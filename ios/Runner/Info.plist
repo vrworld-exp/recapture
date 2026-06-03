@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- ───────────────────────────────────────────
+	     PERMISSION USAGE DESCRIPTIONS
+	─────────────────────────────────────────────── -->
+
+	<!-- Camera — required for AR and camera capture features -->
+	<key>NSCameraUsageDescription</key>
+	<string>Recapture needs camera access to enable AR experiences and capture content.</string>
+
+	<!-- Microphone — required alongside camera for video and AR recording -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Recapture needs microphone access to record audio during video capture sessions.</string>
+
+	<!-- Motion — required for AR motion tracking and device orientation -->
+	<key>NSMotionUsageDescription</key>
+	<string>Recapture needs motion sensor access to enable accurate AR tracking and experiences.</string>
+
+	<!-- ───────────────────────────────────────────
+	     AR CAPABILITY DECLARATION
+	─────────────────────────────────────────────── -->
+
+	<!-- Declares AR as a required device capability -->
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>arm64</string>
+		<string>arkit</string>
+	</array>
+
+	<!-- ───────────────────────────────────────────
+	     APP TRANSPORT SECURITY
+	─────────────────────────────────────────────── -->
+
+	<!-- Block all cleartext HTTP — all traffic must use HTTPS -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+	</dict>
+
+	<!-- ───────────────────────────────────────────
+	     DEEP LINK URL SCHEME (go_router)
+	─────────────────────────────────────────────── -->
+
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.mayasabha.recapture</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>recapture</string>
+			</array>
+		</dict>
+	</array>
+
+	<!-- ───────────────────────────────────────────
+	     BUNDLE / APP IDENTITY
+	─────────────────────────────────────────────── -->
+
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Recapture</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>recapture</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+
+	<!-- ───────────────────────────────────────────
+	     SCENE CONFIGURATION
+	─────────────────────────────────────────────── -->
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+
+	<!-- ───────────────────────────────────────────
+	     DISPLAY + ORIENTATION
+	─────────────────────────────────────────────── -->
+
+	<!-- Lock to portrait for camera and AR sessions -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+
+	<!-- iPad — allow portrait orientations -->
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+
+	<!-- ───────────────────────────────────────────
+	     FLUTTER SPECIFIC
+	─────────────────────────────────────────────── -->
+
+	<!-- Enables high frame rate rendering on ProMotion displays -->
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+</dict>
+</plist>

@@ -1,0 +1,102 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.mayasabha.recapture">
+
+    <!-- ───────────────────────────────────────────────
+         PERMISSIONS
+    ─────────────────────────────────────────────────── -->
+
+    <!-- Internet access — required for Firebase, Dio API calls -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Camera — required for AR/camera features -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Audio recording — required for video/AR recording features -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Foreground service — required for background processing tasks -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <!-- Needed to start foreground service on Android 14+ -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+
+    <!-- Network state — optional but recommended for connectivity checks -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Wake lock — keeps screen on during AR/camera sessions -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- ───────────────────────────────────────────────
+         HARDWARE FEATURES
+    ─────────────────────────────────────────────────── -->
+
+    <!-- Camera is required for this app to function -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="true" />
+
+    <!-- Autofocus — required for AR/scanning accuracy -->
+    <uses-feature
+        android:name="android.hardware.camera.autofocus"
+        android:required="false" />
+
+    <!-- ───────────────────────────────────────────────
+         APPLICATION
+    ─────────────────────────────────────────────────── -->
+
+    <application
+        android:label="Recapture"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="false"
+        android:hardwareAccelerated="true"
+        android:usesCleartextTraffic="false">
+
+        <!-- Main Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+
+            <!-- App launch intent -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Deep link support — base setup for go_router -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="recapture"
+                    android:host="app" />
+            </intent-filter>
+
+        </activity>
+
+        <!-- Flutter background isolate bridge — required for Firebase -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+
+    </application>
+
+    <!-- Required for Flutter engine text processing plugin -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
+        </intent>
+    </queries>
+
+</manifest>
