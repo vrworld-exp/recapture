@@ -1,0 +1,9 @@
+
+
+Commands for Flutter :-------------
+    flutter clean
+    flutter doctor
+    flutter pub get
+    flutter emulators
+
+

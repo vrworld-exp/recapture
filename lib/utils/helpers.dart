@@ -1,3 +1,0 @@
-class AppHelpers {
-  AppHelpers._();
-}

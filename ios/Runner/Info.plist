@@ -50,7 +50,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.mayasabha.recapture</string>
+			<string>com.mayasabhaxr.recapture</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>recapture</string>

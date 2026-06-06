@@ -1,38 +1,37 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_core/firebase_core.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'firebase_options.dart';
-import 'utils/theme.dart';
-import 'utils/constants.dart';
-import 'presentation/router/app_router.dart';
+import 'app/app.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  // Load environment variables FIRST
+  try {
+    await dotenv.load(fileName: '.env');
+  } catch (_) {
+    debugPrint(
+      'ERROR: .env file not found. Copy .env.example to .env and fill in values.',
+    );
+    exit(1);
+  }
 
-  await Hive.initFlutter();
+  // Init Hive at app documents directory
+  try {
+    await Hive.initFlutter();
+  } catch (e) {
+    debugPrint('ERROR: Hive initialisation failed: $e');
+    exit(1);
+  }
 
   runApp(
     const ProviderScope(
-      child: RecaptureApp(),
+      child: ReCapture(),
     ),
   );
 }
 
-class RecaptureApp extends StatelessWidget {
-  const RecaptureApp({super.key});
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp.router(
-      title: AppConstants.appName,
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark,
-      routerConfig: appRouter,
-    );
-  }
-}
+

@@ -6,8 +6,8 @@ plugins {
 }
 
 android {
-    namespace = "com.mayasabha.recapture"
-    compileSdk = 34
+    namespace = "com.mayasabhaxr.recapture"
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -21,8 +21,8 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.mayasabha.recapture"
-        minSdk = 23
+        applicationId = "com.mayasabhaxr.recapture"
+        minSdk = flutter.minSdkVersion
         targetSdk = 34
         versionCode = flutter.versionCode
         versionName = flutter.versionName
