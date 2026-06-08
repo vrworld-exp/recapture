@@ -1,0 +1,116 @@
+# .github/ISSUE_TEMPLATE/bug_report.yml
+name: Bug Report
+description: Report a reproducible bug in ReCapture
+title: "[BUG] "
+labels: ["bug", "needs-triage"]
+assignees:
+  - vrworld-exp
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Fill in as much detail as
+        possible — vague reports take much longer to fix.
+
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product area
+      description: Which part of ReCapture is affected?
+      options:
+        - App launch / auth
+        - Project management
+        - Guided capture — Level A (Eye Ring)
+        - Guided capture — Level B (Top Ring)
+        - Guided capture — Level C (Low Ring)
+        - Capture summary
+        - Upload
+        - Processing / backend
+        - Model viewer (3D)
+        - AR preview
+        - Settings / config
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Critical (crash / data loss)
+        - High (feature broken, no workaround)
+        - Medium (feature degraded, workaround exists)
+        - Low (cosmetic / minor)
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened? Include error messages verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps to reliably reproduce the bug.
+      placeholder: |
+        1. Open the app
+        2. Create a new project (Small object)
+        3. Start Level A capture
+        4. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - Android (physical device)
+        - Android (emulator)
+        - iOS (physical device)
+        - iOS (simulator)
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device model and OS version
+      placeholder: "e.g. Samsung Galaxy A53, Android 13 / iPhone 14, iOS 17.2"
+    validations:
+      required: true
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      placeholder: "e.g. 1.0.0+1 (visible in app settings or build output)"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or stack trace
+      description: Paste flutter run output, Crashlytics report, or logcat output here.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, screen recordings, or anything else that helps.
