@@ -8,7 +8,8 @@
 .PHONY: run.dev run.staging run.prod \
         build.apk.dev build.apk.staging build.apk.prod \
         build.ipa.dev build.ipa.staging build.ipa.prod \
-        clean
+        clean \
+        deploy.android.build deploy.android.internal deploy.ios.testflight lanes
 
 # ── Run (hot-reload dev sessions) ─────────────────────────────────────────────
 
@@ -47,3 +48,23 @@ build.ipa.prod:
 
 clean:
 	flutter clean
+
+# ── Fastlane deploy targets ───────────────────────────────────────────────────
+
+## Build release AAB only (no upload) — requires android/key.properties
+deploy.android.build:
+	bundle exec fastlane android build_release
+
+## Build + upload to Play Internal Testing track
+## Requires: fastlane/secrets/play-store-service-account.json
+deploy.android.internal:
+	bundle exec fastlane android internal
+
+## Build + upload to TestFlight (STUB — will fail until activated)
+## See activation checklist in fastlane/Fastfile under 'iOS PLATFORM — STUB'
+deploy.ios.testflight:
+	bundle exec fastlane ios testflight
+
+## List all available Fastlane lanes
+lanes:
+	bundle exec fastlane lanes

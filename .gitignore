@@ -55,3 +55,17 @@ app.*.map.json
 android/key.properties
 android/app/*.jks
 android/app/*.keystore
+
+# Fastlane
+fastlane/secrets/*.json
+fastlane/secrets/*.p8
+fastlane/secrets/match_env
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+fastlane/.env*
+
+# Ruby
+.bundle/
+vendor/bundle/
