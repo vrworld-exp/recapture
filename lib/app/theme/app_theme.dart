@@ -250,8 +250,9 @@ abstract final class AppTheme {
       // ── Switch ────────────────────────────────────────────────────────────
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected))
+          if (states.contains(WidgetState.selected)) {
             return AppColors.textPrimary;
+          }
           return AppColors.textMuted;
         }),
         trackColor: WidgetStateProperty.resolveWith((states) {
