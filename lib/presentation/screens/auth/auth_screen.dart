@@ -53,9 +53,9 @@ class _AuthScreenState extends State<AuthScreen> {
             const SizedBox(height: AppSpacing.xxl),
             Row(
               children: [
-                _TabButton(label: 'Phone', active: _isPhone, onTap: () => setState(() => _isPhone = true)),
+                Expanded(child: _TabButton(label: 'Phone', active: _isPhone, onTap: () => setState(() => _isPhone = true))),
                 const SizedBox(width: AppSpacing.sm),
-                _TabButton(label: 'Email', active: !_isPhone, onTap: () => setState(() => _isPhone = false)),
+                Expanded(child: _TabButton(label: 'Email', active: !_isPhone, onTap: () => setState(() => _isPhone = false))),
               ],
             ),
             const SizedBox(height: AppSpacing.lg),

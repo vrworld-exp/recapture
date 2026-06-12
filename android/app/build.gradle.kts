@@ -47,7 +47,15 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            // Use release signing only when a real keystore is configured in
+            // android/key.properties; otherwise fall back to debug signing so
+            // `flutter build apk --release` still works during development.
+            val releaseKeystore = (keystoreProperties["storeFile"] as String?)?.let { file(it) }
+            signingConfig = if (releaseKeystore?.exists() == true) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             isShrinkResources = false
         }
