@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: recapture-api
+    env: node
+    region: singapore
+    plan: starter
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: MONGODB_URI
+        fromDatabase:
+          name: recapture-mongo
+          property: connectionString
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: AWS_REGION
+        value: ap-south-1
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET_RAW
+        value: msxr-raw-captures
+      - key: S3_BUCKET_ARTIFACTS
+        value: msxr-model-artifacts
+      - key: CLOUDFRONT_BASE_URL
+        sync: false
+    autoDeploy: true
