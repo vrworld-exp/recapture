@@ -6,4 +6,5 @@ Commands for Flutter :-------------
     flutter pub get
     flutter emulators
 
-
+    flutter pub outdated
+    flutter pub upgrade --major-versions

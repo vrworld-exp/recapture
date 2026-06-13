@@ -1,5 +1,8 @@
-# Environment
+# Environment — NEVER commit real values
 .env
+.env.dev
+.env.staging
+.env.prod
 
 # Miscellaneous
 *.class
@@ -47,3 +50,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android signing — NEVER commit these
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+
+# Fastlane
+fastlane/secrets/*.json
+fastlane/secrets/*.p8
+fastlane/secrets/match_env
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+fastlane/.env*
+
+# Ruby
+.bundle/
+vendor/bundle/

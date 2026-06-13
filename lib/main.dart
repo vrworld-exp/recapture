@@ -1,37 +1,23 @@
-import 'dart:io';
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'app/app.dart';
+import 'utils/app_env.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Load environment variables FIRST
+  // ignore: avoid_print
+  print(
+      '[ReCapture] env=${kAppEnvironment.name}  file=${kAppEnvironment.envFileName}');
   try {
-    await dotenv.load(fileName: '.env');
+    await dotenv.load(fileName: kAppEnvironment.envFileName);
   } catch (_) {
-    debugPrint(
-      'ERROR: .env file not found. Copy .env.example to .env and fill in values.',
-    );
-    exit(1);
+    // ignore: avoid_print
+    print(
+        '[ReCapture] WARNING: ${kAppEnvironment.envFileName} not found — env vars will be empty.');
   }
-
-  // Init Hive at app documents directory
-  try {
-    await Hive.initFlutter();
-  } catch (e) {
-    debugPrint('ERROR: Hive initialisation failed: $e');
-    exit(1);
-  }
-
-  runApp(
-    const ProviderScope(
-      child: ReCapture(),
-    ),
-  );
+  await Hive.initFlutter();
+  runApp(const ProviderScope(child: ReCapture()));
 }
-
-
-
