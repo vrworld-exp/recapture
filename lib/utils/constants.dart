@@ -47,4 +47,5 @@ abstract final class AppConfig {
 
   static const String channelCapture = 'com.mayasabhaxr.recapture/capture';
   static const String channelSensors = 'com.mayasabhaxr.recapture/sensors';
+  static const String channelCaptureEvents = 'com.mayasabhaxr.recapture/captureEvents';
 }

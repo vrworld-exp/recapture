@@ -4,19 +4,40 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../domain/entities/checklist_item.dart';
 import '../../widgets/app_button.dart';
-import '../../widgets/app_card.dart';
+import '../../widgets/checklist_item_tile.dart';
 
-class PreCaptureScreen extends StatelessWidget {
+/// Pre-capture checklist. The user acknowledges each required item before the
+/// Start CTA enables and navigates into the capture flow.
+///
+/// Acknowledgment state lives in local widget state only — no global state
+/// management is needed for a single transient screen.
+class PreCaptureScreen extends StatefulWidget {
   const PreCaptureScreen({super.key});
 
-  static const _items = [
-    (Icons.wb_sunny_outlined, 'Use bright, even lighting', 'Avoid shadows and harsh flash'),
-    (Icons.crop_square_outlined, 'Use a plain background', 'Recommended for clean edges'),
-    (Icons.table_restaurant_outlined, 'Place on a stable surface', 'Object must not move'),
-    (Icons.rotate_right, 'Move around the object', "Don't rotate the object itself"),
-    (Icons.flash_off, 'Keep flash off', 'Flash creates reflections'),
-  ];
+  @override
+  State<PreCaptureScreen> createState() => _PreCaptureScreenState();
+}
+
+class _PreCaptureScreenState extends State<PreCaptureScreen> {
+  final Set<String> _checkedIds = <String>{};
+
+  /// True once every required item has been acknowledged. A returning user who
+  /// arrives with all items pre-checked would see the CTA enabled immediately.
+  bool get _allRequiredChecked => defaultChecklistItems
+      .where((item) => item.isRequired)
+      .every((item) => _checkedIds.contains(item.id));
+
+  void _setChecked(ChecklistItem item, bool checked) {
+    setState(() {
+      if (checked) {
+        _checkedIds.add(item.id);
+      } else {
+        _checkedIds.remove(item.id);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -33,63 +54,51 @@ class PreCaptureScreen extends StatelessWidget {
         ),
         title: Text('Before you start', style: Theme.of(context).textTheme.titleLarge),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
+      body: SafeArea(
+        top: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Check these before you begin for best results.',
-              style: Theme.of(context).textTheme.bodyMedium,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.sm,
+                AppSpacing.lg,
+                AppSpacing.lg,
+              ),
+              child: Text(
+                'Confirm each item below for the best capture results.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             ),
-            const SizedBox(height: AppSpacing.xxl),
-            ..._items.map((item) => Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                  child: AppCard(
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 32,
-                          height: 32,
-                          decoration: const BoxDecoration(
-                            color: AppColors.mirageRed,
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(item.$1, color: Colors.white, size: AppSpacing.lg),
-                        ),
-                        const SizedBox(width: AppSpacing.md),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(item.$2, style: Theme.of(context).textTheme.bodyLarge),
-                              Text(
-                                item.$3,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodySmall
-                                    ?.copyWith(color: AppColors.textMuted),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )),
-            const SizedBox(height: AppSpacing.xxl),
-            Container(height: 1, color: AppColors.royalGold.withValues(alpha: 0.3)),
-            const SizedBox(height: AppSpacing.xxl),
-            AppButton(
-              label: 'Start Capture',
-              onPressed: () => context.go(AppRoutes.permissions),
+            // Scrollable list keeps the CTA pinned and on-screen even on small
+            // devices or in landscape.
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                itemCount: defaultChecklistItems.length,
+                separatorBuilder: (_, __) =>
+                    const SizedBox(height: AppSpacing.sm),
+                itemBuilder: (context, index) {
+                  final item = defaultChecklistItems[index];
+                  return ChecklistItemTile(
+                    item: item,
+                    isChecked: _checkedIds.contains(item.id),
+                    onToggle: (checked) => _setChecked(item, checked),
+                  );
+                },
+              ),
             ),
-            const SizedBox(height: AppSpacing.md),
-            AppButton.secondary(
-              label: 'Back',
-              onPressed: () {
-                if (context.canPop()) context.pop();
-              },
+            Padding(
+              padding: const EdgeInsets.all(AppSpacing.lg),
+              child: AppButton(
+                label: 'Start Capture',
+                // Null disables the button (greyed state) until every required
+                // item is acknowledged.
+                onPressed: _allRequiredChecked
+                    ? () => context.go(AppRoutes.permissions)
+                    : null,
+              ),
             ),
           ],
         ),

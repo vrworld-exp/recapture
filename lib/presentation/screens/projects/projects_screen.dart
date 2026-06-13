@@ -5,11 +5,51 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../domain/entities/project_status.dart';
+import '../../../platform/connectivity_watcher.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_status_pill.dart';
+import '../../widgets/offline_retry_modal.dart';
 
-class ProjectsScreen extends StatelessWidget {
+class ProjectsScreen extends StatefulWidget {
   const ProjectsScreen({super.key});
+
+  @override
+  State<ProjectsScreen> createState() => _ProjectsScreenState();
+}
+
+class _ProjectsScreenState extends State<ProjectsScreen> {
+  final ConnectivityWatcher _connectivity = ConnectivityWatcher();
+
+  @override
+  void initState() {
+    super.initState();
+    // Run the initial load after the first frame so a BuildContext is
+    // available for the modal.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadProjects());
+  }
+
+  /// Stand-in for the Projects API load until the backend lands. Until then
+  /// connectivity is the data source — offline surfaces the retry modal.
+  Future<void> _loadProjects() async {
+    final status = await _connectivity.currentStatus();
+    if (!mounted) return;
+    if (status == AppConnectivityStatus.offline) {
+      await showOfflineRetryModal(
+        context,
+        source: OfflineSource.projectsHub,
+        onRetry: _ensureOnline,
+      );
+    }
+  }
+
+  /// Throws while still offline so the modal stays open; returns on success so
+  /// the modal auto-dismisses.
+  Future<void> _ensureOnline() async {
+    final status = await _connectivity.currentStatus();
+    if (status == AppConnectivityStatus.offline) {
+      throw const _OfflineException();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -141,6 +181,11 @@ class _ProjectCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Raised when a load is attempted while the device is still offline.
+class _OfflineException implements Exception {
+  const _OfflineException();
 }
 
 class _Chip extends StatelessWidget {

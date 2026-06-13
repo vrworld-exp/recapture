@@ -4,8 +4,10 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../platform/connectivity_watcher.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
+import '../../widgets/offline_retry_modal.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -16,6 +18,33 @@ class AuthScreen extends StatefulWidget {
 
 class _AuthScreenState extends State<AuthScreen> {
   bool _isPhone = true;
+
+  final ConnectivityWatcher _connectivity = ConnectivityWatcher();
+
+  /// Wraps the "Send OTP" network step: if offline, surface the retry modal
+  /// first; only proceed once connectivity is confirmed.
+  Future<void> _onSendOtp() async {
+    final status = await _connectivity.currentStatus();
+    if (!mounted) return;
+    if (status == AppConnectivityStatus.offline) {
+      // Modal is non-dismissible, so this returns only after a successful
+      // retry (device back online).
+      await showOfflineRetryModal(
+        context,
+        source: OfflineSource.auth,
+        onRetry: _ensureOnline,
+      );
+      if (!mounted) return;
+    }
+    context.go(AppRoutes.otpVerify);
+  }
+
+  Future<void> _ensureOnline() async {
+    final status = await _connectivity.currentStatus();
+    if (status == AppConnectivityStatus.offline) {
+      throw const _OfflineException();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -67,7 +96,7 @@ class _AuthScreenState extends State<AuthScreen> {
             const SizedBox(height: AppSpacing.xxl),
             AppButton(
               label: 'Send OTP',
-              onPressed: () => context.go(AppRoutes.otpVerify),
+              onPressed: _onSendOtp,
             ),
             const SizedBox(height: AppSpacing.lg),
             Center(
@@ -83,6 +112,11 @@ class _AuthScreenState extends State<AuthScreen> {
       ),
     );
   }
+}
+
+/// Raised when an action is attempted while the device is still offline.
+class _OfflineException implements Exception {
+  const _OfflineException();
 }
 
 class _TabButton extends StatelessWidget {

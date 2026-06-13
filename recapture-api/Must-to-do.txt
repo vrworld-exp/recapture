@@ -1,4 +1,39 @@
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // // // // AWS config -------------------------------------------------------->>
 
 
@@ -97,6 +132,45 @@ S3_BUCKET_ARTIFACTS=msxr-model-artifacts
 CLOUDFRONT_BASE_URL=https://d1a2b3c4d5e6f7.cloudfront.net
 7. Verify
 Run npm run dev in recapture-api — the Zod env validation from the scaffold will fail loudly if any of these are missing or malformed. If it boots clean, the env contract is satisfied. Actual upload/read verification happens once P6's s3.service.ts exists — that's the natural point to write a quick putObject/getObject smoke test against both buckets.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
