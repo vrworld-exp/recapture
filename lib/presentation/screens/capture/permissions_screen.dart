@@ -93,7 +93,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
       'motion_granted': _statusOf(AppPermissionType.motion).isGranted,
       'photos_granted': _statusOf(AppPermissionType.photos).isGranted,
     });
-    context.go(AppRoutes.levelAIntro);
+    context.goNamed(AppRouteNames.levelAIntro);
   }
 
   AppPermissionStatus _statusOf(AppPermissionType type) =>

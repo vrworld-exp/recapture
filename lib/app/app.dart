@@ -36,8 +36,8 @@ class ReCapture extends ConsumerWidget {
       darkTheme: AppTheme.dark,
       themeMode: ThemeMode.dark,
 
-      // Navigation
-      routerConfig: appRouter,
+      // Navigation — router carries the auth guard (refreshListenable).
+      routerConfig: ref.watch(appRouterProvider),
     );
   }
 }

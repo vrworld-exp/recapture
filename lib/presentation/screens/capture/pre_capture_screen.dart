@@ -96,7 +96,7 @@ class _PreCaptureScreenState extends State<PreCaptureScreen> {
                 // Null disables the button (greyed state) until every required
                 // item is acknowledged.
                 onPressed: _allRequiredChecked
-                    ? () => context.go(AppRoutes.permissions)
+                    ? () => context.goNamed(AppRouteNames.permissions)
                     : null,
               ),
             ),

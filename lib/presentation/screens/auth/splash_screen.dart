@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/bootstrap/app_bootstrap_service.dart';
 import '../../../app/routes/app_router.dart';
+import '../../../app/routes/auth_router_notifier.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../utils/analytics.dart';
@@ -86,11 +87,15 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
           defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
     });
 
-    final route = switch (result.route) {
-      AppInitRoute.projectsHub => AppRoutes.projects,
-      AppInitRoute.login => AppRoutes.auth,
-    };
-    context.go(route);
+    // Splash is the authority on the launch auth state — it has already
+    // cleared any expired token. Seed the router's notifier so its guard agrees
+    // with this decision before we navigate.
+    final authed = result.route == AppInitRoute.projectsHub;
+    ref.read(authRouterNotifierProvider).setAuthenticated(authed);
+
+    context.goNamed(
+      authed ? AppRouteNames.projects : AppRouteNames.auth,
+    );
   }
 
   @override

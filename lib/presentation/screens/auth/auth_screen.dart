@@ -36,7 +36,7 @@ class _AuthScreenState extends State<AuthScreen> {
       );
       if (!mounted) return;
     }
-    context.go(AppRoutes.otpVerify);
+    context.goNamed(AppRouteNames.otpVerify);
   }
 
   Future<void> _ensureOnline() async {

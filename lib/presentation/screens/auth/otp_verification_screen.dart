@@ -176,7 +176,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     if (!alreadyLogged) _logAttempt(ok ? 'success' : 'invalid', method);
     if (!mounted) return;
     if (ok) {
-      context.go(AppRoutes.projects);
+      context.goNamed(AppRouteNames.projects);
     } else {
       Haptics.failed();
       _clearAndRefocus();
