@@ -1,0 +1,253 @@
+
+// // // // AWS config -------------------------------------------------------->>
+
+
+Here's the AWS Console checklist for both buckets — should take about 10 minutes.
+
+AWS S3 Setup Checklist (manual — 10 minutes)
+1. Create the two buckets
+Go to S3 Console → Create bucket
+Bucket 1 — msxr-raw-captures
+
+Region: ap-south-1 (Mumbai) — matches Render region: singapore reasonably well; pick whichever is closer to your primary user base and keep both buckets + Render in the same region to avoid cross-region transfer costs
+Block all public access: ON (keep default — never make this public)
+Bucket Versioning: Off (not needed for raw captures)
+Default encryption: SSE-S3 (default, fine)
+
+Bucket 2 — msxr-model-artifacts
+
+Same region as above
+Block all public access: ON (CloudFront will access via Origin Access Control, not public ACLs)
+Versioning: Off
+Default encryption: SSE-S3 (default)
+
+2. Configure CORS on msxr-raw-captures
+This bucket needs CORS so the mobile app can upload directly via presigned URLs.
+
+Go to bucket → Permissions → Cross-origin resource sharing (CORS) → paste:
+json[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedOrigins": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+}
+]
+
+Tighten AllowedOrigins later if the mobile app ever runs uploads from a known web domain — for native mobile apps "*" is standard since there's no browser origin to restrict.
+
+3. Configure lifecycle rule on msxr-raw-captures
+Go to bucket → Management → Create lifecycle rule:
+
+Rule name: expire-raw-captures
+Scope: entire bucket
+Action: Expire current versions of objects
+Days after object creation: 90 (matches PRD: "retain 30–90 days")
+
+4. Create IAM user for the backend API
+Go to IAM Console → Users → Create user
+
+Name: recapture-api-service
+No console access — programmatic access only
+Attach policy: create a custom inline policy (don't use AWS-managed AmazonS3FullAccess):
+
+json{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::msxr-raw-captures",
+        "arn:aws:s3:::msxr-raw-captures/*",
+        "arn:aws:s3:::msxr-model-artifacts",
+        "arn:aws:s3:::msxr-model-artifacts/*"
+      ]
+    }
+  ]
+}
+
+Create an access key (Access key ID + Secret access key) — save both to the team password manager immediately. This key is never shown again.
+
+5. Set up CloudFront for msxr-model-artifacts
+This is the only way artifacts are served to clients — never raw S3 URLs (enforced throughout the backend prompts).
+Go to CloudFront Console → Create distribution:
+
+Origin domain: select msxr-model-artifacts.s3.ap-south-1.amazonaws.com
+Origin access: Origin access control settings (recommended) → Create new OAC
+After creating the distribution, CloudFront will show a bucket policy to copy — go back to msxr-model-artifacts → Permissions → Bucket policy → paste it (this grants CloudFront-only read access, keeping the bucket private)
+Viewer protocol policy: Redirect HTTP to HTTPS
+Cache policy: CachingOptimized (default — fine for immutable model artifacts)
+
+Once deployed (takes ~5–15 min to propagate), copy the distribution domain, e.g.:
+https://d1a2b3c4d5e6f7.cloudfront.net
+6. Fill in .env
+dotenvAWS_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=<from step 4>
+AWS_SECRET_ACCESS_KEY=<from step 4>
+S3_BUCKET_RAW=msxr-raw-captures
+S3_BUCKET_ARTIFACTS=msxr-model-artifacts
+CLOUDFRONT_BASE_URL=https://d1a2b3c4d5e6f7.cloudfront.net
+7. Verify
+Run npm run dev in recapture-api — the Zod env validation from the scaffold will fail loudly if any of these are missing or malformed. If it boots clean, the env contract is satisfied. Actual upload/read verification happens once P6's s3.service.ts exists — that's the natural point to write a quick putObject/getObject smoke test against both buckets.
+
+
+
+
+
+// // // For Render and jwt -------------------------------------------->>
+
+
+
+Checking the env validation section already delivered in the backend scaffold prompt
+Checking the env validation section already delivered in the backend scaffold prompt
+Confirmed. Step 3 of PROMPT_P0_Backend_Scaffold_Init.md implements src/config/env.ts — the complete Zod-validated typed env loader covering exactly the three categories named in this task:
+
+DB URL → MONGODB_URI (validated, required, min length 1)
+S3 → AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET_RAW, S3_BUCKET_ARTIFACTS, CLOUDFRONT_BASE_URL (all validated)
+JWT secret → JWT_SECRET (min 32 chars enforced), JWT_EXPIRES_IN
+Plus .env.example with all of these documented, and the acceptance criteria covers the failure mode (missing var → process exits with code 1, descriptive field-level error).
+
+Re-generating this prompt would produce a near-identical duplicate — same file, same schema, same acceptance criteria.
+
+Looking at the remaining Backend Scaffold tasks from the original phase plan, two genuinely uncovered items remain:
+
+"Deploy stub API to Render (health check endpoint only)" — Render deployment is part-manual (connecting the repo, setting env vars in Render dashboard) but there's real codeable work: confirming render.yaml is correct (it exists from the scaffold), a deployment verification checklist, and possibly a render-build.sh if any build quirks exist.
+"Implement JWT middleware + token refresh logic" — the requireAuth middleware exists, but the actual /auth/refresh endpoint, refresh token generation/storage, and rotation logic do not exist yet. This is substantial new work.
+Which of these two would you like next — or is there a different task you'd like to tackle?
+
+for both provide me details, i'll do that manually
+
+11:29 AM
+Here's the manual guide for both — Render deployment and JWT refresh token strategy.
+
+1. Deploy stub API to Render
+Prerequisites
+recapture-api pushed to GitHub (private repo is fine — Render supports it)
+render.yaml already exists from the scaffold task
+Steps
+A. Connect Render to GitHub
+
+Go to dashboard.render.com → sign up/login (GitHub OAuth is easiest)
+New → Web Service
+Connect your GitHub account if not already connected → authorize access to the recapture-api repo
+Select the repo
+B. Render auto-detects render.yaml
+Since render.yaml exists at the repo root, Render will read it and pre-fill most settings. Verify:
+
+Name: recapture-api
+Region: Singapore (as set in render.yaml)
+Branch: main (or dev if you want a staging service — see note below)
+Build Command: npm install && npm run build
+Start Command: node dist/index.js
+Plan: Starter (free tier works for now, sleeps after 15 min inactivity — fine for dev/testing)
+C. Set environment variables
+render.yaml references several secrets via sync: false — these must be entered manually in the Render dashboard (Environment tab):
+
+Variable	Value source
+MONGODB_URI	Atlas connection string (from Atlas setup)
+JWT_SECRET	Generate a new 32+ char random string — different from local dev
+AWS_ACCESS_KEY_ID	From IAM user recapture-api-service
+AWS_SECRET_ACCESS_KEY	Same
+CLOUDFRONT_BASE_URL	Your CloudFront distribution domain
+Variables already set via render.yaml (value: fields) don't need re-entry: NODE_ENV=production, PORT=3000, AWS_REGION=ap-south-1, S3_BUCKET_RAW, S3_BUCKET_ARTIFACTS, JWT_EXPIRES_IN.
+
+Generate a fresh JWT_SECRET for production — don't reuse your local .env value:
+
+bash
+openssl rand -base64 48
+D. Deploy
+
+Click Create Web Service — Render will run the build command, then start command
+First build takes 2–5 minutes (npm install + tsc compile)
+Watch the logs — you should see:
+  ✅ MongoDB connected
+  🚀 recapture-api running on port 3000 [production]
+E. Verify
+Render gives you a URL like https://recapture-api.onrender.com. Test:
+
+bash
+curl https://recapture-api.onrender.com/health
+# Expected: {"status":"ok","db":"connected","timestamp":"...","env":"production"}
+F. Note on free tier sleep
+Render free/starter web services spin down after 15 minutes of no traffic and take ~30-60 seconds to wake on the next request. This is fine for dev/staging. For the production app the team ships to pilot restaurants, consider upgrading to a paid plan ($7/mo Starter+) closer to launch — sleeping mid-upload would break the photogrammetry pipeline.
+
+G. Optional — staging environment
+If you want a separate staging URL (matching .env.staging's recapture-api-staging.onrender.com), repeat steps A–E as a second Render service, pointing to the dev branch instead of main, with its own MongoDB database (recapture-staging instead of recapture) and its own JWT_SECRET. Keeps staging data isolated from production.
+
+2. JWT Middleware + Token Refresh Logic
+The requireAuth middleware (verifies access tokens) already exists from the scaffold. What's missing is the refresh flow — short-lived access tokens + long-lived refresh tokens, with rotation.
+
+Strategy
+Two-token model:
+
+Access token — short-lived (15 min), sent in Authorization: Bearer header, used for all API calls. Stateless — verified via JWT_SECRET signature only, no DB lookup.
+Refresh token — long-lived (30 days), stored in MongoDB (hashed), used only to mint new access tokens via POST /auth/refresh. Stateful — DB lookup required, can be revoked.
+This matches the PRD's acceptance criteria: "Token expiry & refresh supported."
+
+New MongoDB collection: refreshTokens
+typescript
+interface IRefreshToken {
+  _id: ObjectId;
+  userId: ObjectId;
+  tokenHash: string;        // SHA-256 hash of the raw refresh token — never store raw
+  expiresAt: Date;           // 30 days from issue
+  revokedAt?: Date;          // set on logout or rotation
+  deviceInfo?: string;       // optional — "iPhone15,2 / iOS 17.2" for session management
+  createdAt: Date;
+}
+// Indexes:
+//   { tokenHash: 1 } unique
+//   { userId: 1, revokedAt: 1 }
+//   TTL index on expiresAt (auto-delete expired tokens)
+Token issuance flow (on OTP verify, POST /auth/verify-otp)
+Verify OTP
+Generate access token: jwt.sign({ userId, authUid }, JWT_SECRET, { expiresIn: '15m' })
+Generate refresh token: random 64-byte hex string (crypto.randomBytes(64).toString('hex'))
+Hash the refresh token (crypto.createHash('sha256').update(token).digest('hex')) and store the hash in refreshTokens with 30-day expiresAt
+Return both tokens to the app: { accessToken, refreshToken, expiresIn: 900 }
+Refresh flow (POST /auth/refresh)
+App sends { refreshToken } in request body (not as a header — refresh tokens are opaque, not JWTs)
+Hash the incoming token, look up refreshTokens by tokenHash
+Checks: token exists, not revoked, not expired
+Rotate: revoke the old refresh token (revokedAt: now), issue a brand new refresh token + new access token
+Return new pair: { accessToken, refreshToken, expiresIn: 900 }
+Why rotation matters: if a refresh token is ever stolen, it can only be used once before the legitimate client's next refresh attempt fails (because the token was already rotated) — alerting you to compromise. This is the OWASP-recommended pattern for mobile refresh tokens.
+
+Logout flow (POST /auth/logout)
+App sends { refreshToken }
+Hash it, find the record, set revokedAt: now
+Access token remains valid until its 15-min expiry (stateless — can't be revoked early without a blocklist, which is usually not worth the complexity for a 15-min window)
+Edge cases to design for
+Expired refresh token → 401, app must route user back to AuthScreen (re-login via OTP)
+Revoked/reused refresh token → 401 + optionally revoke all refresh tokens for that userId (defense against token theft — "revoke all sessions on suspicious reuse")
+Clock skew → JWT exp claims have a small leeway (jwt.verify(token, secret, { clockTolerance: 10 })) to handle minor client/server time drift
+Multiple devices → a user can have multiple active refresh tokens simultaneously (one per device) — don't revoke other devices' tokens on a normal refresh, only on explicit logout or theft detection
+Mobile app side (Flutter)
+AuthNotifier (from the P1 Flutter prompts, not yet generated) stores both tokens in Hive (boxSession). Dio interceptor: on 401 response, call /auth/refresh with the stored refresh token, update both tokens, retry the original request. If refresh also fails → clear session, route to AuthScreen.
+
+
+When you're ready to turn this into a coding prompt — likely as part of P1 (Auth + Projects), since /auth/verify-otp, /auth/refresh, and /auth/logout are all P1 endpoints — just say so and I'll generate it with the full route handlers, the RefreshToken Mongoose model, and the rotation logic written out.
+
+
+
+
+// // // Next ------------------------------------------------------------->>
+
+
+
+
+
+
+
+
+
+
+

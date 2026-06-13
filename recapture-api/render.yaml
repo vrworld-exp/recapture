@@ -12,9 +12,7 @@ services:
       - key: PORT
         value: 3000
       - key: MONGODB_URI
-        fromDatabase:
-          name: recapture-mongo
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         sync: false
       - key: JWT_EXPIRES_IN
