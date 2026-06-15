@@ -79,7 +79,37 @@ jobs:
       - name: Run flutter test
         run: flutter test
 
-  # ── Job 3: Build + Deploy Android ─────────────────────────────────────────
+  # ── Job 3: Backend typecheck + lint ───────────────────────────────────────
+  # Covers recapture-api (Node/TS). Hermetic — no DB needed for tsc/lint.
+  backend:
+    name: backend-typecheck-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: recapture-api
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: recapture-api/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (tsc --noEmit, strict)
+        run: npm run type-check
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+  # ── Job 4: Build + Deploy Android ─────────────────────────────────────────
   # Builds a signed release AAB and uploads to Play Internal Testing track.
   # Runs on push to main ONLY — not on PRs, not on dev pushes.
   # Requires: PLAY_STORE_JSON_KEY and KEYSTORE_* secrets in GitHub Actions.
@@ -173,7 +203,7 @@ jobs:
       - name: Run Fastlane Android internal lane
         run: bundle exec fastlane android internal
 
-  # ── Job 4: Build + Deploy iOS (STUB — DISABLED) ───────────────────────────
+  # ── Job 5: Build + Deploy iOS (STUB — DISABLED) ───────────────────────────
   # Disabled via `if: false` until iOS activation checklist is complete.
   # To activate:
   #   1. Complete all items in the iOS PLATFORM STUB checklist in fastlane/Fastfile

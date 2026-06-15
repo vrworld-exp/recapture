@@ -1,11 +1,12 @@
 // lib/presentation/screens/projects/create_project_screen.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
-import '../../../data/repositories/projects_repository.dart';
+import '../../../application/projects/projects_notifier.dart';
 import '../../../domain/entities/create_project_options.dart';
 import '../../../domain/entities/project.dart';
 import '../../../utils/analytics.dart';
@@ -18,17 +19,18 @@ import '../../widgets/offline_retry_modal.dart';
 /// capture mode, then submits to create the project and route into the
 /// pre-capture checklist.
 ///
-/// All state is local to this screen — no global state management. Creation
-/// happens only on an explicit CTA tap, never on field change.
-class CreateProjectScreen extends StatefulWidget {
+/// Creation goes through [projectsProvider] so the new project lands in the
+/// shared list state (it appears on return to the Projects Hub without a
+/// refetch). Form input is local; creation happens only on an explicit CTA tap.
+class CreateProjectScreen extends ConsumerStatefulWidget {
   const CreateProjectScreen({super.key});
 
   @override
-  State<CreateProjectScreen> createState() => _CreateProjectScreenState();
+  ConsumerState<CreateProjectScreen> createState() =>
+      _CreateProjectScreenState();
 }
 
-class _CreateProjectScreenState extends State<CreateProjectScreen> {
-  final ProjectsRepository _repository = const ProjectsRepository();
+class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
   final TextEditingController _nameController = TextEditingController();
 
   ObjectSize? _selectedSize;
@@ -74,11 +76,11 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
     Project? created;
     var result = 'success';
     try {
-      created = await _repository.createProject(
-        name: name,
-        size: size,
-        mode: mode,
-      );
+      created = await ref.read(projectsProvider.notifier).create(
+            name: name,
+            size: size,
+            mode: mode,
+          );
     } catch (_) {
       result = 'network_error';
       if (!mounted) return;
@@ -89,11 +91,11 @@ class _CreateProjectScreenState extends State<CreateProjectScreen> {
         context,
         source: OfflineSource.projectsHub,
         onRetry: () async {
-          created = await _repository.createProject(
-            name: name,
-            size: size,
-            mode: mode,
-          );
+          created = await ref.read(projectsProvider.notifier).create(
+                name: name,
+                size: size,
+                mode: mode,
+              );
         },
       );
     }

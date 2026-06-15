@@ -6,6 +6,8 @@ import { requestLogger } from '@/middleware/requestLogger';
 import { errorHandler } from '@/middleware/errorHandler';
 import { notFound } from '@/middleware/notFound';
 import healthRouter from '@/routes/health';
+import authRouter from '@/routes/auth';
+import projectsRouter from '@/routes/projects';
 
 export function createApp(): express.Express {
   const app = express();
@@ -19,6 +21,8 @@ export function createApp(): express.Express {
 
   // Routes
   app.use('/health', healthRouter);
+  app.use('/auth', authRouter);
+  app.use('/projects', projectsRouter);
 
   // 404 + error handling — MUST be last
   app.use(notFound);

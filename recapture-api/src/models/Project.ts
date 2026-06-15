@@ -34,6 +34,9 @@ export type ProjectStatus =
   | 'COMPLETED'
   | 'FAILED';
 
+/** How the capture session is driven (mirrors the app's CaptureMode). */
+export type CaptureMode = 'GUIDED' | 'MANUAL';
+
 /**
  * A user's capture project — the logical container for capturing one
  * physical object across one or more job versions.
@@ -42,6 +45,7 @@ export interface IProject extends Document {
   userId: Types.ObjectId;
   name: string;
   objectSize: ObjectSize;
+  mode: CaptureMode;
   category?: string;
   status: ProjectStatus;
   activeJobId?: Types.ObjectId;
@@ -68,6 +72,11 @@ const ProjectSchema = new Schema<IProject>(
     objectSize: {
       type: String,
       enum: ['SMALL', 'MEDIUM', 'LARGE'],
+      required: true,
+    },
+    mode: {
+      type: String,
+      enum: ['GUIDED', 'MANUAL'],
       required: true,
     },
     category: {
@@ -103,8 +112,11 @@ const ProjectSchema = new Schema<IProject>(
 );
 
 // ── Indexes ────────────────────────────────────────────────────────────────
-// Primary query pattern: "list a user's projects, most recently updated first"
-ProjectSchema.index({ userId: 1, updatedAt: -1 });
+// Primary query pattern: "list a user's projects, most recently updated first".
+// `_id` is part of the key so the deterministic tie-breaker (updatedAt DESC,
+// _id DESC) used by GET /projects cursor pagination is fully index-backed. This
+// also covers the shorter `(userId, updatedAt)` prefix query.
+ProjectSchema.index({ userId: 1, updatedAt: -1, _id: -1 });
 
 // Secondary query pattern: "filter a user's projects by status"
 // (e.g. show only DRAFT/CAPTURING projects on Projects screen "in progress" section)
@@ -114,3 +126,4 @@ export const Project = model<IProject>('Project', ProjectSchema);
 
 // Re-export for convenience — services can import from '../models/Project'.
 export type { ObjectSize };
+// `CaptureMode` and `ProjectStatus` are already exported above.

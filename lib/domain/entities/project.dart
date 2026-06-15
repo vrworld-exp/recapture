@@ -36,6 +36,16 @@ class Project {
     );
   }
 
+  /// Serialises to the same shape [Project.fromMap] reads, for the projects
+  /// cache (round-trips: status via apiValue, updatedAt as ISO-8601).
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'status': status.apiValue,
+        'thumbnailUrl': thumbnailUrl,
+        'updatedAt': updatedAt.toIso8601String(),
+      };
+
   /// Accepts epoch millis (int) or an ISO-8601 string; falls back to now.
   static DateTime _parseDate(dynamic raw) {
     if (raw is int) return DateTime.fromMillisecondsSinceEpoch(raw);

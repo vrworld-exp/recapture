@@ -8,6 +8,8 @@ export interface IUser extends Document {
   authUid: string;
   email?: string;
   phone?: string;
+  emailVerified: boolean;
+  phoneVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -33,6 +35,9 @@ const UserSchema = new Schema<IUser>(
       type: String,
       trim: true,
     },
+    // Set true once the identifier is proven via a successful OTP verification.
+    emailVerified: { type: Boolean, required: true, default: false },
+    phoneVerified: { type: Boolean, required: true, default: false },
   },
   {
     timestamps: true,

@@ -1,13 +1,13 @@
 // lib/presentation/screens/projects/projects_screen.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
-import '../../../data/repositories/projects_repository.dart';
+import '../../../application/projects/projects_notifier.dart';
 import '../../../domain/entities/project.dart';
-import '../../../domain/entities/project_options_result.dart';
 import '../../../domain/entities/project_status.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
@@ -17,21 +17,18 @@ import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
 
-enum _ScreenState { loading, loaded, empty, error }
-
-class ProjectsScreen extends StatefulWidget {
+/// Projects Hub. The list state lives entirely in [projectsProvider] (single
+/// source of truth) — this screen renders loading/empty/loaded/error straight
+/// from that `AsyncValue` and drives mutations through the notifier. Only
+/// ephemeral UI guards (per-action in-flight, sheet/refresh dedupe) are local.
+class ProjectsScreen extends ConsumerStatefulWidget {
   const ProjectsScreen({super.key});
 
   @override
-  State<ProjectsScreen> createState() => _ProjectsScreenState();
+  ConsumerState<ProjectsScreen> createState() => _ProjectsScreenState();
 }
 
-class _ProjectsScreenState extends State<ProjectsScreen> {
-  final ProjectsRepository _repository = const ProjectsRepository();
-
-  _ScreenState _state = _ScreenState.loading;
-  List<Project> _projects = const [];
-
+class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
   /// Per-project in-flight guard so a double-tap can't fire two requests/navs.
   final Set<String> _actionInFlight = <String>{};
 
@@ -43,57 +40,33 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   /// flight (e.g. a programmatic post-action refresh racing a manual pull).
   bool _refreshInFlight = false;
 
+  /// Dedupe guard so the auto offline modal isn't stacked on repeated error
+  /// emissions for the same failed load.
+  bool _loadErrorModalOpen = false;
+
+  ProjectsNotifier get _notifier => ref.read(projectsProvider.notifier);
+
   String get _deviceType =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
 
-  @override
-  void initState() {
-    super.initState();
-    _loadProjects();
-  }
-
   // ── Data ─────────────────────────────────────────────────────────────────────
 
-  /// Full load with the skeleton state. On network failure shows the offline
-  /// modal (its retry re-fetches) and parks the screen in [error] behind it so
-  /// nothing is blank if the modal is dismissed.
-  Future<void> _loadProjects() async {
-    setState(() => _state = _ScreenState.loading);
-    try {
-      final projects = await _repository.fetchProjects();
-      if (!mounted) return;
-      _applyProjects(projects);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _state = _ScreenState.error);
-      await showOfflineRetryModal(
-        context,
-        source: OfflineSource.projectsHub,
-        onRetry: _fetchInto, // throws on failure → modal stays open
-      );
-    }
-  }
-
-  /// Re-fetch for pull-to-refresh / post-action — no full skeleton, just the
-  /// refresh spinner (the [RefreshIndicator] shows its own). The returned Future
-  /// is what the indicator awaits, so the spinner lasts exactly as long as the
-  /// fetch. On failure the visible list is preserved and the offline modal is
-  /// surfaced over it.
+  /// Pull-to-refresh / post-action re-fetch — no full skeleton. The returned
+  /// Future is what the [RefreshIndicator] awaits. On failure the visible list
+  /// is preserved (the notifier never blanks it) and the offline modal is shown.
   Future<void> _refresh() async {
     if (_refreshInFlight) return; // single in-flight fetch — dedupe rapid pulls
     _refreshInFlight = true;
     try {
-      await _fetchInto();
+      await _notifier.refresh();
       _logRefresh('success');
     } catch (_) {
       _logRefresh('network_error');
       if (!mounted) return;
-      // Do NOT clear the list — _fetchInto threw before applying, so the last
-      // good data stays visible behind the modal.
       await showOfflineRetryModal(
         context,
         source: OfflineSource.projectsHub,
-        onRetry: _fetchInto,
+        onRetry: _notifier.refresh,
       );
     } finally {
       _refreshInFlight = false;
@@ -103,30 +76,39 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   void _logRefresh(String result) {
     Analytics.logEvent('projects_list_refreshed', {
       'result': result,
-      'project_count': result == 'success' ? _projects.length : 0,
+      'project_count':
+          result == 'success' ? (_projectsOrEmpty().length) : 0,
       'device_type': _deviceType,
     });
   }
 
-  /// Fetches and applies projects. Lets network errors propagate so the offline
-  /// modal's retry can stay open until it succeeds.
-  Future<void> _fetchInto() async {
-    final projects = await _repository.fetchProjects();
-    if (!mounted) return;
-    _applyProjects(projects);
-  }
+  List<Project> _projectsOrEmpty() =>
+      ref.read(projectsProvider).valueOrNull ?? const <Project>[];
 
-  void _applyProjects(List<Project> projects) {
-    setState(() {
-      _projects = projects;
-      _state = projects.isEmpty ? _ScreenState.empty : _ScreenState.loaded;
-    });
+  void _logViewed(List<Project> projects) {
     Analytics.logEvent('projects_list_viewed', {
       'project_count': projects.length,
       'has_failed_projects':
           projects.any((p) => p.status.cardAction == ProjectCardAction.retry),
       'device_type': _deviceType,
     });
+  }
+
+  /// Auto-surfaces the offline modal when a full load/reload fails, parking the
+  /// `_ErrorView` behind it so the screen is never blank if the modal is closed.
+  Future<void> _showLoadErrorModal() async {
+    if (_loadErrorModalOpen) return;
+    _loadErrorModalOpen = true;
+    try {
+      await showOfflineRetryModal(
+        context,
+        source: OfflineSource.projectsHub,
+        // Reload via the provider; rethrows on failure so the modal stays open.
+        onRetry: () => ref.refresh(projectsProvider.future),
+      );
+    } finally {
+      _loadErrorModalOpen = false;
+    }
   }
 
   // ── Actions ──────────────────────────────────────────────────────────────────
@@ -167,65 +149,41 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     if (!_claim(p)) return;
     _logAction('retry', p);
     try {
-      await _repository.retryProject(p.id);
-      if (!mounted) return;
-      await _refresh(); // reflect the new status (back to processing)
+      // Notifier optimistically flips the card to processing and rolls back on
+      // failure — no refetch needed.
+      await _notifier.retry(p.id);
     } catch (_) {
       if (!mounted) return;
       await showOfflineRetryModal(
         context,
         source: OfflineSource.projectsHub,
-        onRetry: () => _repository.retryProject(p.id),
+        onRetry: () => _notifier.retry(p.id),
       );
-      if (!mounted) return;
-      await _refresh();
     } finally {
       _release(p);
     }
   }
 
-  /// Opens the Rename / Delete options sheet and applies its typed result to the
-  /// list state in place — no full refetch.
+  /// Opens the Rename / Delete options sheet. Mutations run through the notifier
+  /// (optimistic + rollback); the list state lives in the provider, so the
+  /// sheet's typed result is no longer applied locally.
   Future<void> _onMore(Project p) async {
     if (_sheetOpen) return;
     _sheetOpen = true;
     try {
-      final result = await showProjectOptionsSheet(
+      await showProjectOptionsSheet(
         context,
         project: p,
         onRename: (id, newName) async {
-          await _repository.renameProject(id, newName);
-          // Backend returns success only — build the updated entity locally.
+          await _notifier.rename(id, newName);
+          // The sheet wants the updated entity for its result; the notifier has
+          // already committed this optimistic value to shared state.
           return p.copyWith(name: newName, updatedAt: DateTime.now());
         },
-        onDelete: (id) => _repository.deleteProject(id),
+        onDelete: (id) => _notifier.delete(id),
       );
-      if (!mounted) return;
-      _applyOptionsResult(result);
     } finally {
       _sheetOpen = false;
-    }
-  }
-
-  void _applyOptionsResult(ProjectOptionsResult result) {
-    switch (result.action) {
-      case ProjectOptionsAction.renamed:
-        final updated = result.updatedProject!;
-        setState(() {
-          _projects = [
-            for (final project in _projects)
-              if (project.id == updated.id) updated else project,
-          ];
-        });
-      case ProjectOptionsAction.deleted:
-        final id = result.deletedProjectId!;
-        setState(() {
-          _projects =
-              _projects.where((project) => project.id != id).toList();
-          if (_projects.isEmpty) _state = _ScreenState.empty;
-        });
-      case ProjectOptionsAction.none:
-        break;
     }
   }
 
@@ -233,6 +191,20 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // React to load outcomes: log 'viewed' on a settled load/reload, and
+    // auto-surface the offline modal on a load error. Refresh/mutation failures
+    // keep the list as AsyncData, so they never reach these branches.
+    ref.listen<AsyncValue<List<Project>>>(projectsProvider, (prev, next) {
+      if (prev is AsyncLoading && next is AsyncData<List<Project>>) {
+        _logViewed(next.value);
+      }
+      if (next is AsyncError) {
+        _showLoadErrorModal();
+      }
+    });
+
+    final projectsAsync = ref.watch(projectsProvider);
+
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       appBar: AppBar(
@@ -253,45 +225,47 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         backgroundColor: AppColors.mirageRed,
         child: const Icon(Icons.add, color: Colors.white),
       ),
-      body: _buildBody(),
+      body: _buildBody(projectsAsync),
     );
   }
 
-  Widget _buildBody() {
-    switch (_state) {
-      case _ScreenState.loading:
-        return const _SkeletonList();
-      case _ScreenState.empty:
-        // Empty state is pull-to-refreshable too — a user with no projects can
-        // swipe to re-check. The scroll view fills the viewport so the gesture
-        // is available even though the content is short.
-        return _refreshable(
-          LayoutBuilder(
-            builder: (context, constraints) => SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: ProjectsEmptyState(
-                  // "Start new capture" begins by creating/configuring the project.
-                  onStartCapture: () =>
-                      context.pushNamed(AppRouteNames.createProject),
+  Widget _buildBody(AsyncValue<List<Project>> projectsAsync) {
+    return projectsAsync.when(
+      // A refresh/mutation keeps the previous data visible via `skipLoadingOn*`
+      // defaults; a true first load / reload has no data yet → skeleton.
+      loading: () => const _SkeletonList(),
+      error: (_, __) => _ErrorView(
+        onRetry: () => ref.invalidate(projectsProvider),
+      ),
+      data: (projects) {
+        if (projects.isEmpty) {
+          // Empty state is pull-to-refreshable too — a user with no projects can
+          // swipe to re-check. The scroll view fills the viewport so the gesture
+          // is available even though the content is short.
+          return _refreshable(
+            LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: ProjectsEmptyState(
+                    onStartCapture: () =>
+                        context.pushNamed(AppRouteNames.createProject),
+                  ),
                 ),
               ),
             ),
-          ),
-        );
-      case _ScreenState.error:
-        return _ErrorView(onRetry: _loadProjects);
-      case _ScreenState.loaded:
+          );
+        }
         return _refreshable(
           ListView.separated(
             // Always scrollable so even a 1–2 item list can be pulled down.
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(AppSpacing.lg),
-            itemCount: _projects.length,
+            itemCount: projects.length,
             separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
             itemBuilder: (context, index) {
-              final project = _projects[index];
+              final project = projects[index];
               return ProjectCard(
                 project: project,
                 isActionInFlight: _actionInFlight.contains(project.id),
@@ -303,7 +277,8 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             },
           ),
         );
-    }
+      },
+    );
   }
 
   /// Wraps a scrollable child in the shared pull-to-refresh indicator.

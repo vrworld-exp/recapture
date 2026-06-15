@@ -1,0 +1,3281 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------->
+
+
+
+
+
+
+✅ Generate a coding prompt for this task: Remote config fetch on app init (pitch bands, segment counts, thresholds) — Phase: Auth + Projects Hub, Track: State & Domain.   ------------------------------------------------------------------------------->>>
+
+
+# DOMAIN: Remote Config Fetch on App Init (Pitch Bands, Segment Counts, Thresholds)
+# Product: maya-viewer
+# Scope: New Feature (State & Domain — Configuration Layer)
+# Priority: High
+
+---
+
+## Task Description
+
+Fetch remote capture configuration at app initialization and expose it as typed, app-wide state via Riverpod. This config carries tuning parameters the capture pipeline depends on — pitch bands, segment counts per band, and quality thresholds — so they can be tuned server-side without an app release. The fetch must never hard-block startup: the app always has working values via bundled defaults, falls back to a cached copy when offline, and refreshes from remote in the background (stale-while-revalidate).
+
+- [ ] Define a typed `CaptureConfig` model (pitch bands, segment counts, thresholds) with bundled compile-time defaults
+- [ ] Implement a remote config fetch (via the existing API client / a config endpoint)
+- [ ] Cache the fetched config locally (Hive) and read it on startup for instant availability
+- [ ] Resolve config with a clear precedence: fresh remote → cached → bundled defaults, never empty/null
+- [ ] Expose config through a Riverpod provider that the capture flow (and others) read
+- [ ] Refresh in the background on app init without blocking the UI; surface fetch failures silently (use fallback)
+- [ ] Version/validate remote payloads so a malformed or out-of-range remote config cannot break capture
+
+## Files to Inspect First
+
+1. `lib/core/storage/storage_providers.dart` and the Hive box gateways — add (or reuse) a config box following the established gateway pattern; do not touch Hive directly elsewhere
+2. `lib/features/auth/application/auth_notifier.dart` / API client setup — confirm how authenticated requests are made (config endpoint may or may not require auth)
+3. `lib/main.dart` (app root) — where startup async init runs; the background refresh is kicked off here or in a top-level provider
+4. `pubspec.yaml` — confirm Riverpod and Hive versions already in use (match prior tasks)
+5. Any existing capture/precapture screens (e.g. checklist) — to understand which config fields are actually consumed downstream
+
+## Implementation Instructions
+
+### Step 1: Typed config model + bundled defaults
+In `lib/features/config/domain/capture_config.dart` (pure Dart, no Flutter imports):
+
+```dart
+class PitchBand {
+  final String id;          // e.g. "low", "mid", "high"
+  final double minDegrees;  // inclusive
+  final double maxDegrees;  // exclusive
+  final int segments;       // how many capture positions around this band
+  const PitchBand({required this.id, required this.minDegrees, required this.maxDegrees, required this.segments});
+
+  factory PitchBand.fromMap(Map<String, dynamic> m) => PitchBand(
+    id: m['id'] as String? ?? 'band',
+    minDegrees: (m['minDegrees'] as num?)?.toDouble() ?? 0,
+    maxDegrees: (m['maxDegrees'] as num?)?.toDouble() ?? 90,
+    segments: (m['segments'] as num?)?.toInt() ?? 12,
+  );
+  Map<String, dynamic> toMap() => {'id': id, 'minDegrees': minDegrees, 'maxDegrees': maxDegrees, 'segments': segments};
+}
+
+class CaptureThresholds {
+  final double minSharpness;     // 0..1 reject blurry frames below this
+  final double minCoveragePct;   // % of segments that must be captured to allow finishing
+  final double maxTiltDeltaDeg;  // max device tilt deviation tolerated
+  const CaptureThresholds({required this.minSharpness, required this.minCoveragePct, required this.maxTiltDeltaDeg});
+
+  factory CaptureThresholds.fromMap(Map<String, dynamic> m) => CaptureThresholds(
+    minSharpness: (m['minSharpness'] as num?)?.toDouble() ?? 0.45,
+    minCoveragePct: (m['minCoveragePct'] as num?)?.toDouble() ?? 80,
+    maxTiltDeltaDeg: (m['maxTiltDeltaDeg'] as num?)?.toDouble() ?? 12,
+  );
+  Map<String, dynamic> toMap() => {'minSharpness': minSharpness, 'minCoveragePct': minCoveragePct, 'maxTiltDeltaDeg': maxTiltDeltaDeg};
+}
+
+class CaptureConfig {
+  final int version;
+  final List<PitchBand> pitchBands;
+  final CaptureThresholds thresholds;
+  const CaptureConfig({required this.version, required this.pitchBands, required this.thresholds});
+
+  static const CaptureConfig bundledDefault = CaptureConfig(
+    version: 0,
+    pitchBands: [
+      PitchBand(id: 'low',  minDegrees: 0,  maxDegrees: 30, segments: 12),
+      PitchBand(id: 'mid',  minDegrees: 30, maxDegrees: 60, segments: 10),
+      PitchBand(id: 'high', minDegrees: 60, maxDegrees: 90, segments: 8),
+    ],
+    thresholds: CaptureThresholds(minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
+  );
+
+  int get totalSegments => pitchBands.fold(0, (sum, b) => sum + b.segments);
+
+  factory CaptureConfig.fromMap(Map<String, dynamic> m) {
+    final bands = (m['pitchBands'] as List?)
+        ?.whereType<Map>()
+        .map((e) => PitchBand.fromMap(e.cast<String, dynamic>()))
+        .toList();
+    return CaptureConfig(
+      version: (m['version'] as num?)?.toInt() ?? 0,
+      pitchBands: (bands == null || bands.isEmpty) ? bundledDefault.pitchBands : bands,
+      thresholds: m['thresholds'] is Map
+          ? CaptureThresholds.fromMap((m['thresholds'] as Map).cast<String, dynamic>())
+          : bundledDefault.thresholds,
+    );
+  }
+  Map<String, dynamic> toMap() => {
+    'version': version,
+    'pitchBands': pitchBands.map((b) => b.toMap()).toList(),
+    'thresholds': thresholds.toMap(),
+  };
+}
+```
+
+### Step 2: Validation / sanity clamping
+In `lib/features/config/domain/capture_config_validator.dart`, sanitize a parsed config so out-of-range remote values can't break capture:
+
+```dart
+CaptureConfig sanitizeCaptureConfig(CaptureConfig cfg) {
+  // - drop bands with maxDegrees <= minDegrees or segments <= 0
+  // - clamp degrees into [0,90], clamp segments into [1, 64]
+  // - clamp minSharpness [0,1], minCoveragePct [0,100], maxTiltDeltaDeg [1,45]
+  // - if no valid bands remain -> fall back to bundledDefault.pitchBands
+}
+```
+
+A remote config that fails sanitization to "nothing usable" must degrade to `bundledDefault`, never produce an empty/invalid config.
+
+### Step 3: Repository (remote + cache)
+In `lib/features/config/data/config_repository.dart`:
+
+```dart
+abstract class ConfigRepository {
+  Future<CaptureConfig> fetchRemote();        // throws on network error
+  Future<CaptureConfig?> readCached();         // null if none/corrupt
+  Future<void> writeCache(CaptureConfig cfg);
+}
+```
+
+- Remote impl calls the config endpoint via the existing API client, parses + sanitizes
+- Cache impl uses a Hive config box gateway (`config_cache`) following the established pattern; corrupt cache → return null (treat as no cache)
+
+### Step 4: Config notifier / provider
+In `lib/features/config/application/config_notifier.dart`:
+
+```dart
+class ConfigNotifier extends Notifier<CaptureConfig> {
+  @override
+  CaptureConfig build() {
+    _bootstrap();                 // async, non-blocking
+    return CaptureConfig.bundledDefault; // immediate, always-valid value
+  }
+
+  Future<void> _bootstrap() async {
+    final repo = ref.read(configRepositoryProvider);
+    // 1) load cache for a better-than-default starting point
+    final cached = await repo.readCached();
+    if (cached != null) state = sanitizeCaptureConfig(cached);
+    // 2) refresh from remote in background
+    try {
+      final remote = sanitizeCaptureConfig(await repo.fetchRemote());
+      state = remote;
+      await repo.writeCache(remote);
+    } catch (_) {
+      // stay on cache/default; silent (log/analytics only)
+    }
+  }
+
+  Future<void> refresh() => _bootstrap();
+}
+
+final captureConfigProvider = NotifierProvider<ConfigNotifier, CaptureConfig>(ConfigNotifier.new);
+```
+
+`build()` returns a synchronous, always-valid value so consumers never see loading/null — they get bundled defaults instantly, upgraded to cached, then remote.
+
+### Step 5: App init wiring
+- Ensure the provider is read/initialized early (e.g. in the app root) so `_bootstrap()` kicks off at startup
+- Do NOT `await` the remote fetch in `main()` before `runApp` — startup must not block on the network
+- Hive init (from the boxes task) must complete before the cache read; sequence accordingly
+
+## What NOT to Change
+
+- Do NOT block app startup awaiting the remote config — bundled defaults must make the app immediately usable
+- Do NOT expose config as a nullable/`AsyncValue` that forces consumers to handle loading — it is always a valid `CaptureConfig`
+- Do NOT touch Hive directly outside the config box gateway
+- Do NOT modify `AuthNotifier`, `ProjectsNotifier`, routing, or the API client internals (only call the client to fetch)
+- Do NOT let a malformed/out-of-range remote payload reach consumers unsanitized
+- Do NOT hardcode capture parameters in the capture screens — they must read from `captureConfigProvider`
+
+## Analytics Events
+
+Event: `remote_config_fetch`
+Trigger: on each remote config fetch attempt at init/refresh
+Properties:
+  - result: "success" | "network_error" | "parse_error"
+  - source_used: "remote" | "cache" | "bundled_default"   // what the app ended up using
+  - config_version: int
+  - device_type: "android" | "ios"
+
+(Route through the existing analytics dispatcher; otherwise add a TODO-marked stub. Do not log full config payloads.)
+
+## Edge Cases to Handle
+
+- [ ] First launch, offline → no cache, remote fails → app uses `bundledDefault`, fully functional
+- [ ] Cached config present, offline → uses cache, no crash
+- [ ] Remote returns malformed JSON / wrong types → parse falls back defensively; sanitization clamps; never crashes
+- [ ] Remote returns empty/zero pitch bands → falls back to `bundledDefault.pitchBands`
+- [ ] Remote returns out-of-range values (negative segments, sharpness > 1, degrees > 90) → clamped/dropped by sanitizer
+- [ ] Corrupt config cache box → treated as no cache, wiped per the Hive gateway's corruption handling
+- [ ] Remote `version` older than cached version → policy decision: prefer the freshly fetched remote as source of truth (server is authoritative) unless a downgrade-guard is desired (see assumptions)
+- [ ] Provider read very early before Hive init done → still returns `bundledDefault` synchronously; cache upgrade applies once ready
+- [ ] Background refresh completes after the user already entered a capture screen → config updates; capture screens must read reactively (watch) or snapshot at capture-start (see assumptions)
+
+## Constraints
+
+- `captureConfigProvider` must always hold a valid, non-empty `CaptureConfig` (synchronous `build()` returns bundled default)
+- Resolution precedence is strictly: sanitized remote → sanitized cache → bundled default
+- Remote fetch is fire-and-forget at startup; failures are silent to the user (logged/analytics only)
+- All remote values pass through `sanitizeCaptureConfig` before reaching state or cache
+- Config domain is pure Dart (no Flutter/Riverpod imports in the model/validator)
+- Hive access only via the config box gateway
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] App starts without blocking on the network; `captureConfigProvider` immediately yields valid bundled defaults
+- [ ] On a successful remote fetch, the provider updates to the sanitized remote config and the cache is written
+- [ ] On a subsequent launch while offline, the provider loads the cached config (better than defaults)
+- [ ] Malformed/out-of-range remote payloads are sanitized; the app never receives an empty/invalid config
+- [ ] Empty pitch bands from remote fall back to bundled bands
+- [ ] Corrupt config cache is handled without crashing (treated as no cache)
+- [ ] `totalSegments` and threshold values are correct and consumable by downstream capture logic
+- [ ] Analytics reports which source was used (remote/cache/bundled_default) per fetch
+- [ ] No full config payloads or sensitive data logged
+- [ ] Works on Android (mid-range) and iOS — verified manually, including airplane-mode launch
+
+## Testing Instructions
+
+1. Confirm Riverpod/Hive versions match prior tasks; confirm whether the config endpoint requires auth.
+2. Run `flutter analyze` — confirm no errors.
+3. Unit-test `CaptureConfig.fromMap`/`toMap` round-trip; test with missing fields, wrong types, empty bands.
+4. Unit-test `sanitizeCaptureConfig`: negative/zero segments, inverted band ranges, out-of-range degrees and thresholds → confirm clamping/dropping and fallback to bundled bands when nothing valid remains.
+5. Unit-test `ConfigNotifier` with a fake repo:
+   - no cache + remote success → ends on remote, cache written
+   - cache present + remote failure → ends on cache
+   - no cache + remote failure → ends on bundled default
+   - malformed remote → sanitized, never throws
+6. Manual: launch in airplane mode on a fresh install → confirm app works on bundled defaults; enable network and relaunch → confirm remote applied and cached; airplane mode relaunch → confirm cache used.
+7. Confirm capture-consuming screens read from `captureConfigProvider` (no hardcoded params).
+8. Confirm analytics `source_used` reflects each scenario.
+9. Repeat launch scenarios on Android and iOS.
+
+## Assumptions
+
+- Assumed: a remote config endpoint exists (or will be stubbed) returning JSON with `version`, `pitchBands`, and `thresholds` — if the team uses a managed service (Firebase Remote Config) instead of a custom endpoint, swap the `ConfigRepository.fetchRemote` impl; the model/sanitizer/notifier stay the same.
+- Assumed: server is authoritative — a freshly fetched remote config replaces the cache even if its `version` is lower. If downgrade protection is wanted (ignore remote when `remote.version < cached.version`), add that guard in `_bootstrap` and confirm the versioning scheme.
+- Assumed: capture screens should react to late-arriving config or snapshot config at capture-start — pick one explicitly: for tuning stability mid-capture, snapshot the config when a capture session begins (so a background refresh doesn't change segment counts under the user); confirm the desired behavior with the capture flow design.
+- Assumed: the exact field set (pitch bands / segment counts / thresholds) shown is a reasonable starting schema — confirm against the actual capture pipeline's expected parameters and extend the model accordingly. The names here are placeholders aligned to the task title.
+- Assumed: config does not require auth to fetch (it's app-level, not user-level) — if it is user-scoped, gate the fetch on `authProvider.isAuthenticated` and refetch on login.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✅ Generate a coding prompt for this task: Offline state detection + queue logic stub — Phase: Auth + Projects Hub, Track: State & Domain
+
+------------------------------------------------------------------------------------>>>>
+
+# DOMAIN: Offline State Detection + Action Queue (Stub)
+# Product: maya-viewer
+# Scope: New Feature (State & Domain — Connectivity Foundation)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Promote connectivity into app-wide Riverpod state and lay down a minimal offline action queue scaffold. This is a foundation/stub task: the connectivity detection is fully real (built on the existing `ConnectivityWatcher` from Screen 0A), but the queue is a working contract with a stubbed processor — it can enqueue, persist, and drain actions on reconnect, while the concrete action handlers are placeholders to be filled in by later tasks. Do not over-build: no retry backoff matrices, no conflict resolution engine, just a clean, testable skeleton.
+
+- [ ] Expose connectivity as a Riverpod provider (`online` / `offline`) driven by the existing `ConnectivityWatcher`
+- [ ] Define an `OfflineAction` contract and an `OfflineQueue` that can enqueue, list, and remove actions
+- [ ] Persist the queue (Hive) so queued actions survive app restarts
+- [ ] Drain the queue automatically when connectivity returns (stubbed per-action processing)
+- [ ] Distinguish "interface online" from "actually reachable" — treat a failed drain as still-offline rather than blindly clearing
+- [ ] Expose simple state (`isOnline`, `pendingCount`) for UI/debug, and a manual `processQueue()` trigger
+- [ ] Keep concrete action execution as clearly-marked stubs/TODOs
+
+## Files to Inspect First
+
+1. `lib/core/connectivity/connectivity_watcher.dart` — the watcher from Screen 0A (`AppConnectivityStatus`, `statusStream`, `currentStatus()`); wrap it, don't reimplement
+2. `lib/core/widgets/offline_retry_modal.dart` — consumes connectivity; ensure the new provider doesn't conflict with the modal's own retry logic
+3. `lib/core/storage/storage_providers.dart` + Hive gateways — add an `offline_queue` box gateway following the established pattern
+4. `lib/features/auth/application/auth_notifier.dart` — the queue may need to clear on logout (avoid replaying a previous user's actions)
+5. `pubspec.yaml` — confirm `connectivity_plus`, Riverpod, and Hive versions (match prior tasks)
+
+## Implementation Instructions
+
+### Step 1: Connectivity provider
+In `lib/core/connectivity/connectivity_providers.dart`:
+
+```dart
+final connectivityWatcherProvider = Provider<ConnectivityWatcher>((ref) => ConnectivityWatcher());
+
+// Stream-backed status; seed with current status so first read isn't null/unknown.
+final connectivityStatusProvider = StreamProvider<AppConnectivityStatus>((ref) {
+  final watcher = ref.watch(connectivityWatcherProvider);
+  return watcher.statusStream;
+});
+
+// Convenience boolean (defaults to online if status not yet resolved, to avoid false "offline" flashes).
+final isOnlineProvider = Provider<bool>((ref) {
+  final async = ref.watch(connectivityStatusProvider);
+  return async.maybeWhen(
+    data: (s) => s == AppConnectivityStatus.online,
+    orElse: () => true,
+  );
+});
+```
+
+Note: connectivity "online" means a network interface exists, NOT that the API is reachable. The queue drain result is the real reachability signal.
+
+### Step 2: OfflineAction contract
+In `lib/features/offline/domain/offline_action.dart` (pure Dart):
+
+```dart
+enum OfflineActionType { renameProject, deleteProject, retryProject, unknown }
+
+class OfflineAction {
+  final String id;            // uuid
+  final OfflineActionType type;
+  final Map<String, dynamic> payload; // action-specific data (e.g. {projectId, newName})
+  final DateTime createdAt;
+  final int attempts;
+
+  const OfflineAction({
+    required this.id,
+    required this.type,
+    required this.payload,
+    required this.createdAt,
+    this.attempts = 0,
+  });
+
+  OfflineAction incremented() => OfflineAction(
+    id: id, type: type, payload: payload, createdAt: createdAt, attempts: attempts + 1,
+  );
+
+  Map<String, dynamic> toMap() => {
+    'id': id, 'type': type.name, 'payload': payload,
+    'createdAt': createdAt.toUtc().toIso8601String(), 'attempts': attempts,
+  };
+  factory OfflineAction.fromMap(Map<String, dynamic> m) => OfflineAction(
+    id: m['id'] as String,
+    type: OfflineActionType.values.firstWhere(
+      (t) => t.name == m['type'], orElse: () => OfflineActionType.unknown),
+    payload: (m['payload'] as Map?)?.cast<String, dynamic>() ?? const {},
+    createdAt: DateTime.tryParse(m['createdAt'] as String? ?? '')?.toUtc() ?? DateTime.now().toUtc(),
+    attempts: (m['attempts'] as num?)?.toInt() ?? 0,
+  );
+}
+```
+
+### Step 3: Queue persistence gateway
+In `lib/core/storage/offline_queue_box.dart`, a Hive gateway storing the queue as a JSON list under one key (`actions`). Read returns `[]` on absent/corrupt. Follow the corruption-handling pattern from the Hive task (degrade to empty, never crash).
+
+### Step 4: Queue notifier
+In `lib/features/offline/application/offline_queue_notifier.dart`:
+
+```dart
+class OfflineQueueState {
+  final List<OfflineAction> pending;
+  final bool processing;
+  const OfflineQueueState({this.pending = const [], this.processing = false});
+  int get pendingCount => pending.length;
+}
+
+class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
+  @override
+  OfflineQueueState build() {
+    _restore();
+    // auto-drain when connectivity flips to online
+    ref.listen(connectivityStatusProvider, (prev, next) {
+      next.whenData((s) {
+        if (s == AppConnectivityStatus.online) processQueue();
+      });
+    });
+    // clear on logout
+    ref.listen(authProvider, (prev, next) {
+      if (next is AuthUnauthenticated) clear();
+    });
+    return const OfflineQueueState();
+  }
+
+  Future<void> enqueue(OfflineAction action) async { /* add, persist, setState */ }
+
+  Future<void> processQueue() async {
+    if (state.processing || state.pending.isEmpty) return;
+    state = OfflineQueueState(pending: state.pending, processing: true);
+    final remaining = <OfflineAction>[];
+    for (final action in state.pending) {
+      final ok = await _process(action); // stub
+      if (!ok) remaining.add(action.incremented()); // keep for next drain
+    }
+    await _persist(remaining);
+    state = OfflineQueueState(pending: remaining, processing: false);
+  }
+
+  // STUB: real handlers wired in later tasks.
+  Future<bool> _process(OfflineAction action) async {
+    switch (action.type) {
+      case OfflineActionType.renameProject:
+      case OfflineActionType.deleteProject:
+      case OfflineActionType.retryProject:
+        // TODO(later-task): call the corresponding ProjectsNotifier/repository method.
+        // For now, return false so the action is retained (no silent data loss),
+        // OR true to no-op drain in dev — pick retained-by-default. See constraints.
+        return false;
+      case OfflineActionType.unknown:
+        return true; // drop unknown actions so they don't wedge the queue forever
+    }
+  }
+
+  Future<void> clear() async { /* empty + persist */ }
+  Future<void> _restore() async { /* read box -> setState */ }
+  Future<void> _persist(List<OfflineAction> actions) async { /* write box */ }
+}
+
+final offlineQueueProvider =
+    NotifierProvider<OfflineQueueNotifier, OfflineQueueState>(OfflineQueueNotifier.new);
+```
+
+### Step 5: Guard against runaway retries (light)
+- Cap `attempts` (e.g. `kMaxOfflineAttempts = 5`); when exceeded, drop the action and emit an analytics event (so a permanently-failing action can't wedge the queue). Keep this simple — no exponential backoff in the stub.
+
+## What NOT to Change
+
+- Do NOT reimplement connectivity detection — wrap the existing `ConnectivityWatcher`
+- Do NOT change the `OfflineRetryModal`'s behavior — it keeps its own immediate-retry path; the queue is for deferred actions, not the modal's foreground retries
+- Do NOT wire concrete project mutations into `_process` in this task — they are stubs/TODOs for a later task
+- Do NOT add retry backoff schedules, conflict resolution, or multi-device sync — out of scope for the stub
+- Do NOT touch Hive directly outside the queue box gateway
+- Do NOT make `isOnlineProvider` default to offline before status resolves (avoids false-offline flashes)
+
+## Analytics Events
+
+Event: `offline_queue_event`
+Trigger: on enqueue, on drain start/finish, and on action drop
+Properties:
+  - event: "enqueued" | "drain_started" | "drain_finished" | "action_dropped"
+  - action_type: "rename_project" | "delete_project" | "retry_project" | "unknown"
+  - pending_count: int
+  - device_type: "android" | "ios"
+
+(Route through the existing dispatcher; otherwise add a TODO-marked stub.)
+
+## Edge Cases to Handle
+
+- [ ] App launches offline with persisted queued actions → queue restores; no drain attempted until connectivity returns
+- [ ] Connectivity flips online → `processQueue` runs once; flapping connectivity does not start overlapping drains (guard with `processing`)
+- [ ] Drain attempted while "interface online" but API unreachable → `_process` returns false → action retained, not lost
+- [ ] Action exceeds `kMaxOfflineAttempts` → dropped, analytics emitted, queue continues
+- [ ] Unknown action type loaded from an older app version → dropped (does not wedge the queue)
+- [ ] Corrupt queue box → treated as empty, no crash
+- [ ] Logout with pending actions → queue cleared (no cross-user replay)
+- [ ] Concurrent `enqueue` during a drain → new action persists and is picked up on the next/continuing drain without corrupting the list
+- [ ] Empty queue + connectivity flip → `processQueue` no-ops cheaply
+
+## Constraints
+
+- Default `_process` behavior for known-but-not-yet-implemented action types is RETAIN (return false), never silently succeed — avoid data loss while handlers are stubbed
+- Only one drain in flight at a time (`processing` guard)
+- Queue persistence goes through the Hive gateway only; degrade-to-empty on corruption
+- Connectivity status is advisory; reachability is proven by drain success — do not clear actions just because the interface reports online
+- Queue clears on logout
+- All date handling in UTC; queue domain types are pure Dart
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] `isOnlineProvider` reflects connectivity changes and does not flash false-offline before status resolves
+- [ ] Actions can be enqueued and are persisted across app restarts
+- [ ] Queue auto-drains when connectivity returns; only one drain runs at a time
+- [ ] A failing drain retains actions (no data loss) and increments attempts
+- [ ] Actions exceeding the attempt cap are dropped with an analytics event; unknown types are dropped
+- [ ] Corrupt queue storage degrades to empty without crashing
+- [ ] Logout clears the queue
+- [ ] Concrete project mutations remain clearly-marked stubs/TODOs (no real execution wired in)
+- [ ] `pendingCount` is accurate and observable for UI/debug
+- [ ] Works on Android (mid-range) and iOS — verified manually with airplane-mode toggling
+
+## Testing Instructions
+
+1. Confirm `connectivity_plus`/Riverpod/Hive versions; verify `ConnectivityWatcher` API from Screen 0A.
+2. Run `flutter analyze` — confirm no errors.
+3. Unit-test `OfflineAction.toMap`/`fromMap` round-trip, including unknown type and missing fields.
+4. Unit-test `OfflineQueueNotifier` with a fake box + stubbed `_process`:
+   - enqueue persists and updates `pendingCount`
+   - drain with `_process` returning false retains actions and increments attempts
+   - drain with `_process` returning true removes actions
+   - attempt cap drops the action
+   - unknown action dropped
+   - second drain call while `processing` is a no-op
+5. Test restore: pre-seed the box, restart the notifier → confirm queue restored.
+6. Test connectivity-driven drain: flip `connectivityStatusProvider` to online (fake) → confirm `processQueue` fires once; flap rapidly → confirm no overlapping drains.
+7. Test logout: flip `authProvider` to unauthenticated → confirm queue cleared.
+8. Manual: enqueue a couple of stub actions while offline (airplane mode), relaunch → confirm persisted; re-enable network → confirm a drain attempt occurs (actions retained since handlers are stubs).
+9. Confirm analytics events fire for enqueue/drain/drop.
+10. Repeat airplane-mode flow on Android and iOS.
+
+## Assumptions
+
+- Assumed: this is intentionally a stub — concrete handlers for rename/delete/retry will be wired into `_process` in a later task once those flows decide whether they support offline deferral. The default RETAIN behavior is the safe placeholder; flag in the PR that the queue does not yet actually replay actions.
+- Assumed: a UUID generator is available (`uuid` package or similar) for action ids — if not present, generate ids from timestamp + counter; confirm whether `uuid` is a dependency.
+- Assumed: the offline queue is for write/mutation actions (rename/delete/retry), not for read caching — reads are handled by `projects_cache` from the Hive task; keep these concerns separate.
+- Assumed: a single shared queue per user is sufficient — no per-feature queues. If later tasks need ordering guarantees beyond FIFO (e.g. dependency between actions), that's a separate enhancement, not part of this stub.
+- Assumed: the team does not want the `OfflineRetryModal` replaced by this queue — the modal stays for foreground/immediate retries; the queue is for background-deferred actions. Confirm this division if there's overlap concern.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✅ Generate a coding prompt for this task: POST /auth/verify-otp — verify + issue JWT + refresh token — Phase: Auth + Projects Hub, Track: Backend APIs
+
+--------------------------------------------------------------------------->>>>>
+
+
+# NEW FEATURE: POST /auth/verify-otp — Verify OTP + Issue JWT & Refresh Token
+# Product: Internal (Projects Hub — shared Auth service)
+# Scope: New Feature / Backend API
+# Priority: High
+
+---
+
+## Task Description
+
+Implement the *verify* half of the OTP flow. This endpoint validates a submitted OTP against the hashed record created by `POST /auth/send-otp`, and on success establishes an authenticated session by issuing a short-lived JWT access token and a long-lived rotating refresh token. This task assumes `POST /auth/send-otp` already exists and writes the OTP record described below.
+
+- [ ] Accept an identifier (`phone` or `email` via `channel` discriminator) plus the submitted `code`
+- [ ] Look up the latest unexpired OTP record for the normalized identifier
+- [ ] Enforce attempt limits and expiry before comparison
+- [ ] Compare the submitted code against the stored hash using a constant-time/library compare
+- [ ] On success: resolve-or-create the user, issue a signed JWT access token + a refresh token, persist the refresh token, and consume the OTP record (single-use)
+- [ ] On failure: increment the attempt counter and return a generic error
+- [ ] Emit analytics events for both success and failure
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/routes/auth/index.ts` — see how `send-otp` was registered; register `verify-otp` the same way
+2. `src/services/auth/sendOtp.*` — match the identifier normalization and OTP record shape exactly
+3. `src/lib/validation/*` — reuse the Zod discriminated-union pattern from `send-otp`
+4. `src/lib/jwt/*` or `src/lib/tokens/*` — find any existing JWT signing/verification helpers before adding new ones
+5. `src/models/*` or `src/db/schema/*` — locate the OTP record model and the user model; find where refresh tokens are (or should be) persisted
+6. `src/lib/rateLimit/*` — reuse the existing rate limiter for verify-attempt throttling
+7. `src/lib/analytics/*` — match the event-emission pattern used by `auth_otp_sent`
+
+## Implementation Instructions
+
+### Step 1: Define the request schema
+Reuse the same discriminated union on `channel` as `send-otp`, with an added `code` field:
+
+```ts
+const VerifyOtpSchema = z.discriminatedUnion("channel", [
+  z.object({ channel: z.literal("sms"),   phone: z.string().min(8).max(20), code: z.string().regex(/^\d{6}$/) }),
+  z.object({ channel: z.literal("email"), email: z.string().email(),        code: z.string().regex(/^\d{6}$/) }),
+]);
+```
+Normalize the identifier with the **same** logic `send-otp` uses (trim+lowercase email, strip+E.164 phone) so lookups match.
+
+### Step 2: Throttle verify attempts
+Before any lookup, apply a rate limit keyed on the normalized identifier (e.g. `MAX_VERIFY_ATTEMPTS_PER_WINDOW`, default 10 per `VERIFY_WINDOW_SECONDS`, default 900). On breach return `429`. Reuse the existing rate limiter; do not add a new one. This is independent of the per-record `attempts` counter in Step 4.
+
+### Step 3: Fetch the OTP record
+Load the latest OTP record for the identifier. If none exists, return the generic invalid-code error (`401`) — do **not** reveal whether the issue is "no code requested" vs "wrong code". If the record is expired (`expiresAt < now`), delete it and return the same generic error.
+
+### Step 4: Attempt-count guard
+If `attempts >= MAX_OTP_ATTEMPTS` (default 5), treat the code as locked: delete the record and return a generic error (optionally a distinct `OTP_LOCKED` code). Otherwise proceed.
+
+### Step 5: Constant-time comparison
+Compare the submitted `code` against `otpHash` using the hashing library's verify function (e.g. `bcrypt.compare` / `argon2.verify`) — never a plain `===` on raw values. On mismatch: increment `attempts`, persist, and return the generic `401`. Do not delete the record on a wrong guess (let the attempt counter govern lockout).
+
+### Step 6: Resolve or create the user
+On a successful match, look up the user by identifier. If none exists, create one (first-time login = signup) using the existing user-creation path. Mark the identifier as verified on the user record (`phoneVerified` / `emailVerified`).
+
+### Step 7: Issue tokens
+- **Access token (JWT):** sign with the existing JWT secret/key from config. Include at minimum `sub` (user id), `iat`, `exp` (`ACCESS_TOKEN_TTL_SECONDS`, default 900), and any standard claims the codebase already uses. Do not invent a new claim shape if one exists.
+- **Refresh token:** generate an opaque cryptographically random token (`crypto.randomBytes`), hash it, and persist the hash with `userId`, `expiresAt` (`REFRESH_TOKEN_TTL_SECONDS`, default 30d), and a `rotatedFrom`/family identifier to support rotation. Return the **plaintext** refresh token to the client once; store only the hash.
+
+### Step 8: Consume OTP + respond + analytics
+Delete (or mark consumed) the OTP record so the code cannot be reused. Emit the analytics event. Return `200` with the access token, refresh token, and expiry metadata.
+
+## API / Data Contract
+
+```
+Endpoint: POST /auth/verify-otp
+
+Request Body (one of):
+{ "channel": "sms",   "phone": "+919876543210", "code": "482913" }
+{ "channel": "email", "email": "user@example.com", "code": "482913" }
+
+Success Response (200):
+{
+  "status": "success",
+  "accessToken": "<jwt>",
+  "accessTokenExpiresIn": 900,
+  "refreshToken": "<opaque-token>",
+  "refreshTokenExpiresIn": 2592000,
+  "isNewUser": false
+}
+
+Invalid / expired / locked code (401):
+{
+  "status": "error",
+  "code": "INVALID_OTP",
+  "message": "The code is invalid or has expired."
+}
+
+Rate-limited (429):
+{
+  "status": "error",
+  "code": "RATE_LIMITED",
+  "retryAfter": 120
+}
+
+Validation error (400):
+{
+  "status": "error",
+  "code": "INVALID_REQUEST",
+  "message": "..."
+}
+```
+
+## Analytics Events
+
+```
+Event: auth_otp_verified
+Trigger: fires after a successful verification + token issuance (Step 8)
+Properties:
+  - channel: "sms" | "email"
+  - identifier_hash: string    // hashed/masked identifier, NEVER raw PII
+  - is_new_user: boolean
+
+Event: auth_otp_verify_failed
+Trigger: fires on a wrong/expired/locked code (Steps 3-5)
+Properties:
+  - channel: "sms" | "email"
+  - identifier_hash: string
+  - reason: "wrong_code" | "expired" | "locked" | "no_record"
+```
+Never log the raw identifier, the submitted code, the access token, or the refresh token.
+
+## What NOT to Change
+
+- Do NOT modify `POST /auth/send-otp` or change the OTP record shape — this endpoint must read what `send-otp` writes.
+- Do NOT alter the identifier-normalization logic; mismatched normalization will break every lookup.
+- Do NOT introduce a new JWT library or a new rate-limiter — reuse existing ones.
+- Do NOT return the OTP hash, refresh-token hash, or any internal record fields in the response.
+- Do NOT make the error responses distinguishable in a way that enables enumeration (wrong-code vs no-record must look identical to the client).
+- Do NOT skip refresh-token persistence — an unstored refresh token cannot be revoked or rotated.
+
+## Edge Cases to Handle
+
+- [ ] No OTP record for the identifier → generic `401` (`reason: no_record` in analytics only).
+- [ ] Expired record → delete it, generic `401`.
+- [ ] Wrong code → increment `attempts`, generic `401`; record survives until lockout/expiry.
+- [ ] `attempts` cap reached → delete record, generic `401` (or `OTP_LOCKED`).
+- [ ] Correct code on an already-consumed record → behaves as no_record (`401`), since single-use deletes it.
+- [ ] First-time identifier → create user, `isNewUser: true`.
+- [ ] Verify-attempt rate limit breached → `429` before any DB lookup.
+- [ ] Token signing failure → `500` generic error; do NOT consume the OTP record (so the user can retry).
+
+## Constraints
+
+- Code comparison MUST use the hashing library's verify (constant-time), never raw string equality.
+- Refresh tokens MUST be generated with `crypto.randomBytes`, stored hashed, and returned in plaintext only once.
+- OTP records MUST be single-use: consumed/deleted immediately on successful verification.
+- Error responses MUST be enumeration-safe and identical across the wrong-code / no-record / expired cases at the API boundary (distinctions live only in analytics).
+- All tunables (`ACCESS_TOKEN_TTL_SECONDS`, `REFRESH_TOKEN_TTL_SECONDS`, `MAX_OTP_ATTEMPTS`, `MAX_VERIFY_ATTEMPTS_PER_WINDOW`, `VERIFY_WINDOW_SECONDS`) MUST come from config, not hardcoded.
+- JWT signing key MUST be read from existing config/secret management — never hardcoded.
+
+## Acceptance Criteria
+
+- [ ] Correct code for a valid, unexpired record returns `200` with a signed JWT and a refresh token.
+- [ ] The returned JWT verifies against the configured key and contains `sub`, `iat`, and `exp`.
+- [ ] The refresh token is persisted as a hash; the plaintext appears in no DB field or log.
+- [ ] After a successful verify, reusing the same code returns `401` (single-use enforced).
+- [ ] Wrong code increments the per-record attempt counter and returns a generic `401`.
+- [ ] Exceeding the attempt cap locks the code and returns a generic error.
+- [ ] An expired record returns `401` and is cleaned up.
+- [ ] A first-time identifier creates a user and returns `isNewUser: true`; the identifier is marked verified.
+- [ ] Wrong-code, no-record, and expired responses are byte-identical at the API boundary.
+- [ ] Exceeding the verify-attempt rate limit returns `429` with `retryAfter`.
+- [ ] A simulated token-signing failure returns `500` and leaves the OTP record intact for retry.
+- [ ] `auth_otp_verified` and `auth_otp_verify_failed` events record only hashed identifiers, never raw PII.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes; no sensitive data logged.
+
+## Testing Instructions
+
+1. Run `send-otp` against a test identifier, read the OTP from the dev/sandbox provider (or seed a known hash), then:
+   `curl -X POST localhost:PORT/auth/verify-otp -H "Content-Type: application/json" -d '{"channel":"email","email":"user@example.com","code":"482913"}'`
+2. Confirm `200` with a JWT + refresh token. Decode the JWT and verify claims and signature.
+3. Replay the exact same request → confirm `401` (single-use).
+4. Send a wrong code N times → confirm attempt counter increments and lockout triggers at the cap.
+5. Expire a record (or wait past TTL) → confirm `401` and cleanup.
+6. Verify with a brand-new identifier → confirm user is created and `isNewUser: true`.
+7. Inspect the DB → confirm refresh token stored as a hash, OTP record deleted after success.
+8. Hammer the endpoint past the verify rate limit → confirm `429`.
+9. Force the signer to throw → confirm `500` and that the OTP record still exists.
+10. Run `tsc --noEmit` and the linter — confirm both pass.
+
+## Assumptions
+
+- **Pairing:** Assumes `POST /auth/send-otp` exists with the OTP record shape `{ identifier, channel, otpHash, expiresAt, attempts, createdAt }`. If that shape differs, lookup/compare steps must adapt.
+- **Product/service:** Assumed the shared Auth service inside the internal Projects Hub. Different product → different route mounting and config location.
+- **Stack:** Assumed Node + TypeScript, Zod validation, a Redis-backed rate limiter, and bcrypt/argon2 hashing. Adjust if any differ.
+- **JWT:** Assumed an existing JWT helper and signing secret in config. If none exists, an additional setup step (key management) is required before this task.
+- **Refresh storage:** Assumed refresh tokens are persisted server-side for rotation/revocation. If the system is stateless-JWT-only with no refresh persistence, Step 7's refresh half must be redesigned.
+- **User creation:** Assumed first-time verification doubles as signup. If signup is a separate gated flow, Step 6 should return an error instead of creating a user.
+- **Token transport:** Assumed tokens are returned in the JSON body. If the system uses httpOnly cookies, the response and `Set-Cookie` handling change.
+- **Route path:** Assumed `/auth/verify-otp` with no version prefix; adjust if routes are versioned.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✅  Generate a coding prompt for this task: POST /auth/refresh — token refresh — Phase: Auth + Projects Hub, Track: Backend APIs
+
+----------------------------------------------------------------------->>>>
+
+# NEW FEATURE: POST /auth/refresh — Refresh Token Rotation
+# Product: Internal (Projects Hub — shared Auth service)
+# Scope: New Feature / Backend API
+# Priority: High
+
+---
+
+## Task Description
+
+Implement the token-refresh endpoint that exchanges a valid refresh token for a new short-lived JWT access token and a rotated refresh token. This endpoint consumes the refresh tokens issued by `POST /auth/verify-otp` (stored hashed, with a family/`rotatedFrom` linkage). It must implement **rotation with reuse detection**: each refresh token is single-use, and presenting an already-rotated token is treated as a theft signal that revokes the entire token family.
+
+- [ ] Accept a refresh token (same transport `verify-otp` uses — body or httpOnly cookie)
+- [ ] Hash the presented token and look up its persisted record
+- [ ] Validate: record exists, not expired, not revoked, not already rotated
+- [ ] On valid token: issue a new JWT access token + new refresh token, mark the old token rotated, link both to the same family
+- [ ] On a reused (already-rotated) token: revoke the whole family and reject
+- [ ] Emit analytics for refresh success and for reuse-detection events
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/services/auth/verifyOtp.*` — match the refresh-token record shape, hashing, and family linkage exactly
+2. `src/routes/auth/index.ts` — register `refresh` the same way `verify-otp` and `send-otp` are mounted
+3. `src/lib/jwt/*` or `src/lib/tokens/*` — reuse the same access-token signing helper and claim shape
+4. `src/models/*` or `src/db/schema/*` — locate the refresh-token model; understand `family`/`rotatedFrom`, `revokedAt`, `usedAt`/`rotatedAt`, `expiresAt`
+5. `src/lib/rateLimit/*` — reuse the existing rate limiter for refresh throttling
+6. `src/lib/analytics/*` — match the event-emission pattern used by `auth_otp_verified`
+
+## Implementation Instructions
+
+### Step 1: Read and validate the request
+Accept the refresh token from the **same transport `verify-otp` returns it on**. If body-based, validate with Zod (`{ refreshToken: z.string().min(1) }`); if cookie-based, read the httpOnly cookie. A missing/empty token → generic `401`. Do not echo the token back in any response or log.
+
+### Step 2: Throttle
+Apply a rate limit keyed on a stable client signal (IP and/or token family if resolvable) — e.g. `MAX_REFRESH_PER_WINDOW` default 30 per `REFRESH_WINDOW_SECONDS` default 900. On breach return `429`. Reuse the existing limiter.
+
+### Step 3: Look up the token record
+Hash the presented token with the same algorithm `verify-otp` used to store it, then look it up by hash (constant-time/library compare; never raw equality). If no record matches → generic `401` (`reason: unknown`). Do not reveal which check failed.
+
+### Step 4: Reuse detection (theft signal)
+If the matched record is already rotated/used (`rotatedAt`/`usedAt` set) or `revokedAt` is set:
+- Revoke the **entire token family** (`UPDATE ... SET revokedAt = now WHERE family = <family>`), invalidating every descendant.
+- Emit the reuse-detection analytics event.
+- Return generic `401`.
+This is the core security behavior — a stolen-then-rotated token presented again must burn the whole chain.
+
+### Step 5: Expiry check
+If `expiresAt < now`, mark/leave the record unusable and return generic `401` (`reason: expired`). Do not rotate.
+
+### Step 6: User validity
+Resolve the `userId` on the record. If the user no longer exists, is disabled, or is otherwise not eligible for a session, revoke the family and return `401`. Do not issue tokens for a dead account.
+
+### Step 7: Rotate atomically
+Within a single transaction (or atomic conditional update to avoid races where two requests rotate the same token):
+- Mark the current record rotated (`rotatedAt = now`).
+- Generate a new opaque refresh token (`crypto.randomBytes`), store its **hash** with the **same `family`**, `rotatedFrom = <current record id>`, fresh `expiresAt` (sliding window: `now + REFRESH_TOKEN_TTL_SECONDS`, default 30d — confirm whether the system uses sliding or fixed expiry).
+- Sign a new JWT access token with the existing helper and claim shape (`sub`, `iat`, `exp = now + ACCESS_TOKEN_TTL_SECONDS`, default 900).
+Guard against double-rotation: the update marking the old token rotated must be conditional on it being currently unrotated, so concurrent requests cannot both succeed.
+
+### Step 8: Respond + analytics
+Emit the success event and return the new access token + new refresh token (on the same transport as input). Return only the plaintext new refresh token once; store only its hash.
+
+## API / Data Contract
+
+```
+Endpoint: POST /auth/refresh
+
+Request Body (if body transport):
+{ "refreshToken": "<opaque-token>" }
+(if cookie transport: token read from httpOnly cookie; body empty)
+
+Success Response (200):
+{
+  "status": "success",
+  "accessToken": "<jwt>",
+  "accessTokenExpiresIn": 900,
+  "refreshToken": "<new-opaque-token>",     // omitted if cookie transport; set via Set-Cookie instead
+  "refreshTokenExpiresIn": 2592000
+}
+
+Invalid / expired / reused / revoked (401):
+{
+  "status": "error",
+  "code": "INVALID_REFRESH_TOKEN",
+  "message": "Session expired. Please sign in again."
+}
+
+Rate-limited (429):
+{
+  "status": "error",
+  "code": "RATE_LIMITED",
+  "retryAfter": 60
+}
+```
+
+## Analytics Events
+
+```
+Event: auth_token_refreshed
+Trigger: fires after a successful rotation (Step 8)
+Properties:
+  - user_id_hash: string       // hashed user id, NEVER raw PII or tokens
+  - family_id: string          // family identifier is acceptable; it is not a secret token
+
+Event: auth_refresh_reuse_detected
+Trigger: fires when an already-rotated/revoked token is presented (Step 4)
+Properties:
+  - family_id: string
+  - user_id_hash: string
+```
+Never log the raw refresh token (old or new), the access token, or raw user PII.
+
+## What NOT to Change
+
+- Do NOT modify `verify-otp` or `send-otp`, or change the refresh-token record shape — this endpoint must read what `verify-otp` writes.
+- Do NOT change the access-token claim shape or signing key handling — reuse the existing JWT helper.
+- Do NOT introduce a new JWT library, hashing scheme, or rate limiter.
+- Do NOT skip family revocation on reuse — that is the security purpose of this endpoint.
+- Do NOT return or log any plaintext token beyond the single new refresh token in the success response.
+- Do NOT make error responses distinguishable across unknown / expired / reused / revoked cases at the API boundary (distinctions live only in analytics).
+
+## Edge Cases to Handle
+
+- [ ] Missing/empty refresh token → generic `401`.
+- [ ] Unknown token (no matching hash) → generic `401`.
+- [ ] Expired token → generic `401`, no rotation.
+- [ ] Already-rotated token presented again → revoke family, emit reuse event, `401`.
+- [ ] Explicitly revoked token (or any token in a revoked family) → `401`.
+- [ ] Concurrent double-refresh with the same token → exactly one succeeds; the loser gets `401` without corrupting the family.
+- [ ] User deleted/disabled since issuance → revoke family, `401`.
+- [ ] Refresh rate limit breached → `429` before lookup.
+
+## Constraints
+
+- Token hashing and comparison MUST use the same algorithm/verify as `verify-otp`; never raw string equality.
+- New refresh tokens MUST be `crypto.randomBytes`, stored hashed, returned in plaintext once.
+- Rotation MUST be atomic and guarded against concurrent double-use (transaction or conditional update).
+- Reuse of a rotated/revoked token MUST revoke the entire family.
+- Error responses MUST be enumeration-safe and identical across all failure reasons at the API boundary.
+- All tunables (`ACCESS_TOKEN_TTL_SECONDS`, `REFRESH_TOKEN_TTL_SECONDS`, `MAX_REFRESH_PER_WINDOW`, `REFRESH_WINDOW_SECONDS`) MUST come from config.
+- Token transport (body vs httpOnly cookie) MUST match `verify-otp`; do not introduce a second convention.
+
+## Acceptance Criteria
+
+- [ ] A valid refresh token returns `200` with a new JWT and a new refresh token; the JWT verifies against the configured key.
+- [ ] The old refresh token is marked rotated and no longer works after a successful refresh.
+- [ ] The new refresh token shares the same `family` and records `rotatedFrom` pointing at the old token.
+- [ ] Presenting an already-rotated token revokes the whole family: every token in that family stops working and `auth_refresh_reuse_detected` fires.
+- [ ] Expired, unknown, revoked, and reused tokens all return a byte-identical `401` at the API boundary.
+- [ ] Two concurrent refreshes with the same token result in exactly one success and one `401`, with no orphaned/duplicate live tokens.
+- [ ] A refresh for a deleted/disabled user returns `401` and revokes the family.
+- [ ] New refresh tokens are stored hashed; no plaintext token appears in any DB field or log.
+- [ ] Exceeding the refresh rate limit returns `429`.
+- [ ] `auth_token_refreshed` and `auth_refresh_reuse_detected` log only hashed user ids / family ids, never raw tokens or PII.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes; no sensitive data logged.
+
+## Testing Instructions
+
+1. Obtain a refresh token via the `send-otp` → `verify-otp` flow.
+2. Call refresh:
+   `curl -X POST localhost:PORT/auth/refresh -H "Content-Type: application/json" -d '{"refreshToken":"<token>"}'`
+   Confirm `200`, decode the new JWT, verify claims/signature.
+3. Reuse the original (now-rotated) token → confirm `401` AND that the new token from step 2 is now also dead (family revoked). Confirm `auth_refresh_reuse_detected` fired.
+4. Use a fabricated/unknown token → confirm generic `401`.
+5. Expire a token (or set `expiresAt` in the past) → confirm `401`, no rotation.
+6. Fire two refreshes with the same valid token near-simultaneously → confirm exactly one `200` and one `401`.
+7. Disable the user, then refresh → confirm `401` and family revocation.
+8. Inspect the DB → new token stored hashed, old token `rotatedAt` set, `family`/`rotatedFrom` linkage correct.
+9. Exceed the refresh rate limit → confirm `429`.
+10. Run `tsc --noEmit` and the linter — confirm both pass.
+
+## Assumptions
+
+- **Pairing:** Assumes `verify-otp` persists refresh tokens hashed with fields roughly `{ id, userId, tokenHash, family, rotatedFrom, rotatedAt|usedAt, revokedAt, expiresAt, createdAt }`. If the shape differs, Steps 3-7 adapt.
+- **Rotation model:** Assumed rotating refresh tokens with reuse detection (industry-standard). If the system uses non-rotating refresh tokens, Steps 4 and 7 change substantially.
+- **Expiry style:** Assumed a sliding window on rotation. If the system uses fixed absolute expiry per family, the new token must inherit the family's original `expiresAt` instead of extending it.
+- **Transport:** Assumed refresh tokens travel the same way `verify-otp` returns them. If that is httpOnly cookies, request parsing and the response use `Set-Cookie` rather than the JSON body.
+- **Stack:** Assumed Node + TypeScript, Zod, a transactional store (or atomic conditional updates), the existing JWT helper, and a Redis-backed rate limiter. Adjust if any differ.
+- **Concurrency:** Assumed the datastore supports a transaction or atomic conditional update for safe rotation. If it does not, an alternative locking strategy must be specified before implementation.
+- **Route path:** Assumed `/auth/refresh` with no version prefix; adjust if routes are versioned.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✅ Generate a coding prompt for this task: GET /projects — list user projects (sorted by updatedAt desc) — Phase: Auth + Projects Hub, Track: Backend APIs
+
+------------------------------------------------------------------------------------->>>>
+
+# NEW FEATURE: GET /projects — List User Projects (sorted by updatedAt desc)
+# Product: Internal (Projects Hub)
+# Scope: New Feature / Backend API
+# Priority: High
+
+---
+
+## Task Description
+
+Implement an authenticated endpoint that returns the projects belonging to the currently authenticated user, sorted by `updatedAt` descending, with pagination. This is the primary list view for the Projects Hub. It is a protected route: it relies on the JWT auth middleware to resolve the user from the access token, and it must return only that user's projects.
+
+- [ ] Protect the route with the existing JWT auth middleware (resolves `userId` from the access token `sub` claim)
+- [ ] Query projects scoped strictly to the authenticated `userId`
+- [ ] Exclude soft-deleted projects if the schema supports soft deletion
+- [ ] Sort by `updatedAt` descending, with a deterministic tie-breaker
+- [ ] Support pagination (cursor-based preferred; offset acceptable if that is the existing convention)
+- [ ] Return a typed, minimal project list shape plus pagination metadata
+- [ ] Emit a lightweight analytics event for the list view
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/middleware/auth.*` — the JWT middleware; confirm how it attaches the user (`req.user` / `req.userId`) and how it rejects unauthenticated requests
+2. `src/routes/projects/index.ts` (or wherever project routes live/should live) — see existing route registration conventions
+3. `src/models/*` or `src/db/schema/*` — the Project model: confirm field names (`ownerId`/`userId`, `updatedAt`, soft-delete flag), and indexes
+4. `src/lib/validation/*` — confirm Zod is used; reuse query-param validation patterns
+5. `src/lib/pagination/*` (if present) — reuse the existing pagination helper and response envelope rather than inventing one
+6. `src/lib/analytics/*` — match the existing event-emission pattern
+
+## Implementation Instructions
+
+### Step 1: Mount the protected route
+Register `GET /projects` behind the existing JWT auth middleware so unauthenticated/invalid-token requests are rejected with `401` before the handler runs. Do not re-implement token verification in the handler — rely on the middleware and read the resolved `userId`.
+
+### Step 2: Validate query parameters
+Validate pagination/query params with Zod. Coerce and bound them:
+```ts
+const ListProjectsQuery = z.object({
+  limit:  z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().optional(),   // opaque cursor (preferred)
+  // OR, if offset is the house convention:
+  // page: z.coerce.number().int().min(1).default(1),
+});
+```
+Reject out-of-range or malformed params with `400`. Cap `limit` hard at 100 regardless of input to prevent unbounded queries.
+
+### Step 3: Build the scoped query
+Query the Project collection/table filtered by the owner field equal to the authenticated `userId`. If the schema has a soft-delete flag (e.g. `deletedAt`/`isDeleted`), exclude soft-deleted rows. Never accept a `userId`/owner from the query string or body — the owner comes only from the authenticated token.
+
+### Step 4: Sort deterministically
+Order by `updatedAt DESC`. Because `updatedAt` can collide, add a stable secondary sort on a unique field (`_id`/`id` DESC) so ordering is deterministic and cursor pagination is correct. Ensure a supporting index exists on `(ownerId, updatedAt, _id)` (or equivalent); if absent, add it in the migration/schema step and note it.
+
+### Step 5: Paginate
+- **Cursor (preferred):** encode the last item's `(updatedAt, id)` into an opaque cursor; on the next request decode it and fetch rows strictly after that position. Return `nextCursor` only when more rows exist.
+- **Offset (if house convention):** use `skip`/`offset` with the validated `page`/`limit`, and return total count + page metadata.
+Fetch `limit + 1` rows to determine whether a next page exists without a separate count query (cursor mode).
+
+### Step 6: Shape the response + analytics
+Map rows to a minimal DTO (do not leak internal-only fields). Emit the analytics event. Return `200` with the items and pagination metadata.
+
+## API / Data Contract
+
+```
+Endpoint: GET /projects
+Auth: required (Bearer access token)
+Query params:
+  - limit:  integer 1-100 (default 20)
+  - cursor: string (opaque, optional)   // cursor mode
+  // or: page: integer >=1 (default 1)   // offset mode
+
+Success Response (200) — cursor mode:
+{
+  "status": "success",
+  "items": [
+    {
+      "id": "proj_123",
+      "name": "My Project",
+      "updatedAt": "2026-06-14T10:00:00.000Z",
+      "createdAt": "2026-06-01T09:00:00.000Z"
+      // include only fields the Hub list view needs
+    }
+  ],
+  "nextCursor": "<opaque>" | null
+}
+
+Unauthorized (401) — from middleware:
+{ "status": "error", "code": "UNAUTHORIZED", "message": "..." }
+
+Validation error (400):
+{ "status": "error", "code": "INVALID_REQUEST", "message": "..." }
+```
+
+## Analytics Events
+
+```
+Event: projects_listed
+Trigger: fires after a successful list response (Step 6)
+Properties:
+  - user_id_hash: string    // hashed user id, NEVER raw PII
+  - result_count: number
+  - is_empty: boolean
+```
+Do not log raw user identifiers or full project payloads.
+
+## What NOT to Change
+
+- Do NOT re-implement or modify the JWT auth middleware — consume it as-is.
+- Do NOT accept an owner/`userId` from query, body, or header — ownership comes only from the authenticated token. Accepting it from the request is a security hole.
+- Do NOT return projects the authenticated user does not own under any pagination/sort path.
+- Do NOT add write logic, mutation, or side effects — this is a read-only endpoint.
+- Do NOT return soft-deleted projects or internal-only model fields in the DTO.
+- Do NOT introduce a new pagination convention if the repo already has one.
+
+## Edge Cases to Handle
+
+- [ ] User has zero projects → `200` with `items: []` and `nextCursor: null` (NOT a 404 or error).
+- [ ] Invalid/expired/missing token → `401` from middleware before the handler.
+- [ ] Malformed or out-of-range `limit`/`cursor`/`page` → `400`.
+- [ ] Tampered/garbage cursor → `400` (decode defensively; do not 500).
+- [ ] `updatedAt` ties across multiple projects → deterministic order via secondary `id` sort; no duplicates or skips across pages.
+- [ ] Large project count → bounded by `limit` cap; no unbounded scan.
+- [ ] Soft-deleted projects exist → excluded from results and counts.
+
+## Constraints
+
+- Owner scoping MUST be enforced server-side from the token `sub`; the request cannot influence which user's projects are returned.
+- `limit` MUST be hard-capped (100) server-side regardless of client input.
+- Sort MUST be deterministic (`updatedAt DESC, id DESC`) so cursor pagination is stable.
+- Query params MUST be validated with Zod; cursor decoding MUST be defensive (bad cursor → 400, never 500).
+- The handler MUST be read-only — no writes, no mutations.
+- A supporting compound index MUST back the `(owner, updatedAt, id)` query path; add it if missing.
+
+## Acceptance Criteria
+
+- [ ] An authenticated request returns only the caller's projects, sorted by `updatedAt` descending.
+- [ ] A request with no token / invalid token returns `401`.
+- [ ] A user with no projects gets `200` and an empty `items` array (not an error).
+- [ ] Pagination returns each project exactly once across pages with no gaps or duplicates, even when `updatedAt` values tie.
+- [ ] `nextCursor` is present when more rows exist and `null`/absent on the last page (cursor mode), or page metadata is correct (offset mode).
+- [ ] `limit` above 100 is clamped to 100; below 1 or non-numeric returns `400`.
+- [ ] A tampered cursor returns `400`, not `500`.
+- [ ] Attempting to influence ownership via a `userId` query/body param has no effect — only the token's user is used.
+- [ ] Soft-deleted projects never appear in results.
+- [ ] The response DTO contains no internal-only fields.
+- [ ] `projects_listed` analytics event fires with a hashed user id and correct `result_count`.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes.
+
+## Testing Instructions
+
+1. Seed two users each with several projects (varying `updatedAt`, including at least two with identical `updatedAt`).
+2. Call the endpoint as user A:
+   `curl localhost:PORT/projects -H "Authorization: Bearer <userA-access-token>"`
+   Confirm only user A's projects return, ordered by `updatedAt` desc, ties broken deterministically.
+3. Page through with small `limit` (e.g. 2) following `nextCursor` to the end → confirm every project appears once, no gaps/dupes, `nextCursor` null on the last page.
+4. Call with no token and with an expired token → confirm `401`.
+5. Call with `limit=9999`, `limit=0`, `limit=abc` → confirm clamp / `400` as specified.
+6. Call with a corrupted cursor string → confirm `400`.
+7. Add `?userId=<userB-id>` to user A's request → confirm user B's projects do NOT leak.
+8. Soft-delete a project → confirm it disappears from the list.
+9. Call as a user with zero projects → confirm `200` with empty array.
+10. Run `tsc --noEmit` and the linter — confirm both pass.
+
+## Assumptions
+
+- **Auth dependency:** Assumes the JWT auth middleware from the auth track exists and attaches the user id (from `sub`) to the request. If it is not yet built, this task is blocked on it.
+- **Pagination style:** Assumed cursor-based pagination. If the Projects Hub already standardizes on offset/page pagination, switch to that convention and response envelope.
+- **Project model:** Assumed a Project model with an owner field, `updatedAt`, `createdAt`, and possibly a soft-delete flag. Field names must be confirmed against the actual schema.
+- **Ownership model:** Assumed each project has a single owner equal to the authenticated user. If projects can be shared (collaborators/teams), the scoping query must include membership, which changes Step 3 materially.
+- **Index:** Assumed a compound index can be added on `(ownerId, updatedAt, id)`. If migrations are gated, the index addition may be a separate task.
+- **Stack:** Assumed Node + TypeScript with Zod. Adjust if different.
+- **Route path:** Assumed `/projects` with no version prefix; adjust if routes are versioned.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+✅/2 Generate a coding prompt for this task: POST /projects — create project (name, objectSize, category, mode) — Phase: Auth + Projects Hub, Track: Backend APIs
+
+-------------------------------------------------------->>>
+
+
+# NEW FEATURE: POST /projects — Create Project (name, objectSize, category, mode)
+# Product: Internal (Projects Hub)
+# Scope: New Feature / Backend API
+# Priority: High
+
+---
+
+## Task Description
+
+Implement an authenticated endpoint that creates a new project owned by the current user. The project is defined by a `name` and three constrained fields — `objectSize`, `category`, and `mode`. On success it returns the created project with a `201`. The created record must set `updatedAt` so the project surfaces at the top of `GET /projects` (which sorts by `updatedAt` desc).
+
+- [ ] Protect the route with the existing JWT auth middleware (owner resolved from access-token `sub`)
+- [ ] Validate the body: `name`, `objectSize`, `category`, `mode`
+- [ ] Enforce that `objectSize`, `category`, and `mode` are members of their allowed enum sets (values listed in Assumptions — REPLACE with real values before running)
+- [ ] Persist the project with `ownerId` from the token, plus `createdAt` and `updatedAt`
+- [ ] Return the created project DTO with `201`
+- [ ] Emit a `project_created` analytics event
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/middleware/auth.*` — confirm how the JWT middleware attaches `userId` to the request
+2. `src/routes/projects/index.ts` — register `POST /projects` alongside the existing `GET /projects`
+3. `src/services/projects/*` — match the service-layer pattern used by the list endpoint, if one exists
+4. `src/models/*` or `src/db/schema/*` — the Project model: confirm exact field names, required fields, and whether enums are defined at the schema level
+5. `src/lib/validation/*` — reuse the Zod patterns established by the auth and list endpoints
+6. `src/constants/*` or wherever shared enums live — find existing definitions for objectSize/category/mode before defining new ones
+7. `src/lib/analytics/*` — match the existing event-emission pattern
+
+## Implementation Instructions
+
+### Step 1: Mount the protected route
+Register `POST /projects` behind the JWT auth middleware so unauthenticated requests are rejected with `401` before the handler runs. Read the owner id only from the middleware-resolved user — never from the body.
+
+### Step 2: Define the request schema
+Validate the body with Zod. Enforce the enum constraints explicitly — **do not** accept free-form strings for the three constrained fields:
+```ts
+const CreateProjectSchema = z.object({
+  name:       z.string().trim().min(1).max(120),
+  objectSize: z.enum(OBJECT_SIZE_VALUES),   // see Assumptions — replace placeholders
+  category:   z.enum(CATEGORY_VALUES),       // see Assumptions — replace placeholders
+  mode:       z.enum(MODE_VALUES),           // see Assumptions — replace placeholders
+});
+```
+Reuse existing enum constant definitions if they already exist in the codebase rather than redeclaring the literal values. Reject any unknown/extra body fields (`.strict()`) or strip them — match the house convention. Invalid input → `400` with a clear (but non-leaky) validation message.
+
+### Step 3: Build the record
+Construct the project document:
+```
+{
+  ownerId:    <authenticated userId>,   // from token, never from body
+  name:       <validated, trimmed>,
+  objectSize: <validated enum>,
+  category:   <validated enum>,
+  mode:       <validated enum>,
+  createdAt:  now,
+  updatedAt:  now,                       // equal to createdAt on creation
+}
+```
+Set `updatedAt === createdAt` at creation so the new project sorts to the top of the list endpoint. Apply any schema-level defaults the Project model already defines (do not duplicate them in the handler).
+
+### Step 4: Persist
+Insert the record via the existing model/ODM. Do not enforce name uniqueness unless the schema already requires it — duplicate project names are allowed by default. If the insert fails for a constraint the schema does enforce, surface a `409`/`400` as appropriate rather than a generic `500`.
+
+### Step 5: Respond + analytics
+Map the persisted record to the same project DTO shape the list endpoint returns (consistency matters — the frontend reuses it). Emit the analytics event. Return `201` with the created project.
+
+## API / Data Contract
+
+```
+Endpoint: POST /projects
+Auth: required (Bearer access token)
+
+Request Body:
+{
+  "name": "Living Room Sofa",
+  "objectSize": "<one of OBJECT_SIZE_VALUES>",
+  "category": "<one of CATEGORY_VALUES>",
+  "mode": "<one of MODE_VALUES>"
+}
+
+Success Response (201):
+{
+  "status": "success",
+  "project": {
+    "id": "proj_123",
+    "name": "Living Room Sofa",
+    "objectSize": "...",
+    "category": "...",
+    "mode": "...",
+    "createdAt": "2026-06-14T10:00:00.000Z",
+    "updatedAt": "2026-06-14T10:00:00.000Z"
+  }
+}
+
+Validation error (400):
+{ "status": "error", "code": "INVALID_REQUEST", "message": "...", "fields": { "objectSize": "invalid value" } }
+
+Unauthorized (401) — from middleware:
+{ "status": "error", "code": "UNAUTHORIZED", "message": "..." }
+```
+
+## Analytics Events
+
+```
+Event: project_created
+Trigger: fires after successful persistence (Step 5)
+Properties:
+  - user_id_hash: string    // hashed user id, NEVER raw PII
+  - project_id: string
+  - object_size: string
+  - category: string
+  - mode: string
+```
+Do not log raw user identifiers.
+
+## What NOT to Change
+
+- Do NOT re-implement or modify the JWT auth middleware — consume it as-is.
+- Do NOT accept `ownerId`/`userId` from the request body — ownership comes only from the token. Accepting it lets a caller create projects for someone else.
+- Do NOT change the project DTO shape returned by `GET /projects` — both endpoints must return the same project shape.
+- Do NOT accept free-form strings for `objectSize`, `category`, or `mode` — they must be enum-validated.
+- Do NOT add update/delete logic — this task is create-only.
+- Do NOT introduce name uniqueness constraints unless the schema already has them.
+
+## Edge Cases to Handle
+
+- [ ] Missing `name` or empty/whitespace-only `name` → `400`.
+- [ ] `name` exceeding max length → `400`.
+- [ ] `objectSize`/`category`/`mode` missing or not in the allowed enum → `400` identifying the offending field.
+- [ ] Unknown/extra body fields → rejected or stripped per house convention.
+- [ ] Invalid/expired/missing token → `401` from middleware.
+- [ ] Wrong content-type / non-JSON body → `400`, not `500`.
+- [ ] Duplicate name for the same user → allowed (succeeds), unless schema says otherwise.
+
+## Constraints
+
+- Owner MUST come from the authenticated token `sub`; the request body cannot set it.
+- `objectSize`, `category`, `mode` MUST be validated against fixed enum sets via Zod `z.enum`.
+- `name` MUST be trimmed and length-bounded (1-120 chars assumed; confirm).
+- `updatedAt` MUST equal `createdAt` at creation so the project sorts first in the list endpoint.
+- The returned DTO MUST match the `GET /projects` project shape exactly.
+- The handler MUST validate before any DB write; no partial writes on validation failure.
+
+## Acceptance Criteria
+
+- [ ] A valid authenticated request creates a project owned by the caller and returns `201` with the project DTO.
+- [ ] The created project appears at the top of `GET /projects` immediately after creation (because `updatedAt` is set to now).
+- [ ] Missing/empty `name` returns `400`.
+- [ ] An invalid `objectSize`, `category`, or `mode` returns `400` and identifies the bad field; valid enum values succeed.
+- [ ] Sending `ownerId` in the body does NOT change ownership — the project is owned by the token's user.
+- [ ] A request with no/invalid token returns `401`.
+- [ ] The returned project DTO is identical in shape to what `GET /projects` returns.
+- [ ] Duplicate project names for the same user succeed (no false uniqueness error), unless schema dictates otherwise.
+- [ ] `project_created` analytics event fires with hashed user id and the three enum values.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes.
+
+## Testing Instructions
+
+1. Create a project as an authenticated user:
+   `curl -X POST localhost:PORT/projects -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"name":"Sofa","objectSize":"<valid>","category":"<valid>","mode":"<valid>"}'`
+   Confirm `201` and the returned DTO.
+2. Immediately call `GET /projects` → confirm the new project is first (sorted by `updatedAt` desc).
+3. Omit `name`, send empty `name`, and send an over-long `name` → confirm `400` each time.
+4. Send an invalid value for each of `objectSize`/`category`/`mode` → confirm `400` naming the field.
+5. Send `"ownerId":"<other-user-id>"` in the body → confirm the project is still owned by the token's user.
+6. Call with no token / expired token → confirm `401`.
+7. Send a non-JSON body → confirm `400`, not a crash.
+8. Inspect the DB → confirm `ownerId`, both timestamps equal, and enum values stored correctly.
+9. Run `tsc --noEmit` and the linter — confirm both pass.
+
+## Assumptions
+
+- **!! Enum values unknown — MUST confirm before running !!** Placeholder sets to replace with the real allowed values:
+  - `OBJECT_SIZE_VALUES`: assumed e.g. `["small", "medium", "large"]` — REPLACE.
+  - `CATEGORY_VALUES`: assumed product-specific (e.g. furniture/decor/electronics) — REPLACE.
+  - `MODE_VALUES`: assumed e.g. `["ar", "3d"]` or `["preview", "published"]` — REPLACE.
+  If these enums are already defined in a shared constants file, import them instead of redeclaring.
+- **Auth dependency:** Assumes the JWT auth middleware exists and attaches the user id. If not built yet, this task is blocked on it.
+- **Project model:** Assumes a Project model with `ownerId`, `name`, `objectSize`, `category`, `mode`, `createdAt`, `updatedAt`, matching the `GET /projects` schema. Field names must be confirmed.
+- **Ownership model:** Assumes single-owner projects (consistent with the list endpoint). If projects belong to teams or require membership, the create path must set team/membership fields too.
+- **Name rules:** Assumed 1-120 chars, duplicates allowed. Adjust if the product enforces uniqueness or different bounds.
+- **Extra fields:** Assumed the project may have additional fields (e.g. a model/asset URL) set by later endpoints; this task sets only the four specified plus timestamps and owner.
+- **Stack/route:** Assumed Node + TypeScript + Zod, route at `/projects` with no version prefix. Adjust if versioned.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: DELETE /projects/:id — soft delete with confirmation — Phase: Auth + Projects Hub, Track: Backend APIs
+
+------------------------------------------------------------------------------->>>>>>
+
+# NEW FEATURE: DELETE /projects/:id — Soft Delete with Confirmation
+# Product: Internal (Projects Hub)
+# Scope: New Feature / Backend API
+# Priority: High
+
+---
+
+## Task Description
+
+Implement an authenticated endpoint that soft-deletes a project owned by the current user. The delete is **soft** (the row is flagged, not removed) so it stays consistent with `GET /projects`, which already excludes soft-deleted projects. The delete also requires an explicit **confirmation signal** in the request to guard against accidental destructive calls — the frontend shows the confirmation dialog, but the backend independently enforces that confirmation was given.
+
+- [ ] Protect the route with the existing JWT auth middleware (owner resolved from access-token `sub`)
+- [ ] Validate the `:id` path param
+- [ ] Require and validate an explicit confirmation signal (see API contract + Assumptions)
+- [ ] Enforce ownership: only the project's owner may delete it
+- [ ] Soft-delete by setting the schema's soft-delete flag (e.g. `deletedAt`), not by removing the row
+- [ ] Behave idempotently for an already-deleted project
+- [ ] Emit a `project_deleted` analytics event
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/middleware/auth.*` — confirm how the JWT middleware attaches `userId`
+2. `src/routes/projects/index.ts` — register `DELETE /projects/:id` alongside the existing project routes
+3. `src/services/projects/*` — match the service-layer pattern used by list/create
+4. `src/models/*` or `src/db/schema/*` — the Project model: confirm the soft-delete field name (`deletedAt` vs `isDeleted`) and how the list endpoint filters on it
+5. `src/lib/validation/*` — reuse the Zod param/body validation patterns
+6. `src/lib/analytics/*` — match the existing event-emission pattern
+
+## Implementation Instructions
+
+### Step 1: Mount the protected route
+Register `DELETE /projects/:id` behind the JWT auth middleware so unauthenticated requests get `401` before the handler. Read the owner id only from the resolved user.
+
+### Step 2: Validate the path param and confirmation
+- Validate `:id` matches the expected id format (ObjectId / UUID / prefixed id — match the schema). Malformed → `400`.
+- Validate the confirmation signal. **Assumed mechanism (confirm before running):** the client must send the exact current project `name` in the request body as `confirmName`; the handler proceeds only if it matches the stored name. This prevents blind/accidental deletes. (Lighter alternative: a required `confirm: true` flag — see Assumptions.) Missing or mismatched confirmation → `422` (or `400`) WITHOUT performing the delete.
+  - Note: some HTTP clients/proxies strip bodies from DELETE requests. If the repo's client conventions make a DELETE body unreliable, accept the confirmation as a query param (`?confirmName=...`) instead — match the house convention and state which was used.
+
+### Step 3: Fetch and authorize
+Load the project by `id` scoped to the authenticated `ownerId` in a single query (`{ _id: id, ownerId: userId }`). If no such non-deleted project exists:
+- If the project does not exist OR belongs to another user → return `404` (do NOT return `403`; a `403` leaks that the id exists). Ownership failures and not-found must be indistinguishable.
+
+### Step 4: Confirmation match
+Compare the supplied `confirmName` against the loaded project's current `name`. On mismatch → `422`, no delete. (If using the `confirm: true` flag variant, verify it is strictly `true`.)
+
+### Step 5: Soft-delete (idempotent)
+Set the soft-delete flag (`deletedAt = now`; or `isDeleted = true` plus `deletedAt`). Use a conditional update so the operation is idempotent and race-safe:
+- If the project is already soft-deleted, do not error and do not overwrite the original `deletedAt` — return success (idempotent). Decide and document the status code (see Acceptance Criteria).
+Do NOT hard-delete. Do NOT cascade-delete related records unless explicitly required (out of scope here).
+
+### Step 6: Respond + analytics
+Emit the analytics event and return success. Return `200` with a small confirmation body (or `204` if the house convention is no-body on delete — match existing endpoints).
+
+## API / Data Contract
+
+```
+Endpoint: DELETE /projects/:id
+Auth: required (Bearer access token)
+Path param: id (project id)
+
+Request Body (confirmation — assumed mechanism):
+{ "confirmName": "Living Room Sofa" }
+// Alternative mechanism: { "confirm": true }
+// Or query param: DELETE /projects/:id?confirmName=Living%20Room%20Sofa
+
+Success Response (200):
+{
+  "status": "success",
+  "id": "proj_123",
+  "deletedAt": "2026-06-14T10:00:00.000Z"
+}
+// or 204 No Content if that is the house convention
+
+Confirmation missing/mismatched (422):
+{ "status": "error", "code": "CONFIRMATION_REQUIRED", "message": "Confirmation does not match the project name." }
+
+Not found / not owned (404):
+{ "status": "error", "code": "NOT_FOUND", "message": "Project not found." }
+
+Bad id format (400):
+{ "status": "error", "code": "INVALID_REQUEST", "message": "..." }
+
+Unauthorized (401) — from middleware:
+{ "status": "error", "code": "UNAUTHORIZED", "message": "..." }
+```
+
+## Analytics Events
+
+```
+Event: project_deleted
+Trigger: fires after a successful soft-delete (Step 6), including idempotent repeats only on the first actual delete
+Properties:
+  - user_id_hash: string    // hashed user id, NEVER raw PII
+  - project_id: string
+  - was_already_deleted: boolean   // true on idempotent repeat (no state change)
+```
+Do not log raw user identifiers or full project payloads.
+
+## What NOT to Change
+
+- Do NOT re-implement or modify the JWT auth middleware — consume it as-is.
+- Do NOT hard-delete the row or remove it from the database — this is a soft delete only.
+- Do NOT cascade-delete related records (assets, analytics, etc.) — out of scope for this task.
+- Do NOT return `403` for a project owned by another user — return `404` so existence is not leaked.
+- Do NOT change the soft-delete field name or the list endpoint's filter logic — read the existing convention and reuse it.
+- Do NOT perform the delete when confirmation is missing or mismatched.
+
+## Edge Cases to Handle
+
+- [ ] Malformed `:id` → `400` (do not query the DB with an invalid id).
+- [ ] Project does not exist → `404`.
+- [ ] Project exists but is owned by another user → `404` (indistinguishable from not-found).
+- [ ] Missing confirmation signal → `422`, no delete.
+- [ ] Confirmation present but does not match the current name → `422`, no delete.
+- [ ] Project already soft-deleted → idempotent success; original `deletedAt` preserved; `was_already_deleted: true`.
+- [ ] Concurrent double-delete of the same project → both resolve safely; one performs the state change, the other is a no-op success.
+- [ ] Invalid/expired/missing token → `401` from middleware.
+
+## Constraints
+
+- Owner scoping MUST come from the token `sub`; the request cannot specify whose project to delete.
+- Not-found and not-owned MUST return identical `404` responses (no existence leak).
+- The delete MUST be soft (flag set), never a hard delete or cascade.
+- Confirmation MUST be enforced server-side; a request without valid confirmation MUST NOT mutate state.
+- The operation MUST be idempotent and race-safe (conditional update); repeating it does not error or overwrite the original `deletedAt`.
+- The soft-delete flag and filter MUST match the existing convention used by `GET /projects`.
+
+## Acceptance Criteria
+
+- [ ] A valid authenticated request with correct confirmation soft-deletes the caller's project and returns success.
+- [ ] After deletion, the project no longer appears in `GET /projects`.
+- [ ] The row still exists in the database with the soft-delete flag set (not removed).
+- [ ] Missing or mismatched confirmation returns `422` and does NOT delete the project.
+- [ ] Deleting a non-existent project returns `404`.
+- [ ] Deleting another user's project returns `404` (identical to not-found; no `403`).
+- [ ] Deleting an already-deleted project succeeds idempotently and preserves the original `deletedAt`.
+- [ ] Malformed `:id` returns `400` without hitting the DB.
+- [ ] A request with no/invalid token returns `401`.
+- [ ] `project_deleted` analytics event fires with hashed user id and correct `was_already_deleted` value.
+- [ ] No hard delete and no cascade occur — related records are untouched.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes.
+
+## Testing Instructions
+
+1. Create a project, then delete it with correct confirmation:
+   `curl -X DELETE localhost:PORT/projects/<id> -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"confirmName":"<exact name>"}'`
+   Confirm success and the returned `deletedAt`.
+2. Call `GET /projects` → confirm the project is gone from the list.
+3. Inspect the DB → confirm the row still exists with the soft-delete flag set.
+4. Delete again (same id) → confirm idempotent success and that `deletedAt` did not change.
+5. Delete with a wrong/missing `confirmName` → confirm `422` and that the project is NOT deleted.
+6. Delete a non-existent id → confirm `404`.
+7. As user B, delete user A's project → confirm `404` (not `403`).
+8. Delete with a malformed id → confirm `400`.
+9. Delete with no token / expired token → confirm `401`.
+10. Run `tsc --noEmit` and the linter — confirm both pass.
+
+## Assumptions
+
+- **Confirmation mechanism:** Assumed the client must echo the exact project `name` as `confirmName` (strongest guard against accidental deletes). If the product prefers a simpler `confirm: true` flag, swap Step 2/4 accordingly — the rest is unchanged. If DELETE-body support is unreliable in the repo's HTTP layer, the confirmation moves to a query param.
+- **Soft-delete field:** Assumed the schema uses `deletedAt: Date | null` and the list endpoint filters on it. If it uses `isDeleted: boolean`, set both consistently with the existing convention.
+- **Auth dependency:** Assumes the JWT auth middleware exists and attaches the user id. If not built, this task is blocked on it.
+- **Ownership model:** Assumes single-owner projects (consistent with list/create). If projects are shared with a team, deletion authorization rules (owner-only? admins?) must be defined and Step 3 changes.
+- **Response convention:** Assumed `200` with a small body. If existing delete endpoints return `204 No Content`, match that instead.
+- **No cascade:** Assumed related records (assets, analytics) are intentionally left intact on soft delete. If cascading or later cleanup is required, that is a separate task.
+- **Restore:** Out of scope — if the Hub needs an "undo/restore deleted project" flow, that is a separate endpoint.
+- **Stack/route:** Assumed Node + TypeScript + Zod, route at `/projects/:id` with no version prefix. Adjust if versioned.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: PATCH /projects/:id — rename — Phase: Auth + Projects Hub, Track: Backend APIs
+
+---------------------------------------------------------------------------->>>>>
+
+# NEW FEATURE: PATCH /projects/:id — Rename Project
+# Product: Internal (Projects Hub)
+# Scope: New Feature / Backend API
+# Priority: Medium
+
+---
+
+## Task Description
+
+Implement an authenticated endpoint that renames a project owned by the current user. This is a **rename-only** operation: it accepts a new `name` and nothing else. A successful rename updates `name` and bumps `updatedAt` to now, so the project re-sorts to the top of `GET /projects` (which orders by `updatedAt` desc). Soft-deleted projects cannot be renamed.
+
+- [ ] Protect the route with the existing JWT auth middleware (owner resolved from access-token `sub`)
+- [ ] Validate the `:id` path param and the `name` body field
+- [ ] Accept ONLY `name` — reject any attempt to modify `objectSize`, `category`, `mode`, or other fields here
+- [ ] Enforce ownership: only the owner may rename; not-found and not-owned are indistinguishable
+- [ ] Exclude soft-deleted projects (a deleted project is not renameable)
+- [ ] On an actual name change: update `name` and set `updatedAt = now`
+- [ ] Return the updated project DTO (same shape as list/create)
+- [ ] Emit a `project_renamed` analytics event
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/middleware/auth.*` — confirm how the JWT middleware attaches `userId`
+2. `src/routes/projects/index.ts` — register `PATCH /projects/:id` alongside the existing project routes
+3. `src/services/projects/*` — match the service-layer pattern used by list/create/delete
+4. `src/models/*` or `src/db/schema/*` — the Project model: confirm `name` rules, `updatedAt`, and the soft-delete field
+5. `src/lib/validation/*` — reuse the Zod patterns; match the `name` validation used by `POST /projects` exactly
+6. `src/lib/analytics/*` — match the existing event-emission pattern
+
+## Implementation Instructions
+
+### Step 1: Mount the protected route
+Register `PATCH /projects/:id` behind the JWT auth middleware so unauthenticated requests get `401` before the handler. Read the owner id only from the resolved user.
+
+### Step 2: Validate the path param and body
+- Validate `:id` matches the expected id format (match the schema). Malformed → `400`, no DB query.
+- Validate the body with a strict Zod schema that accepts only `name`, using the **same bounds as `POST /projects`** (trim, 1-120 chars assumed — keep them identical so create and rename never diverge):
+```ts
+const RenameProjectSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+}).strict();   // reject unknown fields so objectSize/category/mode cannot be smuggled in
+```
+If the body contains `objectSize`, `category`, `mode`, or any other field → `400` (strict rejection). This keeps the endpoint rename-only.
+
+### Step 3: Fetch and authorize
+Load the project scoped to the authenticated owner AND not soft-deleted, in a single query (`{ _id: id, ownerId: userId, deletedAt: null }`). If no such project exists (missing, not owned, or already soft-deleted) → return `404`. Do NOT return `403` for another user's project — not-found and not-owned must be identical.
+
+### Step 4: No-op detection
+If the validated new `name` equals the current stored `name` exactly (after trim), treat it as a no-op: return `200` with the unchanged project and do NOT bump `updatedAt` (avoid pointless re-sorting in the list view). Set `was_changed: false` for analytics.
+
+### Step 5: Apply the rename
+On an actual change, update `name` and set `updatedAt = now` atomically (single conditional update scoped to owner + not-deleted, so a concurrent soft-delete cannot be clobbered). Bumping `updatedAt` is required so the project surfaces at the top of the list endpoint.
+
+### Step 6: Respond + analytics
+Return `200` with the updated project mapped to the **same DTO shape** the list/create endpoints return. Emit the analytics event.
+
+## API / Data Contract
+
+```
+Endpoint: PATCH /projects/:id
+Auth: required (Bearer access token)
+Path param: id (project id)
+
+Request Body:
+{ "name": "Renamed Project" }
+// ONLY name is accepted. Any other field => 400.
+
+Success Response (200):
+{
+  "status": "success",
+  "project": {
+    "id": "proj_123",
+    "name": "Renamed Project",
+    "objectSize": "...",
+    "category": "...",
+    "mode": "...",
+    "createdAt": "2026-06-01T09:00:00.000Z",
+    "updatedAt": "2026-06-14T10:00:00.000Z"
+  }
+}
+
+Validation error (400) — missing/empty/over-long name, or extra fields:
+{ "status": "error", "code": "INVALID_REQUEST", "message": "...", "fields": { "name": "required" } }
+
+Not found / not owned / soft-deleted (404):
+{ "status": "error", "code": "NOT_FOUND", "message": "Project not found." }
+
+Unauthorized (401) — from middleware:
+{ "status": "error", "code": "UNAUTHORIZED", "message": "..." }
+```
+
+## Analytics Events
+
+```
+Event: project_renamed
+Trigger: fires after a successful response (Step 6), including no-op
+Properties:
+  - user_id_hash: string    // hashed user id, NEVER raw PII
+  - project_id: string
+  - was_changed: boolean     // false on a no-op rename (name identical)
+```
+Do not log the old/new name values verbatim if names may contain user PII; log only `was_changed`. Do not log raw user identifiers.
+
+## What NOT to Change
+
+- Do NOT re-implement or modify the JWT auth middleware — consume it as-is.
+- Do NOT allow this endpoint to modify `objectSize`, `category`, `mode`, `ownerId`, timestamps (other than the intended `updatedAt` bump), or any field other than `name`.
+- Do NOT change the project DTO shape — it must match `GET /projects` and `POST /projects`.
+- Do NOT return `403` for another user's project — return `404`.
+- Do NOT allow renaming a soft-deleted project — it must be treated as not-found.
+- Do NOT change the `name` validation bounds independently — they must stay identical to `POST /projects`.
+
+## Edge Cases to Handle
+
+- [ ] Malformed `:id` → `400` (no DB query).
+- [ ] Project missing → `404`.
+- [ ] Project owned by another user → `404` (identical to missing).
+- [ ] Project soft-deleted → `404` (not renameable).
+- [ ] Missing/empty/whitespace-only `name` → `400`.
+- [ ] `name` over max length → `400`.
+- [ ] Body contains fields other than `name` (e.g. `mode`) → `400` (strict rejection).
+- [ ] New name identical to current → `200` no-op, `updatedAt` NOT bumped, `was_changed: false`.
+- [ ] Concurrent rename + soft-delete on the same project → the scoped conditional update prevents renaming a row that was just deleted.
+- [ ] Invalid/expired/missing token → `401` from middleware.
+
+## Constraints
+
+- Owner scoping MUST come from the token `sub`; the request cannot specify whose project to rename.
+- The endpoint MUST accept ONLY `name`; all other fields are rejected (`.strict()`).
+- `name` validation MUST be identical to `POST /projects` (same trim + length bounds).
+- Not-found, not-owned, and soft-deleted MUST all return identical `404` responses.
+- A real rename MUST bump `updatedAt`; a no-op rename MUST NOT.
+- The update MUST be scoped to owner + not-deleted in the same query to avoid racing a soft-delete.
+- The returned DTO MUST match the list/create project shape exactly.
+
+## Acceptance Criteria
+
+- [ ] A valid authenticated rename updates `name`, bumps `updatedAt`, and returns the updated DTO.
+- [ ] After a rename, the project moves to the top of `GET /projects` (newest `updatedAt`).
+- [ ] Renaming to the identical current name returns `200`, does NOT change `updatedAt`, and reports `was_changed: false`.
+- [ ] Sending any field other than `name` (e.g. `mode`, `ownerId`) returns `400` and changes nothing.
+- [ ] Missing/empty/over-long `name` returns `400`.
+- [ ] Renaming a non-existent, other-user, or soft-deleted project all return identical `404`.
+- [ ] Malformed `:id` returns `400` without a DB query.
+- [ ] A request with no/invalid token returns `401`.
+- [ ] The returned DTO shape is identical to `GET /projects` and `POST /projects`.
+- [ ] `project_renamed` analytics fires with hashed user id and correct `was_changed`.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes.
+
+## Testing Instructions
+
+1. Create a project, note its `updatedAt`, then rename it:
+   `curl -X PATCH localhost:PORT/projects/<id> -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"name":"New Name"}'`
+   Confirm `200`, new name, and a bumped `updatedAt`.
+2. Call `GET /projects` → confirm the renamed project is now first.
+3. Rename to the exact same name → confirm `200`, `updatedAt` unchanged, `was_changed: false`.
+4. Send `{"name":"x","mode":"ar"}` → confirm `400` and no change.
+5. Send empty/whitespace/over-long `name` → confirm `400` each.
+6. Rename a non-existent id, another user's project, and a soft-deleted project → confirm identical `404` for all three.
+7. Send a malformed id → confirm `400`.
+8. Rename with no token / expired token → confirm `401`.
+9. Inspect the DB → confirm only `name` and `updatedAt` changed; `objectSize`/`category`/`mode`/`createdAt`/`ownerId` untouched.
+10. Run `tsc --noEmit` and the linter — confirm both pass.
+
+## Assumptions
+
+- **Rename-only scope:** Assumed this PATCH edits only `name`. If the Projects Hub wants a general partial-update endpoint that also edits `objectSize`/`category`/`mode`, that is a broader task with per-field enum validation — say so and I will widen the schema and acceptance criteria.
+- **Name rules:** Assumed identical to `POST /projects` (trim, 1-120 chars, duplicates allowed). If create uses different bounds, mirror those here.
+- **No-op behavior:** Assumed renaming to the same value is a no-op that does not bump `updatedAt`. If the product wants every PATCH to bump `updatedAt` regardless, drop Step 4's guard.
+- **Soft-delete field:** Assumed `deletedAt: Date | null` consistent with the list/delete endpoints. If it uses `isDeleted`, scope the query on that instead.
+- **Auth dependency:** Assumes the JWT auth middleware exists and attaches the user id. If not built, this task is blocked on it.
+- **Ownership model:** Assumes single-owner projects. If shared/team projects exist, rename-authorization rules must be defined and Step 3 changes.
+- **Strict bodies:** Assumed `.strict()` rejection of unknown fields. If the house convention is to silently strip unknown fields instead, the "extra fields → 400" criterion softens to "extra fields ignored" — but `name`-only mutation must still hold.
+- **Stack/route:** Assumed Node + TypeScript + Zod, route at `/projects/:id` with no version prefix. Adjust if versioned.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: GET /remote-config — return pitch bands, thresholds, segment counts JSON — Phase: Auth + Projects Hub, Track: Backend APIs
+
+--------------------------------------------------------------------------------------------------------->>>>
+
+
+# NEW FEATURE: GET /remote-config — Serve Pitch Bands, Thresholds & Segment Counts
+# Product: Internal (Projects Hub — shared, consumed by client/viewer)
+# Scope: New Feature / Backend API (Config Delivery)
+# Priority: High
+
+---
+
+## Task Description
+
+Implement a read-only endpoint that returns runtime tuning configuration as JSON — `pitchBands`, `thresholds`, and `segmentCounts` — so the client/viewer can adjust behavior without an app release. The endpoint must be resilient (never hard-fail the client), cacheable (ETag + conditional requests), and versioned so clients can detect changes cheaply.
+
+- [ ] Serve `pitchBands`, `thresholds`, and `segmentCounts` plus a `version` field as JSON
+- [ ] Source the config from the config store, with **safe baked-in defaults** as fallback
+- [ ] NEVER return an error to the client because the config store is missing/unreachable/malformed — fall back to defaults
+- [ ] Support HTTP caching: `Cache-Control`, a content-derived `ETag`, and `304 Not Modified` on matching `If-None-Match`
+- [ ] Keep the payload small (mobile / low-end Android consume this)
+- [ ] Decide and implement the auth posture (see Assumptions — confirm before running)
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/routes/*` — see how routes are registered; decide where `GET /remote-config` mounts (public vs behind auth middleware)
+2. `src/models/*` or `src/db/schema/*` — look for an existing config/`client_configs` collection or a settings document this should read from
+3. `src/config/*` or `src/constants/*` — where baked-in defaults should live
+4. `src/lib/validation/*` — Zod, for validating the stored config document shape before serving it
+5. `src/lib/cache/*` or existing ETag/caching helpers — reuse rather than hand-rolling
+6. `src/lib/analytics/*` — match the event-emission pattern (this fetch may be high-volume; see Analytics)
+
+## Implementation Instructions
+
+### Step 1: Define the config shape and defaults
+Define a Zod schema for the served config and a constant `DEFAULT_REMOTE_CONFIG` that satisfies it. The default object is the source of truth when the store is empty or invalid. Example shape (REPLACE field details with the real spec — see Assumptions):
+```ts
+const RemoteConfigSchema = z.object({
+  version: z.number().int().nonnegative(),
+  pitchBands: z.array(z.object({ min: z.number(), max: z.number(), label: z.string() })),
+  thresholds: z.record(z.string(), z.number()),
+  segmentCounts: z.record(z.string(), z.number().int()),
+});
+```
+
+### Step 2: Mount the route (auth posture)
+Mount `GET /remote-config`. **Auth posture is an open decision (confirm):** the default assumption is that this is consumed at client startup, possibly before login, so it is served WITHOUT a user JWT — optionally gated by an app/API key if the codebase has that pattern. If the product requires a logged-in user, place it behind the JWT middleware instead. Do not silently pick one — implement the confirmed choice and note it.
+
+### Step 3: Load config with fallback
+Read the config document from the store. Then:
+- If found, validate it against `RemoteConfigSchema`. If valid → use it.
+- If missing, unreachable (DB error/timeout), or fails validation → log a warning (server-side, with reason) and use `DEFAULT_REMOTE_CONFIG`.
+The handler MUST NOT throw a 5xx to the client for any store/validation problem — degrade to defaults. Wrap the store read in try/catch.
+
+### Step 4: Compute ETag + handle conditional requests
+Compute a strong ETag from the served payload (e.g. a hash of the canonical JSON, or `"v<version>"` if version is authoritative and monotonic). If the request's `If-None-Match` matches the current ETag, return `304 Not Modified` with no body. Otherwise set `ETag` and a sensible `Cache-Control` (e.g. `public, max-age=300` — confirm TTL with the product; config that changes rarely can cache longer, config that must propagate fast caches shorter).
+
+### Step 5: Respond
+Return `200` with the config JSON and caching headers. Keep the payload minimal — no internal metadata, no store document `_id`, no timestamps the client does not need.
+
+### Step 6: Analytics (optional / sampled)
+This endpoint may be hit very frequently (every client startup). Do NOT emit a per-request analytics event unconditionally — either skip analytics here or sample (see Analytics). Prefer relying on standard request logging/metrics over a custom event.
+
+## API / Data Contract
+
+```
+Endpoint: GET /remote-config
+Auth: see Assumptions (default: none / optional app-key)
+Request headers (optional):
+  If-None-Match: "<etag>"
+
+Success Response (200):
+Headers:
+  ETag: "<content-hash-or-version>"
+  Cache-Control: public, max-age=300
+Body:
+{
+  "version": 7,
+  "pitchBands": [ { "min": 0, "max": 100, "label": "low" }, ... ],
+  "thresholds": { "...": 0.0 },
+  "segmentCounts": { "...": 0 }
+}
+
+Not Modified (304) — when If-None-Match matches:
+(no body)
+```
+Note: there is intentionally no error response that depends on the config store — store problems degrade to defaults with a `200`.
+
+## Analytics Events
+
+```
+[OPTIONAL / HIGH-VOLUME — prefer skipping or sampling]
+Event: remote_config_served
+Trigger: at most a sampled fraction of successful 200 responses (NOT 304s, NOT every request)
+Properties:
+  - config_version: number
+  - served_defaults: boolean   // true when the store was missing/invalid and defaults were used
+```
+If unsure, omit the custom event and rely on existing request metrics/logging. Do not log full config payloads.
+
+## What NOT to Change
+
+- Do NOT make the endpoint return a 4xx/5xx because the config store is missing, slow, or malformed — it MUST degrade to defaults.
+- Do NOT couple this endpoint to user identity or project data — it serves global tuning config, not per-user data (unless the confirmed spec says per-segment/per-client config, which is a different task).
+- Do NOT emit an analytics event on every request — this is likely a hot path.
+- Do NOT leak internal store fields (`_id`, internal flags, timestamps) in the response.
+- Do NOT hardcode the config inline in the handler — defaults live in a single named constant that also serves as the fallback.
+- Do NOT introduce a new caching/ETag library if the repo already has one.
+
+## Edge Cases to Handle
+
+- [ ] Config store empty / no document → serve `DEFAULT_REMOTE_CONFIG`, `200`, `served_defaults: true`.
+- [ ] Config store unreachable / throws / times out → serve defaults, `200`, log warning. No 5xx.
+- [ ] Stored config fails schema validation → serve defaults, `200`, log which field failed.
+- [ ] `If-None-Match` matches current ETag → `304`, no body.
+- [ ] `If-None-Match` present but stale → normal `200` with new ETag.
+- [ ] Partially valid stored config (some fields missing) → per the confirmed policy: either reject-to-defaults (safer) or merge over defaults. Default assumption: reject-to-defaults for a clean, predictable payload.
+- [ ] Concurrent requests during a config update → each request serves a self-consistent snapshot (no torn reads).
+
+## Constraints
+
+- The endpoint MUST always return a valid, schema-conforming config (`200` or `304`) regardless of store health.
+- Defaults MUST be defined once as a named constant and reused as both the schema fixture and the runtime fallback.
+- The stored config MUST be validated with Zod before being served; invalid → defaults.
+- ETag MUST be deterministic for identical payloads so caching/`304` works correctly.
+- Payload MUST exclude internal-only fields and stay small (mobile clients).
+- Analytics MUST NOT fire per-request on this hot path.
+
+## Acceptance Criteria
+
+- [ ] A request returns `200` with `version`, `pitchBands`, `thresholds`, and `segmentCounts` as valid JSON.
+- [ ] With the config store empty, the endpoint still returns `200` with the documented defaults and `served_defaults`/log indicates defaults were used.
+- [ ] With the config store throwing an error, the endpoint returns `200` with defaults — never a 5xx.
+- [ ] With a malformed stored config, the endpoint returns `200` with defaults and logs the validation failure server-side.
+- [ ] A repeat request with a matching `If-None-Match` returns `304` with no body.
+- [ ] The `ETag` is stable across identical payloads and changes when the config (or version) changes.
+- [ ] `Cache-Control` is present with the agreed TTL.
+- [ ] The response contains no internal store fields (`_id`, internal flags).
+- [ ] No per-request custom analytics event fires (skipped or sampled per the agreed policy).
+- [ ] `tsc --noEmit` passes in strict mode; lint passes.
+
+## Testing Instructions
+
+1. With a valid stored config, call the endpoint:
+   `curl -i localhost:PORT/remote-config`
+   Confirm `200`, the JSON body, an `ETag`, and `Cache-Control`.
+2. Re-request with the returned ETag:
+   `curl -i localhost:PORT/remote-config -H 'If-None-Match: "<etag>"'`
+   Confirm `304` and no body.
+3. Empty the config store / delete the document → confirm `200` with defaults (not a 404/500).
+4. Simulate a store error (mock the read to throw) → confirm `200` with defaults and a server-side warning log.
+5. Insert a malformed config (wrong types / missing field) → confirm `200` with defaults and a validation warning.
+6. Change the config (or bump `version`) → confirm the `ETag` changes and a fresh `If-None-Match` no longer matches.
+7. Inspect the body → confirm no `_id` or internal fields leak.
+8. If auth is required per the confirmed posture, call without credentials → confirm the expected `401`; otherwise confirm it is reachable unauthenticated.
+9. Run `tsc --noEmit` and the linter — confirm both pass.
+
+## Assumptions
+
+- **!! Config field shapes unknown — MUST confirm !!** The exact structure of `pitchBands`, `thresholds`, and `segmentCounts` is assumed (see Step 1 example). Replace with the real spec; the Zod schema and defaults depend entirely on it.
+- **!! Auth posture unconfirmed !!** Assumed served WITHOUT a user JWT (fetched at client startup, possibly pre-login), optionally behind an app/API key. If the product requires an authenticated user, mount it behind the JWT middleware instead. This decision must be made before implementation.
+- **Config source:** Assumed a single global config document in the store (or `client_configs`-style collection). If config is per-client/per-segment, this becomes a parameterized lookup and the contract changes.
+- **Partial-config policy:** Assumed reject-to-defaults on any invalid/partial stored config (predictable payload). If the product wants field-level merge over defaults, change Step 3 and the partial-config edge case.
+- **Cache TTL:** Assumed `max-age=300`. Tune to how fast config changes must propagate to clients.
+- **Versioning:** Assumed an integer `version` exists/should exist on the config to support cheap change detection. If absent, derive the ETag purely from a content hash.
+- **Analytics:** Assumed this is a hot path, so per-request events are avoided. Confirm whether any sampled telemetry is wanted.
+- **Stack/route:** Assumed Node + TypeScript + Zod, route at `/remote-config` with no version prefix. Adjust if versioned.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: Analytics events: app_opened, auth_otp_sent, auth_otp_verified, auth_failed — Phase: Auth + Projects Hub, Track: Analytics / QA
+----------------------------------------------------------------------------------->>
+
+# FEATURE: Analytics Events — app_opened, auth_otp_sent, auth_otp_verified, auth_failed
+# Product: Internal (Projects Hub — shared analytics layer)
+# Scope: Instrumentation + Tracking Plan + QA (cross-cutting)
+# Track: Analytics / QA
+# Priority: High
+
+---
+
+## Task Description
+
+Establish a canonical, typed analytics layer for four foundational events and wire the server-side ones into the existing auth flow. This is not a single endpoint — it has three deliverables: (1) a single source-of-truth **tracking plan** (event names + property schemas), (2) a **typed, validated emit layer** so events cannot drift or carry the wrong/raw properties, and (3) **QA verification** that each event fires correctly with no PII leakage.
+
+The four events:
+- `app_opened` — client/session cold start
+- `auth_otp_sent` — an OTP was dispatched (already referenced by `POST /auth/send-otp`)
+- `auth_otp_verified` — an OTP was successfully verified (already referenced by `POST /auth/verify-otp`)
+- `auth_failed` — an authentication attempt failed (canonical failure event — see Naming Reconciliation)
+
+- [ ] Define a single enum/const of event names — no string literals scattered across the codebase
+- [ ] Define a Zod property schema per event; validate properties at emit time (at least in dev/staging)
+- [ ] Enforce PII hygiene: identifiers are hashed, tokens/raw phone/email/OTP never appear in any event
+- [ ] Wire `auth_otp_sent`, `auth_otp_verified`, `auth_failed` into the existing auth endpoints
+- [ ] Define `app_opened` in the plan and handle its emission path (client-emitted; see Assumptions)
+- [ ] Ensure analytics emission NEVER blocks or breaks the request path (fire-and-forget, failures swallowed + logged)
+- [ ] Provide QA verification steps / assertions proving each event fires with the correct schema
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/lib/analytics/*` — the existing analytics client/wrapper; understand the current emit signature and destination (Segment/Mixpanel/Amplitude/custom)
+2. `src/services/auth/sendOtp.*`, `verifyOtp.*` — where `auth_otp_sent` / `auth_otp_verified` are (or should be) emitted; reconcile any existing failure-event naming
+3. `src/constants/*` — where shared enums/consts live, for the event-name source of truth
+4. `src/lib/validation/*` — Zod, for per-event property schemas
+5. `src/lib/crypto/*` or hashing util — the canonical way identifiers are hashed (must match what prior prompts call `identifier_hash` / `user_id_hash`)
+6. Test setup (`src/**/*.test.*`, test harness) — how to assert emitted events in QA
+
+## Implementation Instructions
+
+### Step 1: Define the event-name source of truth
+Create one enum/const that every emit call must reference. No raw event-name strings anywhere else.
+```ts
+export const AnalyticsEvent = {
+  APP_OPENED:        "app_opened",
+  AUTH_OTP_SENT:     "auth_otp_sent",
+  AUTH_OTP_VERIFIED: "auth_otp_verified",
+  AUTH_FAILED:       "auth_failed",
+} as const;
+```
+
+### Step 2: Define per-event property schemas (Zod)
+One schema per event. The emit layer validates against these. Property naming is `snake_case` and consistent across events.
+```ts
+const AppOpenedProps = z.object({
+  platform: z.enum(["ios", "android", "web"]),
+  app_version: z.string(),
+  is_cold_start: z.boolean().optional(),
+});
+const AuthOtpSentProps = z.object({
+  channel: z.enum(["sms", "email"]),
+  identifier_hash: z.string(),   // hashed — never raw phone/email
+  success: z.boolean(),
+});
+const AuthOtpVerifiedProps = z.object({
+  channel: z.enum(["sms", "email"]),
+  identifier_hash: z.string(),
+  is_new_user: z.boolean(),
+});
+const AuthFailedProps = z.object({
+  stage: z.enum(["send_otp", "verify_otp", "refresh"]),   // where it failed
+  channel: z.enum(["sms", "email"]).optional(),
+  identifier_hash: z.string().optional(),
+  reason: z.enum(["wrong_code", "expired", "locked", "no_record", "rate_limited", "dispatch_failed", "invalid_token"]),
+});
+```
+Tune the `reason`/`stage`/`platform` enums to the real product vocabulary (see Assumptions). The point is fixed enums, not free strings.
+
+### Step 3: Build (or wrap) the typed emit function
+Expose a single `track(event, props)` that: (a) accepts only known event names, (b) validates props against that event's schema, (c) forwards to the existing analytics destination. On validation failure in dev/staging, throw or loudly log (catch drift early); in production, drop the event and log a warning rather than crash. The function MUST be fire-and-forget — it never blocks the caller and never throws into the request path in production.
+
+### Step 4: Enforce PII hygiene centrally
+The emit layer (or a shared helper it calls) is responsible for ensuring no raw PII or secrets ever ship: hash identifiers via the existing util before they enter props, and strip/forbid any property matching a denylist (raw `phone`, `email`, `otp`, `code`, `token`, `password`). Treat this as a guardrail, not just a convention — a forbidden raw field should be dropped + flagged, not emitted.
+
+### Step 5: Wire the server-side events
+- `auth_otp_sent` → in `send-otp` after a dispatch attempt (success true/false). Reconcile with whatever that endpoint already emits.
+- `auth_otp_verified` → in `verify-otp` on success.
+- `auth_failed` → at each auth failure point: send-otp dispatch failure / rate limit, verify-otp wrong/expired/locked/no_record, refresh invalid/reused token. **Naming Reconciliation:** the `verify-otp` prompt previously emitted `auth_otp_verify_failed`; standardize on `auth_failed` with `stage: "verify_otp"` and the specific `reason`. Either replace the old event or alias it — pick one and document it so dashboards aren't split across two names.
+
+### Step 6: Handle app_opened
+`app_opened` is fundamentally client-emitted at cold start. This task defines its canonical schema in the tracking plan. If the architecture ingests client events through a backend endpoint (e.g. `POST /events`), ensure that path validates `app_opened` against the same schema; if clients send directly to the analytics destination, ensure the shared tracking-plan definition is exported for the client to consume. Confirm which (see Assumptions) and implement accordingly — do not invent a new ingest endpoint without confirmation.
+
+### Step 7: Produce the tracking-plan document
+Output a concise tracking-plan reference (markdown or a typed export) listing each event, when it fires, and its properties — the single artifact analysts and client devs read. This doubles as the QA oracle.
+
+## Tracking Plan (canonical reference)
+
+```
+app_opened
+  When: client cold start / session begin
+  Props: platform (ios|android|web), app_version (string), is_cold_start (bool, optional)
+
+auth_otp_sent
+  When: after OTP dispatch attempt in POST /auth/send-otp
+  Props: channel (sms|email), identifier_hash (string), success (bool)
+
+auth_otp_verified
+  When: successful verification in POST /auth/verify-otp
+  Props: channel (sms|email), identifier_hash (string), is_new_user (bool)
+
+auth_failed
+  When: any auth attempt fails (send/verify/refresh)
+  Props: stage (send_otp|verify_otp|refresh), reason (enum), channel (optional), identifier_hash (optional)
+```
+
+## What NOT to Change
+
+- Do NOT scatter event-name string literals — every emit references the `AnalyticsEvent` const.
+- Do NOT let analytics emission block, delay, or throw into the request/response path in production. Auth must succeed even if analytics is down.
+- Do NOT emit raw PII or secrets in any property: no raw phone, email, OTP/code, JWT, refresh token, or password — ever.
+- Do NOT keep two competing failure event names — reconcile `auth_otp_verify_failed` into `auth_failed`.
+- Do NOT change the auth endpoints' behavior/response contracts — only add/standardize their analytics emissions.
+- Do NOT introduce a new analytics SDK/destination — wrap the existing one.
+
+## Edge Cases to Handle
+
+- [ ] Analytics destination unreachable / throws → event dropped, warning logged, request path unaffected.
+- [ ] Emit called with an unknown event name → rejected at the type level (compile error) and/or runtime guard.
+- [ ] Props fail schema validation → dev/staging surfaces loudly; production drops + logs, never crashes.
+- [ ] A forbidden raw field (e.g. `email`) sneaks into props → stripped/flagged, not emitted.
+- [ ] `auth_failed` fired alongside a generic API error → the user-facing error response is unchanged; only telemetry differs.
+- [ ] High-volume `app_opened` → ensure emission is non-blocking; consider sampling only if the destination has volume limits (confirm).
+- [ ] Duplicate emissions for one logical action → ensure each event fires exactly once per occurrence (no double-tracking in retry paths).
+
+## Constraints
+
+- Event names MUST come from a single enum/const; no literals elsewhere.
+- Every event MUST have a Zod property schema; props MUST be validated by the emit layer.
+- Identifiers MUST be hashed with the existing util; raw PII/secrets MUST never be emitted.
+- Property naming MUST be `snake_case` and consistent across events.
+- Emission MUST be fire-and-forget and MUST NOT affect request latency or success in production.
+- Failure telemetry MUST consolidate under `auth_failed` (no parallel `auth_otp_verify_failed`).
+- A tracking-plan artifact MUST be produced and kept in sync with the schemas.
+
+## Acceptance Criteria
+
+- [ ] All four events are defined in one `AnalyticsEvent` const and each has a Zod property schema.
+- [ ] `auth_otp_sent` fires on dispatch (with `success`), `auth_otp_verified` fires on successful verify, `auth_failed` fires on each failure stage with the correct `stage`/`reason`.
+- [ ] No emitted event contains raw phone, email, OTP/code, token, or password — only hashed identifiers.
+- [ ] Emitting an unknown event name is impossible (type-checked) or rejected at runtime.
+- [ ] Props that violate a schema are caught in dev/staging and safely dropped in production (no crash).
+- [ ] With the analytics destination forced to throw, auth endpoints still return their normal responses.
+- [ ] There is exactly one failure event name (`auth_failed`); `auth_otp_verify_failed` is removed or aliased and documented.
+- [ ] Each logical action emits its event exactly once (no double-tracking via retries).
+- [ ] `app_opened` is defined in the plan and its emission path (client-direct or backend ingest) is implemented per the confirmed architecture.
+- [ ] A tracking-plan reference artifact exists and matches the schemas.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes; relevant tests pass.
+
+## Testing Instructions (Analytics / QA focus)
+
+1. **Unit:** call `track()` with each event and valid props → assert the destination client received the correct name + props. Use a mock/spy on the analytics client.
+2. **Schema enforcement:** call `track()` with invalid props (wrong type, missing required) → assert it is rejected in dev/staging and dropped+logged in production mode.
+3. **PII guardrail:** attempt to emit with a raw `email`/`otp`/`token` property → assert it is stripped/flagged and never reaches the destination.
+4. **Resilience:** mock the analytics client to throw → exercise `send-otp` and `verify-otp` and assert their HTTP responses are unchanged (analytics failure is swallowed).
+5. **Wiring (integration):** run the full `send-otp → verify-otp` happy path → assert `auth_otp_sent` then `auth_otp_verified` fired with hashed identifiers. Run a wrong-code path → assert one `auth_failed` with `stage: verify_otp`, `reason: wrong_code`.
+6. **Reconciliation:** grep the codebase → assert no remaining `auth_otp_verify_failed` literal (or that it is an explicit documented alias).
+7. **No double-track:** trigger a retried dispatch → assert `auth_otp_sent` fires once per logical send, not per internal retry.
+8. **app_opened:** simulate the client emission / ingest path → assert it validates against `AppOpenedProps`.
+9. Run `tsc --noEmit`, the linter, and the analytics test suite — confirm all pass.
+
+## Assumptions
+
+- **Analytics destination:** Assumed an existing analytics client/wrapper in `src/lib/analytics` (Segment/Mixpanel/Amplitude/custom). This task wraps it, not replaces it. If none exists, a minimal typed emitter + destination integration becomes a prerequisite sub-task.
+- **app_opened emission path:** Assumed client-emitted at cold start. Unconfirmed whether the backend ingests client events via an endpoint (e.g. `POST /events`) or clients send directly to the destination. This decision changes Step 6 — confirm before implementing.
+- **Naming reconciliation:** Assumed `auth_failed` (with `stage`/`reason`) supersedes the `auth_otp_verify_failed` event referenced in the verify-otp prompt. If product/analytics want to keep granular per-stage event names instead, the plan changes — confirm.
+- **Enum vocabularies:** `platform`, `stage`, and `reason` enum members are assumed; align them to the real product taxonomy.
+- **Hashing:** Assumed an existing identifier-hashing util consistent with `identifier_hash`/`user_id_hash` used in prior prompts. The same salt/algorithm must be reused so hashes join across events.
+- **Environments:** Assumed a dev/staging vs production distinction so schema violations can be loud in non-prod and safe in prod. If there is no such flag, define one.
+- **Cross-track dependency:** The auth endpoints (`send-otp`, `verify-otp`, `refresh`) must exist for the wiring steps; if they are not yet built, this task delivers the analytics layer + plan and stubs the wiring to be completed alongside them.
+- **Stack:** Assumed Node + TypeScript + Zod. Adjust if different.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: Analytics events: project_created, project_deleted, project_resumed — Phase: Auth + Projects Hub, Track: Analytics / QA
+------------------------------------------------------------------------------------------------>>>
+# FEATURE: Analytics Events — project_created, project_deleted, project_resumed
+# Product: Internal (Projects Hub — shared analytics layer)
+# Scope: Instrumentation + Tracking Plan + QA (cross-cutting)
+# Track: Analytics / QA
+# Priority: High
+
+---
+
+## Task Description
+
+Define and wire three project-lifecycle analytics events into the **existing canonical analytics layer** established for the auth events (the typed `track()` emitter, the `AnalyticsEvent` name const, Zod per-event schemas, and the PII guardrail). This task EXTENDS that layer — it does not create a parallel analytics system.
+
+The three events:
+- `project_created` — a project was created (already referenced by `POST /projects`)
+- `project_deleted` — a project was soft-deleted (already referenced by `DELETE /projects/:id`)
+- `project_resumed` — a user re-opened / resumed an existing project (**no emitter exists yet** — see Emitter Gap)
+
+- [ ] Add the three events to the existing `AnalyticsEvent` const (no new string literals)
+- [ ] Add a Zod property schema per event, consistent with the auth-events schemas
+- [ ] Reconcile `project_created` / `project_deleted` with the emissions the create/delete endpoints already define
+- [ ] Identify and implement the `project_resumed` emit point (likely `GET /projects/:id` — see Emitter Gap)
+- [ ] Reuse the existing PII hygiene (hashed identifiers; no raw PII/secrets) and fire-and-forget behavior
+- [ ] Update the tracking-plan artifact and provide QA verification
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `src/lib/analytics/*` and the `AnalyticsEvent` const from the auth-events task — extend, do not duplicate
+2. `src/services/projects/*` — where `project_created` / `project_deleted` are (or should be) emitted; reconcile property shapes
+3. `src/routes/projects/*` — the project routes, including `GET /projects/:id` if it exists (the likely `project_resumed` emitter)
+4. `src/lib/validation/*` — Zod, for the per-event schemas
+5. `src/lib/crypto/*` — the identifier-hashing util (must be the SAME one used for `user_id_hash` elsewhere so hashes join across events)
+6. The tracking-plan artifact produced by the auth-events task — append to it
+
+## Implementation Instructions
+
+### Step 1: Extend the event-name source of truth
+Add to the existing const (do not create a second one):
+```ts
+export const AnalyticsEvent = {
+  // ...existing auth events...
+  PROJECT_CREATED:  "project_created",
+  PROJECT_DELETED:  "project_deleted",
+  PROJECT_RESUMED:  "project_resumed",
+} as const;
+```
+
+### Step 2: Define per-event property schemas (Zod)
+Match the conventions already in use (`snake_case`, hashed identifiers, fixed enums). Align `object_size`/`category`/`mode` enums with the same constants `POST /projects` validates against — do not redeclare divergent literals.
+```ts
+const ProjectCreatedProps = z.object({
+  user_id_hash: z.string(),
+  project_id:   z.string(),
+  object_size:  z.enum(OBJECT_SIZE_VALUES),   // reuse the project enums
+  category:     z.enum(CATEGORY_VALUES),
+  mode:         z.enum(MODE_VALUES),
+});
+const ProjectDeletedProps = z.object({
+  user_id_hash:        z.string(),
+  project_id:          z.string(),
+  was_already_deleted: z.boolean(),   // matches the idempotent-delete contract
+});
+const ProjectResumedProps = z.object({
+  user_id_hash: z.string(),
+  project_id:   z.string(),
+  // optional context — include only if cheaply available, see Emitter Gap:
+  source:           z.enum(["projects_list", "deep_link", "direct"]).optional(),
+  seconds_since_last_update: z.number().int().nonnegative().optional(),
+});
+```
+
+### Step 3: Reconcile the existing emissions
+- `project_created`: the create endpoint already emits this with `user_id_hash`, `project_id`, `object_size`, `category`, `mode`. Ensure that emission now routes through the typed `track()` + this schema. If the property names differ from the schema, align them (prefer the schema; update the endpoint).
+- `project_deleted`: the delete endpoint emits `user_id_hash`, `project_id`, `was_already_deleted`. Same reconciliation — one shape, validated.
+Do NOT introduce a second, differently-named event for either action.
+
+### Step 4: Resolve the project_resumed Emitter Gap
+`project_resumed` has no existing emit point among the endpoints generated so far. Determine where a "resume" occurs and emit there:
+- **Most likely:** `GET /projects/:id` (a user opening a single project to continue work). If that endpoint exists, emit `project_resumed` on a successful fetch of a non-deleted project the caller owns.
+- If "resume" is a distinct client action (e.g. a `POST /projects/:id/resume` or a client-emitted event), define it accordingly.
+**Do not invent a new endpoint to host this event without confirmation.** If `GET /projects/:id` does not yet exist, flag `project_resumed` as blocked on it and wire the schema/plan now so the emit is a one-line add when that endpoint lands.
+
+### Step 5: PII hygiene + fire-and-forget (reuse, don't reinvent)
+Use the existing emit layer's hashing and denylist guardrails. No raw `name`, `email`, `phone`, `token`, or full project payloads in any event. Emission stays non-blocking and must never break the create/delete/fetch request paths if the analytics destination is down.
+
+### Step 6: Update the tracking-plan artifact
+Append these three events (when they fire + properties) to the existing tracking-plan reference so analysts and client devs have one document for all auth + project events.
+
+## Tracking Plan (append to canonical reference)
+
+```
+project_created
+  When: successful project creation in POST /projects
+  Props: user_id_hash, project_id, object_size, category, mode
+
+project_deleted
+  When: successful soft-delete in DELETE /projects/:id (incl. idempotent repeat)
+  Props: user_id_hash, project_id, was_already_deleted (bool)
+
+project_resumed
+  When: a user re-opens an existing non-deleted project (likely GET /projects/:id)
+  Props: user_id_hash, project_id, source (optional), seconds_since_last_update (optional)
+```
+
+## What NOT to Change
+
+- Do NOT create a new analytics system, emitter, or event-name const — extend the existing one.
+- Do NOT emit raw PII or project content: no project `name`, no owner email/phone, no tokens.
+- Do NOT introduce duplicate/competing event names for create or delete.
+- Do NOT invent a new endpoint to host `project_resumed` without confirmation — wire it into the real resume point.
+- Do NOT let analytics emission block or break the create/delete/fetch request paths.
+- Do NOT diverge the `object_size`/`category`/`mode` enums from the constants `POST /projects` uses.
+
+## Edge Cases to Handle
+
+- [ ] `project_deleted` on an already-deleted project → fires with `was_already_deleted: true` (matches the idempotent delete contract; the event still records the no-op call).
+- [ ] `project_resumed` for a project the user does not own / soft-deleted → the underlying fetch returns 404, so NO `project_resumed` fires (only emit on a successful, authorized, non-deleted fetch).
+- [ ] Rapid repeated opens of the same project → decide debounce/dedupe policy (see Assumptions); avoid flooding `project_resumed` on every poll/refetch.
+- [ ] Analytics destination unreachable → events dropped + logged; project endpoints unaffected.
+- [ ] Props fail schema validation → loud in dev/staging, dropped in production, never crash.
+- [ ] `project_created` enum value not in the shared enum set → schema rejects (signals a create-endpoint drift to fix, not to mask).
+
+## Constraints
+
+- All three events MUST be registered in the single existing `AnalyticsEvent` const.
+- Each MUST have a Zod schema validated by the shared emit layer.
+- Identifiers MUST be hashed with the SAME util used elsewhere so `user_id_hash` joins across events.
+- `object_size`/`category`/`mode` MUST reuse the project enum constants, not redeclared literals.
+- Emission MUST be fire-and-forget and MUST NOT affect request latency/success.
+- `project_resumed` MUST only fire on a successful, authorized, non-deleted project open.
+- The tracking-plan artifact MUST be updated to include these events.
+
+## Acceptance Criteria
+
+- [ ] The three events exist in the shared `AnalyticsEvent` const, each with a Zod schema.
+- [ ] `POST /projects` emits `project_created` through the typed layer with the schema's exact props.
+- [ ] `DELETE /projects/:id` emits `project_deleted` with correct `was_already_deleted` (true on idempotent repeat).
+- [ ] `project_resumed` fires from the confirmed resume point on a successful authorized open — and does NOT fire on a 404 (not owned / not found / deleted).
+- [ ] No event contains raw project name, owner PII, tokens, or full payloads — only hashed ids + enums.
+- [ ] Create/delete/fetch endpoints still return normal responses when the analytics destination throws.
+- [ ] `object_size`/`category`/`mode` values validate against the same enums the create endpoint uses.
+- [ ] Repeated opens follow the agreed dedupe/debounce policy (no flood).
+- [ ] The tracking-plan artifact lists all three events with when-fired + properties.
+- [ ] If `GET /projects/:id` does not exist, `project_resumed` is explicitly flagged as blocked on it with the schema/plan already in place.
+- [ ] `tsc --noEmit` passes in strict mode; lint passes; analytics tests pass.
+
+## Testing Instructions (Analytics / QA focus)
+
+1. **Unit:** call `track()` for each event with valid props → assert the analytics client received the correct name + props (mock/spy the client).
+2. **Reconciliation:** run `POST /projects` and `DELETE /projects/:id` end-to-end → assert exactly `project_created` / `project_deleted` fire with the schema props (and no legacy/duplicate event names linger — grep to confirm).
+3. **Idempotent delete:** delete an already-deleted project → assert `project_deleted` fires with `was_already_deleted: true`.
+4. **Resume happy path:** open a project the user owns (via the confirmed emitter) → assert `project_resumed` fires once with hashed id.
+5. **Resume negative path:** open a non-owned / soft-deleted / missing project → assert the request 404s and NO `project_resumed` fires.
+6. **PII guardrail:** attempt to emit with a raw project `name`/owner `email` → assert it is stripped/flagged and never reaches the destination.
+7. **Resilience:** mock the analytics client to throw → exercise create/delete/open and assert HTTP responses are unchanged.
+8. **Dedupe:** rapidly re-open the same project → assert the agreed debounce/dedupe policy holds.
+9. Run `tsc --noEmit`, the linter, and the analytics test suite — confirm all pass.
+
+## Assumptions
+
+- **Foundation dependency:** Assumes the analytics-events task (auth events) already shipped the shared `track()` layer, `AnalyticsEvent` const, PII guardrail, and tracking-plan artifact. This task extends them. If that layer does not exist yet, it is a prerequisite.
+- **project_resumed emitter:** Assumed `GET /projects/:id` is the resume point. That endpoint has NOT been generated yet in this track — `project_resumed` is effectively blocked on it. If "resume" is a different action (dedicated endpoint or pure client event), confirm and the emit point changes.
+- **Resume semantics:** Assumed "resumed" = opening an existing project to continue work, distinct from `projects_listed` (viewing the list). If "resume" means something narrower (e.g. resuming an in-progress capture/session), the trigger and `source` enum change.
+- **Dedupe policy:** Assumed some debounce is wanted to avoid `project_resumed` firing on every poll/refetch. Confirm the window (e.g. once per project per session, or once per N minutes).
+- **Enums:** `object_size`/`category`/`mode` reuse the (still-to-be-confirmed) project enum constants. The `source` enum for `project_resumed` is assumed and should be aligned to real entry points.
+- **Hashing:** Same identifier-hash util/salt as the auth events, so `user_id_hash` is consistent and joinable across all events.
+- **Stack:** Assumed Node + TypeScript + Zod. Adjust if different.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: Test: auth happy path (OTP flow end-to-end) — Phase: Auth + Projects Hub, Track: Analytics / QA
+------------------------------------------------------------------------------------------->>
+
+# TEST: Auth Happy Path — OTP Flow End-to-End
+# Product: Internal (Projects Hub — shared Auth service)
+# Scope: Integration / E2E Test (QA)
+# Track: Analytics / QA
+# Priority: High
+
+---
+
+## Task Description
+
+Write an end-to-end integration test that exercises the full authentication happy path: request an OTP, capture the dispatched code, verify it, receive a valid session, use the access token on a protected route, and refresh the token. The test must be deterministic, isolated, and run with NO real SMS/email providers or external network calls.
+
+The chain under test:
+`POST /auth/send-otp` → (capture OTP from mocked provider) → `POST /auth/verify-otp` → use `accessToken` on a protected endpoint (`GET /projects`) → `POST /auth/refresh` → use the rotated token.
+
+- [ ] Stand up the app against an ephemeral/isolated test database
+- [ ] Mock the SMS and email provider clients so no real messages are sent and the dispatched OTP can be captured
+- [ ] Drive the full send → verify → authenticated-request → refresh chain via HTTP (e.g. supertest)
+- [ ] Assert success at each step AND the correct side effects (token validity, OTP consumed, refresh persisted, analytics fired)
+- [ ] Ensure the test is repeatable, order-independent, and leaves no residual state
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. Existing test setup (`jest.config.*` / `vitest.config.*`, `test/setup.*`, any `testcontainers`/in-memory DB helpers) — match the established testing stack and DB strategy
+2. `src/app.*` / server bootstrap — how to import the app for in-process HTTP testing (supertest) without binding a real port
+3. `src/services/auth/sendOtp.*`, `verifyOtp.*`, refresh service — confirm the exact request/response contracts the test will assert against
+4. `src/lib/providers/*` — the SMS/email client interfaces to mock, and where the OTP plaintext flows so it can be captured
+5. `src/lib/analytics/*` — the analytics client to spy on for `auth_otp_sent` / `auth_otp_verified`
+6. `src/models/*` — the OTP record and refresh-token models, to assert persistence/consumption state
+7. Any existing integration tests — copy their bootstrap/teardown conventions rather than inventing new ones
+
+## Implementation Instructions
+
+### Step 1: Test harness + isolated DB
+Bring up the app against an isolated database (ephemeral container, in-memory, or a dedicated test schema — match the repo's existing convention). Each test run starts clean; truncate/reset relevant collections in `beforeEach`/`afterEach`. Do NOT point tests at a shared/dev database.
+
+### Step 2: Mock the providers and capture the OTP
+The OTP is never returned by the API (hashed at rest, dispatched out-of-band), so the test must obtain it from the dispatch boundary:
+- Mock the SMS and email provider clients. The mock records the message payload so the test can extract the 6-digit code that `send-otp` generated.
+- **Preferred:** capture the real generated code from the provider mock (black-box; exercises real generation + hashing).
+- **Alternative:** if capture is impractical, stub the OTP generator to a fixed known value — but prefer capture so the test covers generation.
+Assert no real network call leaves the process.
+
+### Step 3: Drive the chain
+1. `POST /auth/send-otp` with a test identifier (use both an `sms` case and an `email` case — parameterize). Assert `200` and the generic success body.
+2. Read the dispatched OTP from the provider mock.
+3. `POST /auth/verify-otp` with the identifier + captured code. Assert `200`, an `accessToken`, a `refreshToken`, and `isNewUser: true` on first run (a new identifier creates the user).
+4. Decode/verify the `accessToken` against the configured key; assert `sub`, `exp`, and standard claims.
+5. Call a protected route (`GET /projects`) with `Authorization: Bearer <accessToken>`. Assert `200` (and an empty `items` array for a brand-new user).
+6. `POST /auth/refresh` with the `refreshToken`. Assert `200` and a NEW access + refresh token, and that the new access token also authorizes `GET /projects`.
+
+### Step 4: Assert side effects
+- **OTP consumed:** after a successful verify, the OTP record is deleted/consumed (re-verifying the same code returns `401` — assert this as part of the happy-path completeness).
+- **Refresh persisted + rotated:** the original refresh token no longer works after refresh; the new one does (single rotation step).
+- **Analytics:** spy on the analytics client and assert `auth_otp_sent` fired on dispatch and `auth_otp_verified` fired on success, each with a hashed identifier (NOT raw PII). (Ties to the analytics tracking plan.)
+- **No PII leakage:** assert the OTP, raw identifier, and tokens never appear in application logs captured during the run.
+
+### Step 5: Robustness
+- Run the full suite twice in a row in the same process → it must pass both times (no residual state).
+- Randomize test order if the runner supports it → must still pass (no inter-test coupling).
+- Keep it fast: no real sleeps for OTP expiry in the happy path; use the success window directly.
+
+## What NOT to Change
+
+- Do NOT modify production code to make the test pass (no test-only branches, no relaxing validation). If a real bug is found, report it — do not paper over it in the endpoint.
+- Do NOT call real SMS/email providers or any external network during tests.
+- Do NOT point the test at a shared/dev/staging database.
+- Do NOT hardcode a captured OTP across runs — capture it dynamically each run (unless using the explicit fixed-generator-stub alternative).
+- Do NOT leave residual records — every run must clean up after itself.
+- Do NOT assert on implementation internals that the contract does not guarantee (test behavior/contract, not private structure) beyond the documented DB side-effects.
+
+## Edge Cases to Handle (test-robustness, within the happy path)
+
+- [ ] First-run new identifier → user is created, `isNewUser: true`.
+- [ ] Both `sms` and `email` channels covered (parameterized), each capturing from the right provider mock.
+- [ ] Re-running the verify with the consumed code → `401` (proves single-use; part of happy-path completeness).
+- [ ] Refresh rotation → old refresh token dead, new one live.
+- [ ] Repeated full-suite runs and randomized order → still green (isolation).
+- [ ] Analytics destination mocked → spied, asserted, and never makes a real call.
+
+## Constraints
+
+- The test MUST be hermetic: no real providers, no external network, isolated DB.
+- The OTP MUST be obtained from the dispatch boundary (mock) or an explicit generator stub — never read from a response field (there isn't one).
+- The test MUST assert the full chain: send → verify → protected request → refresh → protected request with rotated token.
+- The test MUST verify side effects (OTP consumed, refresh rotated, analytics fired, no PII in logs), not just HTTP 200s.
+- The test MUST be deterministic and order-independent; no reliance on wall-clock sleeps for the happy path.
+- The test MUST clean up all state so repeated runs pass.
+
+## Acceptance Criteria
+
+- [ ] A single test (or tightly-grouped suite) drives send-otp → verify-otp → GET /projects → refresh → GET /projects and passes.
+- [ ] The OTP is captured from a mocked provider; no real SMS/email is sent.
+- [ ] The access token returned by verify is a valid JWT and authorizes `GET /projects`.
+- [ ] The refresh step returns new tokens, the new access token authorizes `GET /projects`, and the old refresh token is dead.
+- [ ] Re-verifying the consumed OTP returns `401` (single-use proven).
+- [ ] `auth_otp_sent` and `auth_otp_verified` are asserted fired with hashed identifiers via an analytics spy.
+- [ ] Both `sms` and `email` channels are covered.
+- [ ] No OTP, raw identifier, or token appears in captured logs.
+- [ ] The suite passes on two consecutive runs and under randomized order (proves isolation).
+- [ ] No production code was modified to make the test pass.
+- [ ] `tsc --noEmit` passes; lint passes; the test runs in CI without external dependencies.
+
+## Testing Instructions (how to run / verify the test itself)
+
+1. Run the new suite in isolation:
+   `npm test -- auth-happy-path` (adjust to the repo's runner/filter).
+2. Confirm it passes with no network access (run with network disabled if the environment supports it).
+3. Run it twice consecutively → confirm both pass (isolation).
+4. Run with randomized order (`--shuffle` / equivalent) → confirm it still passes.
+5. Temporarily break a step (e.g. corrupt the captured OTP) → confirm the test FAILS at verify (proving the assertions are real, not vacuous), then revert.
+6. Inspect the test output/logs → confirm no OTP, identifier, or token is printed.
+7. Run `tsc --noEmit` and the linter on the test files → confirm both pass.
+
+## Assumptions
+
+- **Endpoints exist:** Assumes `send-otp`, `verify-otp`, `refresh`, and a protected `GET /projects` are implemented per the prior prompts. If any is missing, the test is blocked on it (or that step is stubbed and skipped with a clear TODO).
+- **Test stack:** Assumed the repo uses Jest or Vitest with supertest (or equivalent in-process HTTP testing) and an established isolated-DB strategy (testcontainers / in-memory / test schema). Match whatever exists; do not introduce a new framework.
+- **Provider seam:** Assumes the SMS/email providers are injected/importable in a way that allows mocking and capturing the dispatched payload. If they are not seam-able, a small refactor for testability may be required (report it rather than hacking around it).
+- **OTP capture vs stub:** Assumed black-box capture from the provider mock is feasible. The fixed-generator-stub fallback is acceptable only if capture is impractical.
+- **Analytics spy:** Assumes the analytics client is mockable/spy-able (consistent with the analytics-events task). If analytics is not yet wired, assert what exists and leave a TODO for the rest.
+- **JWT verification:** Assumes the test can access the configured signing key/secret (via test env config) to verify the access token.
+- **Scope:** This task is the HAPPY path only. Failure/abuse paths (wrong code, expired, rate-limited, locked, reuse detection) are a separate negative-path test suite.
+- **Stack:** Assumed Node + TypeScript. Adjust if different.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: Test: project state persists across app restart (Hive) — Phase: Auth + Projects Hub, Track: Analytics / QA
+
+------------------------------------------------------------------------------------------------------------>>>
+
+# TEST: Project State Persists Across App Restart (Hive)
+# Product: Internal (maya-viewer / Projects Hub — Flutter client)
+# Scope: Persistence / Integration Test (QA)
+# Track: Analytics / QA
+# Platform: Flutter (Dart) + Hive
+# Priority: High
+
+---
+
+## Task Description
+
+Write a test proving that locally-persisted project state, stored in Hive, survives an app restart. The defining requirement: the test must close the Hive box and reopen it **against the same on-disk path** to genuinely simulate a cold restart — an in-memory or freshly-mocked store would pass without testing real disk persistence, which defeats the purpose.
+
+> NOTE — STACK SHIFT: This is a Flutter/Dart client test using Hive, NOT a Node/TypeScript backend test like the other tasks in this phase. Use `flutter_test` (and `hive`/`hive_flutter`), Dart conventions, and Hive type adapters.
+
+- [ ] Initialize Hive against a real temporary directory (not a no-persistence mock)
+- [ ] Register the project `TypeAdapter`(s) needed to store the project state
+- [ ] Write project state to a Hive box
+- [ ] Simulate a restart by closing the box/Hive and reopening the SAME path
+- [ ] Assert the state is read back intact, field-for-field
+- [ ] Cover empty state, single project, multiple projects, and update-then-restart
+- [ ] Clean up the temp directory and close Hive in teardown so runs are isolated
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `lib/**/hive*.dart` or the Hive bootstrap (`Hive.initFlutter()`, `registerAdapter`, box-opening code) — match how the app initializes Hive and names its boxes
+2. `lib/models/project*.dart` and its generated `*.g.dart` adapter — the Project model, its `@HiveType`/`typeId`, and field `@HiveField` indices
+3. The repository/service that reads/writes project state to Hive — confirm the box name(s) and what "project state" includes (saved projects vs in-progress/draft state)
+4. `test/` existing tests — match the established `flutter_test` setup, temp-dir helpers, and teardown conventions
+5. `pubspec.yaml` — confirm `hive`, `hive_flutter`, `hive_test`/`path_provider` (or test temp-dir approach), and `flutter_test` are available
+
+## Implementation Instructions
+
+### Step 1: Initialize Hive on a real temp directory
+In `setUp`, create a unique temporary directory and `Hive.init(tempDir.path)` (do NOT use `initFlutter` in pure Dart tests; use a real path so data actually lands on disk). Register every adapter the project state needs (`Hive.registerAdapter(ProjectAdapter())`, plus any nested-type adapters). Guard against double-registration if the suite re-runs.
+
+### Step 2: Write project state
+Open the project box (same name the app uses) and write representative state:
+- One known `Project` with all fields populated (id, name, objectSize, category, mode, createdAt, updatedAt, plus any local-only/in-progress fields the app persists).
+- Then variants for the other cases (multiple projects keyed correctly; an updated project).
+Flush/await writes so they are committed before the simulated restart.
+
+### Step 3: Simulate the restart (the critical step)
+Close the box and Hive (`await box.close();` then `await Hive.close();`) to release in-memory handles, then **re-init Hive on the SAME temp directory path** and re-open the box. This forces the data to be reloaded from disk rather than served from memory — the only way to actually test persistence. Do NOT delete the temp dir between the two phases.
+
+### Step 4: Assert state survived
+Read the project(s) back from the reopened box and assert deep field-by-field equality with what was written (id, name, enums, timestamps, in-progress fields). Assert the box length matches and keys/order are as expected. Equality must compare values, not object identity (instances differ across the reopen).
+
+### Step 5: Cover the cases
+- **Empty:** no writes → after restart the box is empty (not null/error), length 0.
+- **Single project:** survives intact.
+- **Multiple projects:** all survive, correctly keyed, none lost or duplicated.
+- **Update-then-restart:** write a project, update a field (e.g. rename / change a draft field), restart, assert the UPDATED value persisted (not the stale one).
+
+### Step 6: Isolation + teardown
+In `tearDown`: close any open boxes, `Hive.close()`, and delete the temp directory recursively. Each test uses its own temp dir so tests cannot leak into one another or into the app's real Hive store. The suite must pass on repeat runs and under randomized order.
+
+## What NOT to Change
+
+- Do NOT use an in-memory-only or persistence-less mock for the "restart" — it must hit a real on-disk path, closed and reopened.
+- Do NOT point the test at the app's real Hive directory (`getApplicationDocumentsDirectory()` / production box path) — use an isolated temp dir.
+- Do NOT modify production model/adapter code to make the test pass; if a `typeId`/`HiveField` bug breaks persistence, report it.
+- Do NOT skip closing Hive/boxes in teardown — leaked handles cause cross-test flakiness and "box already open" errors.
+- Do NOT assert object identity; assert field values (deserialized instances are new objects).
+- Do NOT introduce a different local-storage library — this tests Hive specifically.
+
+## Edge Cases to Handle (within the persistence scope)
+
+- [ ] Empty box after restart → length 0, no exception, not null.
+- [ ] Multiple projects → all present, correct keys, no duplication or loss.
+- [ ] Updated value before restart → the updated (not stale) value persists.
+- [ ] All `Project` fields, including nullable/optional and any nested objects, round-trip correctly.
+- [ ] Enum fields (objectSize/category/mode) deserialize to the correct enum values (not indices/strings mismatched).
+- [ ] DateTime fields (createdAt/updatedAt) round-trip without precision loss or timezone drift.
+- [ ] Re-running the suite / double adapter registration does not throw.
+- [ ] (Note, not necessarily tested here) adapter `typeId` or `HiveField` index changes break persistence — call out if the model risks this; full migration testing is a separate task.
+
+## Constraints
+
+- Persistence MUST be verified by closing and reopening Hive on the SAME real on-disk path.
+- Each test MUST use an isolated temp directory; no use of the app's production Hive path.
+- Assertions MUST be deep value equality across the restart, including enums and DateTimes.
+- Teardown MUST close all boxes + Hive and delete the temp dir; the suite MUST be repeatable and order-independent.
+- The test MUST register the same adapters the app uses; adapter `typeId`s must match production.
+- No production code changes to force a pass.
+
+## Acceptance Criteria
+
+- [ ] A test writes project state, closes and reopens Hive on the same temp path, and asserts the state survived intact.
+- [ ] Single-project, multiple-project, empty, and update-then-restart cases all pass.
+- [ ] Enum and DateTime fields round-trip correctly across the restart.
+- [ ] The "restart" demonstrably reloads from disk (closing/reopening, not in-memory reuse) — verifiable by the close/reopen sequence in the test.
+- [ ] Each test is isolated (own temp dir) and the suite passes on two consecutive runs and under randomized order.
+- [ ] Teardown leaves no temp directories and no open Hive handles.
+- [ ] No production model/adapter/storage code was modified to pass.
+- [ ] `flutter analyze` is clean on the test files; the test runs in CI without a device/emulator (pure Dart `flutter test`, not requiring `integration_test` unless the app's Hive bootstrap forces it).
+
+## Testing Instructions (how to run / verify the test)
+
+1. Run the suite: `flutter test test/persistence/project_hive_persistence_test.dart` (adjust path).
+2. Run it twice consecutively → confirm both pass (isolation; no "box already open").
+3. Run with randomized ordering if configured → confirm still green.
+4. Sabotage check: temporarily make the write a no-op (or skip the flush) → confirm the test FAILS after restart (proving the assertions are real, not vacuous), then revert.
+5. Sabotage check 2: temporarily swap the reopen to a fresh empty box / different path → confirm the test FAILS (proving it actually tests disk persistence), then revert.
+6. Confirm no temp directories remain on disk after the run.
+7. Run `flutter analyze` on the test files → confirm clean.
+
+## Assumptions
+
+- **Stack:** Assumed Flutter + Dart with `hive`/`hive_flutter` and `flutter_test`. Pure-Dart `flutter test` with `Hive.init(tempPath)` is assumed sufficient; if the app's bootstrap hard-couples to `initFlutter`/`path_provider`, the test may need `path_provider`'s test mock or an `integration_test` harness — confirm.
+- **"Project state" scope:** Assumed this means the locally-cached `Project` records and/or in-progress/draft project state the app keeps between sessions. The exact fields and box name must be confirmed against the real Hive bootstrap. If "state" includes a separate draft/session object, include it in the round-trip assertions.
+- **Model + adapters:** Assumes a `Project` `@HiveType` model with a stable `typeId` and `@HiveField` indices, and a generated adapter. The test registers the production adapters; `typeId`s must match.
+- **Field shape:** Assumes the local Project mirrors the backend (id, name, objectSize, category, mode, createdAt, updatedAt) plus possible local-only fields. Enum representation in Hive (adapter-encoded vs stored as string/index) must be confirmed for the enum round-trip assertion.
+- **Box strategy:** Assumed a standard `Box<Project>` (not `LazyBox`). If the app uses a `LazyBox` or encrypted box, the open/read calls change accordingly.
+- **No migration scope:** Adapter/schema migration across app *versions* is out of scope here; this tests restart with the current schema. Migration is a separate test task.
+- **Isolation:** Assumes the test must never touch the real app Hive directory; a temp dir per test is used.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: Test: token expiry triggers refresh (not logout) — Phase: Auth + Projects Hub, Track: Analytics / QA
+------------------------------------------------------------------------------------------->>>
+
+# TEST: Token Expiry Triggers Refresh (Not Logout)
+# Product: Internal (maya-viewer / Projects Hub — Flutter client)
+# Scope: Auth Session / Interceptor Test (QA)
+# Track: Analytics / QA
+# Platform: Flutter (Dart)
+# Priority: High
+
+---
+
+## Task Description
+
+Write a test proving that when the access token expires, the app **automatically refreshes** the session and transparently retries the original request — the user stays logged in. Logout must happen ONLY when the refresh itself fails (refresh token expired/invalid/reused). This is a client-side concern: the behavior lives in the HTTP client's auth interceptor, not the backend.
+
+> STACK NOTE: This is a Flutter/Dart client test (`flutter_test` + the app's HTTP client/interceptor + mocking), not a backend test. The backend only returns 401 on an expired access token and exposes `POST /auth/refresh`; the refresh-vs-logout decision is the client's.
+
+- [ ] Simulate an expired access token (server returns 401, and/or the stored token's `exp` is past)
+- [ ] Assert the interceptor calls `POST /auth/refresh` with the stored refresh token
+- [ ] Assert the original request is retried with the new access token and succeeds
+- [ ] Assert the session stays authenticated (NO logout, NO redirect to login) on successful refresh
+- [ ] Assert the new tokens are persisted (replacing the old ones)
+- [ ] Assert the BOUNDARY: when refresh fails, the app DOES log out / clears the session
+- [ ] Assert concurrent requests during expiry trigger only ONE refresh, then all retry
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `lib/**/interceptor*.dart` or the HTTP client setup (Dio `Interceptor` / `http` wrapper) — the actual refresh-on-401 logic under test
+2. `lib/**/auth*controller*.dart` / auth bloc/provider/notifier — where "logged in / logged out" session state lives, so the test can assert no logout occurred
+3. Token storage (`flutter_secure_storage` / Hive box) — where access + refresh tokens are read/written
+4. The API client construction — how to inject a mock transport/adapter for tests
+5. `test/` existing tests — match the established `flutter_test` + mocking conventions (mockito vs mocktail)
+6. `pubspec.yaml` — confirm the HTTP client (Dio assumed), mocking lib, and `flutter_test` are available
+
+## Implementation Instructions
+
+### Step 1: Set up a mockable transport
+Inject a mock HTTP transport so responses are scripted without a real network. For Dio, use a mock adapter / `DioAdapter`; for `http`, use `MockClient`. Seed the token store with a valid refresh token and an (about-to-be) expired access token.
+
+### Step 2: Script the expiry → refresh → retry sequence
+Configure the mock so that:
+1. The first call to a protected endpoint (e.g. `GET /projects`) returns `401` (expired access token).
+2. A call to `POST /auth/refresh` returns `200` with a NEW access token + refresh token.
+3. The retried protected call (now with the new access token) returns `200` with data.
+Assert this exact sequence happens and that the caller ultimately receives the successful `200` — the expiry is invisible to the calling code.
+
+### Step 3: Assert no logout on success
+Inspect the auth/session state after the flow: it MUST still be "authenticated". Assert the app did NOT emit a logout event, did NOT clear the token store, and did NOT navigate to login. This is the core of "refresh, not logout".
+
+### Step 4: Assert token rotation persisted
+After refresh, the token store holds the NEW access + refresh tokens (the old access token is replaced; the old refresh token is gone/replaced per the backend's rotation contract). Subsequent requests use the new access token.
+
+### Step 5: Assert the logout BOUNDARY
+Separate test case: script `POST /auth/refresh` to return `401`/failure (refresh token expired/invalid/reused). Now the app MUST log out: session state becomes unauthenticated, tokens cleared, and the original request fails (or surfaces an auth error) rather than hanging. This proves logout is reserved for genuine refresh failure — the opposite outcome from Step 3.
+
+### Step 6: Assert single-flight refresh under concurrency
+Fire multiple protected requests concurrently while the access token is expired. Assert `POST /auth/refresh` is called exactly ONCE (not once per in-flight request), the refresh is de-duplicated/queued, and all original requests are retried and succeed with the new token. A naive implementation that refreshes N times is a bug this test must catch.
+
+### Step 7: Determinism + isolation
+No real network, no real timers/sleeps for expiry — drive expiry via the scripted 401 (and/or a stubbed clock / pre-expired `exp`). Reset the token store and mock between tests. Suite passes on repeat runs and randomized order.
+
+## What NOT to Change
+
+- Do NOT modify the interceptor/auth code to make the test pass; if it logs out on a recoverable expiry, that is the bug — report it.
+- Do NOT use a real backend or real network; script all responses via the mock transport.
+- Do NOT rely on wall-clock sleeps to "wait" for expiry — script the 401 or stub the clock.
+- Do NOT assert only the happy path — the logout boundary (refresh failure → logout) is required to prove the distinction.
+- Do NOT leave the token store or auth state dirty between tests.
+- Do NOT swap the HTTP client or auth architecture — test what the app uses.
+
+## Edge Cases to Handle
+
+- [ ] Expired access token, valid refresh token → refresh succeeds, original request retried, stays logged in.
+- [ ] Expired access token, FAILED refresh (invalid/expired/reused refresh token) → logout, tokens cleared.
+- [ ] Multiple concurrent requests hit expiry simultaneously → exactly one refresh, all retried.
+- [ ] Refresh succeeds but the retried request itself returns a non-auth error (e.g. 500) → surfaced as that error, NOT a logout (a 500 is not an auth failure).
+- [ ] A second 401 on the retried request (refresh gave a bad token) → do not infinite-loop; cap retries and then log out.
+- [ ] No refresh token present at all when access expires → logout (nothing to refresh with).
+- [ ] Proactive vs reactive expiry: if the client checks `exp` before sending, cover that path too; otherwise the reactive 401 path is primary (confirm which the app implements).
+
+## Constraints
+
+- The test MUST prove expiry → refresh → transparent retry with the session remaining authenticated.
+- The test MUST prove the boundary: refresh failure → logout.
+- The test MUST assert exactly one refresh under concurrent expiry (single-flight).
+- The test MUST guard against an infinite refresh/retry loop (bounded retries).
+- All network MUST be mocked; expiry MUST be scripted, not slept on.
+- Tests MUST be isolated and order-independent; token store and auth state reset between cases.
+- No production code changed to force a pass.
+
+## Acceptance Criteria
+
+- [ ] On access-token expiry with a valid refresh token: `POST /auth/refresh` is called, the original request is retried, the caller gets a successful result, and the session stays authenticated (no logout, no login redirect, no cleared tokens).
+- [ ] New access + refresh tokens are persisted after refresh; subsequent calls use the new access token.
+- [ ] On refresh failure: the app logs out (unauthenticated state, tokens cleared) and the request does not silently succeed.
+- [ ] Concurrent requests during expiry trigger exactly one refresh; all are retried and succeed.
+- [ ] A non-auth error (500) on the retried request is surfaced as that error, not a logout.
+- [ ] Repeated 401s do not cause an infinite loop; retries are bounded and end in logout.
+- [ ] Missing refresh token at expiry → logout.
+- [ ] Suite passes on two consecutive runs and under randomized order; no leaked state.
+- [ ] No production interceptor/auth code modified to pass.
+- [ ] `flutter analyze` clean on the test files; `flutter test` runs without a device/emulator.
+
+## Testing Instructions (how to run / verify the test)
+
+1. Run the suite: `flutter test test/auth/token_refresh_test.dart` (adjust path).
+2. Run twice consecutively and with randomized order → confirm green both times (isolation).
+3. Sabotage check A: temporarily make the interceptor log out on the first 401 (instead of refreshing) → confirm the happy-path test FAILS, then revert. Proves the test actually asserts "not logout".
+4. Sabotage check B: temporarily make refresh fire per-request (remove single-flight) → confirm the concurrency test FAILS (more than one refresh), then revert.
+5. Confirm the logout-boundary test passes (refresh failure → logout) and the success test passes (no logout) — both directions covered.
+6. Run `flutter analyze` on the test files → confirm clean.
+
+## Assumptions
+
+- **Refresh-vs-logout location:** Assumed the auto-refresh logic lives in an HTTP interceptor (Dio assumed). If the app uses `http` with a manual wrapper or a different pattern, mock that seam instead.
+- **Expiry detection:** Assumed reactive (server `401`) as the primary trigger. If the client proactively checks the JWT `exp` before sending, add that path. Confirm which the app implements.
+- **Token storage:** Assumed `flutter_secure_storage` or a Hive box for tokens. The test seeds and asserts against whatever the app uses.
+- **Session state:** Assumed an observable auth controller/bloc/provider exposes authenticated vs logged-out so the test can assert "no logout". If logout is purely a navigation side effect, assert on the navigator/router instead.
+- **Backend contract:** Assumes `POST /auth/refresh` rotates tokens (new access + new refresh) per the refresh-endpoint prompt, and returns a failure status when the refresh token is invalid/expired/reused.
+- **Single-flight:** Assumes the interceptor should de-duplicate concurrent refreshes. If the app intentionally does not (and accepts multiple refreshes), the concurrency assertion changes — but that is usually a bug worth surfacing.
+- **Mocking lib:** Assumed mockito or mocktail per repo convention.
+- **Scope:** This is the client session-handling test. The backend rotation/reuse-detection behavior is covered by its own endpoint + negative-path tests.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding prompt for this task: Test: offline — projects load from cache, new project queued — Phase: Auth + Projects Hub, Track: Analytics / QA
+------------------------------------------------------------------------------------------------------->>>
+
+# TEST: Offline — Projects Load From Cache, New Project Queued
+# Product: Internal (maya-viewer / Projects Hub — Flutter client)
+# Scope: Offline / Sync Behavior Test (QA)
+# Track: Analytics / QA
+# Platform: Flutter (Dart) + Hive
+# Priority: High
+
+---
+
+## Task Description
+
+Write a test proving two offline behaviors of the Projects Hub client:
+1. **Offline read** — when there is no connectivity, the project list loads from the local Hive cache instead of erroring.
+2. **Offline create** — when a project is created offline, it is durably queued locally (and shown optimistically), then flushed to the server on reconnect, rather than failing or being lost.
+
+> STACK NOTE: This is a Flutter/Dart client test (`flutter_test` + mocked connectivity + mocked API + Hive), not a backend test. It builds on the same Hive cache exercised by the persistence test and the `GET /projects` / `POST /projects` backend contracts.
+
+- [ ] Force the connectivity state to "offline" in the test
+- [ ] Seed the Hive cache with projects and assert an offline list-load returns them (no network call, no error)
+- [ ] Create a project while offline and assert it is enqueued in the local outbox/queue (durable, in Hive)
+- [ ] Assert the queued project appears optimistically in the list with a pending/unsynced status and a temporary local id
+- [ ] Assert NO `POST /projects` network call happens while offline
+- [ ] Assert that on reconnect the queue flushes: `POST /projects` is called once per queued create, and the project is reconciled (server id, pending flag cleared)
+- [ ] Keep the test deterministic and isolated (mocked connectivity/API, temp Hive dir, clean teardown)
+
+## Files to Inspect First
+
+> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
+
+1. `lib/**/projects_repository*.dart` — the offline-first read/create logic (cache fallback + enqueue) under test
+2. `lib/**/connectivity*.dart` / network-info abstraction (`connectivity_plus` wrapper) — the seam to force offline/online
+3. Hive bootstrap + the cache box and the outbox/queue box — confirm box names, the cached `Project` shape, and the queued-operation shape
+4. The create flow (UI → repository) and how optimistic/pending state is represented on a `Project`
+5. The sync/flush logic — what runs on reconnect and how it dedupes/reconciles
+6. `test/` existing tests — match `flutter_test` + mocking conventions (mockito/mocktail); reuse the persistence test's temp-Hive helpers
+7. `pubspec.yaml` — confirm Hive, the connectivity lib, the HTTP client, mocking lib, and `flutter_test`
+
+## Implementation Instructions
+
+### Step 1: Harness — isolated Hive + mockable connectivity + mockable API
+Init Hive on a temp dir (as in the persistence test), register adapters, and open the cache + outbox boxes. Inject a mock connectivity source and a mock HTTP transport so both can be scripted. Default the mock connectivity to OFFLINE for the offline cases.
+
+### Step 2: Offline read from cache
+Seed the cache box with several `Project` records. With connectivity OFFLINE, invoke the repository's "load projects" path. Assert:
+- The returned list equals the cached projects (sorted as the app sorts them).
+- NO network call to `GET /projects` was attempted (or it was attempted, failed, and the repository fell back to cache — confirm which pattern the app uses; assert the user-visible result is the cached list either way).
+- No error/exception surfaces to the caller; an empty cache returns an empty list (not an error).
+
+### Step 3: Offline create → enqueue
+With connectivity OFFLINE, create a project (name + objectSize/category/mode). Assert:
+- NO `POST /projects` call is made.
+- A queued operation is written to the outbox box (durable — survives, like the persistence test, a close/reopen of Hive).
+- The new project appears in the list result optimistically, marked pending/unsynced, with a temporary local id (distinct from a server id).
+- The queued payload contains the correct create fields.
+
+### Step 4: Reconnect → flush + reconcile
+Flip connectivity to ONLINE and trigger the sync (however the app does it — connectivity listener, app resume, manual). Script `POST /projects` to return `201` with a server-assigned id. Assert:
+- `POST /projects` is called exactly once per queued create (no duplicates).
+- The outbox entry is removed after a successful flush.
+- The optimistic project is reconciled: pending flag cleared, temporary id replaced by the server id, cache updated.
+- A flush that the queue already processed is not re-sent (idempotent/dedup on the queue).
+
+### Step 5: Determinism + isolation
+No real network, no real connectivity, no wall-clock waits. Drive connectivity transitions and API responses via mocks. Reset cache + outbox between tests; own temp Hive dir per test. Suite passes on repeat runs and randomized order.
+
+## What NOT to Change
+
+- Do NOT modify production repository/sync code to pass; if offline create is silently dropped or double-sent, that is the bug — report it.
+- Do NOT make real network or real connectivity calls; mock both seams.
+- Do NOT let an offline read throw to the user — cache fallback must be graceful.
+- Do NOT let an offline create hit the network or fail; it must enqueue durably.
+- Do NOT use the app's real Hive directory; isolated temp dir only.
+- Do NOT rely on wall-clock sleeps for connectivity transitions.
+
+## Edge Cases to Handle
+
+- [ ] Offline + empty cache → empty list, no error.
+- [ ] Offline create, then app "restart" (close/reopen Hive) before reconnect → the queued create survives (durable outbox) and still flushes on later reconnect.
+- [ ] Multiple offline creates → all queued, all flushed on reconnect, none lost or duplicated, order preserved if the app guarantees order.
+- [ ] Queued (pending) project is visible in the list merged with cached projects, clearly marked unsynced.
+- [ ] Reconnect flush where one `POST` fails (e.g. 500) → that entry stays queued for retry; already-synced entries are not re-sent. (If retry/backoff is out of scope, assert the entry is NOT dropped.)
+- [ ] Going offline → online → offline rapidly → no duplicate sends; single-flight/dedup on the queue.
+- [ ] Temporary local id never leaks to the server as the canonical id; server id wins after reconcile.
+
+## Constraints
+
+- Offline reads MUST return cached data gracefully (no thrown error; empty cache → empty list).
+- Offline creates MUST be enqueued durably in Hive (survive an app restart) and MUST NOT touch the network.
+- The optimistic project MUST be distinguishable as pending and carry a temporary id until reconciled.
+- Reconnect flush MUST call `POST /projects` exactly once per queued create and reconcile the result.
+- The queue MUST be idempotent/dedup so reconnect churn cannot double-send.
+- All connectivity/network MUST be mocked; transitions scripted, not slept on.
+- Tests MUST be isolated, order-independent, with clean teardown. No production code changed to pass.
+
+## Acceptance Criteria
+
+- [ ] With connectivity offline and a seeded cache, the list-load returns the cached projects and surfaces no error.
+- [ ] Offline + empty cache returns an empty list, not an error.
+- [ ] Creating a project offline makes no `POST /projects` call and writes a durable outbox entry.
+- [ ] The offline-created project appears in the list optimistically, marked pending, with a temporary id.
+- [ ] The queued create survives a Hive close/reopen (durable across restart).
+- [ ] On reconnect, the queue flushes: `POST /projects` is called once per create, the entry is removed, and the project is reconciled with the server id and cleared pending flag.
+- [ ] Multiple queued creates all flush without loss or duplication.
+- [ ] Rapid offline/online churn does not cause duplicate sends.
+- [ ] A failed flush keeps the entry queued (not dropped); succeeded entries are not re-sent.
+- [ ] Suite passes on two consecutive runs and under randomized order; no leaked state or temp dirs.
+- [ ] No production repository/sync code modified to pass.
+- [ ] `flutter analyze` clean on the test files; `flutter test` runs without a device/emulator.
+
+## Testing Instructions (how to run / verify the test)
+
+1. Run the suite: `flutter test test/offline/projects_offline_test.dart` (adjust path).
+2. Run twice consecutively and with randomized order → confirm green (isolation).
+3. Sabotage check A: temporarily make the offline read throw instead of falling back to cache → confirm the read test FAILS, then revert.
+4. Sabotage check B: temporarily make the offline create call the network (no enqueue) → confirm the create test FAILS (network called / nothing queued), then revert.
+5. Sabotage check C: temporarily make the reconnect flush send each queued item twice → confirm the dedup assertion FAILS, then revert.
+6. Confirm the durable-across-restart case passes (queued create survives Hive close/reopen).
+7. Run `flutter analyze` on the test files → confirm clean.
+
+## Assumptions
+
+- **Offline-first architecture exists:** Assumes the repository already implements cache-read fallback AND a durable create queue/outbox. If either is missing, this test is blocked on that feature (or asserts what exists and flags the gap with a TODO) — surface it rather than building the feature inside the test.
+- **Connectivity seam:** Assumed a mockable connectivity abstraction (e.g. wrapping `connectivity_plus`). If the app reads connectivity inline, a small testability seam may be needed (report it).
+- **Cache + outbox storage:** Assumed Hive for both the project cache and the outbox queue, consistent with the persistence test. Confirm box names and the queued-operation record shape.
+- **Optimistic/pending model:** Assumed a `Project` carries a pending/unsynced flag and a temporary local id until reconciled. If the app models pending differently (separate list, status enum), assert against that.
+- **Sync trigger:** Assumed reconnect flush is driven by a connectivity listener (or app-resume / manual). The test triggers whatever mechanism the app uses.
+- **Retry policy:** Assumed a failed flush keeps the entry queued. Full retry/backoff/conflict-resolution behavior is likely a separate task; this test only asserts entries are not dropped.
+- **Reconciliation:** Assumed server `201` returns the canonical id that replaces the temp id. If the app reconciles by a client-generated UUID sent to the server instead, adjust the id assertions.
+- **Mocking lib + stack:** Assumed mockito/mocktail and Flutter + Dart per repo convention.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Generate a coding agent prompt for Phase P1: Auth + Projects Hub — all tracks. ( This run when all above done. )
+--------------------------------------------------------------------------------------------------->>>
+
+# PHASE P1: Auth + Projects Hub — Master Orchestration Prompt (All Tracks)
+# Product: MayasabhaXR — Projects Hub (Node/TS backend + Flutter/Dart client)
+# Scope: Phase-level plan spanning Backend APIs, Analytics, QA, and Client tracks
+# Priority: Phase milestone
+
+---
+
+## How To Use This Prompt
+
+This is the connective spec for Phase P1. It locks the **shared conventions** every task inherits, surfaces the **cross-cutting decisions** that must be resolved before coding, and defines the **dependency-ordered build sequence**. Each individual task has (or needs) its own detailed prompt — this document is the source of truth they all defer to. When a per-task prompt and this document disagree on a shared convention, this document wins.
+
+Do NOT start coding tasks before the "Resolve Before Starting" block is answered — several decisions there change implementations in opposite directions.
+
+---
+
+## 0. RESOLVE BEFORE STARTING (blocking cross-cutting decisions)
+
+These are unresolved and each blocks multiple tasks. Get explicit answers first.
+
+1. **Project enum values** — the allowed members of `objectSize`, `category`, `mode`. Blocks: `POST /projects`, `project_created` analytics, Hive persistence test. Without these, validation accepts garbage and the client/server disagree.
+2. **Project ownership model** — single-owner vs shared/team projects. Blocks: every project endpoint's scoping query (owner-equality vs membership lookup), `DELETE`/`PATCH` authorization rules. This ripples through the whole Projects track.
+3. **Token transport** — access/refresh tokens in the JSON body vs httpOnly cookies. Blocks: `verify-otp`, `refresh`, and the client interceptor + token-refresh test.
+4. **Refresh-token model** — rotating with reuse detection (assumed) vs static long-lived. Blocks: `refresh` endpoint, client single-flight refresh, negative-path tests.
+5. **`app_opened` emission path** — client-direct to the analytics destination vs a backend ingest endpoint. Blocks: the auth analytics task.
+6. **`/remote-config` auth posture** — public (served pre-login) vs behind JWT. Blocks: `GET /remote-config`.
+7. **Offline-first architecture** — does the client already have cache-fallback reads + a durable create outbox? Blocks: the offline test (and possibly adds a client feature task).
+8. **Analytics destination** — Segment/Mixpanel/Amplitude/custom, and whether a wrapper already exists. Blocks: both analytics tasks.
+9. **First-time verify = signup** — does a successful OTP verify for an unknown identifier create the user? (Assumed yes.) Blocks: `verify-otp`.
+10. **Failure-event naming** — consolidate under `auth_failed` (assumed) vs keep granular per-stage names. Blocks: analytics consistency across the auth endpoints.
+11. **Stack confirmation** — backend Node + TypeScript + Zod; client Flutter + Dart + Hive. Assumed throughout; confirm.
+
+---
+
+## 1. Phase Overview
+
+P1 delivers passwordless OTP authentication and the core Projects Hub CRUD, instrumented with analytics and covered by QA, across two codebases:
+
+- **Backend (Node/TS):** OTP auth lifecycle, JWT session issuance + rotation, project CRUD, remote config.
+- **Client (Flutter/Dart):** token storage + auto-refresh interceptor, Hive-backed offline cache + create outbox, project list/create/rename/delete UI.
+- **Analytics:** a single typed event layer shared by both, with a canonical tracking plan.
+- **QA:** hermetic tests for the auth happy path, local persistence, token-refresh behavior, and offline behavior.
+
+---
+
+## 2. Shared Conventions (inherited by ALL tasks)
+
+Every per-task prompt assumes these; do not re-decide them per task.
+
+**Auth & identity**
+- Access token = JWT with `sub` = userId, short TTL (default 900s), signed with the configured key.
+- Refresh token = opaque, stored hashed, rotating with reuse detection (pending decision #4); plaintext returned once.
+- A shared JWT auth middleware resolves the user from the access token and attaches the userId; protected routes sit behind it. **(Still needs its own prompt — see §4.)**
+- Ownership is ALWAYS derived from the token, NEVER accepted from request body/query/header.
+
+**API contract**
+- Validation via Zod on every input.
+- Error responses are enumeration-safe and generic: not-found and not-owned both return identical `404` (never `403`, which leaks existence).
+- Consistent error envelope: `{ status: "error", code, message }`; success: `{ status: "success", ... }`.
+- Tunables (TTLs, limits, cooldowns) come from config/env — never hardcoded literals.
+
+**Data**
+- Soft delete via `deletedAt` (or the existing schema flag); soft-deleted rows are excluded from reads.
+- The `Project` DTO shape is IDENTICAL across `GET /projects`, `GET /projects/:id`, `POST /projects`, `PATCH /projects/:id`. One shape, defined once.
+- `updatedAt` is set on create (= `createdAt`) and bumped on real mutations (rename), so list ordering by `updatedAt desc` is meaningful.
+
+**PII & secrets hygiene**
+- Never log or emit raw phone, email, OTP/code, JWT, refresh token, or password.
+- Identifiers in analytics/logs are hashed via one shared util (so `identifier_hash`/`user_id_hash` join across events).
+
+**Analytics**
+- One `AnalyticsEvent` name const; no string literals scattered. One Zod property schema per event. `snake_case` properties.
+- Emission is fire-and-forget: it MUST NOT block, delay, or break the request path; failures are swallowed + logged.
+
+**Testing**
+- Hermetic: no real network/providers/connectivity; isolated DB/Hive temp dirs; deterministic (no wall-clock sleeps).
+- Order-independent, repeatable, with full teardown. NEVER modify production code to make a test pass — surface bugs instead.
+
+**Client**
+- Token expiry recovers via refresh transparently; logout happens ONLY on refresh failure.
+- Hive is the local store for the project cache AND the offline create outbox; both durable across restart.
+
+---
+
+## 3. Task Inventory & Status
+
+### Track: Backend APIs
+| Task | Endpoint | Detailed prompt | Status |
+|---|---|---|---|
+| OTP dispatch | `POST /auth/send-otp` | yes | spec'd |
+| OTP verify + tokens | `POST /auth/verify-otp` | yes | spec'd |
+| Token refresh | `POST /auth/refresh` | yes | spec'd |
+| **JWT auth middleware** | (shared) | **NO — needs prompt** | **blocker** |
+| List projects | `GET /projects` | yes | spec'd |
+| Create project | `POST /projects` | yes | spec'd |
+| **Single project fetch** | `GET /projects/:id` | **NO — needs prompt** | **gap** |
+| Rename project | `PATCH /projects/:id` | yes | spec'd |
+| Soft-delete project | `DELETE /projects/:id` | yes | spec'd |
+| Remote config | `GET /remote-config` | yes | spec'd |
+
+### Track: Analytics
+| Task | Detailed prompt | Status |
+|---|---|---|
+| Auth events: `app_opened`, `auth_otp_sent`, `auth_otp_verified`, `auth_failed` | yes | spec'd |
+| Project events: `project_created`, `project_deleted`, `project_resumed` | yes | spec'd (`project_resumed` blocked on `GET /projects/:id`) |
+
+### Track: QA
+| Task | Detailed prompt | Status |
+|---|---|---|
+| Auth happy path (OTP e2e) | yes | spec'd |
+| Project state persists across restart (Hive) | yes | spec'd |
+| Token expiry triggers refresh (not logout) | yes | spec'd |
+| Offline — cache load + queued create | yes | spec'd |
+| **Negative/abuse suite** (wrong code, expired, rate-limit, lockout, refresh reuse) | **NO — recommended** | **gap** |
+
+### Track: Client (Flutter) — implied by the QA tests; features may need their own prompts
+| Feature | Detailed prompt | Status |
+|---|---|---|
+| Token storage + auth interceptor (refresh-on-expiry) | NO | implied by token-refresh test |
+| Hive project cache | NO | implied by persistence test |
+| Offline create outbox + reconnect sync | NO | implied by offline test |
+| Project list / create / rename / delete UI | NO | implied |
+
+---
+
+## 4. Inline Specs for the Two Missing Backend Pieces
+
+These block other work; generate full prompts for them, but here is enough to unblock sequencing.
+
+### JWT Auth Middleware (shared dependency for ALL protected routes)
+- Reads the `Authorization: Bearer <accessToken>` header (or cookie, per decision #3).
+- Verifies the JWT signature + expiry against the configured key; on failure returns the standard `401` envelope.
+- On success, attaches the resolved userId (from `sub`) to the request for downstream handlers.
+- Does NOT hit the DB on every request unless the design requires user re-validation (decide); pure token verification is the default.
+- Must be the single chokepoint — handlers never re-implement token parsing.
+- Every protected endpoint in §3 (`GET/POST/PATCH/DELETE /projects`, `GET /projects/:id`) sits behind it. `send-otp`, `verify-otp`, `refresh` do NOT (they establish the session). `/remote-config` depends on decision #6.
+
+### `GET /projects/:id` (single project fetch)
+- Behind the JWT middleware; owner-scoped exactly like `GET /projects`.
+- Validates `:id`; returns the `Project` DTO (same shape as the rest) on a successful, owned, non-deleted fetch.
+- Not-found / not-owned / soft-deleted all return identical `404`.
+- Is the likely emit point for the `project_resumed` analytics event (with debounce — see that analytics prompt).
+
+---
+
+## 5. Build Sequence (dependency-ordered)
+
+**M0 — Foundations & decisions**
+- Resolve §0. Scaffold/confirm shared libs: Zod validation conventions, the analytics `track()` layer + `AnalyticsEvent` const + PII guardrail, the identifier-hashing util, the rate limiter, JWT signing config.
+
+**M1 — Auth core**
+- `send-otp` → `verify-otp` → `refresh` (in that order; each builds on the prior's records).
+- **JWT auth middleware** (parallelizable; required before any protected route).
+- Auth analytics events wired into the above.
+- QA: auth happy-path e2e (after the three endpoints + middleware + a protected route exist).
+
+**M2 — Projects Hub (backend)**
+- `GET /projects` → `POST /projects` → `GET /projects/:id` → `PATCH /projects/:id` → `DELETE /projects/:id` (all behind the middleware).
+- Project analytics events wired in (`project_resumed` lands with `GET /projects/:id`).
+
+**M3 — Remote config**
+- `GET /remote-config` (independent; can run any time after M0, gated by decision #6).
+
+**M4 — Client (Flutter)**
+- Token storage + auth interceptor (depends on the backend token contract from M1).
+- Hive project cache + offline create outbox + reconnect sync (depends on M2 contracts).
+- Project UI.
+- QA: Hive persistence test, token-refresh test, offline test (each after its feature lands).
+
+**M5 — Hardening**
+- Negative/abuse QA suite (wrong code, expired, rate-limit, lockout, refresh reuse).
+- Reconcile all analytics event names against the canonical tracking plan in one pass.
+
+---
+
+## 6. What NOT To Do (phase-wide)
+
+- Do NOT let any task re-decide a §2 shared convention locally (e.g. a different error envelope, a second analytics const, request-supplied ownership).
+- Do NOT build protected endpoints before the JWT middleware exists — they would each hand-roll token parsing.
+- Do NOT emit or log raw PII/secrets anywhere, in any track.
+- Do NOT let analytics or persistence failures break a request/auth path.
+- Do NOT modify production code to make any QA test pass.
+- Do NOT proceed past M0 with §0 decisions unresolved — especially the project enums and ownership model, which silently shape multiple tasks.
+- Do NOT introduce new frameworks/SDKs where the repo already has one (HTTP client, rate limiter, analytics SDK, mocking lib).
+
+## 7. Phase Definition of Done
+
+- [ ] All §0 decisions resolved and reflected in the per-task prompts.
+- [ ] Auth lifecycle works end-to-end: OTP send → verify → JWT + refresh → protected access → rotation; reuse detection active.
+- [ ] JWT middleware protects every project endpoint; `send-otp`/`verify-otp`/`refresh` are correctly unprotected.
+- [ ] Project CRUD complete (list, create, get, rename, soft-delete) with one shared DTO, owner scoping, `404`-not-`403`, soft-delete exclusion, and `updatedAt` ordering.
+- [ ] `GET /remote-config` returns valid config (or safe defaults) and never 5xxs on store failure; cacheable via ETag/304.
+- [ ] Analytics: all eight events fire through the typed layer with hashed ids, one canonical tracking plan, no name drift, fire-and-forget.
+- [ ] Client: expiry auto-refreshes (no spurious logout), single-flight under concurrency; logout only on refresh failure.
+- [ ] Client: project state persists across restart (Hive); offline reads from cache; offline creates queue durably and flush once on reconnect.
+- [ ] QA suites pass hermetically in CI (no network/device), on repeat runs and randomized order, with sabotage checks proving assertions are non-vacuous.
+- [ ] Backend `tsc --noEmit` + lint clean; client `flutter analyze` + `flutter test` clean.
+- [ ] No raw PII/secrets in logs or analytics; no production code altered to pass tests.
+
+---
+
+## 8. Assumptions (phase-level)
+
+- The individual task prompts already generated are the detailed source for each endpoint/test; this document governs shared conventions and sequencing.
+- Two backend pieces (JWT middleware, `GET /projects/:id`) and the client feature tasks still need their own detailed prompts; §4 unblocks sequencing in the meantime.
+- The negative/abuse QA suite is recommended for phase completeness but not yet spec'd.
+- Backend = Node + TypeScript + Zod + a transactional/queryable store + Redis-style rate limiter; Client = Flutter + Dart + Hive + a mockable HTTP client and connectivity seam. Confirm against the real repos (`AGENTS.md`/`CLAUDE.md`) before execution; adjust paths/conventions accordingly.
+
+
+
+
+
+
+
+
+
+
+
+
+Next ------------------------------------------------------------------------------------------------------------->>>
+
+
+
+
+
+
+

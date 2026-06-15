@@ -2,8 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'app/app.dart';
+import 'data/local/hive_init.dart';
 import 'utils/app_env.dart';
 
 Future<void> main() async {
@@ -18,6 +18,6 @@ Future<void> main() async {
     print(
         '[ReCapture] WARNING: ${kAppEnvironment.envFileName} not found — env vars will be empty.');
   }
-  await Hive.initFlutter();
+  await initHive();
   runApp(const ProviderScope(child: ReCapture()));
 }

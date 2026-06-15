@@ -15,6 +15,46 @@ const envSchema = z.object({
   S3_BUCKET_RAW: z.string().min(1, 'S3_BUCKET_RAW is required'),
   S3_BUCKET_ARTIFACTS: z.string().min(1, 'S3_BUCKET_ARTIFACTS is required'),
   CLOUDFRONT_BASE_URL: z.string().url('CLOUDFRONT_BASE_URL must be a valid URL'),
+
+  // ── OTP (POST /auth/send-otp) ──────────────────────────────────────────────
+  // All tunables come from env; every one has a safe default so existing
+  // deployments boot without new required vars.
+  /** How long a sent OTP stays valid (seconds). */
+  OTP_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  /** Minimum gap between two sends to the same identifier (seconds). */
+  RESEND_COOLDOWN_SECONDS: z.coerce.number().int().nonnegative().default(60),
+  /** Max sends allowed to one identifier within RATE_WINDOW_SECONDS. */
+  MAX_SENDS_PER_WINDOW: z.coerce.number().int().positive().default(5),
+  /** Sliding window for the send cap (seconds). */
+  RATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  /** Secret peppering the OTP/identifier HMAC. Falls back to JWT_SECRET when unset. */
+  OTP_HASH_SECRET: z.string().min(16).optional(),
+  /** Dev/test toggle: when 'true', the provider dispatch throws (to exercise the 502 path). */
+  OTP_SIMULATE_DISPATCH_FAILURE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
+  // ── OTP verify + session tokens (POST /auth/verify-otp) ────────────────────
+  /** Lifetime of the signed JWT access token (seconds). */
+  ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /** Lifetime of an issued refresh token (seconds). Default 30 days. */
+  REFRESH_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(2_592_000),
+  /** Wrong-code guesses tolerated on one OTP record before it locks. */
+  MAX_OTP_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  /** Max verify attempts to one identifier within VERIFY_WINDOW_SECONDS. */
+  MAX_VERIFY_ATTEMPTS_PER_WINDOW: z.coerce.number().int().positive().default(10),
+  /** Sliding window for the verify-attempt cap (seconds). */
+  VERIFY_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
+  /** Max refresh calls from one client signal within REFRESH_WINDOW_SECONDS. */
+  MAX_REFRESH_PER_WINDOW: z.coerce.number().int().positive().default(30),
+  /** Sliding window for the refresh-attempt cap (seconds). */
+  REFRESH_WINDOW_SECONDS: z.coerce.number().int().positive().default(900),
+  /** Dev/test toggle: when 'true', access-token signing throws (to exercise the 500 path). */
+  JWT_SIMULATE_SIGN_FAILURE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);

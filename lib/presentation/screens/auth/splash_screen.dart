@@ -1,12 +1,14 @@
 // lib/presentation/screens/auth/splash_screen.dart
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../app/bootstrap/app_bootstrap_service.dart';
+import '../../../application/auth/auth_notifier.dart';
 import '../../../app/routes/app_router.dart';
-import '../../../app/routes/auth_router_notifier.dart';
+import '../../../domain/entities/auth_state.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../utils/analytics.dart';
@@ -46,53 +48,63 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   }
 
   Future<void> _runBootstrap() async {
-    final service = ref.read(appBootstrapServiceProvider);
-
-    // Time only the real init work, not the artificial minimum-display delay.
+    // Time only the real restore work, not the artificial minimum-display delay.
     final stopwatch = Stopwatch()..start();
-    final resolveFuture = _resolve(service).then((result) {
+    final settleFuture = _awaitAuthSettled().then((state) {
       stopwatch.stop();
-      return result;
+      return state;
     });
 
-    // Wait for both the resolve and the minimum display window. Future.wait
+    // Wait for both the auth restore and the minimum display window. Future.wait
     // completes only once the slower of the two finishes, so the splash is
     // shown for at least _minDisplay and at most ~_maxBootstrap.
     await Future.wait<void>([
-      resolveFuture,
+      settleFuture,
       Future<void>.delayed(_minDisplay),
     ]);
 
-    final result = await resolveFuture;
-    _navigate(result, stopwatch.elapsedMilliseconds);
+    final state = await settleFuture;
+    _navigate(state, stopwatch.elapsedMilliseconds);
   }
 
-  Future<BootstrapResult> _resolve(AppBootstrapService service) async {
+  /// Waits for [authProvider] to leave [AuthRestoring]. The notifier restores
+  /// from secure storage (and may refresh an expired token) on build; we just
+  /// observe the settled result. Falls back to the current (possibly still
+  /// restoring) state on timeout so the splash never hangs.
+  Future<AuthState> _awaitAuthSettled() async {
+    final current = ref.read(authProvider);
+    if (current is! AuthRestoring) return current;
+
+    final completer = Completer<AuthState>();
+    final sub = ref.listenManual<AuthState>(authProvider, (_, next) {
+      if (next is! AuthRestoring && !completer.isCompleted) {
+        completer.complete(next);
+      }
+    });
     try {
-      return await service.resolveInitialRoute().timeout(_maxBootstrap);
-    } catch (_) {
-      // Timeout or any unexpected failure → safe fallback to login.
-      return const BootstrapResult(AppInitRoute.login, 'error');
+      return await completer.future.timeout(_maxBootstrap);
+    } on TimeoutException {
+      return ref.read(authProvider);
+    } finally {
+      sub.close();
     }
   }
 
-  void _navigate(BootstrapResult result, int initDurationMs) {
+  void _navigate(AuthState state, int initDurationMs) {
     if (!mounted || _hasNavigated) return;
     _hasNavigated = true;
 
+    final authed = state.isAuthenticated;
     Analytics.logEvent('app_launch', {
-      'auth_status': result.authStatus,
+      'auth_status': authed ? 'authenticated' : 'unauthenticated',
       'init_duration_ms': initDurationMs,
       'platform':
           defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
     });
 
-    // Splash is the authority on the launch auth state — it has already
-    // cleared any expired token. Seed the router's notifier so its guard agrees
-    // with this decision before we navigate.
-    final authed = result.route == AppInitRoute.projectsHub;
-    ref.read(authRouterNotifierProvider).setAuthenticated(authed);
-
+    // The router's guard reads the same auth source via the bridged listenable,
+    // so it already agrees with this decision; this navigation just leaves the
+    // splash (which the guard deliberately never intercepts).
     context.goNamed(
       authed ? AppRouteNames.projects : AppRouteNames.auth,
     );
