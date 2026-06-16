@@ -18,7 +18,12 @@ import '../../widgets/permission_card.dart';
 /// Statuses are reflected on load (no auto-prompt) and re-checked on app
 /// resume so returning from the OS settings screen updates the UI.
 class PermissionsScreen extends StatefulWidget {
-  const PermissionsScreen({super.key});
+  const PermissionsScreen({super.key, this.service = const PermissionsService()});
+
+  /// The permission gateway. Defaults to the real [PermissionsService] so the
+  /// router builds it `const`; injectable so tests drive statuses without the
+  /// OS (widgets never touch permission_handler directly).
+  final PermissionsService service;
 
   @override
   State<PermissionsScreen> createState() => _PermissionsScreenState();
@@ -26,7 +31,7 @@ class PermissionsScreen extends StatefulWidget {
 
 class _PermissionsScreenState extends State<PermissionsScreen>
     with WidgetsBindingObserver {
-  static const _service = PermissionsService();
+  PermissionsService get _service => widget.service;
 
   final Map<AppPermissionType, AppPermissionStatus> _statuses = {
     for (final item in defaultPermissionItems)
@@ -36,6 +41,9 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   /// Per-permission in-flight guard — blocks duplicate OS prompts from a
   /// rapid double-tap on "Allow".
   final Set<AppPermissionType> _inFlight = <AppPermissionType>{};
+
+  /// Debounce for the "Settings" deep link so rapid taps open it only once.
+  bool _openingSettings = false;
 
   @override
   void initState() {
@@ -86,7 +94,44 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     }
   }
 
-  Future<void> _onOpenSettings() => _service.openSettings();
+  Future<void> _onOpenSettings() async {
+    if (_openingSettings) return; // debounce: one open attempt at a time
+    setState(() => _openingSettings = true);
+    try {
+      // Awaits only whether SETTINGS OPENED — never a permission result.
+      // openAppSettings() resolves as soon as the page opens; the user's actual
+      // change is observed by the resume re-check above when they return.
+      final opened = await _service.openSettings();
+      if (!opened && mounted) _showSettingsUnavailable();
+    } finally {
+      if (mounted) setState(() => _openingSettings = false);
+    }
+  }
+
+  /// Rare fallback when the OS settings page cannot be launched: tell the user
+  /// how to enable the permission by hand. (Inline copy — this repo has no l10n;
+  /// move to localization when it is introduced.)
+  void _showSettingsUnavailable() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface1,
+        title: Text("Can't open Settings",
+            style: Theme.of(context).textTheme.titleLarge),
+        content: Text(
+          'Open your device Settings, find ReCapture, and enable the '
+          'permission under Permissions.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _onContinue() {
     Analytics.logEvent('precapture_permissions_continue', {

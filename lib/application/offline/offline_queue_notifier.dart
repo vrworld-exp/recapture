@@ -4,12 +4,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/local/offline_queue_box.dart';
 import '../../data/local/storage_providers.dart';
+import '../../data/repositories/projects_repository.dart';
 import '../../domain/entities/auth_state.dart';
+import '../../domain/entities/create_project_options.dart';
 import '../../domain/entities/offline_action.dart';
 import '../../platform/connectivity_watcher.dart';
 import '../../utils/analytics.dart';
 import '../auth/auth_notifier.dart';
 import '../connectivity/connectivity_providers.dart';
+import '../projects/projects_notifier.dart';
 
 /// Drop an action once it has failed this many drains, so a permanently-failing
 /// action can never wedge the queue. Kept deliberately simple — no backoff.
@@ -130,6 +133,8 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
   /// from another app version is dropped instead of wedging the queue.
   Future<bool> _process(OfflineAction action) async {
     switch (action.type) {
+      case OfflineActionType.createProject:
+        return _flushCreateProject(action);
       case OfflineActionType.renameProject:
       case OfflineActionType.deleteProject:
       case OfflineActionType.retryProject:
@@ -138,6 +143,31 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
         return false;
       case OfflineActionType.unknown:
         return true; // drop unrecognized actions so they don't wedge the queue
+    }
+  }
+
+  /// Flushes a queued offline create: POSTs it through the repository and, on
+  /// success, reconciles the optimistic pending row (temp id → server id) in the
+  /// projects state. Returns `true` to remove it from the queue, `false` to
+  /// RETAIN for a later retry. A malformed payload (cannot be replayed) is
+  /// dropped so it can never wedge the queue.
+  Future<bool> _flushCreateProject(OfflineAction action) async {
+    final name = action.payload['name'];
+    final tempId = action.payload['tempId'];
+    if (name is! String || tempId is! String) {
+      return true; // unreplayable → drop (matches the `unknown` policy)
+    }
+
+    try {
+      final created = await ref.read(projectsRepositoryProvider).create(
+            name: name,
+            size: objectSizeFromApi(action.payload['size'] as String? ?? ''),
+            mode: captureModeFromApi(action.payload['mode'] as String? ?? ''),
+          );
+      ref.read(projectsProvider.notifier).reconcilePendingCreate(tempId, created);
+      return true;
+    } catch (_) {
+      return false; // network/server failure → keep it queued for the next drain
     }
   }
 

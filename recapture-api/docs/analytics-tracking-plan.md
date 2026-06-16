@@ -1,0 +1,106 @@
+# Analytics Tracking Plan
+
+> **Single source of truth:** `src/validation/analyticsSchemas.ts`.
+> This document mirrors it for analysts and client devs. If they disagree, the
+> Zod schemas win — update this file to match. Every event is emitted through the
+> typed `track()` in `src/utils/analytics.ts`; raw event-name strings are not
+> permitted anywhere else (an unknown name is a compile error).
+
+## Conventions
+
+- **Property names:** `snake_case`, consistent across events.
+- **No PII / secrets, ever:** identifiers are always **hashed** before they enter
+  props (`identifier_hash` = hash of phone/email; `user_id_hash` = hash of user
+  id), via `hashIdentifier()` (`src/utils/otp.ts`). The emit layer additionally
+  drops + flags any property whose name looks sensitive (`phone`, `email`,
+  `otp`, `code`, `token`, `password`, `secret`, …) as a backstop.
+- **Resilience:** emission is fire-and-forget — it never blocks, delays, or
+  throws into a request path. Invalid props are loud in dev/staging
+  (`console.error`) and silently dropped in production. Auth succeeds even if
+  analytics is down.
+
+## Shared enums
+
+| Vocabulary | Values |
+|---|---|
+| `channel` | `sms`, `email` |
+| `stage` (auth_failed) | `send_otp`, `verify_otp`, `refresh` |
+| `reason` (auth_failed) | `wrong_code`, `expired`, `locked`, `no_record`, `rate_limited`, `dispatch_failed`, `invalid_token` |
+| `platform` (app_opened) | `ios`, `android`, `web` |
+
+## Events
+
+### `app_opened`
+- **When:** client cold start / session begin. **Client-emitted** — the backend
+  has no ingest endpoint today, so the client validates against this schema and
+  sends directly to the destination. The schema here is the shared contract.
+- **Props:** `platform` (enum), `app_version` (string), `is_cold_start` (bool, optional)
+
+### `auth_otp_sent`
+- **When:** after an OTP **dispatch attempt** in `POST /auth/send-otp`. Not fired
+  when the request is rejected before dispatch (rate limit) — that is `auth_failed`.
+- **Props:** `channel` (enum), `identifier_hash` (string), `success` (bool)
+
+### `auth_otp_verified`
+- **When:** successful verification in `POST /auth/verify-otp`.
+- **Props:** `channel` (enum), `identifier_hash` (string), `is_new_user` (bool)
+
+### `auth_failed`  *(canonical failure event)*
+- **When:** any auth attempt fails. **Supersedes** the former
+  `auth_otp_verify_failed` — there is exactly one failure event name now.
+- **Fired at:**
+  - send-otp: `rate_limited` (cooldown / window cap), `dispatch_failed`
+  - verify-otp: `rate_limited`, `no_record`, `expired`, `wrong_code`, `locked`
+  - refresh: `rate_limited`, `invalid_token` (unknown / reused / expired / dead-user;
+    the benign concurrent-rotation loser is **not** counted as a failure)
+- **Props:** `stage` (enum), `reason` (enum), `channel` (enum, optional),
+  `identifier_hash` (string, optional — omitted for refresh, which has no
+  phone/email identifier)
+
+### `auth_token_refreshed`
+- **When:** successful refresh-token rotation in `POST /auth/refresh`.
+- **Props:** `family_id` (string), `user_id_hash` (string)
+
+### `auth_refresh_reuse_detected`  *(security signal)*
+- **When:** a rotated/revoked refresh token is replayed (token theft signal);
+  fires alongside an `auth_failed` (`stage: refresh`, `reason: invalid_token`).
+- **Props:** `family_id` (string), `user_id_hash` (string)
+
+### `projects_listed`
+- **When:** `GET /projects`.
+- **Props:** `user_id_hash` (string), `result_count` (int ≥ 0), `is_empty` (bool)
+
+### `project_created`
+- **When:** `POST /projects`.
+- **Props:** `user_id_hash` (string), `project_id` (string), `object_size`
+  (`small`|`medium`|`large`), `mode` (`guided`|`manual`), `category` (string|null)
+
+### `project_renamed`
+- **When:** `PATCH /projects/:id`. `was_changed` is `false` on a no-op rename.
+- **Props:** `user_id_hash` (string), `project_id` (string), `was_changed` (bool)
+
+### `project_deleted`
+- **When:** `DELETE /projects/:id`. `was_already_deleted` is `true` on an
+  idempotent repeat.
+- **Props:** `user_id_hash` (string), `project_id` (string), `was_already_deleted` (bool)
+
+### `project_resumed`
+- **When:** a user re-opens an existing, owned, **non-deleted** project via
+  `GET /projects/:id`. Fires only on a successful authorized open — a 404 (not
+  found / not owned / soft-deleted) emits nothing.
+- **Dedupe:** the server emits **once per open**; it has no session state, so
+  per-session/per-poll debounce is the **client's** responsibility.
+- **Props:** `user_id_hash` (string), `project_id` (string), `source`
+  (`projects_list`|`deep_link`|`direct`, optional — from `?source=`, lenient),
+  `seconds_since_last_update` (int ≥ 0, optional)
+
+### `remote_config_served`
+- **When:** sampled (~1%) on `200` responses from `GET /remote-config` (never on
+  `304`). `served_defaults` is `true` when baked defaults were used.
+- **Props:** `config_version` (int ≥ 0), `served_defaults` (bool)
+
+## QA
+
+Run `npx tsx scripts/analytics-qa.ts` (see the script header for the dev/prod
+invocations). It verifies: valid emit reaches the sink, invalid props are
+rejected, forbidden PII keys are stripped, and a throwing sink never propagates.

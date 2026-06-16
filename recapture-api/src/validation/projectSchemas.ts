@@ -40,3 +40,48 @@ export const createProjectSchema = z
   .strict();
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+
+// A Mongo ObjectId rendered as a 24-char hex string. Validating the shape here
+// keeps a malformed `:id` a 400 without ever touching the DB, and keeps mongoose
+// out of the validation layer (consistent with the rest of this file).
+const OBJECT_ID_RE = /^[a-fA-F0-9]{24}$/;
+
+/**
+ * `:id` path param for project routes that target a single project (DELETE,
+ * PATCH). Malformed id → 400 (never queried).
+ */
+export const projectIdParamsSchema = z
+  .object({
+    id: z.string().regex(OBJECT_ID_RE, 'Invalid project id'),
+  })
+  .strict();
+
+export type ProjectIdParams = z.infer<typeof projectIdParamsSchema>;
+
+/**
+ * DELETE /projects/:id body. The client must echo the project's exact current
+ * `name` as `confirmName` — a server-enforced guard against accidental
+ * destructive deletes. Presence is validated here; the value is matched against
+ * the stored name in the service. `.strict()` rejects unknown fields.
+ */
+export const deleteProjectBodySchema = z
+  .object({
+    confirmName: z.string().min(1),
+  })
+  .strict();
+
+export type DeleteProjectInput = z.infer<typeof deleteProjectBodySchema>;
+
+/**
+ * PATCH /projects/:id body — rename only. `name` uses the EXACT same bounds as
+ * {@link createProjectSchema} (trim, 1..NAME_MAX) so create and rename never
+ * diverge. `.strict()` rejects every other field, so `objectSize`/`category`/
+ * `mode`/`userId` cannot be smuggled into a rename.
+ */
+export const renameProjectSchema = z
+  .object({
+    name: z.string().trim().min(1).max(NAME_MAX),
+  })
+  .strict();
+
+export type RenameProjectInput = z.infer<typeof renameProjectSchema>;

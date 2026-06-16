@@ -94,6 +94,159 @@ export async function createProject(
   return toListItem(project);
 }
 
+/**
+ * Outcome of a soft-delete attempt. The service never throws for the expected
+ * business cases — it returns a discriminated result and the route maps each to
+ * a status code (matching how the other endpoints keep HTTP concerns in routes).
+ *
+ * `NOT_FOUND` covers both "no such project" and "owned by another user" so the
+ * two are indistinguishable to the caller (no existence leak → both 404).
+ */
+export type SoftDeleteProjectResult =
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'CONFIRMATION_MISMATCH' }
+  | { outcome: 'DELETED'; id: string; deletedAt: string; wasAlreadyDeleted: boolean };
+
+/**
+ * Soft-deletes a project owned by `userId`. Ownership is enforced here from the
+ * token-resolved id only — the caller cannot target another user's project.
+ *
+ * The lookup intentionally includes already-soft-deleted rows (no `deletedAt`
+ * filter) so a repeat delete is idempotent and still confirmation-checked.
+ * `confirmName` must equal the stored `name` or the call is rejected without any
+ * mutation. The actual flip is a conditional update on `deletedAt: null`, so a
+ * concurrent double-delete is race-safe: exactly one request performs the change
+ * and the original `deletedAt` is never overwritten.
+ */
+export async function softDeleteProject(
+  userId: string,
+  projectId: string,
+  confirmName: string
+): Promise<SoftDeleteProjectResult> {
+  const ownerId = new Types.ObjectId(userId);
+  const id = new Types.ObjectId(projectId);
+
+  const project = await Project.findOne({ _id: id, userId: ownerId }).exec();
+  if (!project) {
+    return { outcome: 'NOT_FOUND' };
+  }
+
+  // Server-side confirmation guard — never mutate on a mismatch.
+  if (confirmName !== project.name) {
+    return { outcome: 'CONFIRMATION_MISMATCH' };
+  }
+
+  // Already soft-deleted → idempotent no-op; preserve the original deletedAt.
+  if (project.deletedAt) {
+    return {
+      outcome: 'DELETED',
+      id: project.id as string,
+      deletedAt: project.deletedAt.toISOString(),
+      wasAlreadyDeleted: true,
+    };
+  }
+
+  // Conditional update: only a not-yet-deleted row matches. Under a concurrent
+  // double-delete exactly one update wins; the loser gets null and re-reads.
+  const now = new Date();
+  const updated = await Project.findOneAndUpdate(
+    { _id: id, userId: ownerId, deletedAt: null },
+    { $set: { deletedAt: now } },
+    { new: true }
+  ).exec();
+
+  if (updated?.deletedAt) {
+    return {
+      outcome: 'DELETED',
+      id: updated.id as string,
+      deletedAt: updated.deletedAt.toISOString(),
+      wasAlreadyDeleted: false,
+    };
+  }
+
+  // Lost the race: another request deleted it between our read and update.
+  // Re-read the winner's deletedAt and report an idempotent success.
+  const current = await Project.findOne({ _id: id, userId: ownerId }).exec();
+  return {
+    outcome: 'DELETED',
+    id: project.id as string,
+    deletedAt: (current?.deletedAt ?? now).toISOString(),
+    wasAlreadyDeleted: true,
+  };
+}
+
+/**
+ * Outcome of a rename attempt. As with {@link softDeleteProject}, the service
+ * returns a discriminated result and the route maps it to a status code.
+ * `NOT_FOUND` covers missing, not-owned, AND soft-deleted (all → 404).
+ */
+export type RenameProjectResult =
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'RENAMED'; project: ProjectListItem; wasChanged: boolean };
+
+/**
+ * Renames a project owned by `userId` (token-resolved only). Scoped to the owner
+ * AND `deletedAt: null`, so a soft-deleted project is not renameable and a
+ * concurrent soft-delete cannot be clobbered.
+ *
+ * Renaming to the identical current name is a no-op: returns the unchanged
+ * project WITHOUT bumping `updatedAt` (so it does not pointlessly re-sort to the
+ * top of the list). A real change updates `name` and lets mongoose `timestamps`
+ * bump `updatedAt`, surfacing the project at the top of GET /projects.
+ */
+export async function renameProject(
+  userId: string,
+  projectId: string,
+  name: string
+): Promise<RenameProjectResult> {
+  const ownerId = new Types.ObjectId(userId);
+  const id = new Types.ObjectId(projectId);
+
+  const project = await Project.findOne({ _id: id, userId: ownerId, deletedAt: null }).exec();
+  if (!project) {
+    return { outcome: 'NOT_FOUND' };
+  }
+
+  // No-op: identical name → don't touch updatedAt.
+  if (project.name === name) {
+    return { outcome: 'RENAMED', project: toListItem(project), wasChanged: false };
+  }
+
+  // Re-scope the update on owner + not-deleted so a soft-delete that landed
+  // between the read and the write wins (returns null → NOT_FOUND). `timestamps`
+  // bumps updatedAt automatically on this update.
+  const updated = await Project.findOneAndUpdate(
+    { _id: id, userId: ownerId, deletedAt: null },
+    { $set: { name } },
+    { new: true }
+  ).exec();
+
+  if (!updated) {
+    return { outcome: 'NOT_FOUND' };
+  }
+
+  return { outcome: 'RENAMED', project: toListItem(updated), wasChanged: true };
+}
+
+/**
+ * Fetches a single project owned by `userId` for "open/resume". Scoped to the
+ * owner AND `deletedAt: null`, so a missing, not-owned, or soft-deleted project
+ * is indistinguishably absent (→ null → 404 at the route, matching delete/rename).
+ * Returns the same DTO shape as list/create.
+ */
+export async function getProject(
+  userId: string,
+  projectId: string
+): Promise<ProjectListItem | null> {
+  const project = await Project.findOne({
+    _id: new Types.ObjectId(projectId),
+    userId: new Types.ObjectId(userId),
+    deletedAt: null,
+  }).exec();
+
+  return project ? toListItem(project) : null;
+}
+
 function toListItem(p: IProject): ProjectListItem {
   return {
     id: p.id as string,

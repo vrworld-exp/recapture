@@ -14,7 +14,11 @@ import '../../widgets/checklist_item_tile.dart';
 /// Acknowledgment state lives in local widget state only — no global state
 /// management is needed for a single transient screen.
 class PreCaptureScreen extends StatefulWidget {
-  const PreCaptureScreen({super.key});
+  const PreCaptureScreen({super.key, this.items = defaultChecklistItems});
+
+  /// The checklist content to render. Defaults to [defaultChecklistItems] so the
+  /// router can build it `const`; injectable for tests / future remote content.
+  final List<ChecklistItem> items;
 
   @override
   State<PreCaptureScreen> createState() => _PreCaptureScreenState();
@@ -23,9 +27,10 @@ class PreCaptureScreen extends StatefulWidget {
 class _PreCaptureScreenState extends State<PreCaptureScreen> {
   final Set<String> _checkedIds = <String>{};
 
-  /// True once every required item has been acknowledged. A returning user who
-  /// arrives with all items pre-checked would see the CTA enabled immediately.
-  bool get _allRequiredChecked => defaultChecklistItems
+  /// True once every required item has been acknowledged. With no required items
+  /// (e.g. an all-optional or empty list) this is vacuously true, so the CTA is
+  /// enabled rather than permanently stuck.
+  bool get _allRequiredChecked => widget.items
       .where((item) => item.isRequired)
       .every((item) => _checkedIds.contains(item.id));
 
@@ -76,11 +81,11 @@ class _PreCaptureScreenState extends State<PreCaptureScreen> {
             Expanded(
               child: ListView.separated(
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
-                itemCount: defaultChecklistItems.length,
+                itemCount: widget.items.length,
                 separatorBuilder: (_, __) =>
                     const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (context, index) {
-                  final item = defaultChecklistItems[index];
+                  final item = widget.items[index];
                   return ChecklistItemTile(
                     item: item,
                     isChecked: _checkedIds.contains(item.id),

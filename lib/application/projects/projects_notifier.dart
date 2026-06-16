@@ -5,10 +5,13 @@ import '../../data/local/projects_cache_box.dart';
 import '../../data/local/storage_providers.dart';
 import '../../data/repositories/projects_repository.dart';
 import '../../domain/entities/create_project_options.dart';
+import '../../domain/entities/offline_action.dart';
 import '../../domain/entities/project.dart';
 import '../../domain/entities/project_status.dart';
 import '../auth/auth_notifier.dart';
 import '../../domain/entities/auth_state.dart';
+import '../connectivity/connectivity_providers.dart';
+import '../offline/offline_queue_notifier.dart';
 
 /// Owns the user's project collection and is the single source of truth the
 /// Projects List, Create, and Options screens read from. State is an
@@ -77,17 +80,62 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     await _writeCache(fresh);
   }
 
-  /// Creates a project and prepends it so it appears at the top of the list
-  /// without a refetch. Not optimistic (there is nothing to show until the
-  /// server confirms); rethrows on failure leaving the list untouched.
+  /// Creates a project. Online, it goes straight to the server and the persisted
+  /// entity is prepended (rethrows on failure, list untouched). Offline, it is
+  /// NOT sent — an optimistic pending project (temporary local id) is prepended
+  /// for instant feedback and a durable `createProject` action is enqueued to the
+  /// offline outbox, to be flushed and reconciled when connectivity returns.
   Future<Project> create({
     required String name,
     required ObjectSize size,
     required CaptureMode mode,
   }) async {
-    final created = await _repo.create(name: name, size: size, mode: mode);
-    state = AsyncData<List<Project>>([created, ..._current]);
-    return created;
+    if (ref.read(isOnlineProvider)) {
+      final created = await _repo.create(name: name, size: size, mode: mode);
+      state = AsyncData<List<Project>>([created, ..._current]);
+      return created;
+    }
+
+    // Offline: show it immediately with a temp id + pending flag, and queue the
+    // create so it survives a restart and flushes on reconnect. No network call.
+    final pending = Project(
+      id: 'pending_${DateTime.now().toUtc().microsecondsSinceEpoch}',
+      name: name,
+      status: ProjectStatus.draft,
+      updatedAt: DateTime.now(),
+      isPending: true,
+    );
+    state = AsyncData<List<Project>>([pending, ..._current]);
+
+    await ref.read(offlineQueueProvider.notifier).enqueue(
+          OfflineAction(
+            id: OfflineAction.newId(),
+            type: OfflineActionType.createProject,
+            payload: {
+              'tempId': pending.id,
+              'name': name,
+              'size': size.apiValue,
+              'mode': mode.apiValue,
+            },
+            createdAt: DateTime.now().toUtc(),
+          ),
+        );
+    return pending;
+  }
+
+  /// Replaces the optimistic pending create identified by [tempId] with the
+  /// server-confirmed [serverProject] once the offline outbox has flushed it
+  /// (clearing the pending flag and adopting the canonical server id). If the
+  /// pending row is gone (e.g. the list was reloaded) the server project is
+  /// prepended, unless it is already present — so a flush is never lost or
+  /// duplicated.
+  void reconcilePendingCreate(String tempId, Project serverProject) {
+    final current = _current;
+    if (current.any((p) => p.id == tempId)) {
+      _replaceById(tempId, serverProject);
+    } else if (!current.any((p) => p.id == serverProject.id)) {
+      state = AsyncData<List<Project>>([serverProject, ...current]);
+    }
   }
 
   /// Optimistically renames the project, then confirms with the repo. Rolls back

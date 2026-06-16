@@ -13,7 +13,11 @@ export interface JwtPayload {
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing or malformed authorization header' });
+    res.status(401).json({
+      status: 'error',
+      code: 'UNAUTHENTICATED',
+      message: 'Authentication required.',
+    });
     return;
   }
 
@@ -23,6 +27,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     req.user = { userId: payload.userId, authUid: payload.authUid };
     next();
   } catch {
-    res.status(401).json({ error: 'Invalid or expired token' });
+    res.status(401).json({
+      status: 'error',
+      code: 'UNAUTHENTICATED',
+      message: 'Invalid or expired token.',
+    });
   }
 }

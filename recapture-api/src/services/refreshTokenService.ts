@@ -5,7 +5,7 @@ import { RefreshToken } from '@/models/RefreshToken';
 import { hashIdentifier } from '@/utils/otp';
 import { signAccessToken, generateRefreshToken, hashRefreshToken } from '@/utils/tokens';
 import { consumeRateWindow } from '@/utils/rateLimit';
-import { trackEvent } from '@/utils/analytics';
+import { track, AnalyticsEvent } from '@/utils/analytics';
 
 /** Outcome of a refresh attempt. The route maps each variant to an HTTP response. */
 export type RefreshResult =
@@ -41,6 +41,11 @@ export async function refreshSession(
 ): Promise<RefreshResult> {
   const now = Date.now();
 
+  // Canonical failure telemetry for this stage. Refresh has no phone/email
+  // identifier, so channel/identifier_hash are intentionally omitted.
+  const trackRefreshFailure = (reason: 'invalid_token' | 'rate_limited'): void =>
+    track(AnalyticsEvent.AUTH_FAILED, { stage: 'refresh', reason });
+
   // ── 2) Throttle (before any lookup) ────────────────────────────────────────
   const limit = await consumeRateWindow(
     `refresh:${clientKey}`,
@@ -49,6 +54,7 @@ export async function refreshSession(
     now
   );
   if (limit.limited) {
+    trackRefreshFailure('rate_limited');
     return { ok: false, kind: 'rate_limited', retryAfter: limit.retryAfter };
   }
 
@@ -56,6 +62,7 @@ export async function refreshSession(
   const tokenHash = hashRefreshToken(rawToken);
   const record = await RefreshToken.findOne({ tokenHash }).exec();
   if (!record) {
+    trackRefreshFailure('invalid_token');
     return { ok: false, kind: 'invalid' };
   }
 
@@ -67,15 +74,18 @@ export async function refreshSession(
   // leaked: burn the entire family so every descendant stops working.
   if (record.rotatedAt !== null || record.revokedAt !== null) {
     await revokeFamily(familyId, now);
-    trackEvent('auth_refresh_reuse_detected', {
+    // Rich security signal + the canonical failure event.
+    track(AnalyticsEvent.AUTH_REFRESH_REUSE_DETECTED, {
       family_id: familyId,
       user_id_hash: userIdHash,
     });
+    trackRefreshFailure('invalid_token');
     return { ok: false, kind: 'invalid' };
   }
 
   // ── 5) Expiry ───────────────────────────────────────────────────────────────
   if (record.expiresAt.getTime() < now) {
+    trackRefreshFailure('invalid_token');
     return { ok: false, kind: 'invalid' };
   }
 
@@ -83,6 +93,7 @@ export async function refreshSession(
   const user = await User.findById(record.userId).exec();
   if (!user) {
     await revokeFamily(familyId, now);
+    trackRefreshFailure('invalid_token');
     return { ok: false, kind: 'invalid' };
   }
 
@@ -124,7 +135,7 @@ export async function refreshSession(
   });
 
   // ── 8) Analytics + respond ─────────────────────────────────────────────────
-  trackEvent('auth_token_refreshed', {
+  track(AnalyticsEvent.AUTH_TOKEN_REFRESHED, {
     family_id: familyId,
     user_id_hash: userIdHash,
   });

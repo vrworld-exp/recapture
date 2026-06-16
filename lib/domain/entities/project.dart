@@ -14,6 +14,7 @@ class Project {
     required this.status,
     required this.updatedAt,
     this.thumbnailUrl,
+    this.isPending = false,
   });
 
   final String id;
@@ -21,6 +22,11 @@ class Project {
   final ProjectStatus status;
   final String? thumbnailUrl;
   final DateTime updatedAt;
+
+  /// True for a project created offline that is still waiting in the offline
+  /// outbox to be flushed to the server. Such a row carries a temporary local
+  /// [id] (never the server id) and is shown optimistically until reconciled.
+  final bool isPending;
 
   /// Defensive parsing — every field falls back to a safe default so a
   /// malformed API row never crashes the list.
@@ -33,6 +39,7 @@ class Project {
       status: ProjectStatusDisplay.fromApiValue((map['status'] ?? '').toString()),
       thumbnailUrl: rawThumb == null || rawThumb.isEmpty ? null : rawThumb,
       updatedAt: _parseDate(map['updatedAt']),
+      isPending: map['isPending'] == true,
     );
   }
 
@@ -44,6 +51,7 @@ class Project {
         'status': status.apiValue,
         'thumbnailUrl': thumbnailUrl,
         'updatedAt': updatedAt.toIso8601String(),
+        'isPending': isPending,
       };
 
   /// Accepts epoch millis (int) or an ISO-8601 string; falls back to now.
@@ -59,6 +67,7 @@ class Project {
     String? name,
     ProjectStatus? status,
     DateTime? updatedAt,
+    bool? isPending,
   }) {
     return Project(
       id: id,
@@ -66,6 +75,7 @@ class Project {
       status: status ?? this.status,
       thumbnailUrl: thumbnailUrl,
       updatedAt: updatedAt ?? this.updatedAt,
+      isPending: isPending ?? this.isPending,
     );
   }
 }

@@ -8,11 +8,12 @@
 /// The kind of deferred mutation. `unknown` is the forward-compatible bucket for
 /// a type loaded from an older/newer app version — such actions are dropped on
 /// drain so they can never wedge the queue.
-enum OfflineActionType { renameProject, deleteProject, retryProject, unknown }
+enum OfflineActionType { createProject, renameProject, deleteProject, retryProject, unknown }
 
 /// Analytics-facing name for each action type (snake_case, never the enum name).
 extension OfflineActionTypeAnalytics on OfflineActionType {
   String get analyticsValue => switch (this) {
+        OfflineActionType.createProject => 'create_project',
         OfflineActionType.renameProject => 'rename_project',
         OfflineActionType.deleteProject => 'delete_project',
         OfflineActionType.retryProject => 'retry_project',

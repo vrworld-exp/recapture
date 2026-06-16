@@ -1,40 +1,107 @@
 // lib/presentation/widgets/checklist_tooltip_sheet.dart
+import 'package:flutter/cupertino.dart' show showCupertinoModalPopup;
 import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../domain/entities/checklist_item.dart';
 
-/// Opens the extended-tooltip bottom sheet for a single [ChecklistItem].
+/// Single, platform-adaptive entry point for a checklist item's tip/detail
+/// surface (the Pre-Capture Checklist opens this on item tap):
+///   - Android (and the default) → Material modal bottom sheet
+///   - iOS / macOS               → Cupertino modal popup
 ///
-/// Uses [showModalBottomSheet] with `isScrollControlled: true` so long
-/// tooltip content scrolls internally instead of overflowing. Dismiss via
-/// swipe-down, tap-outside, or the close button.
-Future<void> showChecklistTooltip(
-  BuildContext context,
-  ChecklistItem item,
-) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: AppColors.surface1,
-    barrierColor: AppColors.scrim,
-    showDragHandle: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
-    ),
-    builder: (sheetContext) => _ChecklistTooltipSheet(item: item),
-  );
+/// Callers never branch on platform — they just call this. The same content
+/// widget ([_TipBody]) renders in both; only the container differs. Platform is
+/// read from `Theme.of(context).platform` so tests can force either side via
+/// `Theme`/`debugDefaultTargetPlatformOverride`.
+///
+/// A guard prevents a second tip from stacking on top of an open one.
+Future<void> showChecklistTooltip(BuildContext context, ChecklistItem item) {
+  if (_tipVisible) return Future<void>.value(); // no stacking
+  _tipVisible = true;
+
+  final platform = Theme.of(context).platform;
+  final isCupertino =
+      platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
+
+  final Future<void> shown = isCupertino
+      ? showCupertinoModalPopup<void>(
+          context: context,
+          barrierColor: AppColors.scrim,
+          builder: (_) => _CupertinoTipSurface(item: item),
+        )
+      : showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: AppColors.surface1,
+          barrierColor: AppColors.scrim,
+          showDragHandle: true,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+          ),
+          builder: (_) => _TipBody(item: item),
+        );
+
+  return shown.whenComplete(() => _tipVisible = false);
 }
 
-class _ChecklistTooltipSheet extends StatelessWidget {
-  const _ChecklistTooltipSheet({required this.item});
+/// True while a tip surface is on screen — blocks stacking. Reset when the
+/// surface is dismissed (see [showChecklistTooltip]).
+bool _tipVisible = false;
+
+/// Resets the no-stacking guard between tests (the flag is process-global).
+@visibleForTesting
+void debugResetChecklistTooltipGuard() => _tipVisible = false;
+
+/// iOS container: a themed bottom surface (Cupertino modal popup provides no
+/// background/shape of its own) wrapping the SAME [_TipBody] as Android.
+class _CupertinoTipSurface extends StatelessWidget {
+  const _CupertinoTipSurface({required this.item});
 
   final ChecklistItem item;
 
   @override
   Widget build(BuildContext context) {
-    // Cap the sheet at 80% of the screen so it never covers the whole view;
-    // content scrolls within that bound when the tooltip is long.
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.surface1,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Grab handle for parity with the Android drag handle.
+            Padding(
+              padding: const EdgeInsets.only(top: AppSpacing.sm),
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.textMuted,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Flexible(child: _TipBody(item: item)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The shared tip content — identical on both platforms. Header (icon badge +
+/// title + close) over the scrollable body; capped at 80% of the screen so it
+/// never covers the whole view and scrolls internally when long.
+class _TipBody extends StatelessWidget {
+  const _TipBody({required this.item});
+
+  final ChecklistItem item;
+
+  @override
+  Widget build(BuildContext context) {
     final maxHeight = MediaQuery.sizeOf(context).height * 0.8;
 
     return SafeArea(

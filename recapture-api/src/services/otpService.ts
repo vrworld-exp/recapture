@@ -2,7 +2,7 @@
 import { env } from '@/config/env';
 import { OtpCode } from '@/models/OtpCode';
 import { generateNumericOtp, hashOtp, hashIdentifier } from '@/utils/otp';
-import { trackEvent } from '@/utils/analytics';
+import { track, AnalyticsEvent } from '@/utils/analytics';
 import { sendSms } from '@/providers/sms';
 import { sendEmail } from '@/providers/email';
 import type { SendOtpInput } from '@/validation/authSchemas';
@@ -48,11 +48,12 @@ export async function sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
   if (existing) {
     const secondsSinceLast = (now - existing.lastSentAt.getTime()) / 1000;
     if (secondsSinceLast < env.RESEND_COOLDOWN_SECONDS) {
-      trackEvent('auth_otp_sent', {
+      // No dispatch was attempted → this is a failure, not a send.
+      track(AnalyticsEvent.AUTH_FAILED, {
+        stage: 'send_otp',
+        reason: 'rate_limited',
         channel,
         identifier_hash: identifierHash,
-        success: false,
-        rate_limited: true,
       });
       return {
         ok: false,
@@ -69,11 +70,11 @@ export async function sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
     const windowAgeSeconds = (now - existing.windowStartedAt.getTime()) / 1000;
     if (windowAgeSeconds < env.RATE_WINDOW_SECONDS) {
       if (existing.sendCount >= env.MAX_SENDS_PER_WINDOW) {
-        trackEvent('auth_otp_sent', {
+        track(AnalyticsEvent.AUTH_FAILED, {
+          stage: 'send_otp',
+          reason: 'rate_limited',
           channel,
           identifier_hash: identifierHash,
-          success: false,
-          rate_limited: true,
         });
         return {
           ok: false,
@@ -143,21 +144,27 @@ export async function sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
     } else {
       await OtpCode.deleteOne({ identifier }).exec();
     }
-    trackEvent('auth_otp_sent', {
+    // A dispatch was attempted and failed → record the attempt (success:false)
+    // AND the canonical failure event.
+    track(AnalyticsEvent.AUTH_OTP_SENT, {
       channel,
       identifier_hash: identifierHash,
       success: false,
-      rate_limited: false,
+    });
+    track(AnalyticsEvent.AUTH_FAILED, {
+      stage: 'send_otp',
+      reason: 'dispatch_failed',
+      channel,
+      identifier_hash: identifierHash,
     });
     return { ok: false, kind: 'dispatch_failed' };
   }
 
   // ── 6) Analytics + success ─────────────────────────────────────────────────
-  trackEvent('auth_otp_sent', {
+  track(AnalyticsEvent.AUTH_OTP_SENT, {
     channel,
     identifier_hash: identifierHash,
     success: true,
-    rate_limited: false,
   });
   return { ok: true, expiresInSeconds: env.OTP_TTL_SECONDS };
 }

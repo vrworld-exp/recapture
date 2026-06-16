@@ -7,7 +7,7 @@ import { RefreshToken } from '@/models/RefreshToken';
 import { VerifyThrottle } from '@/models/VerifyThrottle';
 import { verifyOtpHash, hashIdentifier } from '@/utils/otp';
 import { signAccessToken, generateRefreshToken } from '@/utils/tokens';
-import { trackEvent } from '@/utils/analytics';
+import { track, AnalyticsEvent } from '@/utils/analytics';
 import type { VerifyOtpInput } from '@/validation/authSchemas';
 
 /** Outcome of a verify attempt. The route maps each variant to an HTTP response. */
@@ -47,6 +47,12 @@ export async function verifyOtp(input: VerifyOtpInput): Promise<VerifyOtpResult>
   // ── 1) Verify-attempt rate limit (before any record lookup) ────────────────
   const limit = await checkVerifyRateLimit(identifierHash, now);
   if (limit.limited) {
+    track(AnalyticsEvent.AUTH_FAILED, {
+      stage: 'verify_otp',
+      reason: 'rate_limited',
+      channel,
+      identifier_hash: identifierHash,
+    });
     return { ok: false, kind: 'rate_limited', retryAfter: limit.retryAfter };
   }
 
@@ -104,7 +110,7 @@ export async function verifyOtp(input: VerifyOtpInput): Promise<VerifyOtpResult>
   // ── 8) Consume the OTP (single-use) + analytics ────────────────────────────
   await OtpCode.deleteOne({ identifier }).exec();
 
-  trackEvent('auth_otp_verified', {
+  track(AnalyticsEvent.AUTH_OTP_VERIFIED, {
     channel,
     identifier_hash: identifierHash,
     is_new_user: isNewUser,
@@ -120,16 +126,23 @@ export async function verifyOtp(input: VerifyOtpInput): Promise<VerifyOtpResult>
   };
 }
 
-/** Emits the failure analytics event and returns the generic `invalid` result. */
+/**
+ * Emits the canonical failure analytics event and returns the generic `invalid`
+ * result. Reconciliation: this replaces the former `auth_otp_verify_failed`
+ * event with `auth_failed` (stage: 'verify_otp') so all auth failures live under
+ * one event name. The local `FailReason` values are a subset of the shared
+ * `AUTH_FAIL_REASONS` vocabulary.
+ */
 function fail(
   channel: VerifyOtpInput['channel'],
   identifierHash: string,
   reason: FailReason
 ): VerifyOtpResult {
-  trackEvent('auth_otp_verify_failed', {
+  track(AnalyticsEvent.AUTH_FAILED, {
+    stage: 'verify_otp',
+    reason,
     channel,
     identifier_hash: identifierHash,
-    reason,
   });
   return { ok: false, kind: 'invalid' };
 }

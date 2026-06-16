@@ -3,7 +3,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/auth/auth_notifier.dart';
-import 'api_client.dart';
 
 /// Dio interceptor that bridges the API client to [AuthNotifier]:
 ///   - attaches `Authorization: Bearer <access token>` on every request,
@@ -13,9 +12,15 @@ import 'api_client.dart';
 /// Refresh-storm safety lives in [AuthNotifier.refresh] (one in-flight future
 /// shared across callers), so N concurrent 401s cause exactly one refresh.
 class AuthInterceptor extends Interceptor {
-  AuthInterceptor(this._ref);
+  AuthInterceptor(this._ref, this._dio);
 
   final Ref _ref;
+
+  /// The Dio instance this interceptor is attached to, used to replay a request
+  /// after a refresh. Passed in (not read from a provider) so the retry never
+  /// re-reads the provider that owns this interceptor — a provider reading
+  /// itself trips Riverpod's self-dependency assertion and the retry would hang.
+  final Dio _dio;
 
   /// Marks a request that has already been retried after a refresh, so a second
   /// 401 falls through instead of looping.
@@ -53,12 +58,21 @@ class AuthInterceptor extends Interceptor {
     }
 
     final token = _auth.accessTokenOrNull;
-    final retryOptions = err.requestOptions
-      ..extra[_retriedFlag] = true
-      ..headers['Authorization'] = token != null ? 'Bearer $token' : null;
+    // Build the retry from a COPY rather than mutating `err.requestOptions` in
+    // place: that object is the original, still-referenced request, and
+    // rewriting its headers here would retroactively change what the original
+    // attempt looks like. The copy carries fresh maps so the two attempts stay
+    // independent (original = old token, retry = new token).
+    final retryOptions = err.requestOptions.copyWith(
+      extra: {...err.requestOptions.extra, _retriedFlag: true},
+      headers: {
+        ...err.requestOptions.headers,
+        'Authorization': token != null ? 'Bearer $token' : null,
+      },
+    );
 
     try {
-      final response = await _ref.read(dioProvider).fetch<dynamic>(retryOptions);
+      final response = await _dio.fetch<dynamic>(retryOptions);
       handler.resolve(response);
     } on DioException catch (retryError) {
       handler.next(retryError);

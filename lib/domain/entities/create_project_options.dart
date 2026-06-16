@@ -27,6 +27,18 @@ extension CaptureModeApi on CaptureMode {
       };
 }
 
+/// Inverse of [ObjectSizeApi.apiValue] — used to rehydrate a queued offline
+/// create from its persisted payload. Defaults to [ObjectSize.medium] for an
+/// unrecognized value so a payload from another app version never throws.
+ObjectSize objectSizeFromApi(String value) =>
+    ObjectSize.values.firstWhere((s) => s.apiValue == value,
+        orElse: () => ObjectSize.medium);
+
+/// Inverse of [CaptureModeApi.apiValue]; defaults to [CaptureMode.guided].
+CaptureMode captureModeFromApi(String value) =>
+    CaptureMode.values.firstWhere((m) => m.apiValue == value,
+        orElse: () => CaptureMode.guided);
+
 /// A selectable object-size option with display copy.
 class SizeOption {
   const SizeOption(this.value, this.label, this.helper);

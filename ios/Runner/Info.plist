@@ -18,6 +18,14 @@
 	<key>NSMotionUsageDescription</key>
 	<string>Recapture needs motion sensor access to enable accurate AR tracking and experiences.</string>
 
+	<!-- Photo Library — the permissions gate requests Permission.photos to save
+	     captured results. Without this key, requesting the permission CRASHES on
+	     iOS. NSPhotoLibraryAddUsageDescription covers the add/save-only path. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Recapture needs photo library access to save your captured models and import reference images.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Recapture needs permission to save your captured models to your photo library.</string>
+
 	<!-- ───────────────────────────────────────────
 	     AR CAPABILITY DECLARATION
 	─────────────────────────────────────────────── -->
