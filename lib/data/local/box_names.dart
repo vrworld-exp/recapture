@@ -18,6 +18,11 @@ abstract final class BoxNames {
   /// Persisted offline action queue (deferred write mutations) so queued
   /// actions survive app restarts.
   static const String offlineQueue = 'offline_queue';
+
+  /// App-side permission FLOW state (has-been-asked / user-skipped) so the gate
+  /// doesn't re-prompt or nag on resume. Holds NO grant status — the OS is the
+  /// authority; grant status is always re-checked live.
+  static const String permissionFlow = 'permission_flow';
 }
 
 /// Per-box schema marker. Current migration policy is clear-on-mismatch — when

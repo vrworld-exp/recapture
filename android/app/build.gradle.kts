@@ -65,3 +65,13 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // ActivityCompat / ContextCompat used by the native permissions channel.
+    // (Normally present transitively via the Flutter embedding; declared
+    // explicitly so PermissionManager compiles independently of that.)
+    implementation("androidx.core:core-ktx:1.13.1")
+
+    // JVM unit tests for the pure permission mapping logic (PermissionMapperTest).
+    testImplementation("junit:junit:4.13.2")
+}

@@ -27,6 +27,10 @@
 | `stage` (auth_failed) | `send_otp`, `verify_otp`, `refresh` |
 | `reason` (auth_failed) | `wrong_code`, `expired`, `locked`, `no_record`, `rate_limited`, `dispatch_failed`, `invalid_token` |
 | `platform` (app_opened) | `ios`, `android`, `web` |
+| `source` (permission granted) | `prompt`, `settings_return` |
+| `permission` (permission_denied) | `camera`, `motion`, `photos` |
+| `status` (permission_denied) | `denied`, `permanentlyDenied`, `restricted` |
+| `criticality` (permission_denied) | `required`, `recommended`, `optional` |
 
 ## Events
 
@@ -98,6 +102,46 @@
 - **When:** sampled (~1%) on `200` responses from `GET /remote-config` (never on
   `304`). `served_defaults` is `true` when baked defaults were used.
 - **Props:** `config_version` (int ≥ 0), `served_defaults` (bool)
+
+### Permission funnel (`permission_camera_granted`, `permission_motion_granted`, `permission_denied`)
+
+**Client-emitted** (Screen 4A / permission gate). The defining rule: these fire
+on an actual **grant/deny transition**, **never** on the passive `check()` calls
+the resume re-check performs — emitting per-check would flood the funnel with
+phantom grants on every resume. Each transition fires its event **exactly once**.
+`user_id_hash` is **optional/omitted** because permissions may precede login
+(join later when a session exists).
+
+> **Naming asymmetry (intentional, pending analytics-owner sign-off):** Camera
+> and Motion have *named* granted events; denials use a *single generic*
+> `permission_denied` carrying the `permission`. Photos/storage has **no named
+> granted event** (only camera/motion are named). If the funnel later wants
+> symmetry, normalize to a generic `permission_granted` with a `permission` prop.
+>
+> **Motion reality:** Motion is permission-free (raw IMU — no OS permission), so
+> in practice `permission_motion_granted` rarely/never fires (Motion starts
+> granted and never transitions). The event is wired generically all the same.
+
+### `permission_camera_granted`
+- **When:** Camera transitions to **granted** — via the in-app prompt
+  (`source: prompt`) or by enabling it in Settings, detected on the resume
+  re-check (`source: settings_return`). Once per transition; not re-fired on
+  later resumes while it stays granted.
+- **Props:** `source` (`prompt`|`settings_return`, optional), `user_id_hash`
+  (string, optional)
+
+### `permission_motion_granted`
+- **When:** Motion transitions to **granted** (same `source` semantics as above).
+- **Props:** `source` (`prompt`|`settings_return`, optional), `user_id_hash`
+  (string, optional)
+
+### `permission_denied`
+- **When:** a permission request resolves **non-granted**, or a granted→denied
+  transition (revocation in Settings) is detected on resume. Once per transition;
+  not fired on passive checks, not fired for the iOS `unavailable` state.
+- **Props:** `permission` (`camera`|`motion`|`photos`), `status`
+  (`denied`|`permanentlyDenied`|`restricted`), `criticality`
+  (`required`|`recommended`|`optional`), `user_id_hash` (string, optional)
 
 ## QA
 

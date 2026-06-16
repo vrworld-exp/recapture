@@ -109,6 +109,33 @@ track(AnalyticsEvent.PROJECT_RESUMED, { user_id_hash: 'u', project_id: 'p', sour
 stopCapture();
 check('project_resumed: invalid source rejected', !dispatched('project_resumed'));
 
+// 3c) Permission funnel: granted (optional source) + denied dispatch cleanly;
+//     bad enums are rejected. `user_id_hash` is optional (pre-auth flow).
+startCapture();
+track(AnalyticsEvent.PERMISSION_CAMERA_GRANTED, { source: 'settings_return' });
+track(AnalyticsEvent.PERMISSION_DENIED, {
+  permission: 'motion',
+  status: 'permanentlyDenied',
+  criticality: 'recommended',
+});
+stopCapture();
+if (PROD) {
+  check('permission events: no error/warn in prod', errors.length === 0 && warns.length === 0);
+} else {
+  check('permission_camera_granted: dispatched', dispatched('permission_camera_granted'));
+  check('permission_denied: dispatched', dispatched('permission_denied'));
+}
+// Bad permission key (the Android-internal `storage` is NOT a valid analytics key).
+startCapture();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+track(AnalyticsEvent.PERMISSION_DENIED, {
+  permission: 'storage',
+  status: 'denied',
+  criticality: 'optional',
+} as any);
+stopCapture();
+check('permission_denied: invalid permission key rejected', !dispatched('permission_denied'));
+
 // 4) Resilience: a throwing sink must NOT propagate out of track().
 startCapture();
 console.log = () => {

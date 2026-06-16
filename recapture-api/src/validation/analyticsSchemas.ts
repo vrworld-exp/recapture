@@ -31,6 +31,10 @@ export const AnalyticsEvent = {
   PROJECT_RESUMED: 'project_resumed',
   // ── Config delivery ───────────────────────────────────────────────────────
   REMOTE_CONFIG_SERVED: 'remote_config_served',
+  // ── Pre-Capture & Permissions (client-emitted) ────────────────────────────
+  PERMISSION_CAMERA_GRANTED: 'permission_camera_granted',
+  PERMISSION_MOTION_GRANTED: 'permission_motion_granted',
+  PERMISSION_DENIED: 'permission_denied',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -50,6 +54,24 @@ export const AUTH_FAIL_REASONS = [
 export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
 /** Where a project_resumed open originated (optional context). */
 export const RESUME_SOURCES = ['projects_list', 'deep_link', 'direct'] as const;
+
+// ── Permissions ──────────────────────────────────────────────────────────────
+/** How a permission grant was obtained: the in-app OS prompt, or the user
+ * enabling it in Settings (detected on resume). */
+export const PERMISSION_GRANT_SOURCES = ['prompt', 'settings_return'] as const;
+/**
+ * Unified app-facing permission keys. NOTE: media access is `photos` (matching
+ * the client's `AppPermissionType` and the existing `precapture_permission_result`
+ * event) — NOT the Android native channel's internal `storage` logical key. This
+ * keeps every client analytics event consistent; see the tracking-plan doc.
+ */
+export const PERMISSION_KEYS = ['camera', 'motion', 'photos'] as const;
+/** Non-granted outcomes carried by `permission_denied` (mirror PermissionUiStatus;
+ * `unavailable` is intentionally absent — it is neither a grant nor a denial). */
+export const PERMISSION_DENIED_STATUSES = ['denied', 'permanentlyDenied', 'restricted'] as const;
+/** How strongly the permission gates progress (camera=required, motion=recommended,
+ * photos=optional). */
+export const PERMISSION_CRITICALITY = ['required', 'recommended', 'optional'] as const;
 
 // ── Per-event property schemas ──────────────────────────────────────────────
 // snake_case property names throughout. Identifiers are ALWAYS pre-hashed by the
@@ -161,6 +183,34 @@ const remoteConfigServedProps = z
   })
   .strict();
 
+// Permission-funnel events. CLIENT-emitted on grant/deny TRANSITIONS only (never
+// on passive check()/resume re-checks). Permissions may precede auth, so
+// `user_id_hash` is optional (omitted pre-login, joined later). Camera and Motion
+// have named granted events; denials use a single generic event carrying the
+// permission — see the tracking-plan doc for the documented naming asymmetry.
+const permissionCameraGrantedProps = z
+  .object({
+    source: z.enum(PERMISSION_GRANT_SOURCES).optional(),
+    user_id_hash: z.string().min(1).optional(),
+  })
+  .strict();
+
+const permissionMotionGrantedProps = z
+  .object({
+    source: z.enum(PERMISSION_GRANT_SOURCES).optional(),
+    user_id_hash: z.string().min(1).optional(),
+  })
+  .strict();
+
+const permissionDeniedProps = z
+  .object({
+    permission: z.enum(PERMISSION_KEYS),
+    status: z.enum(PERMISSION_DENIED_STATUSES),
+    criticality: z.enum(PERMISSION_CRITICALITY),
+    user_id_hash: z.string().min(1).optional(),
+  })
+  .strict();
+
 /**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
@@ -179,6 +229,9 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PROJECT_DELETED]: projectDeletedProps,
   [AnalyticsEvent.PROJECT_RESUMED]: projectResumedProps,
   [AnalyticsEvent.REMOTE_CONFIG_SERVED]: remoteConfigServedProps,
+  [AnalyticsEvent.PERMISSION_CAMERA_GRANTED]: permissionCameraGrantedProps,
+  [AnalyticsEvent.PERMISSION_MOTION_GRANTED]: permissionMotionGrantedProps,
+  [AnalyticsEvent.PERMISSION_DENIED]: permissionDeniedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

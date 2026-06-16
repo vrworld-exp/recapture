@@ -20,9 +20,31 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/data/local/permission_flow_box.dart';
+import 'package:recapture/domain/entities/permission_flow_state.dart';
 import 'package:recapture/domain/entities/permission_item.dart';
 import 'package:recapture/platform/permissions_service.dart';
 import 'package:recapture/presentation/screens/capture/permissions_screen.dart';
+
+/// In-memory flow store so these widget tests don't depend on Hive being
+/// initialized (flow-state persistence has its own dedicated tests). Mirrors
+/// how the service is mocked — the screen's injectable dependencies are
+/// provided by the harness.
+class _InMemoryFlowStore implements PermissionFlowStore {
+  final Map<AppPermissionType, PermissionFlowState> _state = {};
+
+  @override
+  Future<PermissionFlowState> get(AppPermissionType type) async =>
+      _state[type] ?? PermissionFlowState.initial;
+
+  @override
+  Future<void> markAsked(AppPermissionType type) async => _state[type] =
+      (_state[type] ?? PermissionFlowState.initial).copyWith(hasBeenAsked: true);
+
+  @override
+  Future<void> markSkipped(AppPermissionType type) async => _state[type] =
+      (_state[type] ?? PermissionFlowState.initial).copyWith(userSkipped: true);
+}
 
 // ── Mock service ──────────────────────────────────────────────────────────────
 
@@ -89,7 +111,10 @@ Future<_FakePermissionsService> _pumpScreen(
 ) async {
   final fake = _FakePermissionsService({...initial});
   await tester.pumpWidget(
-    MaterialApp(theme: AppTheme.dark, home: PermissionsScreen(service: fake)),
+    MaterialApp(
+      theme: AppTheme.dark,
+      home: PermissionsScreen(service: fake, flowStore: _InMemoryFlowStore()),
+    ),
   );
   await tester.pumpAndSettle();
   return fake;
@@ -100,6 +125,7 @@ Future<(_FakePermissionsService, _PushSpy)> _pumpRouter(
   Map<AppPermissionType, AppPermissionStatus> initial,
 ) async {
   final fake = _FakePermissionsService({...initial});
+  final flowStore = _InMemoryFlowStore();
   final spy = _PushSpy();
   final router = GoRouter(
     initialLocation: AppRoutes.permissions,
@@ -108,7 +134,7 @@ Future<(_FakePermissionsService, _PushSpy)> _pumpRouter(
       GoRoute(
         path: AppRoutes.permissions,
         name: AppRouteNames.permissions,
-        builder: (_, __) => PermissionsScreen(service: fake),
+        builder: (_, __) => PermissionsScreen(service: fake, flowStore: flowStore),
       ),
       GoRoute(
         path: AppRoutes.levelAIntro,
@@ -318,7 +344,10 @@ void main() {
       theme: AppTheme.dark,
       home: MediaQuery(
         data: const MediaQueryData(textScaler: TextScaler.linear(2.0)),
-        child: PermissionsScreen(service: _FakePermissionsService(const {})),
+        child: PermissionsScreen(
+          service: _FakePermissionsService(const {}),
+          flowStore: _InMemoryFlowStore(),
+        ),
       ),
     ));
     await tester.pumpAndSettle();

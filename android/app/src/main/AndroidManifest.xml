@@ -11,6 +11,28 @@
     <!-- Camera — required for AR/camera features -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- ───────────── MEDIA / STORAGE (the "Photos" permission gate) ─────────────
+         The app reads/picks captured images & video from the gallery. Saving to
+         the gallery via MediaStore needs no permission on API 29+, so only READ
+         access is requested at runtime. See PermissionMapper.kt for the
+         API-level → concrete-permission mapping the native channel enforces. -->
+
+    <!-- API 33+ : granular media read (request only the types the app uses). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- API ≤32 : legacy read, superseded by granular media on 33+. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- API ≤28 : legacy write. A no-op under scoped storage on 29+, so it is
+         gated and never requested at runtime above API 28. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!-- NOTE: ACTIVITY_RECOGNITION is intentionally NOT declared. The "Motion"
+         gate uses raw IMU sensors (accelerometer / gyroscope / rotation-vector),
+         which require no Android permission. -->
+
+
     <!-- Audio recording — required for video/AR recording features -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 

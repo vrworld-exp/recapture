@@ -48,4 +48,8 @@ abstract final class AppConfig {
   static const String channelCapture = 'com.mayasabhaxr.recapture/capture';
   static const String channelSensors = 'com.mayasabhaxr.recapture/sensors';
   static const String channelCaptureEvents = 'com.mayasabhaxr.recapture/captureEvents';
+
+  /// Native Android permissions channel — must match
+  /// PermissionManager.CHANNEL_NAME on the Kotlin side.
+  static const String channelPermissions = 'com.mayasabhaxr.recapture/permissions';
 }
