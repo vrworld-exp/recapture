@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../domain/entities/checklist_item.dart';
+import '../../utils/analytics.dart';
 
 /// Single, platform-adaptive entry point for a checklist item's tip/detail
 /// surface (the Pre-Capture Checklist opens this on item tap):
@@ -23,6 +24,15 @@ Future<void> showChecklistTooltip(BuildContext context, ChecklistItem item) {
   final platform = Theme.of(context).platform;
   final isCupertino =
       platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
+
+  // One genuine open per call: the stacking guard above already collapsed a
+  // rapid double-tap into a single open, and this runs on the open action (not
+  // on rebuilds while the tip stays up). Each real open is a distinct
+  // interaction and SHOULD count. Fire-and-forget; never blocks presenting.
+  Analytics.logEvent(AnalyticsEvents.precaptureTipOpened, {
+    'item_id': item.id,
+    'presentation': isCupertino ? 'popover' : 'bottom_sheet',
+  });
 
   final Future<void> shown = isCupertino
       ? showCupertinoModalPopup<void>(

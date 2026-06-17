@@ -5,6 +5,7 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../domain/entities/checklist_item.dart';
+import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/checklist_item_tile.dart';
 
@@ -26,6 +27,16 @@ class PreCaptureScreen extends StatefulWidget {
 
 class _PreCaptureScreenState extends State<PreCaptureScreen> {
   final Set<String> _checkedIds = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    // Reach metric: fire exactly once per checklist screen entry. initState
+    // runs once per State (not on rebuild/rotation), so re-entering the screen
+    // (a fresh State) fires again — the intended per-entry semantics.
+    // Fire-and-forget; a thrown analytics observer never reaches this call site.
+    Analytics.logEvent(AnalyticsEvents.precaptureChecklistStarted);
+  }
 
   /// True once every required item has been acknowledged. With no required items
   /// (e.g. an all-optional or empty list) this is vacuously true, so the CTA is

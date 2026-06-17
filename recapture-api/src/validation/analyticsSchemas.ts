@@ -35,6 +35,9 @@ export const AnalyticsEvent = {
   PERMISSION_CAMERA_GRANTED: 'permission_camera_granted',
   PERMISSION_MOTION_GRANTED: 'permission_motion_granted',
   PERMISSION_DENIED: 'permission_denied',
+  // ── Pre-Capture checklist funnel (client-emitted) ─────────────────────────
+  PRECAPTURE_CHECKLIST_STARTED: 'precapture_checklist_started',
+  PRECAPTURE_TIP_OPENED: 'precapture_tip_opened',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -72,6 +75,12 @@ export const PERMISSION_DENIED_STATUSES = ['denied', 'permanentlyDenied', 'restr
 /** How strongly the permission gates progress (camera=required, motion=recommended,
  * photos=optional). */
 export const PERMISSION_CRITICALITY = ['required', 'recommended', 'optional'] as const;
+
+// ── Pre-Capture checklist ────────────────────────────────────────────────────
+/** How a checklist item's tip surface was presented — platform-derived from
+ * `Theme.platform` (Material bottom sheet on Android, Cupertino popover on iOS).
+ * Optional context for platform analysis; the tip content is identical. */
+export const PRECAPTURE_TIP_PRESENTATIONS = ['bottom_sheet', 'popover'] as const;
 
 // ── Per-event property schemas ──────────────────────────────────────────────
 // snake_case property names throughout. Identifiers are ALWAYS pre-hashed by the
@@ -211,6 +220,27 @@ const permissionDeniedProps = z
   })
   .strict();
 
+// Pre-capture checklist funnel. CLIENT-emitted (Screen 4 + its tip surface).
+// `precapture_checklist_started` is a REACH metric: it fires once per checklist
+// screen ENTRY (not the Start-CTA conversion, and never on rebuilds). The pre-
+// capture screen may precede auth, so `user_id_hash` is optional. `item_id` is
+// the checklist item's stable id — not PII.
+const precaptureChecklistStartedProps = z
+  .object({
+    // How the user arrived at the checklist (optional context).
+    source: z.string().min(1).optional(),
+    user_id_hash: z.string().min(1).optional(),
+  })
+  .strict();
+
+const precaptureTipOpenedProps = z
+  .object({
+    item_id: z.string().min(1),
+    presentation: z.enum(PRECAPTURE_TIP_PRESENTATIONS).optional(),
+    user_id_hash: z.string().min(1).optional(),
+  })
+  .strict();
+
 /**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
@@ -232,6 +262,8 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PERMISSION_CAMERA_GRANTED]: permissionCameraGrantedProps,
   [AnalyticsEvent.PERMISSION_MOTION_GRANTED]: permissionMotionGrantedProps,
   [AnalyticsEvent.PERMISSION_DENIED]: permissionDeniedProps,
+  [AnalyticsEvent.PRECAPTURE_CHECKLIST_STARTED]: precaptureChecklistStartedProps,
+  [AnalyticsEvent.PRECAPTURE_TIP_OPENED]: precaptureTipOpenedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

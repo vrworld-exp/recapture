@@ -52,4 +52,10 @@ abstract final class AppConfig {
   /// Native Android permissions channel — must match
   /// PermissionManager.CHANNEL_NAME on the Kotlin side.
   static const String channelPermissions = 'com.mayasabhaxr.recapture/permissions';
+
+  /// Native camera-preview channel — must match
+  /// CameraPreviewManager.CHANNEL_NAME on the Kotlin side. Carries the live
+  /// back-camera preview (external texture) for the capture screen.
+  static const String channelCameraPreview =
+      'com.mayasabhaxr.recapture/camera_preview';
 }

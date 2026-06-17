@@ -72,6 +72,18 @@ dependencies {
     // explicitly so PermissionManager compiles independently of that.)
     implementation("androidx.core:core-ktx:1.13.1")
 
+    // CameraX — live back-camera PREVIEW bridged to Flutter via an external
+    // texture (CameraPreviewManager). camera-view (PreviewView) is intentionally
+    // omitted: Architecture Decision A uses a SurfaceProducer, not a PlatformView.
+    val cameraxVersion = "1.4.1"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+
+    // LifecycleRegistry — CameraPreviewManager owns a private LifecycleOwner so
+    // bindToLifecycle is driven by start/stop/dispose, decoupled from the Activity.
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+
     // JVM unit tests for the pure permission mapping logic (PermissionMapperTest).
     testImplementation("junit:junit:4.13.2")
 }

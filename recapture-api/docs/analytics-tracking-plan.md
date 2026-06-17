@@ -31,6 +31,7 @@
 | `permission` (permission_denied) | `camera`, `motion`, `photos` |
 | `status` (permission_denied) | `denied`, `permanentlyDenied`, `restricted` |
 | `criticality` (permission_denied) | `required`, `recommended`, `optional` |
+| `presentation` (precapture_tip_opened) | `bottom_sheet`, `popover` |
 
 ## Events
 
@@ -142,6 +143,36 @@ phantom grants on every resume. Each transition fires its event **exactly once**
 - **Props:** `permission` (`camera`|`motion`|`photos`), `status`
   (`denied`|`permanentlyDenied`|`restricted`), `criticality`
   (`required`|`recommended`|`optional`), `user_id_hash` (string, optional)
+
+### Pre-capture checklist (`precapture_checklist_started`, `precapture_tip_opened`)
+
+**Client-emitted** (Screen 4 — the pre-capture checklist — and its tip surface).
+Like the permission funnel, the pre-capture screen may precede login, so
+`user_id_hash` is **optional/omitted** (join later when a session exists).
+
+### `precapture_checklist_started`
+- **When:** the user **enters** the pre-capture checklist screen (Screen 4).
+  **Resolved semantics: REACH** — this is the screen-entry metric, fired once in
+  the screen's `initState`, **not** the Start-CTA conversion (the Start tap has
+  its own navigation; no conversion event is wired here). The funnel can add a
+  separate conversion event later if needed.
+- **Rule:** once per screen **entry**; never on rebuilds/rotations (a fresh
+  `State` per entry). Leaving and returning is a new entry → fires again (no
+  per-session dedupe).
+- **Props:** `source` (string, optional — how the user arrived), `user_id_hash`
+  (string, optional)
+
+### `precapture_tip_opened`
+- **When:** a checklist item's tip surface (Material bottom sheet on Android /
+  Cupertino popover on iOS) is **opened** from the item's info affordance.
+- **Rule:** once per **open action**; not on rebuilds while the tip stays up. The
+  tip surface's no-stacking guard collapses a rapid double-tap into one open
+  (→ one event). Dismiss + reopen the same item = two opens = two events (open
+  count is meaningful). A missing/invalid `item_id` is rejected by the schema
+  (signals a content bug to fix, not to mask).
+- **Props:** `item_id` (string, the checklist item's stable id — not PII),
+  `presentation` (`bottom_sheet`|`popover`, optional), `user_id_hash` (string,
+  optional)
 
 ## QA
 

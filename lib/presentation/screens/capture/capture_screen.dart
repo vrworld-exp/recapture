@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../platform/camera/camera_preview_controller.dart';
+import '../../../platform/camera/camera_preview_view.dart';
 
 class CaptureScreen extends StatefulWidget {
   const CaptureScreen({
@@ -23,12 +25,16 @@ class CaptureScreen extends StatefulWidget {
 }
 
 class _CaptureScreenState extends State<CaptureScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   int _captureCount = 0;
   bool _showFlash = false;
   int _instructionIndex = 0;
   Timer? _instructionTimer;
   late final AnimationController _flashController;
+
+  /// Drives the native back-camera preview (CAMERA assumed granted by the P2
+  /// gate). Released on dispose; stopped on background and rebound on resume.
+  late final CameraPreviewController _cameraController;
 
   static const _instructions = [
     'Move clockwise',
@@ -44,6 +50,12 @@ class _CaptureScreenState extends State<CaptureScreen>
       vsync: this,
       duration: const Duration(milliseconds: 200),
     );
+    _cameraController = CameraPreviewController();
+    WidgetsBinding.instance.addObserver(this);
+    // Start after the first frame so the engine texture registry is ready.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _cameraController.start();
+    });
     _instructionTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
       setState(() {
@@ -53,7 +65,22 @@ class _CaptureScreenState extends State<CaptureScreen>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _cameraController.start();
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        _cameraController.stop();
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _cameraController.dispose();
     _flashController.dispose();
     _instructionTimer?.cancel();
     super.dispose();
@@ -111,7 +138,7 @@ class _CaptureScreenState extends State<CaptureScreen>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          _CameraMockBackground(),
+          CameraPreview(controller: _cameraController),
           _PlacementBox(),
           _TopBar(
             levelLabel: widget.levelLabel,
@@ -134,39 +161,6 @@ class _CaptureScreenState extends State<CaptureScreen>
       ),
     );
   }
-}
-
-class _CameraMockBackground extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      // camera mock — not a brand color
-      color: const Color(0xFF0A0A0A),
-      child: CustomPaint(
-        painter: _GridPainter(),
-        child: const SizedBox.expand(),
-      ),
-    );
-  }
-}
-
-class _GridPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = AppColors.disabled.withValues(alpha: 0.1)
-      ..strokeWidth = 0.5;
-    const step = 40.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y < size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(_GridPainter old) => false;
 }
 
 class _PlacementBox extends StatelessWidget {

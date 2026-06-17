@@ -48,4 +48,13 @@ abstract final class AnalyticsEvents {
   /// A permission transitioned to a non-granted state (request resolved
   /// non-granted, or a granted→denied revocation detected on resume).
   static const String permissionDenied = 'permission_denied';
+
+  /// The pre-capture checklist (Screen 4) was entered — a REACH metric. Fires
+  /// once per screen entry, never on rebuilds (and not on the Start CTA, which
+  /// would be a separate conversion event).
+  static const String precaptureChecklistStarted = 'precapture_checklist_started';
+
+  /// A checklist item's tip surface (bottom sheet / popover) was opened. Carries
+  /// the item id; fires once per genuine open (the tip surface guards stacking).
+  static const String precaptureTipOpened = 'precapture_tip_opened';
 }
