@@ -36,6 +36,16 @@ sealed class CaptureEvent {
           index: (map['index'] as num?)?.toInt(),
           message: map['message'] as String? ?? 'Capture error.',
         );
+      case 'metadata':
+        return CaptureMetadataEvent(
+          frameId: map['frameId'] as String? ?? '',
+          index: (map['index'] as num?)?.toInt(),
+          jpegPath: map['jpegPath'] as String? ?? '',
+          sidecarPath: map['sidecarPath'] as String? ?? '',
+          exifOk: map['exifOk'] as bool? ?? false,
+          sidecarOk: map['sidecarOk'] as bool? ?? false,
+          error: map['error'] as String?,
+        );
       default:
         return null;
     }
@@ -77,6 +87,40 @@ class CaptureErrorEvent extends CaptureEvent {
 
   final int? index;
   final String message;
+}
+
+/// Result of the per-frame post-capture metadata step (EXIF normalization + JSON
+/// sidecar). Emitted asynchronously, possibly slightly behind the frame event,
+/// since metadata I/O runs off the capture cadence. [error] is non-null if EXIF
+/// or the sidecar failed (the JPEG is never corrupted — see the native writer).
+@immutable
+class CaptureMetadataEvent extends CaptureEvent {
+  const CaptureMetadataEvent({
+    required this.frameId,
+    required this.index,
+    required this.jpegPath,
+    required this.sidecarPath,
+    required this.exifOk,
+    required this.sidecarOk,
+    this.error,
+  });
+
+  final String frameId;
+  final int? index;
+  final String jpegPath;
+
+  /// Path to the `<frame>.json` sidecar (precise timestamp, device, resolution…).
+  final String sidecarPath;
+
+  /// Whether interop EXIF was normalized onto the JPEG.
+  final bool exifOk;
+
+  /// Whether the JSON sidecar was written.
+  final bool sidecarOk;
+
+  /// Non-null when EXIF and/or sidecar writing failed (the frame is flagged, not
+  /// silently dropped).
+  final String? error;
 }
 
 /// Streams native capture events. Unknown/malformed events are filtered out.

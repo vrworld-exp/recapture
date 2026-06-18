@@ -2,6 +2,7 @@
 package com.mayasabhaxr.recapture.camera
 
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.camera.core.Camera
@@ -49,7 +50,13 @@ import java.util.concurrent.TimeUnit
 class CameraCaptureManager(
     private val appContext: Context,
     private val controls: CameraControlsManager,
+    private val metadataWriter: CaptureMetadataWriter = CaptureMetadataWriter(),
 ) : EventChannel.StreamHandler {
+
+    init {
+        // Per-frame EXIF/sidecar results stream over the same capture EventChannel.
+        metadataWriter.onResult = { event -> emit(event) }
+    }
 
     companion object {
         // Must match AppConfig.channelCapture / channelCaptureEvents on the Dart side.
@@ -63,10 +70,42 @@ class CameraCaptureManager(
         private const val ERR_CAPTURE = "CAPTURE_FAILED"
     }
 
-    /** The use case bound by [CameraPreviewManager]. Stable across rebinds. */
-    val imageCapture: ImageCapture = ImageCapture.Builder()
-        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-        .build()
+    // ── resolution / quality policy (sizing+encoding; see CaptureResolutionPolicy) ─
+    //
+    // The policy is bind-time: it parameterizes the [ImageCapture] but does not
+    // capture. A change is staged into [pendingPolicy] and only realized on the
+    // NEXT bind (the preview/session task owns rebinding) — never swapped under a
+    // live session, so every frame in a session keeps one resolution + quality.
+
+    /** The policy that will be realized on the next bind. */
+    @Volatile
+    private var pendingPolicy: CaptureResolutionPolicy = CaptureResolutionPolicy.DEFAULT
+
+    /** The policy actually realized in [currentImageCapture] (the bound one). */
+    @Volatile
+    private var boundPolicy: CaptureResolutionPolicy = pendingPolicy
+
+    /** True when [pendingPolicy] differs from what [currentImageCapture] encodes. */
+    @Volatile
+    private var policyDirty = false
+
+    /**
+     * The [ImageCapture] handed to [CameraPreviewManager] at bind. Rebuilt only at
+     * bind time via [useCaseForBind] when the policy changed, so captures and
+     * reporting always reference the instance that is actually bound.
+     */
+    @Volatile
+    private var currentImageCapture: ImageCapture = buildImageCapture(pendingPolicy)
+
+    /** The capture use case to bind. Exposed for the preview manager's wiring. */
+    val imageCapture: ImageCapture get() = currentImageCapture
+
+    /**
+     * Invoked (main thread) on a successful [configureCaptureResolution] with the
+     * CameraX [androidx.camera.core.AspectRatio] constant, so the preview/session
+     * task can match its own aspect ratio on the next bind (no FOV mismatch).
+     */
+    var onAspectRatioChanged: ((Int) -> Unit)? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var captureExecutor: ScheduledExecutorService = newExecutor()
@@ -95,6 +134,104 @@ class CameraCaptureManager(
         val intervalMs: Long,
     ) {
         var index = 0
+    }
+
+    // ── policy plumbing ────────────────────────────────────────────────────────
+
+    private fun buildImageCapture(p: CaptureResolutionPolicy): ImageCapture =
+        ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            // Resolution + quality are fixed here, at bind, for the whole session.
+            .setResolutionSelector(p.buildResolutionSelector())
+            .setJpegQuality(p.jpegQuality)
+            // Fixed target rotation ⇒ consistent EXIF orientation across frames.
+            .setTargetRotation(p.targetRotation)
+            .build()
+
+    /**
+     * Returns the [ImageCapture] the preview manager should bind. Called on the
+     * main thread at bind time: if the policy changed since the last bind it
+     * rebuilds the use case here (the only place a policy change is realized), so a
+     * mid-session reconfigure never disturbs the live session — it lands on the
+     * rebind the session task performs.
+     */
+    fun useCaseForBind(): ImageCapture {
+        if (policyDirty) {
+            boundPolicy = pendingPolicy
+            currentImageCapture = buildImageCapture(boundPolicy)
+            policyDirty = false
+        }
+        return currentImageCapture
+    }
+
+    /**
+     * Stages a new resolution/JPEG-quality policy. Validated + clamped; clearly
+     * invalid input is rejected with `INVALID_ARGS` and the prior policy stands.
+     * Takes effect on the NEXT bind (acknowledged via `appliesOnNextBind`), never
+     * mid-session. Reports the (parsed) target so the caller can confirm intent.
+     */
+    fun configureCaptureResolution(args: Map<String, Any?>?, result: MethodChannel.Result) {
+        CaptureResolutionPolicy.fromMap(args).fold(
+            onSuccess = { p ->
+                pendingPolicy = p
+                policyDirty = true
+                onAspectRatioChanged?.invoke(p.aspectRatio.toCameraX())
+                result.success(
+                    mapOf(
+                        "accepted" to true,
+                        "appliesOnNextBind" to true,
+                        "target" to targetMap(p),
+                        "jpegQuality" to p.jpegQuality,
+                        "aspectRatio" to aspectLabel(p.aspectRatio),
+                    ),
+                )
+            },
+            onFailure = { e ->
+                result.error(ERR_INVALID, e.message ?: "Invalid resolution policy.", null)
+            },
+        )
+    }
+
+    /**
+     * Reports the ACTUAL capture resolution. When bound, reads CameraX's chosen
+     * output size from the bound [ImageCapture] and flags whether it diverged from
+     * the target (`fellBack`). When not yet bound, returns the resolved target with
+     * `bound: false` (no actual size exists until a session binds).
+     */
+    fun getActiveCaptureResolution(result: MethodChannel.Result) {
+        val p = boundPolicy
+        val info = if (bound) currentImageCapture.resolutionInfo else null
+        val res = info?.resolution
+        val actual = if (res != null) Dimensions(res.width, res.height) else null
+
+        val out = mutableMapOf<String, Any?>(
+            "jpegQuality" to p.jpegQuality,
+            "aspectRatio" to aspectLabel(p.aspectRatio),
+            "target" to targetMap(p),
+            "bound" to (actual != null),
+        )
+        if (actual != null) {
+            out["width"] = actual.width
+            out["height"] = actual.height
+            out["fellBack"] = p.fellBack(actual)
+        } else {
+            // Best-known size before bind: the resolved target (intent), fellBack unknown.
+            out["width"] = p.resolvedTargetSize.width
+            out["height"] = p.resolvedTargetSize.height
+            out["fellBack"] = false
+        }
+        result.success(out)
+    }
+
+    private fun targetMap(p: CaptureResolutionPolicy): Map<String, Any?> = mapOf(
+        "width" to p.resolvedTargetSize.width,
+        "height" to p.resolvedTargetSize.height,
+        "longEdge" to p.resolvedTargetSize.longEdge,
+    )
+
+    private fun aspectLabel(a: CaptureAspectRatio): String = when (a) {
+        CaptureAspectRatio.RATIO_4_3 -> "4:3"
+        CaptureAspectRatio.RATIO_16_9 -> "16:9"
     }
 
     // ── session wiring (called on the main thread by the preview manager) ─────
@@ -132,6 +269,8 @@ class CameraCaptureManager(
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val ts = image.imageInfo.timestamp
+                    val width = image.width
+                    val height = image.height
                     val bytes = image.jpegBytes()
                     image.close()
                     singleInFlight = false
@@ -146,6 +285,8 @@ class CameraCaptureManager(
                                 ),
                             )
                         }
+                        // Off-thread EXIF + sidecar; the single result already returned.
+                        enqueueMetadata(frame, sessionId, 0, ts, width, height)
                     } catch (e: IOException) {
                         replyMain { result.error(ERR_WRITE, e.message ?: "Write failed.", null) }
                     }
@@ -181,6 +322,8 @@ class CameraCaptureManager(
         active = null
         bound = false
         captureExecutor.shutdownNow()
+        // Let any queued metadata jobs finish (they don't touch the camera).
+        metadataWriter.dispose()
     }
 
     // ── loop driver ───────────────────────────────────────────────────────────
@@ -219,6 +362,8 @@ class CameraCaptureManager(
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val ts = image.imageInfo.timestamp
+                    val width = image.width
+                    val height = image.height
                     val bytes = image.jpegBytes()
                     image.close()
                     // Cancelled (stopped / unbound) while in-flight → drop this frame.
@@ -236,6 +381,8 @@ class CameraCaptureManager(
                                 "total" to op.total,
                             ),
                         )
+                        // Off-thread EXIF + sidecar; never blocks the burst cadence.
+                        enqueueMetadata(frame, op.sessionId, index, ts, width, height)
                     } catch (e: IOException) {
                         // Report and continue, marking the gap (index still advances).
                         emit(mapOf("type" to "error", "index" to index, "message" to (e.message ?: "Write failed.")))
@@ -305,6 +452,59 @@ class CameraCaptureManager(
     }
 
     private fun newSessionId(): String = "cap_${System.currentTimeMillis()}"
+
+    // ── metadata (per-frame post-capture, off-thread) ────────────────────────────
+
+    /** App version string for the device descriptor / EXIF software tag. */
+    private val appVersion: String? by lazy {
+        runCatching {
+            @Suppress("DEPRECATION")
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName
+        }.getOrNull()
+    }
+
+    /**
+     * Snapshots the precise timestamp, actual resolution, device, intrinsics, and
+     * capture conditions for [frame] and hands them to [metadataWriter] for
+     * off-thread EXIF + sidecar writing. Cheap snapshot work only; the heavy I/O is
+     * the writer's, so the capture cadence is never stalled.
+     */
+    private fun enqueueMetadata(
+        frame: Frame,
+        sessionId: String,
+        index: Int,
+        timestampNs: Long,
+        width: Int,
+        height: Int,
+    ) {
+        val policy = boundPolicy
+        val actual = Dimensions.landscape(width, height)
+        val intrinsics = controls.snapshotIntrinsics()
+        val metadata = CaptureMetadata(
+            sessionId = sessionId,
+            frameId = frame.id,
+            frameIndex = index,
+            captureTimestampNs = timestampNs,
+            wallClockMillis = System.currentTimeMillis(),
+            device = DeviceDescriptor(
+                manufacturer = Build.MANUFACTURER ?: "",
+                model = Build.MODEL ?: "",
+                osVersion = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                appVersion = appVersion,
+                cameraId = intrinsics.cameraId,
+            ),
+            resolution = ResolutionMeta(
+                width = width,
+                height = height,
+                aspectRatio = aspectLabel(policy.aspectRatio),
+                jpegQuality = policy.jpegQuality,
+                fellBack = policy.fellBack(actual),
+            ),
+            intrinsics = intrinsics,
+            conditions = controls.snapshotConditions(),
+        )
+        metadataWriter.enqueue(File(frame.path), metadata)
+    }
 
     private fun ImageProxy.jpegBytes(): ByteArray {
         val buffer = planes[0].buffer

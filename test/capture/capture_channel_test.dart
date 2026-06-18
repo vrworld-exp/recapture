@@ -89,6 +89,82 @@ void main() {
       expect(await c.startBurst(3), isNull);
       await c.stopAutoCapture(); // must not throw
     });
+
+    test('configureCaptureResolution forwards the policy map and acks', () async {
+      setHandler((call) async => <String, dynamic>{
+            'accepted': true,
+            'appliesOnNextBind': true,
+          });
+
+      const policy = CaptureResolutionPolicy(
+        targetLongEdge: 3000,
+        aspectRatio: CaptureAspectRatio.ratio4x3,
+        fallbackRule: CaptureFallbackRule.closestHigherThenLower,
+        jpegQuality: 90,
+      );
+      final ok = await CaptureChannel().configureCaptureResolution(policy);
+
+      expect(ok, isTrue);
+      expect(calls.single.method, 'configureCaptureResolution');
+      expect(calls.single.arguments, {
+        'aspectRatio': '4:3',
+        'fallbackRule': 'closest-higher-then-lower',
+        'jpegQuality': 90,
+        'targetLongEdge': 3000,
+      });
+    });
+
+    test('configureCaptureResolution exact size omits longEdge', () async {
+      setHandler((call) async => <String, dynamic>{'accepted': true});
+
+      const policy = CaptureResolutionPolicy(targetWidth: 4000, targetHeight: 3000);
+      await CaptureChannel().configureCaptureResolution(policy);
+
+      expect(calls.single.arguments, {
+        'aspectRatio': '4:3',
+        'fallbackRule': 'closest-higher-then-lower',
+        'jpegQuality': 90,
+        'targetWidth': 4000,
+        'targetHeight': 3000,
+      });
+    });
+
+    test('configureCaptureResolution INVALID_ARGS → false', () async {
+      setHandler((call) async {
+        throw PlatformException(code: 'INVALID_ARGS', message: 'bad policy');
+      });
+      final ok = await CaptureChannel()
+          .configureCaptureResolution(const CaptureResolutionPolicy());
+      expect(ok, isFalse);
+    });
+
+    test('getActiveCaptureResolution parses actual + fellBack', () async {
+      setHandler((call) async => <String, dynamic>{
+            'width': 4032,
+            'height': 3024,
+            'jpegQuality': 90,
+            'aspectRatio': '4:3',
+            'fellBack': true,
+            'bound': true,
+            'target': {'width': 3000, 'height': 2250, 'longEdge': 3000},
+          });
+
+      final res = await CaptureChannel().getActiveCaptureResolution();
+
+      expect(res, isNotNull);
+      expect(res!.width, 4032);
+      expect(res.height, 3024);
+      expect(res.jpegQuality, 90);
+      expect(res.aspectRatio, CaptureAspectRatio.ratio4x3);
+      expect(res.fellBack, isTrue);
+      expect(res.bound, isTrue);
+      expect(res.targetLongEdge, 3000);
+    });
+
+    test('getActiveCaptureResolution missing plugin → null', () async {
+      final res = await CaptureChannel().getActiveCaptureResolution();
+      expect(res, isNull);
+    });
   });
 
   group('CaptureEvent.fromEvent', () {
@@ -130,6 +206,40 @@ void main() {
       expect(err, isA<CaptureErrorEvent>());
       expect((err! as CaptureErrorEvent).index, 3);
       expect((err as CaptureErrorEvent).message, 'disk full');
+    });
+
+    test('parses a metadata event', () {
+      final e = CaptureEvent.fromEvent({
+        'type': 'metadata',
+        'frameId': 'cap_1_00000',
+        'index': 0,
+        'jpegPath': '/p/0.jpg',
+        'sidecarPath': '/p/0.json',
+        'exifOk': true,
+        'sidecarOk': true,
+      });
+      expect(e, isA<CaptureMetadataEvent>());
+      final m = e! as CaptureMetadataEvent;
+      expect(m.frameId, 'cap_1_00000');
+      expect(m.index, 0);
+      expect(m.sidecarPath, '/p/0.json');
+      expect(m.exifOk, isTrue);
+      expect(m.sidecarOk, isTrue);
+      expect(m.error, isNull);
+    });
+
+    test('parses a metadata event carrying an error', () {
+      final m = CaptureEvent.fromEvent({
+        'type': 'metadata',
+        'frameId': 'x',
+        'jpegPath': '/p/x.jpg',
+        'sidecarPath': '/p/x.json',
+        'exifOk': false,
+        'sidecarOk': true,
+        'error': 'exif: boom',
+      }) as CaptureMetadataEvent;
+      expect(m.exifOk, isFalse);
+      expect(m.error, 'exif: boom');
     });
 
     test('unknown / malformed events → null (filtered)', () {

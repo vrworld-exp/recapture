@@ -54,10 +54,21 @@ class CameraControlsManager(private val appContext: Context) {
     private var manualFocusAvailable = false
     private var minFocusDistance = 0f // diopters; max of the focus-distance range
 
+    // Camera intrinsics for the bound camera (read once per bind on the main
+    // thread; null if not exposed by the device — never fabricated). Read from the
+    // capture-executor thread by the metadata snapshot, so @Volatile for safe
+    // publication. Consumed by the metadata task.
+    @Volatile private var cameraId: String? = null
+    @Volatile private var focalLengthMm: Float? = null
+    @Volatile private var fNumber: Float? = null
+    @Volatile private var sensorWidthMm: Float? = null
+    @Volatile private var sensorHeightMm: Float? = null
+
     // Tracked lock state (source of truth, rebuilt into CaptureRequestOptions).
     private val lock = Any()
     private var aeLocked = false
     private var awbLocked = false
+    private var afHeld = false // AF held via startFocusAndMetering (lockForCapture / setFocusLocked)
     private var manualFocusDistance: Float? = null // non-null ⇒ AF_MODE OFF + this distance
 
     /**
@@ -68,6 +79,7 @@ class CameraControlsManager(private val appContext: Context) {
         synchronized(lock) {
             aeLocked = false
             awbLocked = false
+            afHeld = false
             manualFocusDistance = null
         }
         this.camera = camera
@@ -77,6 +89,7 @@ class CameraControlsManager(private val appContext: Context) {
             awbLockAvailable = false
             manualFocusAvailable = false
             minFocusDistance = 0f
+            clearIntrinsics()
             return
         }
         camera2Control = Camera2CameraControl.from(camera.cameraControl)
@@ -100,6 +113,57 @@ class CameraControlsManager(private val appContext: Context) {
         // Manual focus needs both a real focus range and the OFF AF mode.
         manualFocusAvailable = min > 0f && supportsAfOff
         minFocusDistance = if (min > 0f) min else 0f
+
+        readIntrinsics(info)
+    }
+
+    /**
+     * Reads camera intrinsics once per bind for the capture-metadata sidecar.
+     * Each field is left null when the device does not expose it (no fabrication).
+     */
+    private fun readIntrinsics(info: Camera2CameraInfo) {
+        cameraId = runCatching { info.cameraId }.getOrNull()
+        focalLengthMm = info
+            .getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.firstOrNull()
+            ?.takeIf { it > 0f }
+        fNumber = info
+            .getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+            ?.firstOrNull()
+            ?.takeIf { it > 0f }
+        val physical = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        sensorWidthMm = physical?.width?.takeIf { it > 0f }
+        sensorHeightMm = physical?.height?.takeIf { it > 0f }
+    }
+
+    private fun clearIntrinsics() {
+        cameraId = null
+        focalLengthMm = null
+        fNumber = null
+        sensorWidthMm = null
+        sensorHeightMm = null
+    }
+
+    /** Snapshot of the bound camera's intrinsics for the sidecar (nullable fields). */
+    fun snapshotIntrinsics(): CameraIntrinsics = CameraIntrinsics(
+        focalLengthMm = focalLengthMm?.toDouble(),
+        fNumber = fNumber?.toDouble(),
+        sensorWidthMm = sensorWidthMm?.toDouble(),
+        sensorHeightMm = sensorHeightMm?.toDouble(),
+        cameraId = cameraId,
+    )
+
+    /** Snapshot of the current lock/capture conditions for the sidecar. */
+    fun snapshotConditions(): CaptureConditions = synchronized(lock) {
+        CaptureConditions(
+            afLocked = afHeld || manualFocusDistance != null,
+            aeLocked = aeLocked,
+            awbLocked = awbLocked,
+            // Not observed here (no CaptureResult callback) — left null, not faked.
+            exposureTimeNs = null,
+            iso = null,
+            focusDistanceDiopters = manualFocusDistance?.toDouble(),
+        )
     }
 
     // ── MethodChannel entry points (called on the main thread) ────────────────
@@ -148,6 +212,7 @@ class CameraControlsManager(private val appContext: Context) {
             synchronized(lock) {
                 hadManual = manualFocusDistance != null
                 manualFocusDistance = null
+                afHeld = true
             }
             if (hadManual) applyOptions(null) // clear the AF_MODE OFF override
 
@@ -164,6 +229,7 @@ class CameraControlsManager(private val appContext: Context) {
             synchronized(lock) {
                 hadManual = manualFocusDistance != null
                 manualFocusDistance = null
+                afHeld = false
             }
             val future = cam.cameraControl.cancelFocusAndMetering()
             if (hadManual) {
@@ -207,6 +273,7 @@ class CameraControlsManager(private val appContext: Context) {
                 .disableAutoCancel()
                 .build()
             cam.cameraControl.startFocusAndMetering(action)
+            synchronized(lock) { afHeld = true }
         }
     }
 
@@ -217,6 +284,7 @@ class CameraControlsManager(private val appContext: Context) {
         synchronized(lock) {
             aeLocked = false
             awbLocked = false
+            afHeld = false
             manualFocusDistance = null
         }
         // Cancel any held AF metering, then drop every interop override.

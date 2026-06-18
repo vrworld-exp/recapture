@@ -80,6 +80,10 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
 
+    // EXIF read/normalize for captured JPEGs (CaptureMetadataWriter). androidx
+    // ExifInterface does a temp+rename safe save; we add our own copy/validate too.
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
     // LifecycleRegistry — CameraPreviewManager owns a private LifecycleOwner so
     // bindToLifecycle is driven by start/stop/dispose, decoupled from the Activity.
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

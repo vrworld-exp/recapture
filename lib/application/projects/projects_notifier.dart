@@ -12,6 +12,7 @@ import '../auth/auth_notifier.dart';
 import '../../domain/entities/auth_state.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../offline/offline_queue_notifier.dart';
+import 'project_capture_cleanup.dart';
 
 /// Owns the user's project collection and is the single source of truth the
 /// Projects List, Create, and Options screens read from. State is an
@@ -31,6 +32,8 @@ import '../offline/offline_queue_notifier.dart';
 class ProjectsNotifier extends AsyncNotifier<List<Project>> {
   ProjectsRepository get _repo => ref.read(projectsRepositoryProvider);
   ProjectsCacheBox get _cache => ref.read(projectsCacheBoxProvider);
+  ProjectCaptureCleanup get _captureCleanup =>
+      ref.read(projectCaptureCleanupProvider);
 
   List<Project> get _current => state.valueOrNull ?? const <Project>[];
 
@@ -169,6 +172,7 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
       // Already gone (e.g. a rapid double-delete) — confirm with the repo but
       // make no further state change.
       await _repo.delete(id);
+      await _captureCleanup.purgeProjectCaptureData(id);
       return;
     }
     final removed = current[index];
@@ -190,6 +194,9 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
       }
       rethrow;
     }
+    // Server delete confirmed → reclaim the project's local capture data
+    // (purge-on-delete, Option A). Best-effort; never rolls back the delete.
+    await _captureCleanup.purgeProjectCaptureData(id);
   }
 
   /// Re-queues a failed project. Optimistically flips its status to `processing`

@@ -7,11 +7,14 @@ import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.util.Size
+import androidx.camera.core.AspectRatio
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
 import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -92,12 +95,30 @@ class CameraPreviewManager(
     var onCameraChanged: ((Camera?) -> Unit)? = null
 
     /**
-     * An extra use case (the still-capture [androidx.camera.core.ImageCapture]
-     * from [CameraCaptureManager]) bound into the SAME session as Preview. Set
-     * once before the first start; Preview + ImageCapture is a CameraX-guaranteed
+     * Supplies the still-capture [androidx.camera.core.ImageCapture] use case
+     * ([CameraCaptureManager]) to bind into the SAME session as Preview. Pulled at
+     * each bind (not a stored reference) so a resolution-policy change is realized
+     * exactly here, on the rebind — Preview + ImageCapture is a CameraX-guaranteed
      * combination, so no fallback is needed for that pair.
      */
-    var captureUseCase: UseCase? = null
+    var captureUseCaseProvider: (() -> UseCase?)? = null
+
+    /**
+     * Supplies the blur-detection [androidx.camera.core.ImageAnalysis] use case
+     * ([BlurAnalysisManager]) to bind into the SAME session. Pulled at each bind.
+     * Preview + ImageCapture + ImageAnalysis is a 3-use-case combination not
+     * guaranteed on every device, so [bindUseCases] drops analysis and rebinds
+     * Preview (+ ImageCapture) if the full combination is rejected — preview and
+     * capture always survive; blur analysis is simply skipped on such devices.
+     */
+    var analysisUseCaseProvider: (() -> UseCase?)? = null
+
+    /**
+     * CameraX [AspectRatio] for Preview, kept equal to the capture policy's aspect
+     * ratio so the streams share a FOV (no crop mismatch). Updated by the capture
+     * manager on a policy change; read at the next bind. Default 4:3.
+     */
+    var captureAspectRatio: Int = AspectRatio.RATIO_4_3
 
     /** The `start` result awaiting the first resolved surface request. */
     private var pendingStart: MethodChannel.Result? = null
@@ -194,8 +215,16 @@ class CameraPreviewManager(
     private fun bindPreview(provider: ProcessCameraProvider) {
         // Rotation for an external texture is reported by the SurfaceRequest's
         // TransformationInfo and applied on the Flutter side, so the use case
-        // itself needs no target rotation.
+        // itself needs no target rotation. The aspect ratio, however, must match
+        // the capture stream so preview and stills share one FOV (no crop mismatch).
         val useCase = Preview.Builder()
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(
+                        AspectRatioStrategy(captureAspectRatio, AspectRatioStrategy.FALLBACK_RULE_AUTO),
+                    )
+                    .build(),
+            )
             .build()
             .also { it.setSurfaceProvider(cameraExecutor!!, surfaceProvider) }
         preview = useCase
@@ -203,16 +232,43 @@ class CameraPreviewManager(
         // bindToLifecycle must run on the main thread; we are already on it
         // (provider future listener uses the main executor).
         provider.unbindAll()
-        // Bind Preview together with the still-capture use case (if registered) so
-        // captures run on the same session — never a separate rebind.
-        val useCases = listOfNotNull<UseCase>(useCase, captureUseCase).toTypedArray()
-        val bound = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, *useCases)
+        // Bind Preview together with the still-capture + blur-analysis use cases (if
+        // registered) so all run on the same session — never a separate rebind. The
+        // providers are pulled here so a staged resolution-policy change is realized
+        // on this bind, and an unsupported 3-use-case combo falls back gracefully.
+        val captureUseCase = captureUseCaseProvider?.invoke()
+        val analysisUseCase = analysisUseCaseProvider?.invoke()
+        val bound = bindUseCases(provider, useCase, captureUseCase, analysisUseCase)
         // Open the camera by moving our owned lifecycle to RESUMED.
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         // Hand the fresh CameraControl to the controls layer. A new bind ⇒ a new
         // session, so this is the reset-to-auto point for focus/exposure locks.
         camera = bound
         onCameraChanged?.invoke(bound)
+    }
+
+    /**
+     * Binds Preview + (optional) ImageCapture + (optional) ImageAnalysis. If the
+     * full combination is rejected by the device (use-case-limit), retries without
+     * the analysis use case so preview/capture still work (blur analysis is then a
+     * no-op — its analyzer simply never receives frames).
+     */
+    private fun bindUseCases(
+        provider: ProcessCameraProvider,
+        preview: UseCase,
+        capture: UseCase?,
+        analysis: UseCase?,
+    ): Camera {
+        val full = listOfNotNull(preview, capture, analysis).toTypedArray()
+        return try {
+            provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, *full)
+        } catch (e: IllegalArgumentException) {
+            if (analysis == null) throw e
+            // Device can't support Preview + ImageCapture + ImageAnalysis together.
+            provider.unbindAll()
+            val reduced = listOfNotNull(preview, capture).toTypedArray()
+            provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, *reduced)
+        }
     }
 
     /** Fulfils CameraX [SurfaceRequest]s with the Flutter texture's surface. */

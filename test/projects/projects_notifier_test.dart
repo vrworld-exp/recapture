@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
+import 'package:recapture/application/projects/project_capture_cleanup.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
 import 'package:recapture/data/local/projects_cache_box.dart';
 import 'package:recapture/data/local/storage_providers.dart';
@@ -117,13 +118,27 @@ class FakeProjectsCacheBox implements ProjectsCacheBox {
   List<Project> get cachedOrEmpty => _stored?.projects ?? const [];
 }
 
+/// Records which projects had their local capture data purged (Option A: the
+/// notifier purges after a confirmed delete). Avoids any real MethodChannel.
+class SpyCaptureCleanup implements ProjectCaptureCleanup {
+  final List<String> purged = [];
+
+  @override
+  Future<void> purgeProjectCaptureData(String projectId) async {
+    purged.add(projectId);
+  }
+}
+
 ProviderContainer _container(
   FakeProjectsRepository repo, {
   FakeProjectsCacheBox? cache,
+  ProjectCaptureCleanup? cleanup,
 }) {
   final c = ProviderContainer(overrides: [
     projectsRepositoryProvider.overrideWithValue(repo),
     projectsCacheBoxProvider.overrideWithValue(cache ?? FakeProjectsCacheBox()),
+    projectCaptureCleanupProvider
+        .overrideWithValue(cleanup ?? SpyCaptureCleanup()),
     authProvider.overrideWith(FakeAuthNotifier.new),
   ]);
   addTearDown(c.dispose);
@@ -134,8 +149,9 @@ ProviderContainer _container(
 Future<ProviderContainer> _booted(
   FakeProjectsRepository repo, {
   FakeProjectsCacheBox? cache,
+  ProjectCaptureCleanup? cleanup,
 }) async {
-  final c = _container(repo, cache: cache);
+  final c = _container(repo, cache: cache, cleanup: cleanup);
   await c.read(projectsProvider.future);
   return c;
 }
@@ -199,27 +215,42 @@ void main() {
   });
 
   group('delete', () {
-    test('success removes the project', () async {
-      final c = await _booted(FakeProjectsRepository([_p('a'), _p('b')]));
+    test('success removes the project and purges its local capture', () async {
+      final cleanup = SpyCaptureCleanup();
+      final c = await _booted(
+        FakeProjectsRepository([_p('a'), _p('b')]),
+        cleanup: cleanup,
+      );
       await c.read(projectsProvider.notifier).delete('a');
       expect(_list(c).map((p) => p.id), ['b']);
+      // Option A: local capture data reclaimed on a confirmed delete.
+      expect(cleanup.purged, ['a']);
     });
 
-    test('failure restores the removed project at its position', () async {
+    test('failure restores the project and does NOT purge local capture',
+        () async {
+      final cleanup = SpyCaptureCleanup();
       final repo = FakeProjectsRepository([_p('a'), _p('b'), _p('c')])
         ..failDelete = true;
-      final c = await _booted(repo);
+      final c = await _booted(repo, cleanup: cleanup);
       await expectLater(
         c.read(projectsProvider.notifier).delete('b'),
         throwsException,
       );
       expect(_list(c).map((p) => p.id), ['a', 'b', 'c']);
+      // The server delete failed → local capture must be retained.
+      expect(cleanup.purged, isEmpty);
     });
 
-    test('deleting an already-gone id is a harmless no-op', () async {
-      final c = await _booted(FakeProjectsRepository([_p('a')]));
+    test('deleting an already-gone id is a harmless no-op (still purges)',
+        () async {
+      final cleanup = SpyCaptureCleanup();
+      final c = await _booted(FakeProjectsRepository([_p('a')]), cleanup: cleanup);
       await c.read(projectsProvider.notifier).delete('ghost');
       expect(_list(c).map((p) => p.id), ['a']);
+      // The repo confirmed the (idempotent) delete, so purge runs; the native
+      // purge is itself a no-op when there is no capture data.
+      expect(cleanup.purged, ['ghost']);
     });
   });
 

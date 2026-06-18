@@ -1,20 +1,36 @@
 package com.mayasabhaxr.recapture
 
+import com.mayasabhaxr.recapture.camera.BlurAnalysisManager
 import com.mayasabhaxr.recapture.camera.CameraCaptureManager
 import com.mayasabhaxr.recapture.camera.CameraControlsManager
 import com.mayasabhaxr.recapture.camera.CameraPreviewManager
 import com.mayasabhaxr.recapture.permissions.PermissionManager
+import com.mayasabhaxr.recapture.sensors.ImuRotationStreamManager
+import com.mayasabhaxr.recapture.sensors.StabilityStreamManager
+import com.mayasabhaxr.recapture.storage.CaptureStorage
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+
+/** Sentinel distinguishing an unhandled storage method from a legitimate null result. */
+private val NotImplemented = Any()
 
 class MainActivity : FlutterActivity() {
 
     private lateinit var permissionManager: PermissionManager
     private var cameraPreviewManager: CameraPreviewManager? = null
     private var cameraCaptureManager: CameraCaptureManager? = null
+    private var blurAnalysisManager: BlurAnalysisManager? = null
+    private var imuRotationManager: ImuRotationStreamManager? = null
+    private var stabilityManager: StabilityStreamManager? = null
+
+    /** App-scoped capture storage backbone + a dedicated thread for its blocking I/O. */
+    private var captureStorage: CaptureStorage? = null
+    private var storageExecutor: ExecutorService? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -41,16 +57,67 @@ class MainActivity : FlutterActivity() {
         // bound into the SAME session by the preview manager (no separate rebind).
         val cameraCapture = CameraCaptureManager(applicationContext, cameraControls)
         cameraCaptureManager = cameraCapture
-        cameraManager.captureUseCase = cameraCapture.imageCapture
+        // The preview manager pulls the capture use case at each bind so a staged
+        // resolution-policy change is realized on the rebind (CameraCaptureManager
+        // owns the ImageCapture + its ResolutionSelector/jpegQuality).
+        cameraManager.captureUseCaseProvider = { cameraCapture.useCaseForBind() }
+        // Keep Preview's aspect ratio equal to the capture policy's (no FOV mismatch).
+        cameraCapture.onAspectRatioChanged = { aspectRatio ->
+            cameraManager.captureAspectRatio = aspectRatio
+        }
         cameraManager.onCameraChanged = { camera ->
             cameraControls.updateCamera(camera)
             if (camera != null) cameraCapture.onCameraBound(camera) else cameraCapture.onCameraUnbound()
         }
 
+        // Real-time blur detection (variance of Laplacian @ 640px). Owns an
+        // ImageAnalysis use case bound into the SAME session (with graceful fallback
+        // if the device can't support the 3-use-case combination — see bindUseCases).
+        val blurAnalysis = BlurAnalysisManager()
+        blurAnalysisManager = blurAnalysis
+        cameraManager.analysisUseCaseProvider = { blurAnalysis.useCaseForBind() }
+
         EventChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CameraCaptureManager.EVENTS_CHANNEL_NAME,
         ).setStreamHandler(cameraCapture)
+
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            BlurAnalysisManager.CHANNEL_NAME,
+        ).setStreamHandler(blurAnalysis)
+
+        // Parallel exposure channel (mean-luminance dark/ok/bright warn). Shares the
+        // blur analyzer's single downscaled-luma frame pass (see BlurAnalysisManager).
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            BlurAnalysisManager.EXPOSURE_CHANNEL_NAME,
+        ).setStreamHandler(blurAnalysis.exposureHandler)
+
+        // IMU rotation-vector stream (device orientation @ 50–100Hz). Emits
+        // camera-clock-aligned timestamps for the later pose/frame-fusion task;
+        // see ImuRotationStreamManager (clock domain + threading + lifecycle).
+        val imuRotation = ImuRotationStreamManager(applicationContext)
+        imuRotationManager = imuRotation
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ImuRotationStreamManager.CHANNEL_NAME,
+        ).setStreamHandler(imuRotation)
+        // Parallel smoothed-orientation channel (low-pass yaw/pitch/roll for the
+        // capture guide); shares the same sensor registration (see the manager).
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            ImuRotationStreamManager.ORIENTATION_CHANNEL_NAME,
+        ).setStreamHandler(imuRotation.orientationHandler)
+
+        // Stability gate (gyro + linear-accel; debounced STABLE state + auto-capture
+        // trigger). Owns its own raw sensors, distinct from the rotation-vector stream.
+        val stability = StabilityStreamManager(applicationContext)
+        stabilityManager = stability
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            StabilityStreamManager.CHANNEL_NAME,
+        ).setStreamHandler(stability)
 
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -68,7 +135,72 @@ class MainActivity : FlutterActivity() {
                     result,
                 )
                 "stopAutoCapture" -> cameraCapture.stopAutoCapture(result)
+                "configureCaptureResolution" -> {
+                    @Suppress("UNCHECKED_CAST")
+                    val policyArgs = call.arguments as? Map<String, Any?>
+                    cameraCapture.configureCaptureResolution(policyArgs, result)
+                }
+                "getActiveCaptureResolution" -> cameraCapture.getActiveCaptureResolution(result)
                 else -> result.notImplemented()
+            }
+        }
+
+        // App-scoped capture storage hierarchy (/recapture/{project}/{job}/images/{level}).
+        // Dart-facing operations: accounting, free space, incomplete-job listing, and the
+        // delete hooks (P1 project deletion cleans its capture data). Path allocation +
+        // frame writing stay native (the burst task). All I/O runs off the platform thread.
+        val storage = CaptureStorage.fromContext(applicationContext)
+        captureStorage = storage
+        val storageIo = Executors.newSingleThreadExecutor()
+        storageExecutor = storageIo
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            CaptureStorage.CHANNEL_NAME,
+        ).setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
+            // Snapshot args on the platform thread; do the blocking work off it.
+            val projectId = call.argument<String>("projectId")
+            val jobId = call.argument<String>("jobId")
+            val level = call.argument<String>("level")
+            val force = call.argument<Boolean>("force") ?: false
+            val knownProjectIds = call.argument<List<String>>("knownProjectIds")
+            storageIo.execute {
+                val reply: Result<Any?> = runCatching {
+                    when (call.method) {
+                        "freeSpace" -> storage.freeSpaceBytes()
+                        "usage" -> storage.usage(projectId!!, jobId, level).let {
+                            mapOf("frameCount" to it.frameCount, "byteCount" to it.byteCount)
+                        }
+                        "listProjects" -> storage.listProjects()
+                        "listJobs" -> storage.listJobs(projectId!!)
+                        "listIncompleteJobs" -> storage.listIncompleteJobs().map {
+                            mapOf("projectId" to it.projectId, "jobId" to it.jobId, "reason" to it.reason)
+                        }
+                        "deleteLevel" -> storage.deleteLevel(projectId!!, jobId!!, level!!, force).toMap()
+                        "deleteJob" -> storage.deleteJob(projectId!!, jobId!!, force).toMap()
+                        "deleteProject" -> storage.deleteProject(projectId!!, force).toMap()
+                        // Project-deletion cleanup hook (purge a project's local capture
+                        // data) + the optional orphan sweep. See CaptureStorage.purgeProject.
+                        "purgeProjectCaptureData" -> storage.purgeProject(projectId!!, force).toMap()
+                        "sweepOrphanedCaptureData" ->
+                            storage.sweepOrphans(knownProjectIds ?: emptyList(), force).toMap()
+                        else -> NotImplemented
+                    }
+                }
+                runOnUiThread {
+                    reply.fold(
+                        onSuccess = { value ->
+                            if (value === NotImplemented) result.notImplemented() else result.success(value)
+                        },
+                        onFailure = { e ->
+                            val code = when (e) {
+                                is IllegalArgumentException, is NullPointerException -> "INVALID_ARGS"
+                                is SecurityException -> "SECURITY"
+                                else -> "STORAGE_ERROR"
+                            }
+                            result.error(code, e.message ?: e.javaClass.simpleName, null)
+                        },
+                    )
+                }
             }
         }
 
@@ -127,6 +259,21 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Re-register the rotation-vector listener only if a stream is still
+        // subscribed (the manager tracks that); a no-op otherwise.
+        imuRotationManager?.onHostResume()
+        stabilityManager?.onHostResume()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Backgrounded → unregister the sensor listeners (no battery drain/leak).
+        imuRotationManager?.onHostPause()
+        stabilityManager?.onHostPause()
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -153,8 +300,19 @@ class MainActivity : FlutterActivity() {
         if (isFinishing) {
             cameraCaptureManager?.dispose()
             cameraCaptureManager = null
+            blurAnalysisManager?.dispose()
+            blurAnalysisManager = null
             cameraPreviewManager?.dispose(null)
             cameraPreviewManager = null
+            // Unregister the sensor listeners and quit their HandlerThreads.
+            imuRotationManager?.dispose()
+            imuRotationManager = null
+            stabilityManager?.dispose()
+            stabilityManager = null
+            // Stop accepting storage I/O work (in-flight jobs finish).
+            storageExecutor?.shutdown()
+            storageExecutor = null
+            captureStorage = null
         }
         super.onDestroy()
     }
