@@ -4,7 +4,13 @@ import 'package:flutter/services.dart';
 
 import '../../utils/constants.dart';
 
-/// A diopter range for manual focus distance (0 = infinity).
+/// The supported range for manual focus distance, as reported by the device.
+///
+/// The UNIT is platform-specific — callers should treat this as an opaque range
+/// (clamp [setManualFocusDistance] inputs to `[min, max]`) and not assume a unit:
+///  - **Android**: diopters, `[0, minFocusDistance]` where 0 = infinity (far).
+///  - **iOS**: a normalized `lensPosition`, `[0, 1]` where 0 ≈ near, 1 ≈ far
+///    (NOT diopters — AVFoundation exposes only this normalized position).
 @immutable
 class FocusDistanceRange {
   const FocusDistanceRange({required this.min, required this.max});
@@ -91,8 +97,11 @@ class CameraControls {
   Future<bool> setFocusLocked(bool locked) =>
       _invokeVoid('setFocusLocked', {'locked': locked});
 
-  /// Sets manual focus distance in diopters (0 = infinity); the native side
-  /// clamps to the supported range. Only meaningful when [manualFocus] is true.
+  /// Sets manual focus distance, in the units of the device-reported
+  /// [CameraControlCapabilities.focusDistanceRange] (Android: diopters, 0 =
+  /// infinity; iOS: normalized `lensPosition` `[0, 1]`, 0 ≈ near). The native
+  /// side clamps to the supported range. Only meaningful when [manualFocus] is
+  /// true — pass values within the reported range rather than assuming a unit.
   Future<bool> setManualFocusDistance(double distance) =>
       _invokeVoid('setManualFocusDistance', {'distance': distance});
 

@@ -7,6 +7,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../platform/camera/camera_preview_controller.dart';
 import '../../../platform/camera/camera_preview_view.dart';
+import '../../../platform/method_channels.dart';
 
 class CaptureScreen extends StatefulWidget {
   const CaptureScreen({
@@ -35,6 +36,15 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// Drives the native back-camera preview (CAMERA assumed granted by the P2
   /// gate). Released on dispose; stopped on background and rebound on resume.
   late final CameraPreviewController _cameraController;
+
+  /// Triggers a native single still on the SAME bound session as the preview
+  /// (CameraX ImageCapture / AVCapturePhotoOutput). Degrades gracefully: a
+  /// missing/unbound session or a busy capturer resolves to null, never throws.
+  final CaptureChannel _captureChannel = CaptureChannel();
+
+  /// Guards against overlapping shutter taps while a capture is in flight (the
+  /// native side also rejects with BUSY → null, but this avoids spamming it).
+  bool _capturing = false;
 
   static const _instructions = [
     'Move clockwise',
@@ -86,7 +96,20 @@ class _CaptureScreenState extends State<CaptureScreen>
     super.dispose();
   }
 
-  void _onShutter() {
+  Future<void> _onShutter() async {
+    if (_capturing) return;
+    _capturing = true;
+    // Capture a real frame on the native session before any UI feedback, so the
+    // flash + counter reflect frames actually written to disk (not phantom taps).
+    final frame = await _captureChannel.captureSingle();
+    if (!mounted) return;
+    _capturing = false;
+
+    // Null = no bound session / busy / unsupported (e.g. permission-denied
+    // preview, or a non-device test host). Keep the preview running; do not
+    // advance the counter for a capture that did not happen.
+    if (frame == null) return;
+
     setState(() {
       _showFlash = true;
       _captureCount++;
@@ -435,6 +458,7 @@ class _BottomBar extends StatelessWidget {
                 ),
               ),
               GestureDetector(
+                key: const ValueKey('capture_shutter'),
                 onTap: onShutter,
                 child: Container(
                   width: 70,

@@ -99,7 +99,11 @@ crash.
 | Native | `android/.../storage/JobManifest.kt` | Pure: job manifest model + encode/parse (incomplete detection). JVM-testable. |
 | Native | `android/.../storage/CaptureStorage.kt` | The manager: resolve/create, allocate, enumerate, account, mark/detect incomplete, delete (guarded). Injectable base ⇒ JVM-testable; `fromContext` resolves the app-scoped base. |
 | Native | `android/.../MainActivity.kt` | Registers the capture-storage MethodChannel (off-main dispatch). |
-| Dart | `lib/platform/capture_storage.dart` | `CaptureStorageClient` — accounting, free space, incomplete jobs, delete hooks. |
+| Native (iOS) | `ios/Runner/StorageSegments.swift` | Port of `StorageSegments.kt`: allowlist sanitization, frame/sidecar naming, sequence parse, canonical-path containment. Flutter-free. |
+| Native (iOS) | `ios/Runner/JobManifest.swift` | Port of `JobManifest.kt`: wire-compatible manifest model + encode/parse (`in_progress`/`complete`, `_manifest.json`). |
+| Native (iOS) | `ios/Runner/CaptureStorage.swift` | Port of `CaptureStorage.kt`: resolve/create, allocate, enumerate, account, mark/detect incomplete, delete/purge/sweep (guarded). Injectable root ⇒ testable; `fromApplicationSupport` resolves the iOS app-scoped base (Application Support, matching `CameraCaptureManager`). |
+| Native (iOS) | `ios/Runner/CaptureStorageChannelHandler.swift` + `AppDelegate.swift` | Registers + dispatches the SAME `capture_storage` MethodChannel off the platform thread (serial I/O queue, replies on main); same error codes (`INVALID_ARGS`/`SECURITY`/`STORAGE_ERROR`). |
+| Dart | `lib/platform/capture_storage.dart` | `CaptureStorageClient` — accounting, free space, incomplete jobs, delete hooks. Platform-agnostic (drives both Android + iOS). |
 
 ## Coordination (out of scope here)
 

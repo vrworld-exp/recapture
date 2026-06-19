@@ -59,6 +59,14 @@ abstract final class AppConfig {
   static const String channelCameraPreview =
       'com.mayasabhaxr.recapture/camera_preview';
 
+  /// Native iOS camera-preview PlatformView (`UiKitView`) type — must match
+  /// `CameraPreviewViewFactory.viewType` on the Swift side. On iOS the live feed
+  /// is rendered by an embedded `AVCaptureVideoPreviewLayer` (vs Android's
+  /// external texture); the session lifecycle is still driven over
+  /// [channelCameraPreview]. Unused on Android.
+  static const String viewTypeCameraPreviewIos =
+      'com.mayasabhaxr.recapture/camera_preview_view';
+
   /// Native IMU rotation-vector EventChannel — must match
   /// ImuRotationStreamManager.CHANNEL_NAME on the Kotlin side. Streams device
   /// orientation (unit quaternion) at 50–100Hz with camera-clock-aligned

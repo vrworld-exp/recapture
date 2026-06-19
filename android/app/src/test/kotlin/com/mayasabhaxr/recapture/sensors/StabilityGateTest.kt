@@ -204,4 +204,53 @@ class StabilityGateTest {
         assertNull(gate.onLinearAccel(steadyAccel(), 400 * ms))
         assertTrue(gate.onGyro(steadyGyro(), 700 * ms)!!.stable)
     }
+
+    // ── continuous score (UI stillness meter) ─────────────────────────────────
+
+    @Test
+    fun score_isOneWhenPerfectlyStill() {
+        assertEquals(1.0, StabilityMath.score(0.0, 0.0, 0.8, 1.4715), 1e-12)
+    }
+
+    @Test
+    fun score_isZeroWhenEitherSignalReachesThreshold() {
+        // Gyro at threshold → its partial 0 → geometric mean 0, regardless of accel.
+        assertEquals(0.0, StabilityMath.score(0.8, 0.0, 0.8, 1.4715), 1e-12)
+        // Accel above threshold → 0.
+        assertEquals(0.0, StabilityMath.score(0.0, 2.0, 0.8, 1.4715), 1e-12)
+    }
+
+    @Test
+    fun score_decreasesMonotonicallyAsGyroRises() {
+        var prev = Double.POSITIVE_INFINITY
+        for (g in listOf(0.0, 0.1, 0.2, 0.4, 0.6, 0.8)) {
+            val s = StabilityMath.score(g, 0.0, 0.8, 1.4715)
+            assertTrue("score non-increasing as gyro rises (g=$g, s=$s, prev=$prev)", s <= prev + 1e-12)
+            prev = s
+        }
+    }
+
+    @Test
+    fun score_nonPositiveThresholdIsZeroNotNaNOrInfinity() {
+        val s = StabilityMath.score(0.0, 0.0, 0.0, 1.4715)
+        assertEquals(0.0, s, 0.0)
+        assertFalse(s.isNaN())
+        assertFalse(s.isInfinite())
+    }
+
+    @Test
+    fun score_nonFiniteMagnitudeIsZero() {
+        assertEquals(0.0, StabilityMath.score(Double.NaN, 0.0, 0.8, 1.4715), 0.0)
+    }
+
+    @Test
+    fun currentReading_nullUntilBothSensorsReport_thenScores() {
+        val gate = StabilityGate()
+        assertNull(gate.currentReading())
+        gate.onGyro(0.0, 0L)
+        assertNull("still null with only gyro", gate.currentReading())
+        gate.onLinearAccel(0.0, 0L)
+        val r = gate.currentReading()
+        assertTrue(r != null && r.score > 0.99) // both steady at rest ⇒ ~1.0
+    }
 }

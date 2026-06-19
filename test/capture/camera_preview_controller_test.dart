@@ -113,6 +113,75 @@ void main() {
     expect(controller.value.rotationDegrees, 270);
   });
 
+  test('iOS-style start (no textureId) → running with null texture', () async {
+    // The iOS platform-view path returns only a status (the AVCaptureVideoPreviewLayer
+    // renders the feed — there is no Flutter texture).
+    setHandler((call) async {
+      if (call.method == 'start') return <String, dynamic>{'status': 'running'};
+      return null;
+    });
+
+    final controller = CameraPreviewController();
+    addTearDown(controller.dispose);
+
+    await controller.start();
+
+    expect(controller.value.status, CameraPreviewStatus.running);
+    expect(controller.value.textureId, isNull);
+    expect(controller.value.hasTexture, isFalse);
+  });
+
+  test('onStatusChanged interrupted→running drives the iOS interruption cycle',
+      () async {
+    setHandler((call) async => <String, dynamic>{'status': 'running'});
+
+    final controller = CameraPreviewController();
+    addTearDown(controller.dispose);
+    await controller.start();
+
+    await pushFromNative('onStatusChanged', <String, dynamic>{
+      'status': 'interrupted',
+      'reason': 1,
+    });
+    expect(controller.value.status, CameraPreviewStatus.interrupted);
+
+    await pushFromNative('onStatusChanged', <String, dynamic>{'status': 'running'});
+    expect(controller.value.status, CameraPreviewStatus.running);
+  });
+
+  test('onStatusChanged suspended→running drives the iOS background cycle',
+      () async {
+    setHandler((call) async => <String, dynamic>{'status': 'running'});
+
+    final controller = CameraPreviewController();
+    addTearDown(controller.dispose);
+    await controller.start();
+
+    // App backgrounds → native pauses the session and pushes "suspended".
+    await pushFromNative('onStatusChanged', <String, dynamic>{
+      'status': 'suspended',
+    });
+    expect(controller.value.status, CameraPreviewStatus.suspended);
+
+    // App foregrounds → native auto-resumes and pushes "running".
+    await pushFromNative('onStatusChanged', <String, dynamic>{'status': 'running'});
+    expect(controller.value.status, CameraPreviewStatus.running);
+  });
+
+  test('onStatusChanged is ignored after stop (no reviving a stopped preview)',
+      () async {
+    setHandler((call) async => <String, dynamic>{'status': 'running'});
+
+    final controller = CameraPreviewController();
+    addTearDown(controller.dispose);
+    await controller.start();
+    await controller.stop();
+
+    await pushFromNative('onStatusChanged', <String, dynamic>{'status': 'running'});
+
+    expect(controller.value.status, CameraPreviewStatus.stopped);
+  });
+
   test('onError from native flips to error state', () async {
     setHandler((call) async => <String, dynamic>{
           'textureId': 1,

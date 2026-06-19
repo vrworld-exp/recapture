@@ -33,6 +33,15 @@ sealed class StabilityEvent {
         return StabilityTriggerEvent(
           timestampNs: (map['timestampNs'] as num?)?.toInt() ?? 0,
         );
+      case 'score':
+        final score = (map['score'] as num?)?.toDouble();
+        if (score == null) return null;
+        return StabilityScoreEvent(
+          score: score,
+          gyroMag: (map['gyroMag'] as num?)?.toDouble() ?? 0,
+          linAccelMag: (map['linAccelMag'] as num?)?.toDouble() ?? 0,
+          timestampNs: (map['timestampNs'] as num?)?.toInt() ?? 0,
+        );
       default:
         return null;
     }
@@ -68,6 +77,33 @@ class StabilityTriggerEvent extends StabilityEvent {
   const StabilityTriggerEvent({required this.timestampNs});
 
   /// Camera-aligned (CLOCK_MONOTONIC) sensor timestamp the gate opened at.
+  final int timestampNs;
+}
+
+/// A continuous (non-debounced) stillness score, emitted throttled (~10 Hz) for a
+/// UI stillness meter. [score] ∈ [0, 1]: 1.0 perfectly still, falling to 0.0 as
+/// gyro or gravity-removed linear-accel reaches its threshold — it crosses ~0
+/// around the same boundary the debounced gate flips, but is NOT the gate
+/// decision itself (use [StabilityTriggerEvent] for auto-capture).
+@immutable
+class StabilityScoreEvent extends StabilityEvent {
+  const StabilityScoreEvent({
+    required this.score,
+    required this.gyroMag,
+    required this.linAccelMag,
+    required this.timestampNs,
+  });
+
+  /// Stillness in [0, 1] (1.0 = perfectly still).
+  final double score;
+
+  /// Gyro magnitude (rad/s) at this sample.
+  final double gyroMag;
+
+  /// Gravity-removed linear-accel magnitude (m/s²) at this sample.
+  final double linAccelMag;
+
+  /// Camera-aligned (CLOCK_MONOTONIC) sensor timestamp of this sample.
   final int timestampNs;
 }
 
@@ -114,4 +150,15 @@ class StabilityGateStream {
       events(gyroThresh: gyroThresh, accelThresh: accelThresh, dwellMs: dwellMs)
           .where((e) => e is StabilityTriggerEvent)
           .cast<StabilityTriggerEvent>();
+
+  /// Only the continuous score samples (for a UI stillness meter that ignores
+  /// the debounced state/trigger). Throttled (~10 Hz) by the native side.
+  Stream<StabilityScoreEvent> scores({
+    double gyroThresh = defaultGyroThreshRadS,
+    double accelThresh = defaultAccelThreshG,
+    int dwellMs = defaultDwellMs,
+  }) =>
+      events(gyroThresh: gyroThresh, accelThresh: accelThresh, dwellMs: dwellMs)
+          .where((e) => e is StabilityScoreEvent)
+          .cast<StabilityScoreEvent>();
 }

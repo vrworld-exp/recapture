@@ -1,4 +1,5 @@
 // lib/native/event_channel.dart
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Base class for typed [EventChannel] wrappers.
@@ -13,10 +14,16 @@ abstract class NativeEventChannel<T> {
   final EventChannel _channel;
   final T Function(dynamic raw) decoder;
 
-  Stream<T> get stream => _channel
+  /// Raw native events with only [MissingPluginException] swallowed (dev builds
+  /// before stubs are wired). Subclasses that need custom per-event handling
+  /// (e.g. isolating decode failures so one bad frame can't terminate the
+  /// subscription) decode this directly instead of [stream].
+  @protected
+  Stream<dynamic> get rawStream => _channel
       .receiveBroadcastStream()
-      .map<T>(decoder)
       .handleError((Object error, StackTrace _) {
         if (error is! MissingPluginException) throw error;
       });
+
+  Stream<T> get stream => rawStream.map<T>(decoder);
 }

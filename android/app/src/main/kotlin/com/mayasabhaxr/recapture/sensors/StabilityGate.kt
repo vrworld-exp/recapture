@@ -26,6 +26,28 @@ object StabilityMath {
 
     /** Converts a g value (e.g. 0.15) to m/s² (0.15 × 9.81 ≈ 1.47). */
     fun gToMs2(g: Double): Double = g * GRAVITY_MS2
+
+    /**
+     * Continuous stillness score in [0,1] for a UI meter: 1.0 when perfectly
+     * still, falling to 0.0 as EITHER signal reaches its threshold. It is the
+     * geometric mean of the two clamped proximity-to-threshold partials, so one
+     * signal alone can collapse it — mirroring the gate's AND, and crossing ~0
+     * around the same boundary the debounced gate flips. This is an INSTANTANEOUS
+     * display signal, NOT the debounced gate decision (that stays in [StabilityGate]).
+     *
+     * A non-positive threshold ⇒ that partial is 0 (maximum penalty), never a
+     * divide-by-zero; a non-finite magnitude ⇒ that partial is 0.
+     */
+    fun score(gyroMag: Double, linAccelMag: Double, gyroThresh: Double, accelThresh: Double): Double {
+        val g = partial(gyroMag, gyroThresh)
+        val a = partial(linAccelMag, accelThresh)
+        return sqrt(g * a) // geometric mean of two values
+    }
+
+    private fun partial(value: Double, threshold: Double): Double {
+        if (!value.isFinite() || threshold <= 0.0) return 0.0
+        return 1.0 - (value / threshold).coerceIn(0.0, 1.0)
+    }
 }
 
 /**
@@ -118,6 +140,17 @@ data class StabilityTransition(
 )
 
 /**
+ * An instantaneous (non-debounced) stability reading: the continuous [score] plus
+ * the magnitudes it was computed from. Surfaced throttled for a UI stillness meter,
+ * distinct from the debounced [StabilityTransition].
+ */
+data class StabilityReading(
+    val score: Double,
+    val gyroMag: Double,
+    val linAccelMag: Double,
+)
+
+/**
  * dt-aware dwell state machine. Fed the latest gyro / linear-accel magnitude as
  * each (independent) sensor sample arrives; returns a [StabilityTransition] only
  * when the debounced state flips (entered or left STABLE), never per sample.
@@ -165,6 +198,22 @@ class StabilityGate(@Volatile var config: StabilityConfig = StabilityConfig.DEFA
         linAccelMag = magnitude
         haveAccel = true
         return evaluate(timestampNs)
+    }
+
+    /**
+     * The current instantaneous stillness reading from the most-recent magnitude of
+     * each sensor, or null until BOTH have reported (so an early, misleading score
+     * is never surfaced). Independent of the debounced gate state.
+     */
+    @Synchronized
+    fun currentReading(): StabilityReading? {
+        if (!haveGyro || !haveAccel) return null
+        return StabilityReading(
+            score = StabilityMath.score(
+                gyroMag, linAccelMag, config.gyroThreshRadS, config.accelThreshMs2),
+            gyroMag = gyroMag,
+            linAccelMag = linAccelMag,
+        )
     }
 
     private fun evaluate(ts: Long): StabilityTransition? {

@@ -1,16 +1,23 @@
 // lib/platform/camera/camera_preview_view.dart
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../utils/constants.dart';
 import 'camera_preview_controller.dart';
 
-/// Renders the live native camera preview (external texture) for a
-/// [CameraPreviewController].
+/// Renders the live native camera preview for a [CameraPreviewController].
 ///
-/// Handles the three observable states: a graceful error surface (camera
+/// The render path is platform-specific (the lifecycle contract is not):
+///  - **Android** draws the external `Texture` at its native resolution, rotated
+///    by [CameraPreviewState.rotationDegrees] and scaled with [BoxFit.cover]
+///    (FILL_CENTER) so it fills the viewport without stretching.
+///  - **iOS** embeds the native `AVCaptureVideoPreviewLayer` via a `UiKitView`
+///    (platform view), which self-sizes and self-rotates — no Dart geometry.
+///
+/// Both share the three observable surfaces: a graceful error (camera
 /// unavailable / permission missing), a placeholder while binding, and the live
-/// `Texture` once running. The texture is drawn at its native resolution and
-/// rotated by [CameraPreviewState.rotationDegrees], then scaled with
-/// [BoxFit.cover] (FILL_CENTER) so it fills the viewport without stretching.
+/// feed once running.
 class CameraPreview extends StatelessWidget {
   const CameraPreview({
     super.key,
@@ -25,7 +32,7 @@ class CameraPreview extends StatelessWidget {
   final Widget Function(BuildContext context, CameraPreviewState state)?
       errorBuilder;
 
-  /// Optional widget shown while the texture is being acquired.
+  /// Optional widget shown while the preview is being acquired.
   final Widget? placeholder;
 
   @override
@@ -37,11 +44,39 @@ class CameraPreview extends StatelessWidget {
           return errorBuilder?.call(context, state) ??
               _DefaultError(message: state.errorMessage);
         }
+        if (defaultTargetPlatform == TargetPlatform.iOS) {
+          return _IosPlatformPreview(state: state, placeholder: placeholder);
+        }
         if (!state.hasTexture) {
           return placeholder ?? const _DefaultPlaceholder();
         }
         return _TexturePreview(state: state);
       },
+    );
+  }
+}
+
+/// iOS render path: the native `AVCaptureVideoPreviewLayer` hosted in a
+/// `UiKitView`. Mounted only once the session is live (running or interrupted —
+/// an interrupted session keeps showing its last frame rather than going black),
+/// so a stopped/idle preview shows the placeholder and tears the platform view
+/// down (which only *detaches* from the session — the native manager keeps it).
+class _IosPlatformPreview extends StatelessWidget {
+  const _IosPlatformPreview({required this.state, this.placeholder});
+
+  final CameraPreviewState state;
+  final Widget? placeholder;
+
+  @override
+  Widget build(BuildContext context) {
+    final live = state.status == CameraPreviewStatus.running ||
+        state.status == CameraPreviewStatus.interrupted;
+    if (!live) {
+      return placeholder ?? const _DefaultPlaceholder();
+    }
+    return const UiKitView(
+      viewType: AppConfig.viewTypeCameraPreviewIos,
+      creationParamsCodec: StandardMessageCodec(),
     );
   }
 }

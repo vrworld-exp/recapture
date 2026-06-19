@@ -57,4 +57,28 @@ abstract final class AnalyticsEvents {
   /// A checklist item's tip surface (bottom sheet / popover) was opened. Carries
   /// the item id; fires once per genuine open (the tip surface guards stacking).
   static const String precaptureTipOpened = 'precapture_tip_opened';
+
+  // ── Capture decision pipeline ──────────────────────────────────────────────
+  // Exactly ONE of [photoCaptured] / [photoRejectedBlur] / [photoRejectedMotion]
+  // fires per capture attempt; [photoWarnedExposure] may fire IN ADDITION to any
+  // of them (exposure is warn-only and never gates the capture). The mutual
+  // exclusivity is the call site's responsibility — the event layer does not
+  // enforce it. The capture accept/reject decision is currently native-driven;
+  // these constants + the typed event layer in lib/application/capture/ are the
+  // emit contract a future wiring task binds to.
+
+  /// A capture attempt succeeded: a frame was written to disk.
+  static const String photoCaptured = 'photo_captured';
+
+  /// A capture attempt was rejected because the frame's sharpness score fell in
+  /// the blur REJECT band (below the configured reject threshold).
+  static const String photoRejectedBlur = 'photo_rejected_blur';
+
+  /// A capture attempt was rejected because the device was moving (the stability
+  /// gate was not open — gyro/linear-accel above the configured thresholds).
+  static const String photoRejectedMotion = 'photo_rejected_motion';
+
+  /// The frame's exposure was DARK or BRIGHT at the capture attempt. Fires
+  /// independently of (and possibly alongside) the capture/rejection outcome.
+  static const String photoWarnedExposure = 'photo_warned_exposure';
 }

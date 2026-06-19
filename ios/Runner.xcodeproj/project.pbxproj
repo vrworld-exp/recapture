@@ -12,6 +12,20 @@
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
+		CAFE000000000000000000A2 /* CameraPreviewManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000A1 /* CameraPreviewManager.swift */; };
+		CAFE000000000000000000B2 /* CameraPreviewPlatformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000B1 /* CameraPreviewPlatformView.swift */; };
+		CAFE000000000000000000C2 /* CameraControlsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000C1 /* CameraControlsManager.swift */; };
+		CAFE000000000000000000D2 /* SensorStreamHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000D1 /* SensorStreamHandler.swift */; };
+		CAFE000000000000000000E2 /* OrientationFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000E1 /* OrientationFilter.swift */; };
+		CAFE000000000000000000F2 /* ImuOrientationStreamHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000F1 /* ImuOrientationStreamHandler.swift */; };
+		CAFE0000000000000000B102 /* BlurMetric.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B101 /* BlurMetric.swift */; };
+		CAFE0000000000000000B202 /* BlurThresholdPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B201 /* BlurThresholdPolicy.swift */; };
+		CAFE0000000000000000B302 /* BlurAnalysisManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B301 /* BlurAnalysisManager.swift */; };
+		CAFE0000000000000000B402 /* CameraCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B401 /* CameraCaptureManager.swift */; };
+		CAFE00000000000000005102 /* StorageSegments.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00000000000000005101 /* StorageSegments.swift */; };
+		CAFE00000000000000005202 /* JobManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00000000000000005201 /* JobManifest.swift */; };
+		CAFE00000000000000005302 /* CaptureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00000000000000005301 /* CaptureStorage.swift */; };
+		CAFE00000000000000005402 /* CaptureStorageChannelHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00000000000000005401 /* CaptureStorageChannelHandler.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
@@ -49,6 +63,20 @@
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		CAFE000000000000000000A1 /* CameraPreviewManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewManager.swift; sourceTree = "<group>"; };
+		CAFE000000000000000000B1 /* CameraPreviewPlatformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewPlatformView.swift; sourceTree = "<group>"; };
+		CAFE000000000000000000C1 /* CameraControlsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraControlsManager.swift; sourceTree = "<group>"; };
+		CAFE000000000000000000D1 /* SensorStreamHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorStreamHandler.swift; sourceTree = "<group>"; };
+		CAFE000000000000000000E1 /* OrientationFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationFilter.swift; sourceTree = "<group>"; };
+		CAFE000000000000000000F1 /* ImuOrientationStreamHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImuOrientationStreamHandler.swift; sourceTree = "<group>"; };
+		CAFE0000000000000000B101 /* BlurMetric.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurMetric.swift; sourceTree = "<group>"; };
+		CAFE0000000000000000B201 /* BlurThresholdPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurThresholdPolicy.swift; sourceTree = "<group>"; };
+		CAFE0000000000000000B301 /* BlurAnalysisManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurAnalysisManager.swift; sourceTree = "<group>"; };
+		CAFE0000000000000000B401 /* CameraCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureManager.swift; sourceTree = "<group>"; };
+		CAFE00000000000000005101 /* StorageSegments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSegments.swift; sourceTree = "<group>"; };
+		CAFE00000000000000005201 /* JobManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobManifest.swift; sourceTree = "<group>"; };
+		CAFE00000000000000005301 /* CaptureStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStorage.swift; sourceTree = "<group>"; };
+		CAFE00000000000000005401 /* CaptureStorageChannelHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStorageChannelHandler.swift; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
 		9740EEB31CF90195004384FC /* Generated.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Generated.xcconfig; path = Flutter/Generated.xcconfig; sourceTree = "<group>"; };
@@ -119,6 +147,20 @@
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
+				CAFE000000000000000000A1 /* CameraPreviewManager.swift */,
+				CAFE000000000000000000B1 /* CameraPreviewPlatformView.swift */,
+				CAFE000000000000000000C1 /* CameraControlsManager.swift */,
+				CAFE000000000000000000D1 /* SensorStreamHandler.swift */,
+				CAFE000000000000000000E1 /* OrientationFilter.swift */,
+				CAFE000000000000000000F1 /* ImuOrientationStreamHandler.swift */,
+				CAFE0000000000000000B101 /* BlurMetric.swift */,
+				CAFE0000000000000000B201 /* BlurThresholdPolicy.swift */,
+				CAFE0000000000000000B301 /* BlurAnalysisManager.swift */,
+				CAFE0000000000000000B401 /* CameraCaptureManager.swift */,
+				CAFE00000000000000005101 /* StorageSegments.swift */,
+				CAFE00000000000000005201 /* JobManifest.swift */,
+				CAFE00000000000000005301 /* CaptureStorage.swift */,
+				CAFE00000000000000005401 /* CaptureStorageChannelHandler.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
@@ -274,6 +316,20 @@
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
+				CAFE000000000000000000A2 /* CameraPreviewManager.swift in Sources */,
+				CAFE000000000000000000B2 /* CameraPreviewPlatformView.swift in Sources */,
+				CAFE000000000000000000C2 /* CameraControlsManager.swift in Sources */,
+				CAFE000000000000000000D2 /* SensorStreamHandler.swift in Sources */,
+				CAFE000000000000000000E2 /* OrientationFilter.swift in Sources */,
+				CAFE000000000000000000F2 /* ImuOrientationStreamHandler.swift in Sources */,
+				CAFE0000000000000000B102 /* BlurMetric.swift in Sources */,
+				CAFE0000000000000000B202 /* BlurThresholdPolicy.swift in Sources */,
+				CAFE0000000000000000B302 /* BlurAnalysisManager.swift in Sources */,
+				CAFE0000000000000000B402 /* CameraCaptureManager.swift in Sources */,
+				CAFE00000000000000005102 /* StorageSegments.swift in Sources */,
+				CAFE00000000000000005202 /* JobManifest.swift in Sources */,
+				CAFE00000000000000005302 /* CaptureStorage.swift in Sources */,
+				CAFE00000000000000005402 /* CaptureStorageChannelHandler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -53,6 +53,10 @@ class StabilityStreamManager(
         const val CHANNEL_NAME = "com.mayasabhaxr.recapture/stability"
 
         private const val ERR_UNAVAILABLE = "STABILITY_UNAVAILABLE"
+
+        /** Min spacing between continuous "score" events (~10 Hz) — a UI-meter
+         *  cadence, well below the sensor rate, so the channel isn't flooded. */
+        private const val SCORE_INTERVAL_NS = 100_000_000L
     }
 
     private val sensorManager: SensorManager? =
@@ -90,6 +94,9 @@ class StabilityStreamManager(
 
     @Volatile
     private var monotonicMinusBootNs = 0L
+
+    /** Sensor timestamp of the last emitted "score" event (0 = none this session). */
+    private var lastScoreEmitNs = 0L
 
     @Volatile
     private var disposed = false
@@ -164,9 +171,11 @@ class StabilityStreamManager(
         val accel = accelSensor ?: return
         ensureSensorThread()
         monotonicMinusBootNs = System.nanoTime() - SystemClock.elapsedRealtimeNanos()
-        // Fresh sensor session ⇒ reset the dwell + gravity estimate (no stale carry).
+        // Fresh sensor session ⇒ reset the dwell + gravity estimate (no stale carry)
+        // and the score throttle, so a new session emits a score promptly.
         gate.reset()
         gravity.reset()
+        lastScoreEmitNs = 0L
         val g = manager.registerListener(this, gyro, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
         val a = manager.registerListener(this, accel, SensorManager.SENSOR_DELAY_GAME, sensorHandler)
         registered = g && a
@@ -224,6 +233,7 @@ class StabilityStreamManager(
             else -> null
         }
         transition?.let { emit(it) }
+        maybeEmitScore(ts)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
@@ -250,6 +260,28 @@ class StabilityStreamManager(
             if (disposed) return@post
             eventSink?.success(state)
             if (trigger != null) eventSink?.success(trigger)
+        }
+    }
+
+    /**
+     * Emits the continuous (non-debounced) stillness score, throttled to
+     * [SCORE_INTERVAL_NS], once both sensors have reported. For a UI meter — the
+     * debounced state/trigger remain the source of truth for auto-capture.
+     */
+    private fun maybeEmitScore(ts: Long) {
+        if (lastScoreEmitNs != 0L && ts - lastScoreEmitNs < SCORE_INTERVAL_NS) return
+        val reading = gate.currentReading() ?: return
+        lastScoreEmitNs = ts
+        val event = mapOf(
+            "type" to "score",
+            "score" to reading.score,
+            "gyroMag" to reading.gyroMag,
+            "linAccelMag" to reading.linAccelMag,
+            "timestampNs" to ts,
+        )
+        mainHandler.post {
+            if (disposed) return@post
+            eventSink?.success(event)
         }
     }
 }

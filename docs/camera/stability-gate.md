@@ -7,6 +7,22 @@ stream); does **not** capture, smooth orientation, or do pose fusion.
 
 Channel: `com.mayasabhaxr.recapture/stability` (`AppConfig.channelStability`).
 
+## Continuous score (`score` event — UI stillness meter)
+
+Alongside the debounced state/trigger, the manager emits a **continuous, non-debounced
+stillness score** in `[0, 1]` (1.0 = perfectly still), throttled to ~10 Hz
+(`SCORE_INTERVAL_NS`) so the channel isn't flooded at the sensor rate. It is the
+**geometric mean** of the two clamped proximity-to-threshold partials
+(`StabilityMath.score(gyroMag, linAccelMag, gyroThresh, accelThresh)`), so either
+signal alone collapses it — and it crosses ~0 around the same boundary the binary
+gate flips. A non-positive threshold or non-finite magnitude yields `0` for that
+partial (never `NaN`/`Inf`). It is surfaced only once **both** sensors have reported
+(`StabilityGate.currentReading()` → null until then) and is for **display only** —
+the debounced `state`/`trigger` remain the source of truth for auto-capture.
+
+Event: `{ type: "score", score, gyroMag, linAccelMag, timestampNs }` →
+Dart `StabilityScoreEvent` (filter via `StabilityGateStream.scores()`).
+
 ## The gate
 
 ```
