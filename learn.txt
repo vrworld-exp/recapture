@@ -1,10 +1,15 @@
 
 
-Commands for Flutter :-------------
+Commands for Flutter :------------->
+
     flutter clean
-    flutter doctor
+
     flutter pub get
     flutter emulators
 
     flutter pub outdated
     flutter pub upgrade --major-versions
+
+    flutter doctor
+
+    flutter build apk
