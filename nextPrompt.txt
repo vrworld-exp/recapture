@@ -3,3 +3,3238 @@
                                         [[[[[[[[[[[[[[[[[[[ Phase - 4  ]]]]]]]]]]]]]]]]]]]
 
 
+
+
+                            [[[[[[[[[[[[[[[[[[[ Flutter UI — Overlays ]]]]]]]]]]]]]]]]]]]
+
+
+
+
+
+[[[[[[[[[[[ 16 ]]]]]]]]]]]
+
+
+Generate a coding prompt for this task: Placement box overlay (center frame guide) — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+----------------------------------------------------------------------------------------------------------------->>>>>>
+
+
+# UI/OVERLAY: Placement Box Overlay (Center Frame Guide) — Level A (Eye Ring)
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: High
+
+---
+
+## Task Description
+
+Build the placement box overlay — a center-frame guide that tells the user where to position the object within the camera view before/while capturing. It renders on top of the camera preview using the `CaptureOverlayLayer` and `PreviewGeometry` from Screen 6A, sizes itself relative to the actual capture frame (not just screen pixels), and exposes a simple "is the object roughly inside the box" hook for later capture-gating logic. This task renders the guide and its visual states; it does NOT run object detection or trigger captures (those are later tasks).
+
+- [ ] Build a `PlacementBoxOverlay` widget that draws a centered framing guide (box/brackets) over the preview
+- [ ] Size and position the box using `PreviewGeometry` so it maps to a consistent region of the captured image across devices
+- [ ] Support visual states: `idle` (neutral guide), `active`/`good` (object well-placed), `warning` (too close/far/off-center) — driven by an injected status, not self-detected
+- [ ] Include short helper text under/over the box (e.g. "Place the object inside the box")
+- [ ] Honor reduce-motion (no pulsing animation when disabled)
+- [ ] Provide a hit-region/normalized-rect API so later logic can test whether detected object bounds fall inside the box
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — the composition layer this overlay plugs into; confirm how overlays receive `PreviewGeometry`
+2. `lib/features/capture/level_a/camera/preview_geometry.dart` — the screen↔normalized-image mapping; the box rect must be defined in normalized image space and projected to screen
+3. `lib/features/capture/level_a/level_a_capture_screen.dart` — where overlays are composed; this overlay is added to the `overlays` list
+4. `lib/features/config/application/config_notifier.dart` (`captureConfigProvider`) — if box size/margins should be config-driven (e.g. a `placementBox` ratio); otherwise use a sensible constant
+5. Theme tokens — Deep Black scrim, Mirage Red for warning, Royal Gold/white for active/idle; match brand palette
+6. The reduce-motion handling used in Screen 5A — reuse the same `MediaQuery.disableAnimations` pattern
+
+## Implementation Instructions
+
+### Step 1: Define the placement box in normalized image space
+In `lib/features/capture/level_a/domain/placement_box.dart`:
+
+```dart
+class PlacementBox {
+  /// Box expressed in normalized capture-image coordinates (0..1), centered.
+  final double widthRatio;   // e.g. 0.7 of image width
+  final double heightRatio;  // e.g. 0.7 of image height
+  const PlacementBox({this.widthRatio = 0.7, this.heightRatio = 0.7});
+
+  /// Centered normalized rect (0..1 space).
+  Rect get normalizedRect => Rect.fromCenter(
+    center: const Offset(0.5, 0.5),
+    width: widthRatio,
+    height: heightRatio,
+  );
+
+  bool containsNormalized(Rect objectNormalized) =>
+      normalizedRect.contains(objectNormalized.topLeft) &&
+      normalizedRect.contains(objectNormalized.bottomRight);
+}
+```
+
+Defining the box in normalized image space (not screen pixels) is what keeps the guide consistent with the actual captured frame across aspect ratios/devices.
+
+### Step 2: Status enum (injected, not self-detected)
+In the same file or `placement_status.dart`:
+
+```dart
+enum PlacementStatus { idle, good, tooClose, tooFar, offCenter }
+```
+
+The overlay receives a `PlacementStatus` from its parent (future detection/sensor logic supplies it). For now it can default to `idle`.
+
+### Step 3: The overlay widget + painter
+In `lib/features/capture/level_a/widgets/placement_box_overlay.dart`:
+
+```dart
+class PlacementBoxOverlay extends StatelessWidget {
+  final PreviewGeometry geometry;
+  final PlacementBox box;
+  final PlacementStatus status;
+  const PlacementBoxOverlay({
+    required this.geometry,
+    this.box = const PlacementBox(),
+    this.status = PlacementStatus.idle,
+    super.key,
+  });
+}
+```
+
+- Use a `CustomPaint`/`CustomPainter` to draw:
+  - a dimmed scrim outside the box (Deep Black at reduced opacity) to focus attention
+  - corner brackets or a rounded rect at the box edge
+  - color by status: idle = white/grey, good = Royal Gold/success token, warning states = Mirage Red
+- Project the box's `normalizedRect` to the on-screen rect using `geometry` (normalized image → screen), so the drawn box matches where the object will land in the captured image
+- Helper text below the box reflects status ("Place the object inside the box" / "Move closer" / "Move back" / "Center the object")
+
+### Step 4: Subtle animation (reduce-motion aware)
+- In `good` state, an optional gentle pulse/scale on the brackets; in warning states, no jitter that distracts
+- When `MediaQuery.disableAnimations` is true, render static (no pulse)
+- Keep animations cheap (single `AnimationController`, isolated repaint) to protect low-end performance and avoid repainting the whole overlay tree
+
+### Step 5: Expose the rect API
+- Expose the box's normalized rect (and a screen-rect getter via `geometry`) so the capture screen / future detection logic can call `box.containsNormalized(detectedObjectRect)` to decide placement quality
+- Keep all placement *decision* logic out of this widget — it only renders the supplied status and offers the geometry helpers
+
+## What NOT to Change
+
+- Do NOT implement object detection, frame analysis, or capture triggering here — the overlay renders a supplied `PlacementStatus` only
+- Do NOT modify `CaptureOverlayLayer`, `PreviewGeometry`, the camera controller, routing, or config providers — only consume them
+- Do NOT define the box in raw screen pixels — it must be normalized-image-space so it maps to the captured frame
+- Do NOT hardcode brand colors — use theme tokens
+- Do NOT add a heavy animation that repaints the full overlay every frame
+- Do NOT block or intercept touch events meant for the capture chrome (overlay should be non-interactive / hit-test-transparent unless a specific control is added)
+
+## Analytics Events
+
+No new event required for the static guide. If the parent later drives status changes, placement-quality analytics belong with the detection logic, not this render-only widget. (If a lightweight "placement_guide_shown" is desired, add a TODO-marked stub fired by the parent when the overlay first appears.)
+
+## Edge Cases to Handle
+
+- [ ] Preview aspect ratio ≠ screen aspect ratio → box projects to the correct on-screen rect via `PreviewGeometry` (no drift between guide and captured region)
+- [ ] `PreviewGeometry` not yet ready (camera still initializing) → overlay renders nothing or a neutral placeholder, no crash, no NaN rects
+- [ ] Reduce-motion enabled → no pulse animation; static box only
+- [ ] Extreme box ratios (e.g. config sets widthRatio > 1) → clamp to valid 0..1 range so the box can't exceed the frame
+- [ ] Very small / very large screens → box scales proportionally; brackets and helper text remain legible and within safe areas
+- [ ] Status changes rapidly (good ↔ warning) → color/text transitions smoothly without flicker (short debounce/animated color, but no layout thrash)
+- [ ] Portrait lock vs rotation (per Screen 6A's policy) → box recomputes correctly if rotation is allowed; if portrait-locked, no extra work needed
+- [ ] Overlay disposed (screen exit) → animation controller disposed, no leak
+
+## Constraints
+
+- The placement box is defined in normalized capture-image coordinates and projected to screen via `PreviewGeometry` — never positioned directly in screen pixels
+- The widget is render-only: it consumes a `PlacementStatus` and exposes geometry helpers; it contains no detection/gating logic
+- Box ratios clamped to valid ranges; no NaN/invalid rects when geometry is incomplete
+- Reduce-motion honored; animations cheap and isolated (no full-tree repaint)
+- Overlay is hit-test transparent so it doesn't swallow taps intended for capture controls
+- Brand palette via theme tokens (warning = Mirage Red, active = Royal Gold/success, idle = white/grey, scrim = Deep Black)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] A centered placement box renders over the camera preview with a dimmed outside scrim and corner brackets
+- [ ] The box maps to a consistent region of the captured frame across different device aspect ratios (verified against `PreviewGeometry`)
+- [ ] Status drives color/text: idle (neutral), good (active color + optional pulse), warning states (Mirage Red + correct helper text)
+- [ ] `PlacementBox.containsNormalized` correctly reports whether a given normalized object rect is inside the box
+- [ ] Reduce-motion disables the pulse; static box renders
+- [ ] No crash/NaN when `PreviewGeometry` is not yet ready (camera initializing)
+- [ ] Box ratios are clamped; the box never exceeds the frame
+- [ ] Overlay is non-interactive (does not swallow capture-control taps); animation controller disposed cleanly
+- [ ] No jank on a mid-range Android device; brand palette respected
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm `CaptureOverlayLayer`/`PreviewGeometry` APIs and whether box size should come from `CaptureConfig` before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a **physical device**, open the Level A capture screen and add the overlay → confirm the centered box, scrim, and brackets render over the live preview.
+4. Compare the on-screen box to a captured still (temporarily save a frame) → confirm the object inside the box lands inside the intended region of the captured image (no drift from aspect-ratio differences).
+5. Drive the overlay with each `PlacementStatus` (via a debug toggle) → confirm correct colors and helper text for idle/good/tooClose/tooFar/offCenter.
+6. Unit-test `PlacementBox.normalizedRect` and `containsNormalized` with rects inside, partially outside, and fully outside.
+7. Enable reduce-motion → confirm no pulse; status colors still change.
+8. Force `PreviewGeometry` to an uninitialized/incomplete state → confirm the overlay renders nothing/neutral with no crash or NaN.
+9. Set an invalid box ratio (>1) via config/constant → confirm clamping keeps the box within the frame.
+10. Test on small and large screens for legibility and safe-area compliance; check the performance overlay on a mid-range Android during the pulse animation.
+11. Confirm taps pass through the overlay to any capture chrome beneath/around it.
+
+## Assumptions
+
+- Assumed: this overlay is render-only and a later task supplies `PlacementStatus` from object detection or a heuristic (e.g. using the live image stream or sensor distance) — confirm where placement quality will be computed so the status contract matches.
+- Assumed: a default box of 70% width/height centered is reasonable — confirm the desired framing margin with the capture/reconstruction design; if size should adapt to the project's `ObjectSize` (small/medium/large) or come from `CaptureConfig`, wire it from there instead of the constant.
+- Assumed: capture is portrait-locked per Screen 6A — if rotation is allowed, verify the box projection under rotation.
+- Assumed: the box defines where the object should sit for good reconstruction coverage — if the pipeline instead needs the object to fill a specific fraction of the frame (for scale/detail), the ratios and the "tooClose/tooFar" thresholds must match that requirement; confirm with the photogrammetry constraints.
+- Assumed: helper-text copy is placeholder and may be finalized later via a content pass — keep strings centralized for easy update.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[[[[ 15 ]]]]]]]]]]]]]]]]
+
+Generate a coding prompt for this task: Tilt meter: band indicator + needle showing current pitch vs target band — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+------------------------------------------------------------------------------------------------->>>>
+
+# UI/OVERLAY: Tilt Meter — Band Indicator + Needle (Current Pitch vs Target Band) — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: High
+
+---
+
+## Task Description
+
+Build the tilt meter overlay for Level A (Eye Ring): a gauge showing the device's **current pitch** (a needle) against the **target pitch band** (a highlighted zone) so the user holds the phone at the correct vertical angle while ringing the object. It consumes the live device pitch from `sensorStream` and the target band from `CaptureConfig`, smooths sensor noise so the needle doesn't jitter, and signals in/out-of-band state with a clear "tilt up / tilt down" hint. It plugs into the `CaptureOverlayLayer`.
+
+- [ ] Provide a smoothed current-pitch value derived from `SensorStreamChannel` (low-pass filtered to remove jitter)
+- [ ] Render a tilt-meter gauge: a needle for current pitch + a highlighted band indicator for the target range
+- [ ] Drive state from pitch-vs-band: `inBand` (good), `aboveBand` ("tilt down"), `belowBand` ("tilt up")
+- [ ] Show a directional hint and short helper text to guide the user back into the band
+- [ ] Clamp the needle to the gauge's displayable range; handle out-of-range pitch gracefully
+- [ ] Handle sensor-unavailable (`deviceMotionSupported == false`) with a non-blocking fallback (hide/disable meter, optional manual guidance)
+- [ ] Honor reduce-motion for decorative animation while keeping the needle responsive
+
+## Files to Inspect First
+
+1. `lib/native/sensor_stream.dart` (`SensorStreamChannel`, `SensorStreamPayload`) — source of pitch; confirm which field carries pitch (`orientation.beta` per the iOS CMDeviceMotion task) and its units/sign
+2. `lib/features/config/application/config_notifier.dart` (`captureConfigProvider`) + `CaptureConfig`/`PitchBand` — the target band for Level A comes from here (which band = eye level)
+3. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` + `preview_geometry.dart` — composition layer this overlay plugs into
+4. `lib/features/capture/level_a/level_a_capture_screen.dart` — where overlays are composed and how a provider/value is supplied to them
+5. Theme tokens — Royal Gold/success for in-band, Mirage Red for out-of-band, white/grey neutral; brand palette
+6. The iOS sensor task's pitch convention note — there's an open reconciliation on yaw/pitch/roll → alpha/beta/gamma mapping and units; align this overlay to the same convention
+
+## Implementation Instructions
+
+### Step 1: Smoothed pitch provider
+In `lib/features/capture/level_a/application/current_pitch_provider.dart` (Riverpod), map `sensorStream` → smoothed pitch in degrees:
+
+```dart
+class PitchSample {
+  final double pitchDegrees;     // smoothed
+  final bool sensorSupported;
+  const PitchSample(this.pitchDegrees, this.sensorSupported);
+}
+
+final currentPitchProvider = StreamProvider<PitchSample>((ref) {
+  final channel = SensorStreamChannel();
+  double? smoothed;
+  const alpha = 0.15; // low-pass factor; tune for responsiveness vs stability
+  return channel.stream.map((p) {
+    if (!p.deviceMotionSupported) return const PitchSample(0, false);
+    final raw = p.beta; // pitch in degrees per the agreed convention — CONFIRM field/sign
+    smoothed = (smoothed == null) ? raw : (alpha * raw + (1 - alpha) * smoothed!);
+    return PitchSample(smoothed!, true);
+  });
+});
+```
+
+Smoothing is required — raw attitude pitch is noisy and an unsmoothed needle is unusable. Keep the filter cheap (exponential moving average), not a heavyweight Kalman filter.
+
+### Step 2: Resolve the Level A target band
+In `lib/features/capture/level_a/domain/tilt_target.dart`:
+
+```dart
+class TiltTarget {
+  final double minDegrees;
+  final double maxDegrees;
+  const TiltTarget(this.minDegrees, this.maxDegrees);
+  double get center => (minDegrees + maxDegrees) / 2;
+  bool contains(double pitch) => pitch >= minDegrees && pitch <= maxDegrees;
+}
+```
+
+Derive the Level A band from `captureConfigProvider` (the band representing eye level — confirm which `PitchBand.id`). Provide a sensible default if config isn't ready.
+
+### Step 3: Tilt state
+```dart
+enum TiltState { inBand, aboveBand, belowBand }
+
+TiltState tiltStateFor(double pitch, TiltTarget t) {
+  if (t.contains(pitch)) return TiltState.inBand;
+  return pitch > t.maxDegrees ? TiltState.aboveBand : TiltState.belowBand;
+}
+```
+Map state → hint text/direction (`aboveBand` → "Tilt down", `belowBand` → "Tilt up", `inBand` → "Hold steady").
+
+### Step 4: The gauge widget + painter
+In `lib/features/capture/level_a/widgets/tilt_meter_overlay.dart`:
+
+```dart
+class TiltMeterOverlay extends ConsumerWidget {
+  final TiltTarget target;
+  final double gaugeMinDeg; // displayable range, e.g. -30
+  final double gaugeMaxDeg; // e.g. 120
+  const TiltMeterOverlay({required this.target, this.gaugeMinDeg = -30, this.gaugeMaxDeg = 120, super.key});
+}
+```
+
+- Watch `currentPitchProvider`; compute `TiltState`
+- Draw with `CustomPaint`: a vertical (or arc) scale spanning `gaugeMin..gaugeMax`, the target band drawn as a highlighted zone (Royal Gold/success), and a needle at the current pitch position
+- Color the needle/band by state: in-band → success/gold; out-of-band → Mirage Red
+- A small directional arrow + helper text near the meter
+- Animate the needle to new positions with a short implicit animation (smooth, but the value is already filtered)
+
+### Step 5: Placement + reduce-motion
+- Position the meter in a non-obstructive area (e.g. right edge or top-right), respecting safe areas; it should not cover the placement box
+- Reduce-motion: keep the needle moving (functional) but drop any pulse/glow decoration
+
+## What NOT to Change
+
+- Do NOT modify `SensorStreamChannel`, the native sensor module, `CaptureConfig`, the camera controller, routing, or the composition layer — only consume them
+- Do NOT trigger captures or gate the capture flow here — this overlay is guidance only (the capture-gating task may later read tilt state, but that's separate)
+- Do NOT use raw, unsmoothed pitch for the needle — it must be filtered
+- Do NOT hardcode the target band — derive it from `CaptureConfig`
+- Do NOT hardcode brand colors — use theme tokens
+- Do NOT block the UI or throw if the sensor is unsupported — degrade gracefully
+- Do NOT obstruct the placement box or capture controls
+
+## Analytics Events
+
+Event: `tilt_meter_out_of_band` (throttled, e.g. max once per few seconds)
+Trigger: user spends a sustained period out of band during active capture
+Properties:
+  - direction: "above" | "below"
+  - target_band_id: string
+  - device_type: "android" | "ios"
+
+(Optional/low priority; route through the existing dispatcher or add a TODO stub. Do not emit on every frame — throttle.)
+
+## Edge Cases to Handle
+
+- [ ] `deviceMotionSupported == false` (simulator / sensor off / motion permission denied) → meter shows a disabled/fallback state ("Tilt guidance unavailable"), capture still usable, no crash
+- [ ] Sensor noise/jitter → low-pass filter prevents needle flicker; in-band/out-of-band state has slight hysteresis so it doesn't flip rapidly at the boundary
+- [ ] Pitch outside the gauge's displayable range → needle clamps to the gauge end, no overflow/NaN
+- [ ] Gimbal-lock / extreme angles producing odd values → clamp; do not render NaN
+- [ ] Config not yet loaded → default target band used; updates when remote/cached config arrives
+- [ ] Rapid boundary crossing (pitch hovering at band edge) → hysteresis + animated color avoids flicker between good/warning
+- [ ] Reduce-motion → needle still updates; decorative pulse/glow disabled
+- [ ] Overlay disposed / screen exit → stream subscription and any animation controller disposed (no leak)
+- [ ] Pitch convention/sign mismatch (device pitched up vs down) → verified against real device so "tilt up/down" hints are correct, not inverted
+
+## Constraints
+
+- Needle value must be smoothed (EMA low-pass); add small hysteresis on the in-band/out-of-band decision to prevent boundary flicker
+- Target band derived from `CaptureConfig` (single source); gauge display range is a constant/config, clamped
+- Needle clamped to gauge range; never render NaN/invalid positions
+- Overlay is guidance-only and hit-test transparent where it overlaps interactive areas; positioned to not obscure the placement box
+- Reduce-motion honored for decoration; needle remains responsive
+- Cheap rendering: isolate the painter so needle updates don't repaint the whole overlay tree; filter at the provider, not per-paint
+- Brand palette via theme tokens (in-band success/gold, out-of-band Mirage Red, neutral white/grey)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] The tilt meter renders over the preview with a target band zone and a needle reflecting current device pitch
+- [ ] Tilting the device moves the needle smoothly (no jitter) and the in/above/below-band state + hint update correctly and are not inverted
+- [ ] In-band shows success/gold styling and "Hold steady"; out-of-band shows Mirage Red and the correct "Tilt up/down" hint
+- [ ] Target band comes from `CaptureConfig` (changing the config band changes the meter zone)
+- [ ] Sensor-unavailable shows a graceful fallback; capture remains usable
+- [ ] Needle clamps at gauge bounds; no NaN/overflow at extreme angles
+- [ ] Boundary hovering does not cause rapid good/warning flicker (hysteresis works)
+- [ ] Reduce-motion disables decoration but keeps the needle responsive
+- [ ] No leaks on screen exit; no jank on a mid-range Android
+- [ ] Meter does not obscure the placement box or capture controls
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm the pitch field/units/sign from `SensorStreamPayload` and which `CaptureConfig` band is Level A before coding (note: align with the iOS sensor task's convention — do not assume sign).
+2. Run `flutter analyze` — confirm no errors.
+3. On a **physical device**, open Level A capture with the overlay → tilt the phone up/down and confirm the needle tracks smoothly and the band zone is shown.
+4. Verify direction correctness: tilt so you're above the band → confirm it says "Tilt down" (and vice versa); fix sign if inverted.
+5. Hold the device inside the band → confirm in-band success styling and "Hold steady".
+6. Hover at the band boundary → confirm no rapid flicker (hysteresis).
+7. Tilt to extreme angles → confirm the needle clamps, no NaN/overflow.
+8. Run on the simulator / disable motion → confirm the fallback state and that capture remains usable.
+9. Change the Level A band value in config (or stub it) → confirm the meter zone moves accordingly.
+10. Enable reduce-motion → confirm decoration off, needle still tracks.
+11. Unit-test `tiltStateFor` and the EMA smoothing/hysteresis logic with synthetic pitch sequences (noisy input → stable output).
+12. Check leaks (repeated screen entry/exit) and performance overlay on a mid-range Android.
+
+## Assumptions
+
+- Assumed: pitch is available as `SensorStreamPayload.beta` in degrees per the iOS CMDeviceMotion task's mapping (yaw→alpha, pitch→beta, roll→gamma). The sign/zero-reference is the key open question flagged in that task — confirm what 0° means (e.g. phone vertical / pointing at horizon) and which direction is positive, so "tilt up/down" hints are correct. Calibrate against a real device.
+- Assumed: Level A "Eye Ring" corresponds to a specific `PitchBand` in `CaptureConfig` (the eye-level band) — confirm which band id; if Level A spans a different range than any single config band, define the Level A target explicitly rather than reusing a band.
+- Assumed: a vertical strip or small arc gauge is acceptable UI — confirm the desired meter style with design; the band-indicator + needle semantics stay the same regardless of shape.
+- Assumed: EMA factor `alpha ≈ 0.15` and a small hysteresis margin are reasonable starting points — tune on-device for the right balance of responsiveness vs stability; these could later be driven by `CaptureConfig`.
+- Assumed: the smoothing provider lives in the Level A feature layer for now — if other levels (B/C) need the same smoothed pitch, promote `currentPitchProvider` to a shared capture module later.
+- Assumed: this overlay is guidance-only; whether being in-band is *required* to capture (gating) is a separate capture-logic task that may read `tiltStateFor`. Confirm whether the capture trigger should be blocked when out of band.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[[[[ 14 ]]]]]]]]]]]]]]]]
+
+
+
+Generate a coding prompt for this task: Stability indicator: dot + 'Hold steady' / 'Stable' text — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+
+-------------------------------------------------------------------------------------------------------->>>>>
+
+
+# UI/OVERLAY: Stability Indicator — Dot + "Hold steady" / "Stable" — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the stability indicator overlay for Level A: a small status dot plus text that tells the user whether the device is steady enough to capture a sharp frame ("Stable") or moving too much ("Hold steady"). Stability is derived from the live motion signal in `sensorStream` (rotation rate / acceleration variance) compared against a configurable threshold, smoothed and debounced so it doesn't flicker. It plugs into the `CaptureOverlayLayer` and is guidance-only — later capture logic may read stability to gate the shutter, but this task only renders state.
+
+- [ ] Provide a smoothed "motion magnitude" value derived from `SensorStreamChannel` (acceleration and/or rotation variance)
+- [ ] Classify stability as `stable` vs `unstable` against a threshold (from `CaptureConfig` if available, else a constant)
+- [ ] Render a status dot (color-coded) + text: "Stable" (calm) / "Hold steady" (moving)
+- [ ] Debounce/hold transitions so brief jolts don't flip the label rapidly
+- [ ] Handle sensor-unavailable gracefully (hide/disable, non-blocking)
+- [ ] Honor reduce-motion (no pulsing; dot still changes color/state)
+
+## Files to Inspect First
+
+1. `lib/native/sensor_stream.dart` (`SensorStreamChannel`, `SensorStreamPayload`) — source signal; confirm available fields (`accelerometer.x/y/z`, and whether rotation rate is exposed — see assumptions)
+2. `lib/features/capture/level_a/application/current_pitch_provider.dart` — the tilt meter already subscribes to `sensorStream`; reuse the same stream/source rather than opening a second subscription if practical
+3. `lib/features/config/application/config_notifier.dart` (`CaptureConfig`) — `thresholds` may include a motion/sharpness threshold to drive the stability cutoff
+4. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into
+5. Theme tokens — success/Royal Gold for stable, Mirage Red for unstable, neutral grey for unknown; brand palette
+6. The reduce-motion pattern used by the tilt meter / Screen 5A — reuse it
+
+## Implementation Instructions
+
+### Step 1: Motion magnitude + stability provider
+In `lib/features/capture/level_a/application/stability_provider.dart`:
+
+```dart
+enum Stability { unknown, stable, unstable }
+
+class StabilitySample {
+  final Stability stability;
+  final bool sensorSupported;
+  const StabilitySample(this.stability, this.sensorSupported);
+}
+
+final stabilityProvider = StreamProvider<StabilitySample>((ref) {
+  final channel = SensorStreamChannel();
+  double emaMagnitude = 0;
+  const alpha = 0.2;                // smoothing
+  // Stability decision uses hysteresis + a time hold (see Step 2).
+  return channel.stream.map((p) {
+    if (!p.deviceMotionSupported) return const StabilitySample(Stability.unknown, false);
+    // user acceleration magnitude (g). If rotation rate is available, fold it in.
+    final acc = p.accelerometer;
+    final mag = sqrt(acc.x * acc.x + acc.y * acc.y + acc.z * acc.z);
+    emaMagnitude = alpha * mag + (1 - alpha) * emaMagnitude;
+    // classification with hysteresis happens in a small state machine (Step 2)
+    final s = _classifier.update(emaMagnitude);
+    return StabilitySample(s, true);
+  });
+});
+```
+
+`p.accelerometer` from the iOS task is `userAcceleration` (gravity removed), so a low magnitude ≈ steady. If rotation rate (gyro) is exposed by the sensor payload, include it — rotation often matters more than translation for blur.
+
+### Step 2: Hysteresis + time-hold classifier
+In the same file, a small classifier so the label is stable (no pun intended):
+
+```dart
+class _StabilityClassifier {
+  final double enterStableBelow;   // magnitude must drop below this to become stable
+  final double leaveStableAbove;   // and rise above this to become unstable (hysteresis gap)
+  final Duration holdStable;       // must stay calm this long before declaring "Stable"
+  // track last-cross timestamps; only flip after the hold window is satisfied
+  Stability update(double magnitude) { /* hysteresis + dwell-time logic */ }
+}
+```
+
+- Becoming "Stable" requires staying below the calm threshold for a short dwell (e.g. 300–500 ms) — prevents flicker on momentary calm
+- Becoming "Unstable" can be near-immediate (responsiveness matters more when warning)
+
+### Step 3: The indicator widget
+In `lib/features/capture/level_a/widgets/stability_indicator_overlay.dart`:
+
+```dart
+class StabilityIndicatorOverlay extends ConsumerWidget {
+  const StabilityIndicatorOverlay({super.key});
+  // watches stabilityProvider; renders dot + text
+}
+```
+
+- A small colored dot + label:
+  - `stable` → success/Royal Gold dot, "Stable"
+  - `unstable` → Mirage Red dot, "Hold steady"
+  - `unknown` (sensor off) → grey dot, "Hold steady" (or hide — see edge cases)
+- Animate color/opacity transitions briefly; optional gentle pulse on `unstable` only
+- Position compactly (e.g. near the placement box bottom or top-center), safe-area aware, not obscuring the placement box or tilt meter
+
+### Step 4: Reduce-motion + placement
+- Reduce-motion: drop the pulse; keep color/text changes
+- Keep it small and unobtrusive; it complements (doesn't compete with) the tilt meter
+
+## What NOT to Change
+
+- Do NOT modify `SensorStreamChannel`, the native sensor module, `CaptureConfig`, the camera controller, routing, or the composition layer — only consume them
+- Do NOT trigger or gate captures here — guidance only (a later task may read `stabilityProvider` to gate the shutter)
+- Do NOT use raw, unsmoothed motion for the label — it must be filtered + debounced
+- Do NOT open a redundant second `sensorStream` subscription if the existing pitch provider's stream can be shared/derived from — prefer one source
+- Do NOT hardcode the threshold — use `CaptureConfig` if it carries one, else a named constant
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT obstruct the placement box, tilt meter, or capture controls
+
+## Analytics Events
+
+Event: `capture_hold_steady` (throttled)
+Trigger: sustained `unstable` during active capture (e.g. > 1.5s)
+Properties:
+  - device_type: "android" | "ios"
+
+(Optional/low priority; route through the existing dispatcher or add a TODO stub. Never emit per frame — throttle.)
+
+## Edge Cases to Handle
+
+- [ ] `deviceMotionSupported == false` → indicator shows `unknown`/grey or hides; capture remains usable; no crash
+- [ ] Sensor noise → EMA smoothing + hysteresis prevents rapid stable↔unstable flicker
+- [ ] Brief jolt while otherwise steady → does not immediately flip to "Stable→Unstable" then back; dwell/hysteresis absorbs it appropriately (unstable can show quickly, stable requires dwell)
+- [ ] Threshold from config not loaded yet → default constant used; updates when config arrives
+- [ ] Both this overlay and the tilt meter subscribing to sensors → single shared subscription/source preferred; if two, ensure no excessive battery/CPU on low-end devices
+- [ ] Reduce-motion → no pulse; dot/text still update
+- [ ] Overlay disposed / screen exit → stream subscription and animation controller disposed (no leak)
+- [ ] Device perfectly still (magnitude ≈ 0) → "Stable" after the dwell window, not stuck on "Hold steady"
+- [ ] Walking around the object (intended ring motion) → must not constantly read "Hold steady"; threshold tuned so normal ringing pace registers as acceptable when the device isn't shaking (see assumptions — this is about shake/blur, not translation around the object)
+
+## Constraints
+
+- Motion magnitude must be smoothed (EMA) and the stable/unstable decision must use hysteresis + a dwell time for "Stable"
+- Threshold sourced from `CaptureConfig.thresholds` if present, else a named constant — not an inline magic number
+- Prefer a single `sensorStream` subscription shared across pitch + stability overlays
+- Guidance-only and hit-test transparent; positioned to not obscure other overlays/controls
+- Reduce-motion honored; rendering cheap and isolated (no full-tree repaint per sample)
+- Brand palette via theme tokens (stable success/gold, unstable Mirage Red, unknown grey)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] The indicator renders a color-coded dot + correct text ("Stable" / "Hold steady") over the preview
+- [ ] Holding the device still shows "Stable" (after a short dwell); shaking shows "Hold steady" promptly
+- [ ] The label does not flicker rapidly during normal handling (hysteresis + dwell verified)
+- [ ] Threshold comes from `CaptureConfig` when available; default applies otherwise
+- [ ] Sensor-unavailable shows a graceful state and capture remains usable
+- [ ] Reduce-motion disables the pulse but keeps state changes
+- [ ] Only one effective sensor subscription drives both pitch and stability (or no measurable extra cost if two)
+- [ ] No leaks on screen exit; no jank on a mid-range Android
+- [ ] Does not obscure the placement box, tilt meter, or capture controls
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm which motion fields `SensorStreamPayload` exposes (accel only, or accel + rotation rate) and whether `CaptureConfig.thresholds` carries a usable cutoff before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a **physical device**, open Level A capture with the overlay → hold still and confirm "Stable" appears after a brief dwell; shake the device and confirm "Hold steady" appears quickly.
+4. Handle the device normally (small natural movements) → confirm no rapid flicker between states.
+5. Walk slowly around an object at a steady pace (simulating ring capture) without shaking → confirm it generally reads acceptable, not constant "Hold steady".
+6. Run on the simulator / disable motion → confirm the `unknown`/fallback state and that capture still works.
+7. Change the stability threshold via config (or stub) → confirm sensitivity changes.
+8. Enable reduce-motion → confirm pulse off, state still updates.
+9. Unit-test the classifier: feed synthetic magnitude sequences (calm, spike, oscillating near threshold) → assert correct stable/unstable outputs with dwell + hysteresis.
+10. Verify a single shared sensor subscription with the tilt meter (or measure CPU/battery if two); check leaks across repeated screen entry/exit.
+11. Check the performance overlay on a mid-range Android during the pulse.
+
+## Assumptions
+
+- Assumed: stability should reflect **shake/blur risk** (high-frequency jitter + rotation), not the deliberate slow translation of walking around the object. Using gravity-removed `userAcceleration` magnitude (and rotation rate if available) targets shake correctly; confirm the sensor payload exposes what's needed. If only orientation is available, derive a rotation-rate proxy from frame-to-frame attitude deltas — flag this if accel/gyro aren't in the payload.
+- Assumed: rotation rate (gyro) matters for blur and would improve accuracy — if `SensorStreamPayload` doesn't currently carry it, either extend the native payload (separate task) or proceed with acceleration-only for now and note the limitation.
+- Assumed: a calm-magnitude threshold (~0.03–0.06 g EMA) with a ~300–500 ms dwell is a reasonable starting point — tune on-device; prefer sourcing from `CaptureConfig.thresholds` so it's server-tunable.
+- Assumed: this overlay is guidance-only; whether "Stable" is required to fire the shutter (auto-capture gating) is a separate capture-logic task that may consume `stabilityProvider`. Confirm whether capture should be blocked while unstable.
+- Assumed: a single shared `sensorStream` subscription is preferred — if the architecture currently has the pitch provider owning the stream, consider exposing a shared raw-sensor provider that both pitch and stability derive from, to avoid duplicate subscriptions. Confirm the preferred sharing approach.
+- Assumed: placement near the placement box / alongside the tilt meter is acceptable — confirm the HUD layout with design so the stability dot, tilt meter, and ring progress don't crowd each other.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[ 13 ]]]]]]]]]]]]]
+
+Generate a coding prompt for this task: Single instruction banner (pill): crossfade on change, max 2 lines, never stacks — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+------------------------------------------------------------------------------------------------------------------------------->>>>
+
+
+# UI/OVERLAY: Single Instruction Banner (Pill) — Crossfade, Max 2 Lines, Never Stacks — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the single instruction banner: one pill-shaped message that shows the current capture instruction (e.g. "Move closer", "Hold steady", "Tilt down", "Walk left around the object"). It is the single authoritative text cue for the Level A HUD — exactly one banner exists at a time, new messages crossfade over the old, text is capped at two lines, and banners never stack or queue visibly. It plugs into the `CaptureOverlayLayer` and renders whatever instruction the parent supplies; it does not decide instructions itself.
+
+- [ ] Build an `InstructionBanner` overlay that displays a single pill with the current message
+- [ ] Crossfade (fade-out old / fade-in new) when the message changes; never show two banners at once
+- [ ] Cap text at two lines with ellipsis; enforce a max width so the pill stays compact
+- [ ] Coalesce rapid message changes so the banner doesn't thrash (debounce/replace, never queue/stack)
+- [ ] Support an optional severity (info / warning) for subtle color treatment
+- [ ] Honor reduce-motion (instant swap instead of crossfade)
+- [ ] Support an empty/null message → banner hides cleanly (fades out)
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into; confirm how a current-instruction value is supplied to overlays
+2. `lib/features/capture/level_a/level_a_capture_screen.dart` — the parent that will compute and feed the current instruction (from tilt/stability/placement/ring state)
+3. The tilt meter, stability, and placement overlays — their states are the *sources* the parent will translate into a single instruction; this banner must not re-derive them, only display the chosen string
+4. Theme tokens — Deep Black/elevated surface pill, white text, Mirage Red for warning severity, Royal Gold accent sparingly; brand palette
+5. The reduce-motion pattern used by prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Instruction model
+In `lib/features/capture/level_a/domain/capture_instruction.dart`:
+
+```dart
+enum InstructionSeverity { info, warning }
+
+class CaptureInstruction {
+  final String id;        // stable id so identical re-emits don't re-trigger crossfade
+  final String message;
+  final InstructionSeverity severity;
+  const CaptureInstruction({required this.id, required this.message, this.severity = InstructionSeverity.info});
+}
+```
+
+The `id` lets the banner skip re-animating when the same instruction is emitted repeatedly (e.g. "Hold steady" sustained) — only a *changed* id triggers a crossfade.
+
+### Step 2: The banner widget
+In `lib/features/capture/level_a/widgets/instruction_banner.dart`:
+
+```dart
+class InstructionBanner extends StatefulWidget {
+  final CaptureInstruction? instruction; // null => hidden
+  final Duration crossfade;              // default ~220ms
+  final Duration coalesceWindow;         // default ~120ms debounce
+  const InstructionBanner({
+    required this.instruction,
+    this.crossfade = const Duration(milliseconds: 220),
+    this.coalesceWindow = const Duration(milliseconds: 120),
+    super.key,
+  });
+}
+```
+
+- Internally track the *displayed* instruction vs the *incoming* one
+- On a new `instruction` whose `id` differs from the displayed one: start a debounce timer (`coalesceWindow`); if another change arrives within the window, replace the pending one (do not queue) — only the latest wins
+- After the debounce, crossfade: fade the current pill out and the new pill in (use `AnimatedSwitcher`/`AnimatedOpacity` with a single child so two never coexist beyond the transition)
+- Null/empty incoming → fade the pill out to hidden
+
+### Step 3: Pill rendering + 2-line cap
+- Pill: rounded container on an elevated dark surface, white text, compact horizontal padding
+- `Text(..., maxLines: 2, overflow: TextOverflow.ellipsis, textAlign: center)`; enforce a `ConstrainedBox`/max width (e.g. 80% of screen width) so the pill never spans edge-to-edge
+- Severity: `info` → neutral surface; `warning` → subtle Mirage Red border/tint (not a full red fill — keep it readable and on-brand)
+- Position consistently (e.g. centered, lower-third above capture controls), safe-area aware, not obscuring the placement box
+
+### Step 4: Reduce-motion + single-instance guarantee
+- Reduce-motion: skip the crossfade — swap text instantly (still respect coalescing)
+- Architecturally guarantee a single banner: the widget renders exactly one pill (or none). It must be impossible to end up with two pills stacked, even under rapid changes — the `AnimatedSwitcher` transition is the only moment two are briefly cross-faded, and they occupy the same slot (not stacked vertically)
+
+## What NOT to Change
+
+- Do NOT compute instructions here — the banner displays the supplied `CaptureInstruction` only; the parent maps tilt/stability/placement/ring state into the single chosen message
+- Do NOT queue messages or render a list/stack of banners — exactly one at a time, latest-wins
+- Do NOT modify the other overlays, the composition layer, sensor providers, config, or routing — only consume the supplied instruction
+- Do NOT exceed two lines or let the pill grow full-width — enforce maxLines + max width
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT obstruct the placement box, tilt meter, stability dot, or capture controls
+- Do NOT animate on identical re-emits (same `id`) — only changed instructions crossfade
+
+## Analytics Events
+
+No new event required (the banner is a pure display of decisions made elsewhere). If instruction-frequency analytics are wanted, they belong with the parent's instruction-selection logic, not this widget.
+
+## Edge Cases to Handle
+
+- [ ] Rapid succession of different messages → debounce coalesces them; only the latest is shown; no visible flashing through intermediate messages
+- [ ] Same instruction re-emitted continuously (same `id`) → no re-animation, no flicker; pill stays put
+- [ ] Message change during an in-progress crossfade → the new one replaces the target cleanly without leaving two visible afterward
+- [ ] Null/empty message → pill fades out to hidden; a later non-null message fades back in
+- [ ] Very long message → capped at 2 lines with ellipsis; pill respects max width
+- [ ] Severity change only (same text) → decide policy: treat as a change worth a subtle transition or not (recommend: animate only if `id` changed; severity restyle can be instant) — keep consistent
+- [ ] Reduce-motion → instant swaps, no crossfade, coalescing still applies
+- [ ] Widget disposed mid-transition → debounce timer and animation controllers cancelled/disposed; no `setState after dispose`
+- [ ] Tiny screen → pill remains within safe area, 2-line cap prevents overflow
+
+## Constraints
+
+- Exactly one banner visible at any time; latest-wins; never queue or stack
+- Animation only triggers on a changed instruction `id`; identical re-emits are no-ops
+- Text capped at 2 lines (ellipsis) and a max pill width; never edge-to-edge
+- Rapid changes coalesced via a short debounce, replacing (not queuing) the pending instruction
+- Reduce-motion → instant swap; coalescing preserved
+- Guidance-only and hit-test transparent; positioned to not obscure other HUD elements/controls
+- All timers/controllers disposed; `setState` guarded with `mounted`
+- Brand palette via theme tokens (neutral dark pill + white text; warning = subtle Mirage Red treatment)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] Exactly one instruction pill renders at a time; changing the instruction crossfades old→new with no stacking
+- [ ] Repeated identical instructions (same id) do not re-animate or flicker
+- [ ] Rapid different instructions coalesce to the latest; intermediate ones are not flashed
+- [ ] Text is capped at 2 lines with ellipsis and the pill respects a max width (never full-width)
+- [ ] Null/empty message hides the pill via fade-out; a new message brings it back
+- [ ] Warning severity applies a subtle, readable, on-brand treatment
+- [ ] Reduce-motion performs instant swaps (no crossfade) while still coalescing
+- [ ] No two pills ever appear stacked, even under stress (rapid changes / mid-transition replacement)
+- [ ] No leaks / no `setState after dispose`; no jank on a mid-range Android
+- [ ] Does not obscure the placement box, tilt meter, stability dot, or capture controls
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm how the parent supplies the current instruction to overlays before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. Add a debug control to push instructions; cycle through several different messages and confirm single-pill crossfade with no stacking.
+4. Push the same instruction repeatedly (same id) → confirm no re-animation/flicker.
+5. Fire many different messages in quick succession → confirm coalescing shows only the latest, no flashing through intermediates.
+6. Push a 3+ line message → confirm 2-line ellipsis and max-width compliance.
+7. Push null/empty → confirm fade-out; push a new message → confirm fade-in.
+8. Change severity info↔warning → confirm the chosen restyle policy behaves consistently.
+9. Enable reduce-motion → confirm instant swaps, coalescing intact.
+10. Trigger a message change mid-crossfade repeatedly → confirm no lingering second pill afterward.
+11. Dispose the screen mid-transition → confirm no console errors.
+12. Test on small/large screens for safe-area + overflow; check performance overlay on a mid-range Android.
+
+## Assumptions
+
+- Assumed: the parent (Level A capture screen) owns instruction selection — it prioritizes the various HUD signals (e.g. stability "Hold steady" outranks "Walk left") into one `CaptureInstruction`. This banner only displays the result; confirm where that prioritization logic lives so the banner's `id`/message contract matches it. A small priority resolver is likely its own task.
+- Assumed: crossfade ~220ms and coalesce ~120ms are reasonable defaults — tune for feel; expose as constructor params (done) so they're easy to adjust.
+- Assumed: warning severity uses a subtle Mirage Red treatment (border/tint) rather than a full red fill, to stay readable and on-brand — confirm the desired warning styling with design.
+- Assumed: the banner sits in the lower-third above capture controls and does not collide with the placement box / tilt meter / stability dot — confirm the HUD layout so the single banner has a stable reserved position.
+- Assumed: severity-only changes (same text, changed severity) should restyle instantly without a crossfade (animation keyed on `id`) — confirm if a transition is preferred for severity changes too.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[[[[ 12 ]]]]]]]]]]]]]]]]
+
+Generate a coding prompt for this task: Direction arrow overlay: clockwise/counterclockwise, shown only when relevant — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+------------------------------------------------------------------------------------------------------------->>>
+# UI/OVERLAY: Direction Arrow Overlay — Clockwise/Counterclockwise, Shown Only When Relevant — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the direction arrow overlay for Level A (Eye Ring): a directional indicator (clockwise / counterclockwise) that tells the user which way to move around the object to reach the next uncaptured ring position. It appears only when movement guidance is relevant (next target is to one side and the user isn't already there/moving correctly) and fades away otherwise. It plugs into the `CaptureOverlayLayer` and renders a supplied direction/visibility decision — it does not compute ring progress or yaw itself.
+
+- [ ] Build a `DirectionArrowOverlay` that renders a clockwise or counterclockwise arrow indicator
+- [ ] Show/hide based on a supplied relevance flag — hidden by default, appears only when guidance is needed
+- [ ] Animate appearance/disappearance (fade/scale) and an optional subtle motion hint in the indicated direction
+- [ ] Support a "magnitude"/urgency input (how far to go) for optional intensity (size/speed), without becoming noisy
+- [ ] Honor reduce-motion (static arrow, no looping motion hint)
+- [ ] Never obscure the placement box, tilt meter, stability dot, or instruction banner
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into; confirm how a direction decision is supplied to overlays
+2. `lib/features/capture/level_a/level_a_capture_screen.dart` — the parent that computes "which way to the next ring position" (from yaw + ring progress) and feeds this overlay
+3. The ring-progress / yaw indicator task (if present) — that logic is the *source* of the direction; this overlay must not re-derive it
+4. The instruction banner, tilt meter, and stability overlays — coordinate placement so the arrow doesn't collide with them
+5. Theme tokens — Royal Gold/white arrow, Mirage Red for high-urgency (sparingly); brand palette
+6. The reduce-motion pattern used by prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Direction decision model
+In `lib/features/capture/level_a/domain/direction_hint.dart`:
+
+```dart
+enum RingDirection { clockwise, counterclockwise }
+
+class DirectionHint {
+  final bool visible;            // parent decides relevance
+  final RingDirection direction;
+  final double urgency;          // 0..1, optional intensity (0 = barely, 1 = go now)
+  const DirectionHint({
+    required this.visible,
+    this.direction = RingDirection.clockwise,
+    this.urgency = 0.5,
+  });
+
+  static const hidden = DirectionHint(visible: false);
+}
+```
+
+Relevance/visibility is decided by the parent (e.g. show only when the angular gap to the next uncaptured position exceeds a threshold and the user isn't actively closing it). This overlay trusts the flag.
+
+### Step 2: The overlay widget
+In `lib/features/capture/level_a/widgets/direction_arrow_overlay.dart`:
+
+```dart
+class DirectionArrowOverlay extends StatefulWidget {
+  final DirectionHint hint;
+  const DirectionArrowOverlay({required this.hint, super.key});
+}
+```
+
+- Render a curved/circular arrow glyph (`CustomPainter` or an icon/SVG) oriented for clockwise vs counterclockwise
+- Visibility: when `hint.visible` flips true → fade/scale in; when false → fade/scale out (use `AnimatedOpacity`/`AnimatedScale` so toggling is smooth, not abrupt)
+- Optional motion hint: a subtle looping nudge/sweep in the indicated direction to imply "move this way" — keep gentle, low-amplitude
+- Urgency (optional): map `urgency` to size and/or motion speed and color escalation (low = neutral gold/white, high = Mirage Red), but cap the effect so it never becomes distracting
+
+### Step 3: Orientation correctness
+- Ensure the clockwise glyph reads unambiguously clockwise (and CCW vice versa) from the user's viewpoint holding the phone — verify against a real device; a mirrored/back-camera mental model can invert perceived direction (note in assumptions)
+- Keep the arrow's meaning consistent with how the ring-progress logic defines clockwise (agree on a single convention)
+
+### Step 4: Placement + reduce-motion + debounce
+- Position in a consistent, non-obstructive spot (e.g. mid-screen edge toward the indicated direction, or a fixed lower-center slot pointing left/right), safe-area aware, clear of the placement box and other HUD elements
+- Debounce visibility toggles slightly so the arrow doesn't blink on/off when the user hovers near the relevance threshold
+- Reduce-motion: show a static arrow when `visible`, no looping motion hint; appearance can still be an instant show/hide
+
+## What NOT to Change
+
+- Do NOT compute ring progress, yaw, or which direction is shorter here — the overlay renders the supplied `DirectionHint` only
+- Do NOT keep the arrow always on — it must be hidden unless the parent says guidance is relevant
+- Do NOT modify other overlays, the composition layer, sensor providers, ring-progress logic, config, or routing — only consume the supplied hint
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT obscure the placement box, tilt meter, stability dot, instruction banner, or capture controls
+- Do NOT let urgency animations become noisy/distracting — cap intensity and speed
+
+## Analytics Events
+
+No new event required (the arrow purely renders a decision made elsewhere). Movement-guidance analytics, if wanted, belong with the ring-progress/direction-computation logic.
+
+## Edge Cases to Handle
+
+- [ ] `hint.visible == false` → arrow hidden (faded out); no residual glyph, no layout shift for other elements
+- [ ] Visibility flapping near the relevance threshold → debounce prevents blink-on/off
+- [ ] Direction reverses (CW ↔ CCW) while visible → smooth transition (flip/cross-rotate), not an abrupt jump or a brief both-arrows state
+- [ ] Urgency at extremes (0 and 1) → 0 still legible if visible; 1 capped so it doesn't overwhelm; no NaN/overflow in size/speed mapping
+- [ ] Reduce-motion → static arrow, no looping nudge
+- [ ] Rapid show→hide→show cycles → animations don't pile up; controllers reused, no leak
+- [ ] Tiny screen → arrow stays within safe area and clear of other HUD elements
+- [ ] Direction convention mismatch (arrow points the long way around) → verified against the ring-progress definition so it always indicates the intended (shorter) path
+- [ ] Overlay disposed mid-animation → controllers/timers disposed; no `setState after dispose`
+
+## Constraints
+
+- Hidden by default; visible only when the supplied hint says so (relevance decided upstream)
+- Visibility toggles debounced to avoid blinking; direction reversals transition smoothly with no both-arrows state
+- Clockwise/counterclockwise glyph must read correctly from the user's holding viewpoint and match the ring-progress convention
+- Guidance-only and hit-test transparent; positioned clear of all other HUD elements and controls
+- Reduce-motion honored; urgency-driven motion/size capped to stay non-distracting
+- All controllers/timers disposed; `setState` guarded with `mounted`
+- Brand palette via theme tokens (neutral gold/white default, Mirage Red only for high urgency, sparingly)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] The arrow is hidden by default and appears only when `hint.visible` is true, fading/scaling in smoothly
+- [ ] Clockwise vs counterclockwise is rendered unambiguously and correctly from the user's viewpoint
+- [ ] Direction reversal while visible transitions smoothly with no both-arrows or abrupt jump
+- [ ] Visibility flapping near the threshold is debounced (no blinking)
+- [ ] Optional urgency affects intensity within capped, non-distracting bounds; no NaN/overflow at extremes
+- [ ] Reduce-motion shows a static arrow with no looping motion hint
+- [ ] Rapid show/hide cycles cause no animation pile-up or leaks
+- [ ] Arrow never obscures the placement box, tilt meter, stability dot, instruction banner, or controls
+- [ ] No `setState after dispose`; no jank on a mid-range Android
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm how the parent supplies the `DirectionHint` and the agreed clockwise convention from the ring-progress logic before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. Add a debug control to toggle visibility, direction, and urgency.
+4. Toggle visibility on/off → confirm smooth fade/scale in-out, no residual glyph, no layout shift elsewhere.
+5. On a **physical device**, set clockwise and counterclockwise → confirm each reads correctly while holding the phone in capture posture (fix if perceived inverted).
+6. Reverse direction while visible → confirm a smooth transition with no both-arrows flash.
+7. Flap visibility near a threshold (rapid true/false) → confirm debounce prevents blinking.
+8. Sweep urgency 0→1 → confirm intensity stays within non-distracting bounds, no overflow.
+9. Enable reduce-motion → confirm static arrow, no looping nudge.
+10. Rapidly cycle show/hide many times → confirm no animation pile-up; check leaks across screen entry/exit.
+11. Verify clearance from all other HUD overlays on small and large screens; check performance overlay on a mid-range Android.
+
+## Assumptions
+
+- Assumed: the parent / ring-progress logic computes which direction reaches the next uncaptured position via the shorter arc and whether guidance is currently relevant — this overlay only displays it. Confirm where that computation lives so the `DirectionHint` contract and clockwise convention match exactly (a direction/relevance resolver is likely a separate task).
+- Assumed: "clockwise" is defined from the user's viewpoint looking at their screen while ringing the object — confirm this convention with the ring-progress task to avoid an inverted arrow. Calibrate on a real device.
+- Assumed: urgency is optional and may not be supplied initially — default to a neutral intensity; if the team prefers a binary show/hide with no intensity, ignore `urgency` and keep a single neutral style.
+- Assumed: the arrow has a reserved, non-obstructive position in the HUD layout — confirm with design where it sits relative to the placement box, tilt meter, stability dot, and instruction banner so nothing collides.
+- Assumed: this overlay is guidance-only; whether reaching the next position auto-fires a capture is separate capture-logic. Confirm the interaction between direction guidance and the capture trigger.
+- Assumed: a curved/circular arrow best conveys "rotate around the object" vs a straight left/right arrow — confirm the desired glyph style with design; the CW/CCW semantics hold regardless of glyph.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ 11 ]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+
+
+Generate a coding prompt for this task: Ring coverage map (lower-left): segmented ring, filled/target/missing states — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+---------------------------------------------------------------------------------------------------------->>>>
+
+
+
+# UI/OVERLAY: Ring Coverage Map (Lower-Left) — Segmented Ring, Filled/Target/Missing States — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: High
+
+---
+
+## Task Description
+
+Build the ring coverage map for Level A (Eye Ring): a small segmented ring in the lower-left corner that shows, at a glance, how much of the 360° eye-level circle has been captured. Each segment reflects a position around the object and is colored by state — filled (captured), target (the next/current position to capture), or missing (not yet captured). The number of segments comes from `CaptureConfig`. It plugs into the `CaptureOverlayLayer` and renders a supplied coverage model; it does not compute yaw or decide captures itself.
+
+- [ ] Build a `RingCoverageMap` overlay rendering a segmented circular ring (donut) of N segments
+- [ ] Color each segment by state: `filled` (captured), `target` (current/next), `missing` (uncaptured)
+- [ ] Derive N (segment count) from the Level A band's `segments` in `CaptureConfig`
+- [ ] Animate state transitions (missing→filled, target highlight) smoothly
+- [ ] Show a compact progress readout (e.g. "7/12") alongside or inside the ring
+- [ ] Position bottom-left, safe-area aware, not obscuring other HUD elements
+- [ ] Honor reduce-motion (instant state changes, no pulse)
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into; confirm how the coverage model is supplied to overlays
+2. `lib/features/config/application/config_notifier.dart` (`CaptureConfig`/`PitchBand`) — the eye-ring band's `segments` defines N
+3. The ring-progress / yaw logic (parent or a separate task) — the *source* of which segments are filled and which is the target; this overlay only renders it
+4. The direction arrow, instruction banner, tilt meter, stability overlays — coordinate placement so the ring map (lower-left) doesn't collide
+5. Theme tokens — filled = Royal Gold/success, target = Mirage Red or white highlight, missing = muted grey; Deep Black backing; brand palette
+6. The reduce-motion pattern from prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Coverage model
+In `lib/features/capture/level_a/domain/ring_coverage.dart`:
+
+```dart
+enum SegmentState { missing, target, filled }
+
+class RingCoverage {
+  final int segmentCount;            // N, from CaptureConfig
+  final Set<int> filledIndices;      // captured segment indices (0..N-1)
+  final int? targetIndex;            // current/next segment to capture (nullable)
+  const RingCoverage({
+    required this.segmentCount,
+    this.filledIndices = const {},
+    this.targetIndex,
+  });
+
+  SegmentState stateOf(int i) {
+    if (filledIndices.contains(i)) return SegmentState.filled;
+    if (i == targetIndex) return SegmentState.target;
+    return SegmentState.missing;
+  }
+
+  int get filledCount => filledIndices.length;
+  double get progress => segmentCount == 0 ? 0 : filledCount / segmentCount;
+}
+```
+
+The parent supplies `RingCoverage`; this overlay never decides what's filled/target.
+
+### Step 2: Segmented ring painter
+In `lib/features/capture/level_a/widgets/ring_coverage_map.dart`:
+
+```dart
+class RingCoverageMap extends StatelessWidget {
+  final RingCoverage coverage;
+  final double diameter;        // compact, e.g. 64–88 px
+  const RingCoverageMap({required this.coverage, this.diameter = 76, super.key});
+}
+```
+
+- Use `CustomPaint`/`CustomPainter` to draw N arc segments around a donut, with a small gap between segments
+- Segment angular size = `2π / N`; start at top (−90°) so segment 0 is at 12 o'clock (confirm orientation convention with the ring-progress logic)
+- Color by `stateOf(i)`: filled = success/gold, target = highlight (Mirage Red or bright white), missing = muted grey on Deep Black backing
+- Center: compact progress text ("7/12") in white/secondary grey
+- Keep stroke width and gaps legible at small size on dense screens
+
+### Step 3: Transitions + target emphasis
+- Animate `missing→filled` (e.g. a quick fill/scale) and a subtle pulse/glow on the `target` segment so the user knows where to go next
+- Use a single lightweight animation driver; isolate repaint to the ring (don't repaint the whole overlay tree)
+- Reduce-motion: apply state colors instantly, no pulse/fill animation
+
+### Step 4: Placement + config wiring
+- Anchor bottom-left within safe area; ensure it clears the direction arrow / instruction banner / capture controls
+- Segment count N comes from the Level A band in `CaptureConfig`; if config isn't loaded, use the bundled default; if N changes (config refresh), the ring rebuilds to the new count gracefully
+
+## What NOT to Change
+
+- Do NOT compute yaw, ring progress, fill decisions, or the target index here — render the supplied `RingCoverage` only
+- Do NOT hardcode the segment count — derive N from `CaptureConfig`
+- Do NOT modify other overlays, the composition layer, sensor providers, ring-progress logic, config, or routing — only consume them
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT place the ring where it obscures the placement box, tilt meter, stability dot, instruction banner, direction arrow, or capture controls
+- Do NOT repaint the entire overlay tree per state change — isolate the ring's repaint
+
+## Analytics Events
+
+No new event required (the ring renders coverage computed elsewhere). Coverage/completion analytics belong with the ring-progress logic, not this display widget.
+
+## Edge Cases to Handle
+
+- [ ] N = 0 or config not loaded → render nothing or a neutral placeholder using the bundled-default count; no division-by-zero/NaN
+- [ ] `targetIndex` null (no current target, or capture paused) → no target highlight; filled/missing render normally
+- [ ] `targetIndex` out of range (stale/invalid) → ignored safely (treated as no target), no crash
+- [ ] `filledIndices` containing out-of-range indices → ignored, no crash
+- [ ] N changes at runtime (config refresh) → ring rebuilds to the new segment count without crashing; existing filled indices reconciled or reset per policy (see assumptions)
+- [ ] All segments filled (complete) → ring shows fully filled state; progress reads "N/N"; optional completion emphasis
+- [ ] Very large N (e.g. 24+) → segments still legible at the compact size, or stroke/gap auto-adjust; no visual mush
+- [ ] Reduce-motion → instant color changes, no pulse/fill animation
+- [ ] Overlay disposed mid-animation → animation controller disposed; no `setState after dispose`
+- [ ] Small screen → ring stays within safe area and clear of other HUD elements
+
+## Constraints
+
+- Segment count N sourced from `CaptureConfig` (single source); never hardcoded
+- `stateOf` is the single source of per-segment state; out-of-range/invalid indices handled defensively (no crash/NaN)
+- Compact and anchored bottom-left, safe-area aware, clear of all other HUD elements and controls
+- Guidance-only and hit-test transparent
+- Reduce-motion honored; animation cheap and isolated to the ring's repaint
+- Ring orientation/segment-0 convention agreed with the ring-progress logic so positions correspond to real-world angles
+- Brand palette via theme tokens (filled gold/success, target highlight, missing muted grey, Deep Black backing)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] A compact segmented ring renders bottom-left with N segments matching the Level A `CaptureConfig` band
+- [ ] Segments color correctly by state: filled (captured), target (current/next, emphasized), missing (uncaptured)
+- [ ] Progress readout ("X/N") matches the filled count
+- [ ] `missing→filled` and target highlight animate smoothly; reduce-motion makes them instant
+- [ ] Null/invalid `targetIndex` and out-of-range indices are handled with no crash/NaN
+- [ ] N=0 / config-not-loaded renders safely using defaults; runtime N changes rebuild the ring without crashing
+- [ ] Complete state (N/N) renders fully filled with correct readout
+- [ ] Large N remains legible; segments don't visually mush
+- [ ] Ring does not obscure any other HUD element or controls; stays within safe area
+- [ ] No leaks / no `setState after dispose`; no jank on a mid-range Android
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm how the parent supplies `RingCoverage`, which `CaptureConfig` band defines N, and the segment-0 orientation convention before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. Add a debug control to set N, filled indices, and target index.
+4. Render with a mix of filled/target/missing → confirm correct colors, emphasis on target, and "X/N" readout.
+5. Animate filling segments one by one → confirm smooth missing→filled transitions and target pulse.
+6. Set `targetIndex` null, then out-of-range, and add out-of-range filled indices → confirm safe rendering, no crash.
+7. Set N=0 / unloaded config → confirm safe placeholder/default, no NaN.
+8. Change N at runtime (config refresh / stub) → confirm the ring rebuilds correctly.
+9. Fill all segments → confirm complete state and "N/N".
+10. Test large N (e.g. 24) → confirm legibility at compact size.
+11. Enable reduce-motion → confirm instant changes, no pulse.
+12. Unit-test `RingCoverage.stateOf`/`progress` with valid, empty, null-target, and out-of-range inputs.
+13. Verify clearance from other HUD overlays on small/large screens; check leaks and performance overlay on a mid-range Android.
+
+## Assumptions
+
+- Assumed: the parent / ring-progress logic computes `filledIndices` and `targetIndex` from device yaw vs the N target angles — this overlay only displays them. Confirm where that lives so the `RingCoverage` contract and the segment-0/orientation convention match exactly (the ring-progress computation is likely a separate State & Domain or capture-logic task).
+- Assumed: Level A "Eye Ring" maps to one specific `PitchBand` in `CaptureConfig` whose `segments` count defines N — confirm which band id represents the eye-level ring so the segment count matches the actual capture target (and the tilt meter's target band).
+- Assumed: segment 0 at 12 o'clock and clockwise increasing index is the convention — must agree with the direction arrow and ring-progress logic so "next position" and the arrow direction are consistent. Confirm and keep one shared convention.
+- Assumed: on a runtime N change, resetting/reconciling filled indices is acceptable (config rarely changes mid-capture; snapshotting config at capture-start—per the remote-config task's recommendation—avoids this entirely). Confirm whether config is snapshotted at capture start; if so, N won't change mid-session and this edge case is moot.
+- Assumed: lower-left placement is fixed per the task title — confirm with design that the ring map, direction arrow, and instruction banner have non-overlapping reserved slots in the HUD.
+- Assumed: a completion emphasis (e.g. brief celebratory pulse at N/N) is nice-to-have, not required — include a subtle one if cheap, otherwise just the fully-filled state.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[ 10 ]]]]]]]]
+
+Generate a coding prompt for this task: Shutter button: disabled when outside pitch band or unstable (guided mode) — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+-------------------------------------------------------------------------------------------------->>>>
+
+# UI/OVERLAY: Shutter Button — Gated by Pitch Band + Stability (Guided Mode) — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: High
+
+---
+
+## Task Description
+
+Build the shutter button for Level A guided capture. In **guided mode** it is enabled only when the device is within the target pitch band AND steady (and optionally the object is placed); otherwise it is visibly disabled with a clear reason. Tapping it triggers a single capture via a supplied callback, shows an in-flight state, fires haptic feedback on success, and guards against double-capture. It plugs into the `CaptureOverlayLayer`. The button renders readiness and triggers capture — it does not run the camera, compute tilt/stability, or save frames itself.
+
+- [ ] Build a `ShutterButton` overlay that triggers capture via an injected `onCapture` callback
+- [ ] In guided mode, enable only when capture readiness is satisfied (in-band + stable [+ placed]); disable otherwise
+- [ ] Show distinct states: `ready` (enabled), `blocked` (disabled, with reason), `capturing` (in-flight, disabled)
+- [ ] Fire success haptic on a completed capture; guard against double/rapid taps
+- [ ] Support a non-guided/manual mode where gating is relaxed (configurable)
+- [ ] Handle sensor-unavailable so the user is never permanently locked out of capturing
+- [ ] Honor reduce-motion (no capture flash animation; instant state changes)
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns the camera controller and composes overlays; it supplies `onCapture` (which calls `CaptureCameraController.takePicture`) and aggregates readiness
+2. `lib/features/capture/level_a/application/current_pitch_provider.dart` + `tilt_target.dart` — tilt in/out-of-band state (a readiness input)
+3. `lib/features/capture/level_a/application/stability_provider.dart` — stability state (a readiness input)
+4. `lib/features/capture/level_a/domain/placement_box.dart` (`PlacementStatus`) — optional placement input
+5. `lib/core/haptics/haptics.dart` — reuse for success/blocked-tap feedback (from Screen 0A)
+6. Theme tokens — Mirage Red shutter, muted/disabled grey, Royal Gold ready accent; brand palette
+7. The reduce-motion pattern from prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Capture readiness model
+In `lib/features/capture/level_a/domain/capture_readiness.dart`:
+
+```dart
+enum CaptureMode { guided, manual }
+
+enum BlockReason { outOfBand, unstable, notPlaced, sensorUnavailable, capturing }
+
+class CaptureReadiness {
+  final CaptureMode mode;
+  final bool inBand;
+  final bool stable;
+  final bool placed;          // optional gate; true if placement not required
+  final bool sensorSupported;
+
+  const CaptureReadiness({
+    required this.mode,
+    this.inBand = false,
+    this.stable = false,
+    this.placed = true,
+    this.sensorSupported = true,
+  });
+
+  /// In manual mode, always allowed. In guided mode, require gates —
+  /// but if sensors are unavailable, do NOT hard-block (fall back to allow + warn).
+  bool get canCapture {
+    if (mode == CaptureMode.manual) return true;
+    if (!sensorSupported) return true; // never lock the user out when sensors are off
+    return inBand && stable && placed;
+  }
+
+  BlockReason? get primaryBlockReason {
+    if (canCapture) return null;
+    if (!placed) return BlockReason.notPlaced;
+    if (!inBand) return BlockReason.outOfBand;
+    if (!stable) return BlockReason.unstable;
+    return null;
+  }
+}
+```
+
+Readiness is assembled by the parent from the tilt/stability/placement providers and passed in — the button does not subscribe to sensors directly.
+
+### Step 2: The shutter widget
+In `lib/features/capture/level_a/widgets/shutter_button.dart`:
+
+```dart
+class ShutterButton extends StatefulWidget {
+  final CaptureReadiness readiness;
+  final Future<void> Function() onCapture; // performs the actual takePicture; throws on failure
+  final VoidCallback? onBlockedTap;         // optional: nudge user (e.g. emphasize the blocking HUD cue)
+  const ShutterButton({
+    required this.readiness,
+    required this.onCapture,
+    this.onBlockedTap,
+    super.key,
+  });
+}
+```
+
+Internal `capturing` flag. Behavior:
+- If `!readiness.canCapture` → render disabled (muted), tap calls `onBlockedTap` (optional light haptic + signal), does NOT capture
+- If `readiness.canCapture` and not `capturing` → enabled; on tap: set `capturing`, fire selection haptic, await `onCapture()`:
+  - success → success haptic, brief capture flash (reduce-motion: skip flash), clear `capturing`
+  - throws → error haptic, clear `capturing`, surface error to parent (rethrow or callback) so it can show a message/offline modal
+- In-flight guard: ignore taps while `capturing`
+
+### Step 3: Visual states
+- `ready` → solid Mirage Red shutter with a subtle ready accent (gold ring); tappable
+- `blocked` → muted/grey, reduced opacity, non-actionable look; optionally a tiny reason glyph (but the instruction banner carries the verbose reason — avoid duplicating long text on the button)
+- `capturing` → in-flight indicator (spinner/scale), disabled
+- Use a short scale/ripple on tap; capture flash overlay on success (full-screen white flash, quick) unless reduce-motion
+
+### Step 4: Mode + sensor fallback
+- `manual` mode → always enabled (subject only to the in-flight guard)
+- `guided` mode with `sensorSupported == false` → enabled (don't lock out), but the parent should surface a "tilt/stability guidance unavailable" note via the banner; the button itself just allows capture
+- Mode source: from capture flow config / a debug toggle (see assumptions)
+
+### Step 5: Placement + accessibility
+- Anchor bottom-center, safe-area aware, large tap target (≥ 56–64 px), clear of the ring map (lower-left) and other HUD elements
+- Provide a semantics label reflecting state ("Capture, ready" / "Capture, blocked: hold steady" / "Capturing")
+
+## What NOT to Change
+
+- Do NOT run the camera, call `takePicture` directly, or save frames here — the parent's `onCapture` does that; the button only triggers it
+- Do NOT subscribe to sensor providers inside the button — consume the parent-assembled `CaptureReadiness`
+- Do NOT hard-block capture when sensors are unavailable — fall back to allowing capture so the user is never stuck
+- Do NOT modify the camera controller, sensor providers, other overlays, config, or routing — only consume the readiness + callback
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT allow double/rapid captures — enforce the in-flight guard
+- Do NOT obscure the ring coverage map or other HUD elements
+
+## Analytics Events
+
+Event: `level_a_capture_triggered`
+Trigger: a capture attempt resolves
+Properties:
+  - result: "success" | "error"
+  - mode: "guided" | "manual"
+  - sensor_supported: bool
+  - device_type: "android" | "ios"
+
+Event: `level_a_blocked_shutter_tap` (throttled)
+Trigger: user taps while blocked
+Properties:
+  - reason: "out_of_band" | "unstable" | "not_placed"
+
+(Route through the existing dispatcher; otherwise add TODO-marked stubs. Throttle blocked-tap events.)
+
+## Edge Cases to Handle
+
+- [ ] Tap while blocked (out-of-band/unstable/not-placed) → no capture; optional nudge via `onBlockedTap`; throttled analytics
+- [ ] Rapid double-tap when ready → only one capture fires (in-flight guard)
+- [ ] Readiness flips to blocked mid-capture → the in-flight capture completes; the button does not start a new one and returns to the correct state after
+- [ ] `onCapture` throws (camera error) → error haptic, `capturing` cleared, error surfaced to parent (no stuck spinner)
+- [ ] Sensor unavailable in guided mode → button enabled (not locked out); banner warns separately
+- [ ] Manual mode → always enabled regardless of tilt/stability
+- [ ] Reduce-motion → no capture flash/scale animation; state changes instant; haptics still fire
+- [ ] Readiness changes rapidly near gate thresholds → button enable/disable shouldn't flicker jarringly (rely on upstream hysteresis in tilt/stability; optionally a tiny debounce on the enabled→disabled visual)
+- [ ] Widget disposed mid-capture → guard `setState` with `mounted`; no `setState after dispose`
+- [ ] Very small screen → tap target stays ≥ minimum and clear of other HUD elements
+
+## Constraints
+
+- Capture is triggered only via the injected `onCapture`; the button performs no camera I/O
+- Guided gating uses the parent-assembled `CaptureReadiness`; sensor-unavailable must NOT hard-block (fail-open to manual capture)
+- Single in-flight capture at a time (guard); no double-fire
+- Minimum tap target size for accessibility; semantics label reflects state
+- Reduce-motion honored (no flash/scale); haptics via the shared `Haptics` helper
+- Guidance/control element positioned clear of the ring map and other HUD overlays
+- Brand palette via theme tokens (Mirage Red ready, muted grey blocked, gold ready accent)
+- `setState` guarded with `mounted`; controllers/timers disposed
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] In guided mode, the shutter is enabled only when in-band AND stable (AND placed if required); disabled otherwise with a clear disabled appearance
+- [ ] Tapping while blocked does not capture and (optionally) nudges the user; throttled analytics fire
+- [ ] Tapping while ready triggers exactly one capture; rapid double-tap fires only once
+- [ ] In-flight state shows during capture; success fires the success haptic (+ flash unless reduce-motion); error clears state with an error haptic and surfaces the error
+- [ ] Manual mode always allows capture; guided mode with sensors unavailable also allows capture (never locks out)
+- [ ] Reduce-motion disables flash/scale; haptics still fire; states change instantly
+- [ ] Readiness flipping mid-capture does not start a second capture and resolves to the correct state
+- [ ] No `setState after dispose`; tap target meets minimum size; semantics label reflects state
+- [ ] Shutter does not obscure the ring map or other HUD elements
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm how the parent assembles `CaptureReadiness` and wires `onCapture` to `CaptureCameraController.takePicture` before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a **physical device**, enter Level A capture. With the device out of band and/or shaking → confirm the shutter is disabled and tapping does nothing (optional nudge).
+4. Hold in-band and steady → confirm the shutter enables; tap → confirm a single capture, success haptic, and flash (unless reduce-motion).
+5. Rapidly double-tap when ready → confirm only one capture fires.
+6. Stub `onCapture` to throw → confirm error haptic, no stuck spinner, error surfaced.
+7. Switch to manual mode (toggle/stub) → confirm capture works regardless of tilt/stability.
+8. Disable motion / simulator → confirm guided mode does NOT lock the shutter (fail-open) and capture works.
+9. Flip readiness to blocked mid-capture (stub) → confirm the in-flight capture finishes and no second capture starts.
+10. Enable reduce-motion → confirm no flash/scale, haptics still fire.
+11. Unit-test `CaptureReadiness.canCapture`/`primaryBlockReason` across guided/manual, sensor on/off, and each gate combination.
+12. Verify tap target size, semantics label, clearance from the ring map, and performance on a mid-range Android; check leaks across screen entry/exit.
+
+## Assumptions
+
+- Assumed: the parent assembles `CaptureReadiness` from the tilt (`inBand`), stability (`stable`), and placement (`placed`) providers and passes it in — the button does not subscribe to sensors. Confirm the parent owns this aggregation (a small readiness-resolver may be its own task).
+- Assumed: `onCapture` performs the actual `takePicture` via `CaptureCameraController` and returns when the frame is saved/queued — the button only reflects in-flight/success/error. Confirm the capture call's contract (does it return the file path? does the parent handle saving/ring-progress update?).
+- Assumed: sensor-unavailable should fail-open (allow manual capture) rather than lock the user out — confirm this is the desired safety behavior; some teams may instead force manual mode explicitly.
+- Assumed: placement is an optional gate (`placed` defaults true) — confirm whether Level A requires the object inside the placement box to enable capture, or whether tilt+stability suffice.
+- Assumed: a manual/free-capture mode exists or is desired as a fallback/setting — confirm whether guided mode is the only mode for Level A, in which case the `manual` path is just a safety fallback for sensor-off.
+- Assumed: auto-capture (firing automatically when ready at a new ring position) is a separate task — this task is the manual gated shutter. Confirm whether Level A also needs auto-capture and how it would coexist with the manual button.
+- Assumed: bottom-center placement with the ring map at lower-left avoids collision — confirm the final HUD layout with design.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[ 9 ]]]]]]]]]]]]
+
+Generate a coding prompt for this task: Auto-capture indicator (ON/OFF pill) — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+------------------------------------------------------------------------------------------->>>
+
+# UI/OVERLAY: Auto-Capture Indicator (ON/OFF Pill) — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the auto-capture indicator: a small pill in the Level A HUD showing whether auto-capture is ON or OFF, and letting the user toggle it. When ON, the system captures automatically once the user is in-band, steady, and at a new ring position (the auto-capture *logic* is a separate task); this pill reflects and controls that mode. It plugs into the `CaptureOverlayLayer`, renders the supplied auto-capture state, and emits toggle intent — it does not run the capture loop itself.
+
+- [ ] Build an `AutoCaptureIndicator` pill that displays ON/OFF state clearly
+- [ ] Make it tappable to toggle, calling an injected `onToggle` callback (parent owns the actual mode state)
+- [ ] Reflect a "armed/counting down" sub-state when ON and a capture is imminent (optional, if the parent supplies it)
+- [ ] Persist the user's preference across sessions (per the established storage gateway)
+- [ ] Honor reduce-motion (no pulse/countdown animation; instant state)
+- [ ] Position compactly, safe-area aware, clear of the shutter, ring map, and other HUD elements
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns capture mode/state; supplies the current auto-capture value and the `onToggle` handler; coordinates with the shutter/auto-capture logic
+2. `lib/features/capture/level_a/widgets/shutter_button.dart` + `capture_readiness.dart` — auto-capture mode interacts with the gated shutter (`CaptureMode.guided/manual`); confirm how mode is represented so this pill stays consistent
+3. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into
+4. The storage gateway used for "seen intro"/prefs (e.g. `active_session` box / a prefs gateway from the Hive task) — persist the auto-capture preference here, not SharedPreferences directly
+5. Theme tokens — Royal Gold/success for ON, muted grey for OFF, Mirage Red accent for imminent capture; brand palette
+6. The reduce-motion pattern from prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Auto-capture state model
+In `lib/features/capture/level_a/domain/auto_capture_state.dart`:
+
+```dart
+enum AutoCaptureMode { off, on }
+
+class AutoCaptureState {
+  final AutoCaptureMode mode;
+  final bool armed;          // ON and conditions met / about to fire (optional)
+  final double? countdown;   // 0..1 progress of an imminent auto-shot, if used
+  const AutoCaptureState({this.mode = AutoCaptureMode.off, this.armed = false, this.countdown});
+
+  bool get isOn => mode == AutoCaptureMode.on;
+}
+```
+
+The parent owns this state and the auto-capture logic; the pill displays it and requests toggles.
+
+### Step 2: The pill widget
+In `lib/features/capture/level_a/widgets/auto_capture_indicator.dart`:
+
+```dart
+class AutoCaptureIndicator extends StatelessWidget {
+  final AutoCaptureState state;
+  final VoidCallback onToggle;
+  const AutoCaptureIndicator({required this.state, required this.onToggle, super.key});
+}
+```
+
+- Pill: compact rounded container, icon (e.g. auto/lightning) + label "AUTO ON" / "AUTO OFF"
+- Color: ON → success/Royal Gold; OFF → muted grey on Deep Black surface
+- Tappable with a clear pressed state; calls `onToggle`
+- Optional armed/countdown affordance when `state.armed`/`countdown != null`: a subtle ring/progress around the pill or a brief pulse signaling an imminent shot (reduce-motion: static "armed" styling, no animated countdown)
+
+### Step 3: Persistence wiring (preference only)
+- On toggle, the parent updates mode AND persists the preference via the storage gateway (key e.g. `level_a_auto_capture`)
+- On capture-screen entry, the parent reads the persisted preference to set the initial mode; this pill just renders whatever it's given
+- Keep persistence in the parent/gateway — the pill stays presentational (it only calls `onToggle`)
+
+### Step 4: Placement + reduce-motion
+- Anchor in a consistent HUD slot (e.g. top-right), safe-area aware, not overlapping the shutter (bottom-center), ring map (lower-left), tilt meter, or instruction banner
+- Reduce-motion: no pulse/countdown animation; ON/OFF and armed states shown with static styling
+
+## What NOT to Change
+
+- Do NOT implement the auto-capture loop/trigger logic here — the pill reflects state and requests toggles; the parent/auto-capture task fires shots
+- Do NOT modify the shutter button, camera controller, sensor/readiness providers, config, or routing — only consume the supplied state + callback
+- Do NOT persist directly via SharedPreferences — use the established storage gateway (parent-owned)
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT obscure the shutter, ring map, or other HUD elements
+- Do NOT animate the countdown under reduce-motion
+
+## Analytics Events
+
+Event: `auto_capture_toggled`
+Trigger: user taps the pill
+Properties:
+  - new_state: "on" | "off"
+  - device_type: "android" | "ios"
+
+(Route through the existing dispatcher; otherwise add a TODO-marked stub. Auto-capture *fire* analytics belong with the auto-capture logic task, not this pill.)
+
+## Edge Cases to Handle
+
+- [ ] Persisted preference present on entry → pill reflects it immediately (no flash of the wrong state)
+- [ ] No persisted preference (first run) → defaults to a sensible value (see assumptions), no crash
+- [ ] Toggle spammed rapidly → each tap flips state cleanly; no stuck intermediate; parent's persistence is last-write-wins
+- [ ] `armed`/`countdown` supplied while OFF (inconsistent input) → ignore armed/countdown when `mode == off`; render plain OFF
+- [ ] `countdown` out of 0..1 range → clamp; no overflow/NaN in the progress affordance
+- [ ] Reduce-motion → static armed styling, no animated countdown/pulse
+- [ ] Sensor unavailable / guided gating off → auto-capture may be meaningless (nothing to arm on); pill still toggles but parent decides whether ON does anything; ensure no crash and consistent display (see assumptions)
+- [ ] Widget rebuilt frequently (countdown updates) → isolate repaint so frequent countdown updates don't repaint the whole overlay tree
+- [ ] Very small screen → pill stays within safe area and clear of other HUD elements
+
+## Constraints
+
+- Presentational + intent only: renders `AutoCaptureState`, calls `onToggle`; no capture logic or persistence inside the widget
+- Preference persistence handled by the parent via the established storage gateway (not SharedPreferences directly)
+- Armed/countdown affordance ignored when OFF; countdown clamped to 0..1
+- Reduce-motion honored; countdown/armed rendering cheap and isolated
+- Positioned clear of the shutter, ring map, tilt meter, stability dot, instruction banner, and direction arrow
+- Brand palette via theme tokens (ON gold/success, OFF muted grey, imminent Mirage Red accent)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] The pill clearly shows AUTO ON vs AUTO OFF with correct colors and label
+- [ ] Tapping toggles via `onToggle`; the displayed state updates to match the parent's new state
+- [ ] The preference persists across sessions: re-entering Level A shows the last chosen ON/OFF with no wrong-state flash
+- [ ] Armed/countdown affordance renders only when ON and supplied; ignored when OFF; countdown clamped
+- [ ] Reduce-motion shows static armed/ON-OFF styling with no animated countdown
+- [ ] Rapid toggling flips cleanly with last-write-wins persistence; no stuck state
+- [ ] Frequent countdown updates don't repaint the whole overlay; no jank on a mid-range Android
+- [ ] Pill does not obscure the shutter or other HUD elements; stays within safe area
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm how the parent owns auto-capture mode, supplies `AutoCaptureState`, and where the preference persists before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a device, open Level A → toggle the pill ON/OFF and confirm label/color updates and `onToggle` fires.
+4. Toggle ON, leave and re-enter Level A → confirm the pill shows ON (persistence), with no wrong-state flash on entry.
+5. Drive `armed`/`countdown` (debug) while ON → confirm the affordance shows and animates (unless reduce-motion); set OFF with armed/countdown supplied → confirm they're ignored.
+6. Set `countdown` out of range → confirm clamping, no overflow.
+7. Spam toggle rapidly → confirm clean flips and final persisted state matches the last tap.
+8. Enable reduce-motion → confirm static styling, no animated countdown.
+9. Disable sensors / guided gating → confirm the pill still toggles without crashing and displays consistently per the parent's policy.
+10. Verify clearance from the shutter, ring map, and other overlays on small/large screens; check the performance overlay during countdown updates on a mid-range Android.
+11. Confirm `auto_capture_toggled` analytics fire with the correct new state.
+
+## Assumptions
+
+- Assumed: auto-capture mode is owned by the parent/capture-flow state and the actual auto-fire logic (arm when in-band + stable + at a new ring position, then capture) is a separate task — this pill only reflects/toggles. Confirm where the mode lives and how it relates to the shutter's `CaptureMode` (guided/manual) so the two stay consistent (e.g. auto-capture ON likely implies guided mode).
+- Assumed: default auto-capture on first run — confirm the desired default (ON gives a smoother guided experience; OFF gives users explicit control). Persist whatever the user last chose.
+- Assumed: persistence uses the established storage gateway from the Hive task (e.g. a prefs/`active_session` box) under a key like `level_a_auto_capture` — confirm the gateway and key naming; do not introduce SharedPreferences.
+- Assumed: the armed/countdown sub-state is optional and may not be supplied initially — the pill must render a clean ON/OFF without it. If the auto-capture task later adds a countdown, the affordance is ready.
+- Assumed: when sensors are unavailable, auto-capture has nothing to arm on; confirm whether the pill should be disabled/forced OFF in that case or remain toggizable with ON simply having no effect. Keep behavior consistent with the shutter's fail-open policy.
+- Assumed: top-right placement avoids collision with the bottom-center shutter and lower-left ring map — confirm the final HUD layout with design so all overlays have non-overlapping reserved slots.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[ 8 ]]]]]]]]]]]
+
+Generate a coding prompt for this task: Thumbnail strip (last 3–5 photos) — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+---------------------------------------------------------------------------------------------------->>>>>>
+
+
+# UI/OVERLAY: Thumbnail Strip (Last 3–5 Photos) — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the thumbnail strip for the Level A HUD: a compact row showing the most recent 3–5 captured photos, newest first, giving the user quick visual confirmation that captures are landing. New captures animate in; the strip caps its visible count and never grows unbounded. It plugs into the `CaptureOverlayLayer` and renders a supplied list of recent capture references — it does not capture, save, or own the full photo set.
+
+- [ ] Build a `ThumbnailStrip` overlay rendering the last 3–5 captures (newest first), capped to a max visible count
+- [ ] Animate a new thumbnail sliding/fading in as captures arrive; oldest beyond the cap drops off
+- [ ] Load thumbnails efficiently from file paths (downscaled, memory-cached) without jank
+- [ ] Show a placeholder while a thumbnail loads and a graceful fallback if a file is missing/unreadable
+- [ ] Optional tap on a thumbnail → notify parent (e.g. open a quick preview) via callback; no preview UI built here
+- [ ] Honor reduce-motion (instant insert, no slide animation)
+- [ ] Position compactly, safe-area aware, clear of the shutter, ring map, and other HUD elements
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns the camera + capture results; it maintains the captured-photos list and supplies the recent slice to this overlay
+2. `lib/features/capture/level_a/widgets/shutter_button.dart` / capture flow — confirm what a capture produces (file path? captured frame object?) so the strip's item model matches
+3. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into
+4. `pubspec.yaml` — confirm image handling deps; `Image.file` is built-in, but check if a caching/thumbnail lib is already used before adding one
+5. Theme tokens — Deep Black/elevated surface tiles, Royal Gold thin border, subtle shadow; brand palette
+6. The reduce-motion pattern from prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Thumbnail item model
+In `lib/features/capture/level_a/domain/capture_thumbnail.dart`:
+
+```dart
+class CaptureThumbnail {
+  final String id;          // stable id (capture id / ring index)
+  final String filePath;    // local path to the captured image
+  final DateTime capturedAt;
+  const CaptureThumbnail({required this.id, required this.filePath, required this.capturedAt});
+}
+```
+
+The parent supplies a list already sorted newest-first (or the strip sorts by `capturedAt` desc and takes the first N).
+
+### Step 2: The strip widget
+In `lib/features/capture/level_a/widgets/thumbnail_strip.dart`:
+
+```dart
+class ThumbnailStrip extends StatelessWidget {
+  final List<CaptureThumbnail> recent; // parent may pass full or pre-sliced
+  final int maxVisible;                // default 5
+  final void Function(CaptureThumbnail)? onTapThumbnail;
+  const ThumbnailStrip({
+    required this.recent,
+    this.maxVisible = 5,
+    this.onTapThumbnail,
+    super.key,
+  });
+}
+```
+
+- Take newest `maxVisible` items; render as a horizontal row of small rounded tiles, newest at the leading edge
+- Use `AnimatedSwitcher`/`AnimatedList` semantics so a new capture animates in and the dropped-off oldest animates out smoothly
+- Each tile: thumbnail image, thin Royal Gold border, subtle elevation
+
+### Step 3: Efficient thumbnail loading
+- Load from `filePath` with `Image.file`, but **cache-decode at a small size**: set `cacheWidth`/`cacheHeight` to the tile's pixel size (× devicePixelRatio) so full-res photos aren't decoded into memory for tiny tiles — this is the key low-end-device performance guard
+- Show a placeholder (neutral tile / shimmer) until the image is ready
+- On decode/file error (missing/corrupt file), show a broken-tile fallback (muted icon), never crash or show a red error box
+- Use a key per `id` so Flutter reuses element/image state correctly as items shift
+
+### Step 4: Tap + placement + reduce-motion
+- If `onTapThumbnail` provided, wrap tiles in a tap handler that calls back; do not build any preview/lightbox here
+- Anchor in a consistent slot (e.g. above the shutter, or a side column), safe-area aware, not overlapping the shutter (bottom-center), ring map (lower-left), or other HUD elements
+- Reduce-motion: insert/remove instantly (no slide/fade)
+
+## What NOT to Change
+
+- Do NOT capture, save, or manage the full photo set here — the parent owns capture results; the strip displays a recent slice
+- Do NOT build a full-screen preview/gallery — only an optional tap callback to the parent
+- Do NOT decode full-resolution images for tiny tiles — always downscale-decode (`cacheWidth`/`cacheHeight`)
+- Do NOT modify the camera controller, capture flow, other overlays, config, or routing — only consume the supplied list + callback
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT let the strip grow beyond `maxVisible`, and do NOT obscure the shutter or other HUD elements
+
+## Analytics Events
+
+Event: `thumbnail_tapped`
+Trigger: user taps a thumbnail (only if `onTapThumbnail` wired)
+Properties:
+  - capture_id: string
+  - device_type: "android" | "ios"
+
+(Optional/low priority; route through the existing dispatcher or add a TODO stub. No event needed for mere display.)
+
+## Edge Cases to Handle
+
+- [ ] No captures yet → strip hidden or renders an empty/placeholder slot cleanly (no layout jump when the first thumbnail arrives)
+- [ ] First few captures (fewer than `maxVisible`) → strip shows only what exists, left-aligned, no empty broken tiles
+- [ ] More than `maxVisible` captures → only the newest N shown; older ones drop off with animation; memory for off-strip images released
+- [ ] Missing/corrupt image file → fallback broken-tile, no crash, others still render
+- [ ] Rapid consecutive captures (auto-capture ON) → insert animations don't pile up or drop frames; the strip keeps up and stays capped
+- [ ] Large source images on low-end devices → downscale-decode prevents memory spikes/jank; verify no OOM on repeated captures
+- [ ] Duplicate ids (re-capture of same ring index) → keyed correctly; the strip updates rather than duplicating
+- [ ] Reduce-motion → instant insert/remove
+- [ ] Widget disposed → no leaked image streams; image cache entries for off-strip thumbnails can be evicted
+- [ ] Very small screen → tiles shrink/scroll within safe area, clear of other HUD elements
+
+## Constraints
+
+- Display-only: renders the supplied recent slice and emits an optional tap callback; no capture/persistence logic
+- Always downscale-decode thumbnails via `cacheWidth`/`cacheHeight` matched to tile pixel size — never full-res for tiles
+- Visible count capped at `maxVisible` (3–5); newest-first ordering
+- Per-item keys (`id`) for correct reuse as items shift; missing/corrupt files fall back gracefully
+- Reduce-motion honored; animations cheap and isolated (no full-tree repaint per capture)
+- Positioned clear of the shutter, ring map, tilt meter, stability dot, instruction banner, auto-capture pill, and direction arrow
+- Brand palette via theme tokens (dark tiles, thin Royal Gold border)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] The strip shows the most recent 3–5 captures, newest first, capped at `maxVisible`
+- [ ] New captures animate in and the oldest beyond the cap animates out (instant under reduce-motion)
+- [ ] Thumbnails are downscale-decoded (verified: no full-res decode for tiles); placeholder shows while loading
+- [ ] Missing/corrupt files show a graceful fallback tile without crashing; other tiles unaffected
+- [ ] Rapid consecutive captures (auto-capture) keep up without dropped frames or unbounded growth
+- [ ] No memory spike/OOM across many captures on a mid-range device (off-strip images released)
+- [ ] Optional thumbnail tap fires the callback; no preview UI is built here
+- [ ] Fewer-than-max and zero-capture states render cleanly with no layout jump
+- [ ] Strip does not obscure the shutter or other HUD elements; stays within safe area
+- [ ] No leaks; no jank on a mid-range Android
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm what a capture produces (file path vs frame object) and how the parent supplies the recent list before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a device, capture several photos in Level A → confirm thumbnails appear newest-first and animate in.
+4. Capture beyond `maxVisible` → confirm only the newest N remain and older ones drop off.
+5. Point at a missing/corrupt path (stub one) → confirm fallback tile, no crash, others render.
+6. Turn on auto-capture (or stub rapid captures) → confirm the strip keeps up, stays capped, no dropped frames.
+7. Capture many large photos on a mid-range Android and watch memory → confirm downscale-decode keeps memory flat (no OOM).
+8. Tap a thumbnail (with callback wired) → confirm the callback fires; confirm no built-in preview opens.
+9. Enable reduce-motion → confirm instant insert/remove.
+10. Test zero-capture and fewer-than-max states → confirm clean layout, no jump when the first arrives.
+11. Verify clearance from the shutter, ring map, and other overlays on small/large screens; check leaks across screen entry/exit and the performance overlay during rapid captures.
+
+## Assumptions
+
+- Assumed: captures are saved to local files and the parent provides their paths (and a stable capture/ring id) — the strip loads from `filePath`. If captures are held in memory as bytes rather than files, switch to `Image.memory` with the same downscale-decode approach; confirm the capture output format.
+- Assumed: dedicated thumbnail files are not pre-generated — the strip downscale-decodes the full image for tiles. If the capture pipeline already writes small thumbnails, prefer those paths for even better performance; confirm whether thumbnails are produced.
+- Assumed: `maxVisible = 5` (within the 3–5 range) — confirm the exact count with design; it's a constructor param so it's easy to set.
+- Assumed: tapping a thumbnail (if enabled) opens a quick preview owned by the parent — this task only emits the callback. Confirm whether tap-to-preview is in scope for Level A or deferred.
+- Assumed: above-the-shutter (or a side column) placement avoids collision with the bottom-center shutter and lower-left ring map — confirm the final HUD layout with design so all overlays have non-overlapping reserved slots.
+- Assumed: the parent manages the authoritative full capture set (for upload/processing and ring-progress) and only passes a recent slice here — this overlay is purely for visual confirmation, not the source of truth for what was captured.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[ 7 ]]]]]
+
+
+Generate a coding prompt for this task: Progress meter: 'Accepted: 12/36 • Coverage: 68%' — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+--------------------------------------------------------------------------------------------------------------------------->>>>>>>>>>
+
+
+# UI/OVERLAY: Progress Meter — "Accepted: 12/36 • Coverage: 68%" — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the textual progress meter for the Level A HUD: a compact readout showing accepted-capture count vs target and overall coverage percentage (e.g. "Accepted: 12/36 • Coverage: 68%"). It complements the visual ring coverage map with precise numbers and an optional thin progress bar. It plugs into the `CaptureOverlayLayer` and renders a supplied progress model — it does not count captures, judge acceptance, or compute coverage itself.
+
+- [ ] Build a `ProgressMeter` overlay rendering accepted/target counts and coverage percentage
+- [ ] Show a compact text line ("Accepted: X/N • Coverage: P%") with an optional thin progress bar
+- [ ] Animate value changes smoothly (count tick / bar fill) without flicker
+- [ ] Distinguish "accepted" (passed quality) from a raw total if both are supplied
+- [ ] Reflect a complete state when target/coverage thresholds are met
+- [ ] Position compactly, safe-area aware, clear of the ring map, shutter, and other HUD elements
+- [ ] Honor reduce-motion (instant value updates, no animated tick/fill)
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns capture results and computes accepted count / coverage; supplies the progress model to this overlay
+2. `lib/features/capture/level_a/domain/ring_coverage.dart` (`RingCoverage`) — the ring map already exposes `filledCount`/`progress`; reconcile so the meter and ring map show consistent numbers
+3. `lib/features/config/application/config_notifier.dart` (`CaptureConfig`) — target count (N) and `minCoveragePct` threshold for the complete state come from here
+4. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into
+5. Theme tokens — white/secondary-grey text, Royal Gold/success bar when progressing, Mirage Red sparingly; brand palette
+6. The reduce-motion pattern from prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Progress model
+In `lib/features/capture/level_a/domain/capture_progress.dart`:
+
+```dart
+class CaptureProgress {
+  final int accepted;        // captures that passed quality checks
+  final int target;          // N target positions (from CaptureConfig)
+  final double coveragePct;  // 0..100, supplied by the parent's coverage computation
+  final double completeAtPct;// threshold to consider capture complete (e.g. minCoveragePct)
+  const CaptureProgress({
+    required this.accepted,
+    required this.target,
+    required this.coveragePct,
+    this.completeAtPct = 80,
+  });
+
+  double get acceptedFraction => target <= 0 ? 0 : (accepted / target).clamp(0.0, 1.0);
+  double get coverageFraction => (coveragePct / 100).clamp(0.0, 1.0);
+  bool get isComplete => coveragePct >= completeAtPct;
+}
+```
+
+The parent supplies all values; the meter only formats and animates them.
+
+### Step 2: The meter widget
+In `lib/features/capture/level_a/widgets/progress_meter.dart`:
+
+```dart
+class ProgressMeter extends StatelessWidget {
+  final CaptureProgress progress;
+  final bool showBar;        // optional thin progress bar under the text
+  const ProgressMeter({required this.progress, this.showBar = true, super.key});
+}
+```
+
+- Text line: `"Accepted: ${accepted}/${target} • Coverage: ${coveragePct.round()}%"`
+- Optional thin bar: fill = `coverageFraction` (or `acceptedFraction` — pick one and be consistent; recommend coverage since it's the completion criterion), success/gold fill on a muted track
+- Complete state: when `isComplete`, emphasize (e.g. gold checkmark + "Complete") — subtle, not loud
+
+### Step 3: Smooth value transitions
+- Animate the count with an implicit tween (e.g. `TweenAnimationBuilder<int>`) so 11→12 ticks rather than snaps; animate the bar fill with a short duration
+- Avoid flicker: only animate on actual value change; identical re-emits don't re-trigger
+- Reduce-motion: set values instantly, no tick/fill animation
+
+### Step 4: Placement
+- Anchor in a consistent slot (e.g. top-center or near the ring map but not overlapping it), safe-area aware, clear of the shutter (bottom-center), ring map (lower-left), tilt meter, stability dot, instruction banner, auto-capture pill, and thumbnail strip
+- Keep the text legible over the camera preview (use a subtle Deep Black scrim/elevated chip behind the text)
+
+## What NOT to Change
+
+- Do NOT count captures, judge acceptance, or compute coverage here — render the supplied `CaptureProgress` only
+- Do NOT hardcode the target N or completion threshold — they come from `CaptureConfig` via the parent
+- Do NOT modify the ring map, capture flow, sensor/readiness providers, config, or routing — only consume the supplied model
+- Do NOT show numbers inconsistent with the ring coverage map — both must derive from the same source of truth
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT obscure the ring map, shutter, or other HUD elements
+- Do NOT animate under reduce-motion
+
+## Analytics Events
+
+No new event required (the meter displays progress computed elsewhere). Completion/coverage analytics belong with the capture-progress logic, not this display widget.
+
+## Edge Cases to Handle
+
+- [ ] `target <= 0` or config not loaded → guard against divide-by-zero; show "0/0" or a neutral placeholder, no NaN
+- [ ] `coveragePct` out of 0..100 → clamp; bar fill clamped to 0..1
+- [ ] `accepted > target` (over-capture allowed) → display the real numbers (e.g. "38/36"); bar/fraction clamped at 100%; no overflow
+- [ ] Numbers change rapidly (auto-capture bursts) → count tick animation coalesces to the latest value; no flicker or queue of intermediate ticks
+- [ ] Reaching complete threshold → complete emphasis shows once; does not flash repeatedly as values fluctuate around the threshold (small hysteresis or latch once complete — see assumptions)
+- [ ] Reduce-motion → instant updates, no animation
+- [ ] Identical re-emit (same accepted/coverage) → no re-animation/flicker
+- [ ] Very small screen → text truncates/wraps gracefully or shrinks; stays within safe area and legible
+- [ ] Widget disposed mid-animation → controllers disposed; no `setState after dispose`
+
+## Constraints
+
+- Display-only: renders `CaptureProgress`; no counting/acceptance/coverage logic inside the widget
+- Target N and completion threshold sourced from `CaptureConfig` (via parent) — never hardcoded
+- Numbers must match the ring coverage map (single source of truth for accepted/coverage)
+- All fractions clamped (0..1) and percentages clamped (0..100); divide-by-zero guarded
+- Reduce-motion honored; count/bar animation cheap and isolated (no full-tree repaint)
+- Positioned clear of all other HUD overlays and controls; legible over the camera preview
+- Brand palette via theme tokens (white/grey text, gold/success bar, subtle complete emphasis)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] The meter renders "Accepted: X/N • Coverage: P%" with correct values from the supplied model
+- [ ] Numbers exactly match the ring coverage map (same source of truth)
+- [ ] Count and bar update smoothly on change (tick/fill); reduce-motion makes updates instant
+- [ ] Complete state shows correctly when the coverage threshold is met, without flickering around the threshold
+- [ ] `target<=0`/config-not-loaded, out-of-range coverage, and `accepted>target` are all handled safely (no NaN/overflow)
+- [ ] Rapid value changes coalesce; identical re-emits don't re-animate
+- [ ] Text stays legible over the preview and within safe area on small/large screens
+- [ ] Meter does not obscure the ring map, shutter, or other HUD elements
+- [ ] No `setState after dispose`; no jank on a mid-range Android
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm how the parent computes accepted count and coverage, and which `CaptureConfig` values give N and the completion threshold, before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. Drive the meter (debug) through increasing accepted/coverage values → confirm correct text and smooth count/bar animation.
+4. Cross-check the meter's numbers against the ring coverage map for the same state → confirm they match.
+5. Set `target=0` / unloaded config → confirm safe placeholder, no NaN/divide-by-zero.
+6. Set coverage to -5 and 150, and accepted greater than target → confirm clamping and correct raw-number display, no overflow.
+7. Hover values around the completion threshold → confirm the complete state doesn't flicker (latch/hysteresis works).
+8. Fire rapid bursts (auto-capture) → confirm count ticks coalesce to the latest, no flicker.
+9. Enable reduce-motion → confirm instant updates.
+10. Unit-test `CaptureProgress` getters (`acceptedFraction`, `coverageFraction`, `isComplete`) with normal, zero-target, over-capture, and out-of-range inputs.
+11. Verify legibility and clearance from other overlays on small/large screens; check the performance overlay during rapid updates on a mid-range Android.
+
+## Assumptions
+
+- Assumed: the parent computes "accepted" (captures passing quality checks like sharpness/coverage thresholds) and overall coverage percentage — both this meter and the ring coverage map must read from that same computation to avoid contradictory numbers. Confirm where accepted/coverage is computed (likely the ring-progress / capture-acceptance task) so the `CaptureProgress` and `RingCoverage` stay consistent.
+- Assumed: target N is the Level A band's `segments` from `CaptureConfig` and the completion threshold is `CaptureConfig.thresholds.minCoveragePct` — confirm these mappings so the meter, ring map, and tilt target all agree on the same N and thresholds.
+- Assumed: "Coverage %" may differ from "accepted/target %" (coverage can weight angular distribution, not just count) — that's why both are shown. If coverage is simply accepted/target, the two numbers will track each other; confirm how coverage is defined so the bar uses the right fraction.
+- Assumed: once complete, the state should latch (stay "Complete") rather than toggle if values dip slightly — confirm whether completion is sticky or live; if live, add hysteresis to prevent threshold flicker.
+- Assumed: over-capture beyond target is allowed and should display real numbers (e.g. "38/36") with the bar capped — confirm whether the flow caps captures at N or permits extras.
+- Assumed: top-center (or near-ring) placement avoids collision with the bottom-center shutter and lower-left ring map — confirm the final HUD layout so all overlays have non-overlapping reserved slots.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[[[[ 6 ]]]]]]]]]]]]]]]]
+
+Generate a coding prompt for this task: Top bar: Level indicator, Help, Settings icons — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+---------------------------------------------------------------------------------------------------------------------------------->>>>>>>>>>>>>
+
+
+# UI/OVERLAY: Top Bar — Level Indicator, Help, Settings Icons — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the capture-screen top bar overlay: a compact bar showing the current capture level (e.g. "Level A — Eye Ring"), a Help icon that opens guidance/rules, and a Settings icon that opens capture settings, plus a back/close affordance. It sits above the camera preview in the `CaptureOverlayLayer`, stays out of the way of the live HUD, and emits intent via callbacks — it does not implement the help/settings screens themselves.
+
+- [ ] Build a `CaptureTopBar` overlay with: level indicator (label + optional step), Help icon, Settings icon, and a back/close control
+- [ ] Wire each control to an injected callback (`onBack`, `onHelp`, `onSettings`); no sheet/screen content built here beyond optionally invoking provided builders
+- [ ] Render legibly over the live camera preview (subtle scrim/elevated chips behind icons)
+- [ ] Safe-area aware (top notch/status bar), and positioned so it never overlaps the progress meter or other top-anchored HUD elements
+- [ ] Pausing/blocking concern: opening Help/Settings should let the parent pause auto-capture (emit intent; don't manage it here)
+- [ ] Honor reduce-motion and provide accessible tap targets + semantics labels
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns the camera + HUD; supplies the level label and the `onBack`/`onHelp`/`onSettings` handlers, and decides what Help/Settings open
+2. `lib/features/capture/level_a/widgets/capture_overlay_layer.dart` — composition layer this overlay plugs into
+3. The progress meter / other top-anchored overlays — coordinate placement so the top bar and progress readout don't collide
+4. Screen 5A intro screen (rules/instructions) — Help likely re-surfaces that rules content; reuse it rather than duplicating
+5. The auto-capture pill / mode state — opening Help/Settings should signal the parent to pause auto-capture (intent only)
+6. Theme tokens — Deep Black/elevated chips, white icons, Royal Gold accent, Mirage Red sparingly; brand palette
+
+## Implementation Instructions
+
+### Step 1: Top bar model
+In `lib/features/capture/level_a/domain/capture_top_bar_state.dart`:
+
+```dart
+class CaptureTopBarState {
+  final String levelLabel;     // e.g. "Level A"
+  final String? levelSubtitle; // e.g. "Eye Ring"
+  final bool helpEnabled;
+  final bool settingsEnabled;
+  const CaptureTopBarState({
+    required this.levelLabel,
+    this.levelSubtitle,
+    this.helpEnabled = true,
+    this.settingsEnabled = true,
+  });
+}
+```
+
+### Step 2: The top bar widget
+In `lib/features/capture/level_a/widgets/capture_top_bar.dart`:
+
+```dart
+class CaptureTopBar extends StatelessWidget {
+  final CaptureTopBarState state;
+  final VoidCallback onBack;
+  final VoidCallback onHelp;
+  final VoidCallback onSettings;
+  const CaptureTopBar({
+    required this.state,
+    required this.onBack,
+    required this.onHelp,
+    required this.onSettings,
+    super.key,
+  });
+}
+```
+
+Layout (within `SafeArea`, top):
+- Leading: back/close icon button → `onBack`
+- Center: level indicator — `levelLabel` (prominent) + `levelSubtitle` (secondary grey); optionally a small level glyph
+- Trailing: Help icon → `onHelp`; Settings icon → `onSettings` (disabled/greyed when the corresponding `*Enabled` is false)
+- Each icon sits on a subtle elevated/scrim chip so it's legible over any preview background
+
+### Step 3: Legibility + placement
+- Add a thin top gradient scrim (Deep Black → transparent) behind the bar so white icons/text read over bright camera scenes
+- Keep the bar height compact; reserve the top-center for the level indicator and ensure the progress meter is placed elsewhere or below to avoid overlap (coordinate with the parent's HUD layout)
+- Respect the status bar / notch via `SafeArea` and `MediaQuery.viewPadding`
+
+### Step 4: Intent for pause-on-open
+- The bar only calls `onHelp`/`onSettings`; the parent decides to pause auto-capture and present the relevant sheet/screen. Do not manage capture state here. (Document this clearly so the parent wires the pause.)
+
+### Step 5: Accessibility + tap targets + reduce-motion
+- Each control ≥ 44–48 px tap target; add `Semantics`/`tooltip` labels ("Back", "Help", "Settings", and the level as a header)
+- Any press feedback (ripple/scale) is brief; reduce-motion → minimal/no animation
+- Back control should be reachable and not accidentally triggered (consider an explicit confirm on back if a capture is in progress — emit via `onBack`; the parent decides on confirmation, see assumptions)
+
+## What NOT to Change
+
+- Do NOT implement the Help or Settings content/screens here — only invoke the supplied callbacks
+- Do NOT manage auto-capture/pause state in the bar — emit intent via callbacks; the parent pauses/resumes
+- Do NOT modify the camera controller, other overlays, sensor/readiness providers, config, or routing — only consume the supplied state + callbacks
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT overlap the progress meter or other top-anchored HUD elements — coordinate placement
+- Do NOT obscure the live preview more than a thin scrim requires
+
+## Analytics Events
+
+Event: `capture_topbar_action`
+Trigger: user taps a top-bar control
+Properties:
+  - action: "back" | "help" | "settings"
+  - level: "A"
+  - device_type: "android" | "ios"
+
+(Route through the existing dispatcher; otherwise add a TODO-marked stub.)
+
+## Edge Cases to Handle
+
+- [ ] Help/Settings disabled (`*Enabled == false`) → icon greyed and non-actionable; no callback fired
+- [ ] Notch / large status bar / cutout devices → bar respects safe area; icons/text not clipped
+- [ ] Bright camera scene → scrim ensures icons/text remain legible
+- [ ] Rapid taps on an icon → debounce so a single open is triggered (parent shouldn't get duplicate open intents)
+- [ ] Back tapped mid-capture → emit `onBack`; parent decides whether to confirm/discard (bar doesn't crash or capture state)
+- [ ] Long level subtitle → truncates with ellipsis; bar layout stays intact
+- [ ] Very small screen → icons + level indicator fit without overflow (truncate subtitle / tighten spacing)
+- [ ] Landscape (if ever allowed) → bar adapts or is hidden per the screen's orientation policy (capture likely portrait-locked)
+- [ ] Reduce-motion → minimal press animation
+- [ ] Overlay disposed → no leaks (stateless; ensure any debounce timer is cancelled if implemented in a small stateful wrapper)
+
+## Constraints
+
+- Intent-only: renders `CaptureTopBarState` and invokes `onBack`/`onHelp`/`onSettings`; no help/settings/pause logic inside
+- Safe-area aware; legible over the preview via a thin scrim/chips
+- Tap targets ≥ accessibility minimum; semantics/tooltips on all controls; level acts as a header for screen readers
+- Positioned to never overlap the progress meter or other top HUD elements (parent coordinates the layout)
+- Reduce-motion honored; press feedback brief
+- Brand palette via theme tokens (white icons, Deep Black scrim, gold accent, Mirage Red sparingly)
+- Rapid taps debounced to a single open intent
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] The top bar renders the level indicator (label + subtitle), Help, Settings, and back/close, legible over the preview
+- [ ] Each control fires its callback; disabled Help/Settings are greyed and fire nothing
+- [ ] Bar respects safe area on notch/cutout devices; nothing clipped
+- [ ] Rapid taps result in a single open intent (debounced)
+- [ ] Back mid-capture emits `onBack` cleanly (parent handles confirmation)
+- [ ] Long subtitle truncates; layout holds on small/large screens
+- [ ] Tap targets meet the accessibility minimum; semantics/tooltips present
+- [ ] Bar does not overlap the progress meter or other HUD elements
+- [ ] Reduce-motion respected; no leaks
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices, including a notched device
+
+## Testing Instructions
+
+1. Confirm what Help and Settings should open, the level label source, and that the parent will pause auto-capture on open before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a device, open Level A capture → confirm the top bar shows "Level A — Eye Ring", Help, Settings, and back, all legible over a live (bright) scene.
+4. Tap each control → confirm the correct callback fires; verify analytics.
+5. Disable Help/Settings (stub) → confirm greyed, non-actionable.
+6. Test on a notched/cutout device → confirm safe-area handling, nothing clipped.
+7. Rapidly tap Help/Settings → confirm a single open intent.
+8. Tap back mid-capture → confirm `onBack` fires and the parent's confirmation flow (if any) triggers; the bar itself doesn't crash.
+9. Use a long subtitle → confirm truncation; test small and large screens for layout.
+10. Enable a screen reader → confirm semantics/tooltips read correctly and the level is announced as a header.
+11. Enable reduce-motion → confirm minimal press animation; check leaks across screen entry/exit.
+
+## Assumptions
+
+- Assumed: Help re-surfaces the Level A rules/intro content (from Screen 5A) — reuse that content rather than building new help UI. Confirm whether Help opens the intro screen, a bottom sheet of rules, or context-specific tips.
+- Assumed: Settings opens capture-related settings (e.g. resolution, auto-capture default, grid/guides toggles) — confirm what belongs in capture settings; this task only wires the entry point.
+- Assumed: opening Help/Settings should pause auto-capture and not lose progress — the bar emits intent and the parent handles pause/resume. Confirm the parent owns this.
+- Assumed: back/close may need a confirmation if a capture is in progress (to avoid accidental loss) — the bar emits `onBack` and the parent decides whether to confirm/save/discard. Confirm the desired back behavior (discard vs save-as-draft, matching the Projects flow's draft status).
+- Assumed: capture is portrait-locked (per Screen 6A) so the bar is designed for portrait — if rotation is allowed, verify the bar layout in landscape or hide it per policy.
+- Assumed: the level indicator is informational for Level A now but will vary across Levels B/C — build it generically (driven by `CaptureTopBarState`) so higher levels reuse the same bar with a different label.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[ 5 ]]]]]]]]]]]]]
+
+
+Generate a coding prompt for this task: Screen 6A-Check: Post-shot toast — Accepted / Warn / Reject with Retake CTA — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+------------------------------------------------------------------------------------------------------------>>>>>>
+
+
+
+# UI/OVERLAY: Screen 6A-Check — Post-Shot Toast (Accepted / Warn / Reject + Retake CTA) — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: High
+
+---
+
+## Task Description
+
+Build the post-shot feedback toast for Level A: immediately after each capture, a brief toast tells the user whether the shot was Accepted, accepted-with-a-Warning, or Rejected, and (for warn/reject) offers a Retake CTA. It gives instant quality feedback so users fix bad shots in the moment. It plugs into the `CaptureOverlayLayer`, renders a supplied capture-evaluation result, and emits retake intent — it does not evaluate image quality or perform the retake itself.
+
+- [ ] Build a `PostShotToast` overlay that appears after a capture and shows result: `accepted`, `warn`, or `reject`
+- [ ] Accepted → brief positive toast that auto-dismisses quickly (no CTA)
+- [ ] Warn → toast with the reason + an optional "Retake" CTA; auto-dismiss after a longer timeout (user may keep it)
+- [ ] Reject → prominent toast with the reason + a "Retake" CTA; does not auto-dismiss until acted on or a timeout, and signals the shot was discarded
+- [ ] Single instance: a new result replaces the current toast (never stack), with crossfade
+- [ ] Fire result-appropriate haptics; honor reduce-motion; position clear of the shutter and HUD
+- [ ] Emit `onRetake` intent (parent performs the actual retake / re-arms capture)
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns capture + evaluation; supplies the `CaptureEvaluation` after each shot and handles `onRetake`
+2. `lib/features/capture/level_a/widgets/shutter_button.dart` + `capture_readiness.dart` — capture trigger flow; the toast follows a capture's resolution
+3. `lib/features/capture/level_a/widgets/instruction_banner.dart` — reuse its single-instance/crossfade pattern and ensure the toast and banner don't fight for the same screen slot
+4. `lib/core/haptics/haptics.dart` — reuse for accepted/warn/reject feedback (from Screen 0A)
+5. `lib/features/config/application/config_notifier.dart` (`CaptureConfig.thresholds`) — the reasons (blurry/too dark/off-target) derive from these thresholds upstream; the toast just shows the supplied reason
+6. Theme tokens — success/Royal Gold for accepted, amber/warning for warn, Mirage Red for reject; brand palette
+7. The reduce-motion pattern from prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Evaluation model
+In `lib/features/capture/level_a/domain/capture_evaluation.dart`:
+
+```dart
+enum CaptureVerdict { accepted, warn, reject }
+
+enum CaptureIssue { blurry, tooDark, overexposed, offTarget, tooClose, tooFar, lowCoverage, unknown }
+
+class CaptureEvaluation {
+  final String captureId;          // stable id of the shot
+  final CaptureVerdict verdict;
+  final List<CaptureIssue> issues; // empty for clean accepted
+  const CaptureEvaluation({required this.captureId, required this.verdict, this.issues = const []});
+
+  bool get retakeOffered => verdict != CaptureVerdict.accepted;
+}
+```
+
+The parent computes the verdict/issues (from sharpness/exposure/coverage checks); the toast only maps them to copy + styling.
+
+### Step 2: Issue → message mapping (presentation)
+In `lib/features/capture/level_a/widgets/post_shot_messages.dart`, map `CaptureIssue` → short user-facing string ("Too blurry", "Too dark", "Off target", "Move closer", etc.) and pick a concise primary message when multiple issues exist (show the most actionable one; optionally "+N more"). Keep copy terse.
+
+### Step 3: The toast widget
+In `lib/features/capture/level_a/widgets/post_shot_toast.dart`:
+
+```dart
+class PostShotToast extends StatefulWidget {
+  final CaptureEvaluation? evaluation; // null => hidden
+  final VoidCallback onRetake;
+  final Duration acceptedDuration;     // short, e.g. 900ms
+  final Duration warnDuration;         // longer, e.g. 3s
+  // reject: no auto-dismiss by default (or a long safety timeout)
+  const PostShotToast({
+    required this.evaluation,
+    required this.onRetake,
+    this.acceptedDuration = const Duration(milliseconds: 900),
+    this.warnDuration = const Duration(seconds: 3),
+    super.key,
+  });
+}
+```
+
+Behavior:
+- New `evaluation` (different `captureId`) → crossfade in, replacing any current toast (single instance, never stack)
+- Style + icon + haptic by verdict:
+  - `accepted` → success/gold, check icon, light success haptic, auto-dismiss after `acceptedDuration`, no CTA
+  - `warn` → amber, warning icon, light warning haptic, message + "Retake" CTA, auto-dismiss after `warnDuration`
+  - `reject` → Mirage Red, alert icon, stronger error haptic, message + prominent "Retake" CTA, no auto-dismiss (or long safety timeout); indicates the shot was discarded
+- "Retake" tap → call `onRetake`, dismiss the toast
+- Null evaluation → fade out/hidden
+
+### Step 4: Single-instance + timers
+- Track the displayed `captureId`; only a changed id re-triggers the toast/animation/haptic (avoid re-firing on identical re-emit)
+- Manage auto-dismiss timers per verdict; cancel/replace timers when a new result arrives or on dispose
+- Reduce-motion → instant show/hide (no crossfade); haptics still fire
+
+### Step 5: Placement
+- Position clear of the shutter (bottom-center), ring map (lower-left), and the instruction banner — pick a distinct slot (e.g. just above the shutter or top area), safe-area aware
+- Ensure the Retake CTA has an adequate tap target and doesn't overlap the shutter (avoid accidental capture vs retake)
+
+## What NOT to Change
+
+- Do NOT evaluate image quality (sharpness/exposure/coverage) here — the parent supplies `CaptureEvaluation`; the toast only displays it
+- Do NOT perform the retake or modify the capture set/ring progress — emit `onRetake`; the parent handles discard + re-arm
+- Do NOT stack toasts or queue results — single instance, latest-wins, crossfade
+- Do NOT modify the shutter, camera controller, other overlays, config, or routing — only consume the evaluation + callback
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT obscure the shutter or other HUD elements; keep the Retake CTA away from the shutter to prevent mis-taps
+- Do NOT crossfade/haptic on identical re-emit (same captureId)
+
+## Analytics Events
+
+Event: `post_shot_result`
+Trigger: a toast is shown for a capture
+Properties:
+  - verdict: "accepted" | "warn" | "reject"
+  - issues: string[]            // mapped issue keys
+  - device_type: "android" | "ios"
+
+Event: `post_shot_retake`
+Trigger: user taps Retake
+Properties:
+  - verdict: "warn" | "reject"
+  - capture_id: string
+
+(Route through the existing dispatcher; otherwise add TODO-marked stubs.)
+
+## Edge Cases to Handle
+
+- [ ] Accepted shot → short positive toast auto-dismisses; does not block rapid subsequent captures (auto-capture bursts)
+- [ ] Rapid captures (auto-capture ON) producing many results → each new result replaces the prior toast (latest-wins), no stacking, no flicker storm; consider suppressing/condensing the accepted toast during bursts (see assumptions)
+- [ ] Reject with multiple issues → shows the most actionable message (+N more if needed), Retake prominent, no premature auto-dismiss
+- [ ] Retake tapped → toast dismisses, `onRetake` fires once even on double-tap (in-flight guard)
+- [ ] New result arrives while a toast is showing → crossfade to the new one cleanly (no two toasts)
+- [ ] Null/empty evaluation → toast hidden
+- [ ] Identical re-emit (same captureId) → no re-animation/haptic
+- [ ] Reduce-motion → instant show/hide; haptics still fire
+- [ ] Reject toast persists (no auto-dismiss) but the user navigates away/screen disposed → timers cancelled, no `setState after dispose`
+- [ ] Very small screen → toast text wraps within 1–2 lines, Retake CTA reachable, within safe area, not overlapping the shutter
+
+## Constraints
+
+- Display + intent only: renders `CaptureEvaluation`, fires `onRetake`; no quality evaluation or capture-set mutation inside
+- Single toast instance; latest-wins; crossfade; never stack/queue
+- Animation/haptic only on changed `captureId`; identical re-emits are no-ops
+- Verdict-specific auto-dismiss: accepted short, warn longer, reject sticky (or long safety timeout)
+- Retake CTA debounced to a single `onRetake`; positioned away from the shutter to avoid mis-taps
+- Reduce-motion honored (instant), haptics via the shared `Haptics` helper
+- Timers/controllers cancelled on result change and dispose; `setState` guarded with `mounted`
+- Brand palette via theme tokens (accepted gold/success, warn amber, reject Mirage Red)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] After a capture, the toast shows the correct verdict with correct color/icon/haptic
+- [ ] Accepted auto-dismisses quickly with no CTA; warn shows reason + Retake and auto-dismisses after a longer timeout; reject shows reason + prominent Retake and does not auto-dismiss prematurely
+- [ ] Retake fires `onRetake` once (double-tap guarded) and dismisses the toast
+- [ ] Only one toast is ever visible; new results crossfade-replace the prior one with no stacking
+- [ ] Identical re-emits (same captureId) don't re-animate or re-haptic
+- [ ] Multiple issues collapse to the most actionable message (+N more if needed)
+- [ ] Rapid auto-capture results don't cause a flicker storm; accepted feedback during bursts is handled gracefully
+- [ ] Reduce-motion makes transitions instant; haptics still fire
+- [ ] No `setState after dispose`; toast/CTA don't overlap the shutter or other HUD; within safe area
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm how the parent produces `CaptureEvaluation` (verdict + issues) and handles `onRetake` before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a device, capture a good shot → confirm the accepted toast (gold, check, light haptic) auto-dismisses quickly with no CTA.
+4. Force a warn result (stub) → confirm amber toast with reason + Retake, longer auto-dismiss.
+5. Force a reject result (stub) → confirm red toast with reason + prominent Retake, no premature auto-dismiss, stronger haptic.
+6. Tap Retake (and double-tap) → confirm single `onRetake` and dismissal.
+7. Fire results in quick succession (auto-capture sim) → confirm single-instance crossfade, no stacking/flicker; verify accepted-during-burst handling.
+8. Emit a reject with multiple issues → confirm the most actionable message (+N more).
+9. Re-emit the same captureId → confirm no re-animation/haptic.
+10. Enable reduce-motion → confirm instant transitions, haptics intact.
+11. Show a sticky reject toast, then dispose the screen → confirm timers cancelled, no console errors.
+12. Verify CTA/toast clearance from the shutter and HUD on small/large screens; check leaks and performance on a mid-range Android.
+
+## Assumptions
+
+- Assumed: the parent evaluates each capture against `CaptureConfig.thresholds` (sharpness/exposure/coverage/placement) and produces a `CaptureVerdict` + `issues` — this toast only displays it. Confirm where evaluation happens (a capture-acceptance task likely owns it) so the verdict/issue contract matches.
+- Assumed: a `reject` means the shot is discarded and does NOT count toward accepted/coverage — confirm the parent's handling so the progress meter/ring map stay consistent (rejected shots shouldn't fill segments).
+- Assumed: `warn` shots are kept (counted) but flagged — confirm whether warn counts toward acceptance or is borderline; this affects whether Retake replaces the kept shot or adds another.
+- Assumed: during auto-capture bursts, repeatedly showing the accepted toast may be noisy — consider suppressing or briefly condensing accepted feedback when auto-capture is ON (the ring map + progress meter already give visual confirmation). Confirm the desired behavior; warn/reject should always surface.
+- Assumed: Retake re-arms capture for the same ring position (so the user re-shoots the problem angle) — confirm whether Retake targets the rejected position specifically or just allows a fresh capture.
+- Assumed: durations (accepted ~900ms, warn ~3s, reject sticky) are reasonable defaults — tune for feel; they're constructor params. Confirm whether reject should have a long safety timeout vs truly sticky.
+- Assumed: a distinct slot above the shutter avoids collision with the bottom-center shutter, lower-left ring map, and the instruction banner — confirm the final HUD layout so the toast has a reserved, non-overlapping position.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[ 4 ]]]]]]]]
+
+
+Generate a coding prompt for this task: Screen 6H: Help bottom sheet (5–7 quick tips) — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+----------------------------------------------------------------------------------------->>>>>>
+
+
+# UI/OVERLAY: Screen 6H — Help Bottom Sheet (5–7 Quick Tips) — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the Help bottom sheet for the Level A capture screen, opened from the top bar's Help icon. It presents 5–7 concise, scannable capture tips (lighting, distance, steadiness, full ring coverage, etc.) so users can quickly fix problems without leaving capture. Opening it should let the parent pause auto-capture; dismissing resumes. It reuses the Level A rules content where possible rather than duplicating copy, and is a modal sheet (not a route).
+
+- [ ] Build a `showLevelAHelpSheet(...)` modal bottom sheet presenting 5–7 quick tips (icon + 1–2 lines each)
+- [ ] Source tips from a single shared content list (reused with Screen 5A intro rules where overlapping)
+- [ ] Scrollable if content exceeds height; rounded top, drag handle, dismiss via swipe/tap-outside/close button
+- [ ] Signal open/close so the parent can pause/resume auto-capture (sheet returns when dismissed)
+- [ ] Optional "Replay intro animation" / "Don't show tips automatically" affordance (if applicable)
+- [ ] Honor reduce-motion; legible over the dimmed capture screen; safe-area aware
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/widgets/capture_top_bar.dart` — the Help icon's `onHelp` opens this sheet; confirm the wiring point
+2. `lib/features/capture/level_a/level_a_capture_screen.dart` — the parent that opens the sheet and pauses/resumes auto-capture around it
+3. Screen 5A intro screen — the rules/tips content lives there; extract a shared content list so Help and intro stay in sync (single source of copy)
+4. `lib/features/precapture/widgets/checklist_tooltip_sheet.dart` — match existing bottom-sheet styling (rounded corners, drag handle, theme tokens) for consistency
+5. `lib/features/config/application/config_notifier.dart` (`CaptureConfig`) — if any tip references a count (e.g. "capture all N positions"), derive N from config
+6. Theme tokens — Deep Black/elevated sheet surface, white/grey text, Royal Gold icon accents, Mirage Red sparingly; brand palette
+
+## Implementation Instructions
+
+### Step 1: Shared tip content model
+In `lib/features/capture/level_a/domain/capture_tip.dart`:
+
+```dart
+class CaptureTip {
+  final String id;
+  final String title;       // short, e.g. "Good lighting"
+  final String body;        // 1–2 lines
+  final IconData icon;      // or an asset path
+  const CaptureTip({required this.id, required this.title, required this.body, required this.icon});
+}
+```
+
+Define a single shared `levelACaptureTips` list (5–7 items) used by BOTH this Help sheet and the Screen 5A intro rules — do not duplicate the copy in two places. If a tip references a count, format it with the config-derived N at render time.
+
+### Step 2: The bottom sheet
+In `lib/features/capture/level_a/widgets/level_a_help_sheet.dart`:
+
+```dart
+Future<void> showLevelAHelpSheet(
+  BuildContext context, {
+  VoidCallback? onReplayIntro,
+}) {
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,    // tips may exceed half height
+    backgroundColor: Colors.transparent, // custom rounded surface inside
+    builder: (_) => const LevelAHelpSheet(/* tips, onReplayIntro */),
+  );
+}
+```
+
+`LevelAHelpSheet` content:
+- Drag handle + title ("Capture tips")
+- A scrollable column of `CaptureTip` rows (icon + title + body), 5–7 items
+- Optional footer actions: "Replay intro" (→ `onReplayIntro`), close button
+- Rounded top corners, elevated dark surface, white/grey text, gold icon accents
+
+### Step 3: Pause/resume coordination (parent-owned)
+- The sheet itself only opens and returns on dismissal. The parent (`onHelp`) pauses auto-capture before `await showLevelAHelpSheet(...)` and resumes after it returns. Document this clearly; do not manage capture state inside the sheet.
+
+### Step 4: Scroll, height, and dismissal
+- Use `isScrollControlled: true` and constrain max height (e.g. 70% of screen) so long content scrolls internally rather than overflowing
+- Dismiss via swipe-down, tap-outside, and an explicit close button
+- Safe-area aware (bottom inset / gesture nav)
+
+### Step 5: Reduce-motion + legibility
+- Reduce-motion: standard sheet present/dismiss is fine; avoid any extra decorative animation
+- Ensure text contrast over the dimmed barrier; keep tips terse and scannable
+
+## What NOT to Change
+
+- Do NOT duplicate tip/rules copy — reuse the shared `levelACaptureTips` list also used by Screen 5A
+- Do NOT manage auto-capture pause/resume inside the sheet — the parent handles it around the `await`
+- Do NOT build a full help/FAQ screen or navigation route — this is a single modal sheet
+- Do NOT modify the top bar, capture flow, other overlays, config, or routing — only consume them
+- Do NOT hardcode brand colors — theme tokens only; match the existing tooltip-sheet styling
+- Do NOT block dismissal — the sheet must always be easy to close
+
+## Analytics Events
+
+Event: `level_a_help_opened`
+Trigger: the Help sheet is shown
+Properties:
+  - device_type: "android" | "ios"
+
+Event: `level_a_help_action`
+Trigger: user taps a footer action (e.g. replay intro)
+Properties:
+  - action: "replay_intro" | "close"
+
+(Route through the existing dispatcher; otherwise add TODO-marked stubs.)
+
+## Edge Cases to Handle
+
+- [ ] Content taller than the screen → sheet scrolls internally (isScrollControlled + max height), no overflow
+- [ ] Small screen / large text scale (accessibility font size) → tips remain readable and scrollable, no clipping
+- [ ] Tip referencing a count when config not loaded → uses bundled-default N; still renders
+- [ ] Rapid Help taps → only one sheet opens (the top bar already debounces; ensure no double-present here)
+- [ ] Dismissed via swipe vs tap-outside vs close button → all resolve the same (return), so the parent reliably resumes auto-capture in every path
+- [ ] "Replay intro" tapped → sheet dismisses and `onReplayIntro` fires (parent handles showing the intro); no nested sheet stacking
+- [ ] Reduce-motion → standard present/dismiss, no extra animation
+- [ ] Sheet open when app backgrounded/returns → no crash; remains open or closes per platform default
+- [ ] Safe area / gesture nav bar → footer actions/close button not obscured
+
+## Constraints
+
+- Single shared tip content source reused with Screen 5A — no duplicated copy
+- Pause/resume of auto-capture handled by the parent around the sheet's `await`, not inside the sheet
+- `isScrollControlled: true` with a constrained max height; always dismissible (swipe/tap-outside/close)
+- Matches existing bottom-sheet styling and theme tokens; legible over the dimmed barrier
+- Count-based tips derive N from `CaptureConfig`; never hardcoded
+- Reduce-motion honored; no leaks (sheet is transient)
+- Brand palette via theme tokens (dark surface, white/grey text, gold icon accents)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] Tapping Help opens a modal bottom sheet with 5–7 concise tips (icon + title + body)
+- [ ] Tip content comes from the shared list reused by Screen 5A (verified: changing the list updates both)
+- [ ] Sheet scrolls internally when content/height/large-font requires it; no overflow
+- [ ] Dismissible via swipe, tap-outside, and close button; all paths return so the parent resumes auto-capture
+- [ ] Auto-capture is paused while the sheet is open and resumes on dismissal (verified at the parent)
+- [ ] Optional "Replay intro" dismisses the sheet and fires `onReplayIntro` without nested-sheet issues
+- [ ] Count-based tips reflect the config N (bundled default if not loaded)
+- [ ] Reduce-motion respected; no leaks; styling matches existing sheets and brand palette
+- [ ] Footer/close not obscured by safe-area/gesture nav on notched/gesture-nav devices
+- [ ] Works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm the shared tip content source (with Screen 5A), the Help wiring from the top bar, and that the parent pauses/resumes auto-capture before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a device, tap Help in Level A → confirm the sheet opens with 5–7 tips and correct styling.
+4. Edit the shared tips list → confirm both the Help sheet and Screen 5A intro reflect the change (single source).
+5. Increase the OS font scale / use a small screen → confirm internal scrolling, no clipping.
+6. Dismiss via swipe, tap-outside, and close button → confirm each returns and the parent resumes auto-capture each time.
+7. Verify auto-capture is paused while open (e.g. it doesn't fire behind the sheet) and resumes after.
+8. Tap "Replay intro" (if present) → confirm dismissal + `onReplayIntro`; confirm no nested sheet stacking.
+9. With config unloaded, render a count-based tip → confirm bundled-default N shows.
+10. Rapidly tap Help → confirm a single sheet opens.
+11. Test on a notched/gesture-nav device → confirm footer/close not obscured; check leaks across open/close cycles.
+12. Confirm analytics fire for open and footer actions.
+
+## Assumptions
+
+- Assumed: Help shows quick capture tips (this sheet) rather than a full help center — confirm scope; deeper help/FAQ would be a separate screen.
+- Assumed: the tip content is shared with Screen 5A's intro rules — extract a single `levelACaptureTips` list both consume. If the two need different copy, keep them separate but confirm, since divergence causes inconsistent guidance.
+- Assumed: the parent pauses auto-capture while Help is open and resumes on dismissal — confirm the parent owns this (the top bar task already assumes pause-on-open intent).
+- Assumed: "Replay intro" is a nice-to-have footer action linking back to Screen 5A's animation — include if cheap; confirm whether it's desired.
+- Assumed: 5–7 tips is the target; final copy/icons supplied by content/design — use placeholders if not yet available, centralized for easy update.
+- Assumed: this Help sheet is Level A specific now but the pattern (config-driven, shared content) should generalize to Levels B/C — build it parameterizable by the tip list so higher levels reuse the same sheet with their own tips.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[ 3 ]]]]]]]]]]
+
+
+Generate a coding prompt for this task: Screen 6S: Settings bottom sheet (auto-capture, save to gallery, quality mode toggles) — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+
+
+----------------------------------------------------------------------------------------------------------------->>>>>>
+
+
+# UI/OVERLAY: Screen 6S — Settings Bottom Sheet (Auto-Capture, Save to Gallery, Quality Mode) — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: Medium
+
+---
+
+## Task Description
+
+Build the Settings bottom sheet for the Level A capture screen, opened from the top bar's Settings icon. It exposes a small set of capture toggles/options — auto-capture on/off, save-to-gallery on/off, and quality mode (e.g. Standard / High) — each persisted across sessions and applied live to the capture experience. Opening it should let the parent pause auto-capture; dismissing resumes. It is a modal sheet (not a route) and emits setting changes via callbacks/persistence — it does not implement capture, saving, or quality switching itself.
+
+- [ ] Build a `showLevelASettingsSheet(...)` modal bottom sheet with: auto-capture toggle, save-to-gallery toggle, quality mode selector
+- [ ] Persist each setting via the established storage gateway; load current values on open
+- [ ] Emit changes so the parent applies them live (e.g. flips auto-capture mode, sets quality)
+- [ ] Keep auto-capture here consistent with the auto-capture pill (single source of truth)
+- [ ] Scrollable if needed; rounded top, drag handle, dismiss via swipe/tap-outside/close
+- [ ] Honor reduce-motion; legible over the dimmed capture screen; safe-area aware
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/widgets/capture_top_bar.dart` — the Settings icon's `onSettings` opens this sheet
+2. `lib/features/capture/level_a/level_a_capture_screen.dart` — the parent that opens the sheet, owns capture settings state, pauses/resumes auto-capture, and applies changes live
+3. `lib/features/capture/level_a/widgets/auto_capture_indicator.dart` + its state/persistence — auto-capture must stay consistent between the pill and this sheet (same key, same source of truth)
+4. The storage gateway used for prefs (Hive `active_session`/prefs box from the Hive task) — persist settings here, not SharedPreferences directly
+5. `lib/features/config/application/config_notifier.dart` (`CaptureConfig`) — quality mode may map to resolution/threshold differences; confirm what "quality mode" controls
+6. `lib/features/precapture/widgets/checklist_tooltip_sheet.dart` / the Help sheet (6H) — match existing sheet styling and structure
+7. Theme tokens — Deep Black/elevated surface, white/grey text, Royal Gold accents, Mirage Red sparingly; brand palette
+
+## Implementation Instructions
+
+### Step 1: Settings model + persistence keys
+In `lib/features/capture/level_a/domain/capture_settings.dart`:
+
+```dart
+enum QualityMode { standard, high }
+
+QualityMode qualityModeFromString(String? s) =>
+    s == 'high' ? QualityMode.high : QualityMode.standard;
+String qualityModeToString(QualityMode m) => m == QualityMode.high ? 'high' : 'standard';
+
+class CaptureSettings {
+  final bool autoCapture;
+  final bool saveToGallery;
+  final QualityMode quality;
+  const CaptureSettings({
+    this.autoCapture = true,
+    this.saveToGallery = false,
+    this.quality = QualityMode.standard,
+  });
+
+  CaptureSettings copyWith({bool? autoCapture, bool? saveToGallery, QualityMode? quality}) =>
+      CaptureSettings(
+        autoCapture: autoCapture ?? this.autoCapture,
+        saveToGallery: saveToGallery ?? this.saveToGallery,
+        quality: quality ?? this.quality,
+      );
+}
+```
+
+Persistence keys (single source; reuse the auto-capture key already defined for the pill):
+- `level_a_auto_capture` (shared with the pill)
+- `level_a_save_to_gallery`
+- `level_a_quality_mode`
+
+Provide a small settings repository/gateway method to read/write these via the established storage gateway.
+
+### Step 2: The settings sheet
+In `lib/features/capture/level_a/widgets/level_a_settings_sheet.dart`:
+
+```dart
+Future<void> showLevelASettingsSheet(
+  BuildContext context, {
+  required CaptureSettings current,
+  required void Function(CaptureSettings) onChanged, // called on each change; parent persists + applies
+}) {
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (_) => LevelASettingsSheet(current: current, onChanged: onChanged),
+  );
+}
+```
+
+Content (each row: label + short helper + control):
+- **Auto-capture** → switch (on/off)
+- **Save to gallery** → switch (on/off), with a short note about where photos go and a permission caveat (see permissions handling)
+- **Quality mode** → segmented/choice control (Standard / High) with a one-line trade-off note ("Higher quality uses more storage/processing")
+- Rounded top, drag handle, close button
+
+Each change calls `onChanged(updatedSettings)` immediately (live apply + persist by the parent). Use local state to reflect the toggle instantly, sourced from `current`.
+
+### Step 3: Save-to-gallery permission caveat
+- Saving to the device gallery typically needs photo/media write permission. The sheet should NOT request permission directly; when the user enables save-to-gallery, emit the change and let the parent trigger the permission request via `PermissionsService` if needed. If permission is denied, the parent reverts the toggle and the sheet reflects the reverted state (controlled by `current`). Document this; keep permission logic out of the sheet.
+
+### Step 4: Consistency with the auto-capture pill
+- The auto-capture setting here and the pill must read/write the SAME persisted key and the SAME in-memory source of truth. Toggling in the sheet updates the pill and vice versa. The parent owns the single capture-settings state; both the sheet and pill are views over it.
+
+### Step 5: Pause/resume, scroll, dismissal, reduce-motion
+- Parent pauses auto-capture before `await showLevelASettingsSheet(...)` and resumes after it returns
+- `isScrollControlled: true`, constrained max height, internal scroll; dismiss via swipe/tap-outside/close; safe-area aware
+- Reduce-motion: standard sheet present/dismiss; no extra decorative animation
+
+## What NOT to Change
+
+- Do NOT implement capture, gallery saving, or quality/resolution switching here — emit settings; the parent applies them
+- Do NOT request permissions inside the sheet — emit the save-to-gallery change; the parent requests/handles permission and reverts if denied
+- Do NOT manage auto-capture pause/resume inside the sheet — the parent handles it around the `await`
+- Do NOT use a separate persistence key/source for auto-capture than the pill — they must share one
+- Do NOT persist via SharedPreferences directly — use the established storage gateway (parent/repository owned)
+- Do NOT build a full settings screen/route — single modal sheet
+- Do NOT hardcode brand colors — theme tokens only; match existing sheet styling
+
+## Analytics Events
+
+Event: `capture_setting_changed`
+Trigger: a setting is toggled/selected
+Properties:
+  - setting: "auto_capture" | "save_to_gallery" | "quality_mode"
+  - value: string            // "on"|"off"|"standard"|"high"
+  - device_type: "android" | "ios"
+
+(Route through the existing dispatcher; otherwise add TODO-marked stubs.)
+
+## Edge Cases to Handle
+
+- [ ] Settings loaded on open reflect persisted values exactly (no wrong-state flash)
+- [ ] First run (no persisted settings) → sensible defaults (auto-capture on, save-to-gallery off, quality standard — confirm)
+- [ ] Toggle save-to-gallery ON but permission denied → parent reverts; sheet reflects the reverted OFF state via `current` (no stuck ON)
+- [ ] Auto-capture toggled here → the auto-capture pill updates to match (shared source); and vice versa
+- [ ] Quality mode change → applied live (parent may need to reconfigure the camera/resolution); ensure no crash if a live switch isn't instantly possible (apply on next capture if needed — see assumptions)
+- [ ] Rapid toggling → each change persists last-write-wins; no flicker; controls reflect final state
+- [ ] Content taller than screen / large font scale → internal scroll, no overflow/clipping
+- [ ] Dismissed via swipe/tap-outside/close → all return so the parent resumes auto-capture in every path
+- [ ] Reduce-motion → standard transitions only
+- [ ] Sheet open during app background/return → no crash; remains open or closes per platform default
+- [ ] Safe area / gesture nav → controls/close not obscured
+
+## Constraints
+
+- Auto-capture shares one persisted key and one in-memory source of truth with the pill — no divergence
+- Persistence via the established storage gateway (not SharedPreferences directly)
+- Sheet is presentational + intent: reflects `current`, calls `onChanged`; the parent persists, applies live, and handles permissions
+- Save-to-gallery permission handled by the parent; sheet reverts to `current` if denied
+- `isScrollControlled: true`, constrained height, always dismissible; matches existing sheet styling and theme tokens
+- Reduce-motion honored; no leaks (transient sheet)
+- Quality mode mapping (what it actually changes) defined by the parent/config, not the sheet
+- Brand palette via theme tokens
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] Tapping Settings opens a modal sheet with auto-capture, save-to-gallery, and quality-mode controls reflecting persisted values
+- [ ] Changing any setting calls `onChanged`, persists, and applies live (verified at the parent)
+- [ ] Auto-capture stays in sync between this sheet and the auto-capture pill (shared key/source)
+- [ ] Enabling save-to-gallery without permission results in the parent requesting it; if denied, the toggle reverts and the sheet shows OFF
+- [ ] Quality mode change is applied (live or on next capture) without crashing
+- [ ] Settings persist across sessions (re-open shows last values, no wrong-state flash)
+- [ ] Sheet scrolls internally when needed; dismissible via swipe/tap-outside/close, all resuming auto-capture
+- [ ] Reduce-motion respected; styling matches existing sheets and brand palette; controls not obscured by safe-area/gesture nav
+- [ ] No leaks; works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm the shared auto-capture key/source with the pill, the storage gateway, what "quality mode" controls, and that the parent pauses/resumes auto-capture and handles gallery permission — before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. On a device, open Settings in Level A → confirm controls reflect persisted values.
+4. Toggle each setting → confirm `onChanged` fires, persists, and applies live; reopen the sheet to confirm persistence.
+5. Toggle auto-capture in the sheet → confirm the pill updates; toggle the pill → confirm the sheet (on reopen) matches.
+6. Enable save-to-gallery and deny the OS permission → confirm the toggle reverts to OFF and the sheet reflects it.
+7. Switch quality Standard↔High → confirm it applies (or applies on next capture) with no crash.
+8. Rapidly toggle a setting → confirm final state persists (last-write-wins), no flicker.
+9. Increase font scale / small screen → confirm internal scroll, no clipping.
+10. Dismiss via swipe, tap-outside, and close → confirm each returns and auto-capture resumes.
+11. Enable reduce-motion → confirm standard transitions; check leaks across open/close cycles.
+12. Test notched/gesture-nav device → confirm controls/close not obscured; confirm analytics fire per change.
+
+## Assumptions
+
+- Assumed: auto-capture is the same setting surfaced by the pill (Screen for the auto-capture indicator) — they MUST share the persisted key (`level_a_auto_capture`) and the parent's single capture-settings state to avoid contradiction. Confirm the parent owns this single source.
+- Assumed: "quality mode" maps to capture resolution and/or acceptance thresholds (Standard vs High) — confirm exactly what it changes (resolution preset, target segment count, sharpness threshold) so the parent can apply it; the sheet only stores the enum.
+- Assumed: switching quality mid-session may require re-initializing the camera at a new resolution — confirm whether a live switch is supported or whether the new quality applies from the next capture/session; the sheet should not assume instant reconfiguration.
+- Assumed: save-to-gallery defaults OFF (captures are managed by the app/project pipeline; gallery copy is optional) and requires media-write permission handled by the parent via `PermissionsService` — confirm defaults and the permission flow.
+- Assumed: defaults are auto-capture ON, save-to-gallery OFF, quality Standard — confirm with product; persisted user choices always override defaults.
+- Assumed: persistence uses the established Hive prefs gateway under the listed keys — confirm gateway and key naming; do not introduce SharedPreferences.
+- Assumed: this sheet is Level A specific now but should generalize (driven by a settings model) so Levels B/C can reuse it with their own option set — build it parameterizable.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[ 2 ]]]]]]]]]]]
+
+
+Generate a coding prompt for this task: Screen 6X: Save & Exit confirmation modal — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+----------------------------------------------------------------------->>>>
+
+# UI/OVERLAY: Screen 6X — Save & Exit Confirmation Modal — Level A
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays)
+# Priority: High
+
+---
+
+## Task Description
+
+Build the Save & Exit confirmation modal for the Level A capture screen, triggered when the user attempts to leave (top-bar back/close, system back gesture) while a capture session has unsaved progress. It prevents accidental loss of captured photos by offering clear choices: Save & Exit (keep progress as a draft), Discard & Exit (throw away this session's captures), or Cancel (stay). It emits the chosen intent via callbacks — it does not save, discard, or navigate itself.
+
+- [ ] Build a `showSaveExitConfirmation(...)` modal presenting Save & Exit / Discard & Exit / Cancel
+- [ ] Show context: how many captures exist (e.g. "12 photos captured") so the user understands what's at stake
+- [ ] Make Discard clearly destructive (color/confirmation), Save the primary safe action, Cancel non-committal
+- [ ] Intercept both top-bar back AND the system/hardware back gesture (`PopScope`) when there is unsaved progress
+- [ ] If there is NO unsaved progress, exit directly without showing the modal
+- [ ] Honor reduce-motion; accessible; legible over the dimmed capture screen
+- [ ] Emit `onSaveExit` / `onDiscardExit` / `onCancel`; parent performs the actual save/discard/navigation
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/widgets/capture_top_bar.dart` — the back/close control's `onBack` should route through this confirmation when there's unsaved progress
+2. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns the capture session state (count, dirty flag), handles save-as-draft/discard, and navigation; wraps the screen in `PopScope`
+3. `lib/features/projects/application/projects_notifier.dart` + `ProjectStatus` — "Save as draft" maps to a project in `draft`/`capturing` status; confirm how the parent persists the in-progress session
+4. `lib/core/storage/active_session_box.dart` (Hive `active_session`) — saving a draft likely persists the resumable session here; confirm the contract
+5. `lib/features/precapture/widgets/checklist_tooltip_sheet.dart` / existing dialogs — match existing modal/dialog styling and theme tokens
+6. `lib/core/haptics/haptics.dart` — optional haptic on destructive confirm
+7. Theme tokens — Mirage Red for destructive Discard, Royal Gold/primary for Save, neutral for Cancel; brand palette
+
+## Implementation Instructions
+
+### Step 1: Decision model
+In `lib/features/capture/level_a/domain/save_exit_decision.dart`:
+
+```dart
+enum SaveExitChoice { saveExit, discardExit, cancel }
+
+class SaveExitContext {
+  final int capturedCount;     // photos in this session
+  final bool hasUnsavedProgress;
+  const SaveExitContext({required this.capturedCount, required this.hasUnsavedProgress});
+}
+```
+
+### Step 2: The confirmation modal
+In `lib/features/capture/level_a/widgets/save_exit_modal.dart`:
+
+```dart
+Future<SaveExitChoice> showSaveExitConfirmation(
+  BuildContext context, {
+  required SaveExitContext ctx,
+}) async {
+  final result = await showDialog<SaveExitChoice>(
+    context: context,
+    barrierDismissible: true, // tapping outside == cancel
+    builder: (_) => SaveExitModal(ctx: ctx),
+  );
+  return result ?? SaveExitChoice.cancel; // any dismissal == cancel
+}
+```
+
+`SaveExitModal` content:
+- Title: "Save your progress?" (or "Leave capture?")
+- Body: context line — e.g. "You've captured {count} photos. Save them as a draft to continue later?"
+- Actions:
+  - **Save & Exit** (primary) → returns `saveExit`
+  - **Discard & Exit** (destructive, Mirage Red, optional haptic) → returns `discardExit`
+  - **Cancel** (neutral) → returns `cancel`
+- Always resolvable to a `SaveExitChoice` (dismissal/back == cancel)
+
+### Step 3: Back interception (both paths)
+- In the capture screen, wrap content in `PopScope` (Flutter's back-intercept API) so the SYSTEM back gesture/button also triggers the confirmation when `hasUnsavedProgress`:
+
+```dart
+PopScope(
+  canPop: !hasUnsavedProgress,
+  onPopInvokedWithResult: (didPop, result) async {
+    if (didPop) return;
+    final choice = await showSaveExitConfirmation(context, ctx: ctx);
+    _handleChoice(choice); // saveExit/discardExit -> persist/discard then pop; cancel -> stay
+  },
+)
+```
+
+- The top-bar back (`onBack`) routes through the SAME `showSaveExitConfirmation` + `_handleChoice` so behavior is identical for both entry points. (Confirm the exact `PopScope` API name for the installed Flutter version — it changed across versions; `WillPopScope` is deprecated.)
+
+### Step 4: No-progress fast path
+- If `hasUnsavedProgress == false` (nothing captured, or already saved): exit directly without the modal (`canPop: true` / `onBack` pops immediately)
+
+### Step 5: Choice handling (parent-owned)
+- `saveExit` → parent persists the session as a draft (project status draft/capturing + `active_session` write), then navigates out
+- `discardExit` → parent discards this session's captures (and any temp files), then navigates out
+- `cancel` → stay on the capture screen, no change
+- The modal only returns the choice; all persistence/cleanup/navigation is the parent's. Document this.
+
+### Step 6: Reduce-motion + accessibility
+- Reduce-motion: standard dialog present/dismiss; no extra animation
+- Buttons have adequate tap targets and semantics; Discard clearly labeled as destructive for screen readers
+- Optional: require a second tap / styling emphasis on Discard to reduce accidental data loss (keep it one clear destructive button unless data loss risk is high — see assumptions)
+
+## What NOT to Change
+
+- Do NOT save, discard, delete files, or navigate inside the modal — emit the choice; the parent performs the action
+- Do NOT show the modal when there's no unsaved progress — exit directly
+- Do NOT use the deprecated `WillPopScope` — use `PopScope`/`onPopInvokedWithResult` (match the installed Flutter version)
+- Do NOT let the top-bar back and system back behave differently — both route through the same confirmation
+- Do NOT modify the capture flow, projects notifier, storage, or routing internals — only consume/emit
+- Do NOT hardcode brand colors — theme tokens only; match existing dialog styling
+- Do NOT make the modal un-cancelable — any dismissal must resolve to `cancel`
+
+## Analytics Events
+
+Event: `save_exit_prompt_shown`
+Trigger: the modal is shown
+Properties:
+  - captured_count: int
+  - device_type: "android" | "ios"
+
+Event: `save_exit_choice`
+Trigger: user makes a choice (including dismissal-as-cancel)
+Properties:
+  - choice: "save_exit" | "discard_exit" | "cancel"
+  - captured_count: int
+
+(Route through the existing dispatcher; otherwise add TODO-marked stubs.)
+
+## Edge Cases to Handle
+
+- [ ] No captures / no unsaved progress → no modal; back exits directly
+- [ ] System back gesture/button with unsaved progress → modal shown (not just top-bar back)
+- [ ] Top-bar back with unsaved progress → same modal, same handling
+- [ ] Tap-outside / back while the modal is open → resolves to `cancel`, stays on screen, no exit
+- [ ] Discard chosen → parent discards captures + temp files; confirm no orphaned files (parent responsibility, but the choice must be unambiguous)
+- [ ] Save chosen → parent persists draft and navigates; resuming later restores the session (parent/active_session responsibility)
+- [ ] Rapid double-tap on a choice → only one choice resolves (dialog closes on first)
+- [ ] Capture in flight when back is pressed → confirm policy: block until the in-flight capture resolves, or include it in the count (see assumptions); avoid losing an in-progress shot silently
+- [ ] Modal shown, app backgrounded/returns → modal persists or dismisses-as-cancel per platform default; no crash
+- [ ] Reduce-motion → standard transitions
+- [ ] Very small screen / large font → modal content wraps, buttons reachable, within safe area
+
+## Constraints
+
+- Both top-bar back and system back must funnel through the same confirmation + choice handler — identical behavior
+- Modal is presentational + intent: returns a `SaveExitChoice`; parent does save/discard/navigation/cleanup
+- No-progress case bypasses the modal entirely
+- Uses `PopScope` (not deprecated `WillPopScope`); confirm the API for the installed Flutter version
+- Any dismissal resolves to `cancel` (never an accidental discard/exit)
+- Discard is visually/ semantically destructive; Save is the primary safe action
+- Reduce-motion honored; accessible labels; brand palette via theme tokens (Mirage Red discard, primary/gold save)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] Attempting to leave with unsaved progress (top-bar back AND system back) shows the modal with the correct capture count
+- [ ] Save & Exit returns `saveExit` (parent saves draft + navigates); Discard & Exit returns `discardExit` (parent discards + navigates); Cancel/dismissal returns `cancel` (stays)
+- [ ] No unsaved progress exits directly without the modal
+- [ ] Tap-outside/back while open resolves to `cancel` — never an accidental exit/discard
+- [ ] Discard is clearly destructive; Save is the primary action; both via theme tokens
+- [ ] Top-bar back and system back behave identically (same confirmation + handler)
+- [ ] Rapid double-tap resolves a single choice
+- [ ] Reduce-motion respected; accessible; layout holds on small/large screens within safe area
+- [ ] Uses `PopScope` (no deprecation warnings)
+- [ ] Works on Android (mid-range, incl. gesture back) and iOS (incl. swipe-back) — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm the capture session's unsaved-progress/count source, how the parent saves a draft (project status + `active_session`) and discards, and the `PopScope` API for the installed Flutter version — before coding.
+2. Run `flutter analyze` — confirm no deprecation/errors.
+3. Capture a few photos, then tap the top-bar back → confirm the modal shows the correct count.
+4. Repeat using the system back gesture/button (Android) and iOS swipe-back → confirm the SAME modal appears.
+5. Choose Save & Exit → confirm `saveExit` fires, parent saves a draft, and navigation occurs; resume the project later → confirm progress restored (parent behavior).
+6. Choose Discard & Exit → confirm `discardExit` fires and captures are discarded; verify no orphaned temp files (parent).
+7. Choose Cancel / tap outside / back while modal open → confirm you stay on the capture screen.
+8. With zero captures, press back → confirm direct exit, no modal.
+9. Press back during an in-flight capture → confirm the chosen policy (block/include) and no silent loss.
+10. Rapidly double-tap a choice → confirm a single resolution.
+11. Enable reduce-motion; test small screen/large font → confirm transitions and layout.
+12. Confirm analytics fire for shown and choice (including cancel).
+
+## Assumptions
+
+- Assumed: "Save" maps to persisting the session as a resumable draft — project moves to `draft`/`capturing` status and the session is written to the `active_session` Hive box so it can be resumed from the Projects list (Resume action). Confirm the exact draft persistence contract with the parent/projects layer.
+- Assumed: "Discard" throws away this session's captured photos and temp files but does NOT delete the project itself (unless it was newly created and empty — confirm whether discarding a brand-new project also removes it). Clarify discard scope to avoid orphaned projects or files.
+- Assumed: unsaved progress = at least one capture not yet committed as a draft — confirm the dirty-flag definition (e.g. does an auto-saved draft mean back can exit without prompting?).
+- Assumed: a capture in flight when back is pressed should be awaited/included rather than dropped — confirm whether to block the prompt until the shot resolves or to count it.
+- Assumed: a single destructive Discard button is acceptable (clear labeling + barrier-dismissible-as-cancel). If accidental data loss is a high concern, add a secondary confirm step on Discard — confirm the desired friction level.
+- Assumed: `PopScope`/`onPopInvokedWithResult` is available (Flutter 3.22+). If the project is on an older Flutter using `onPopInvoked` or still `WillPopScope`, adapt to that API while keeping identical behavior; confirm the version.
+- Assumed: this modal is Level A specific now but the save/discard/exit pattern generalizes to Levels B/C — build it driven by `SaveExitContext` so higher levels reuse it.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[[[[[[[ 1 ]]]]]]]]]]]]]]]]]]]
+
+Generate a coding prompt for this task: Screen 6A-Complete: Summary card + Start Level B / Review buttons — Phase: Guided Capture — Level A (Eye Ring), Track: Flutter UI — Overlays
+
+------------------------------------------------------------------------------------------------------------------->>>>>
+
+
+# UI/OVERLAY: Screen 6A-Complete — Level A Summary Card + Start Level B / Review CTAs
+# Product: maya-viewer
+# Scope: New Feature (Flutter UI — Capture Overlays / Completion)
+# Priority: High
+
+---
+
+## Task Description
+
+Build the Level A completion screen shown when the eye-ring capture meets its target/coverage threshold: a summary card recapping the result (accepted count, coverage %, maybe a thumbnail montage) and two clear next actions — "Start Level B" (continue to the next capture level) and "Review" (inspect/redo the Level A captures). It plugs into the capture flow (over or replacing the HUD), renders a supplied completion summary, and emits navigation intent — it does not compute the summary or perform the transitions itself.
+
+- [ ] Build a `LevelACompleteScreen` (or full-cover overlay) showing a summary card of the Level A result
+- [ ] Summary card: accepted/target count, coverage %, complete state, and an optional thumbnail montage/ring preview
+- [ ] Primary CTA "Start Level B" → `onStartLevelB`; secondary "Review" → `onReview`
+- [ ] Optional "Done / Save & Exit" path if the user wants to stop after Level A
+- [ ] Celebrate completion subtly (on-brand, reduce-motion aware)
+- [ ] Safe-area aware, legible, accessible; emits intent only (parent handles navigation/save)
+
+## Files to Inspect First
+
+1. `lib/features/capture/level_a/level_a_capture_screen.dart` — owns capture results/progress and decides when Level A is complete; supplies the summary and the `onStartLevelB`/`onReview` handlers and navigation
+2. `lib/features/capture/level_a/domain/capture_progress.dart` (`CaptureProgress`) and `ring_coverage.dart` (`RingCoverage`) — the summary's numbers must come from the same source the progress meter/ring map used (consistency)
+3. `lib/features/capture/level_a/domain/capture_thumbnail.dart` + the thumbnail strip — reuse the thumbnail loading approach (downscale-decode) for the montage
+4. `lib/features/config/application/config_notifier.dart` (`CaptureConfig`) — target N and completion threshold; confirm what "complete" means
+5. The router / Level B entry (if it exists) — `onStartLevelB` target; stub a route if Level B isn't built yet
+6. Theme tokens — Deep Black surface, Royal Gold/success completion accent, Mirage Red primary CTA; brand palette
+7. The reduce-motion pattern from prior overlays — reuse `MediaQuery.disableAnimations`
+
+## Implementation Instructions
+
+### Step 1: Completion summary model
+In `lib/features/capture/level_a/domain/level_a_summary.dart`:
+
+```dart
+class LevelASummary {
+  final int accepted;
+  final int target;
+  final double coveragePct;        // 0..100
+  final int rejected;              // optional: shots discarded
+  final List<CaptureThumbnail> highlights; // a few representative thumbnails (e.g. up to 6)
+  const LevelASummary({
+    required this.accepted,
+    required this.target,
+    required this.coveragePct,
+    this.rejected = 0,
+    this.highlights = const [],
+  });
+
+  double get coverageFraction => (coveragePct / 100).clamp(0.0, 1.0);
+}
+```
+
+The parent assembles this from the same progress/coverage source of truth — the summary must not recompute or contradict the in-capture numbers.
+
+### Step 2: The completion screen
+In `lib/features/capture/level_a/widgets/level_a_complete_screen.dart`:
+
+```dart
+class LevelACompleteScreen extends StatelessWidget {
+  final LevelASummary summary;
+  final VoidCallback onStartLevelB;
+  final VoidCallback onReview;
+  final VoidCallback? onDoneExit; // optional "finish after Level A"
+  const LevelACompleteScreen({
+    required this.summary,
+    required this.onStartLevelB,
+    required this.onReview,
+    this.onDoneExit,
+    super.key,
+  });
+}
+```
+
+Layout (Deep Black, full-cover, safe-area):
+- A completion header (e.g. "Level A complete" with a subtle gold check)
+- **Summary card**: accepted/target ("12/12"), coverage ("68%"), optional rejected count; a small coverage bar or a filled ring-preview reusing `RingCoverage` visuals
+- Optional **thumbnail montage**: a small grid of `highlights` (downscale-decoded; graceful fallback for missing files)
+- **CTAs**: primary "Start Level B" (Mirage Red), secondary "Review" (outlined/neutral), optional tertiary "Done" (`onDoneExit`)
+
+### Step 3: Subtle celebration + reduce-motion
+- A brief, on-brand completion flourish (e.g. gold check scale-in, gentle confetti is likely off-brand — prefer a restrained gold accent/pulse). Keep it short and dignified per the brand ("light appears only when something matters")
+- Reduce-motion → static completion state, no animation
+
+### Step 4: Intent only + Level B availability
+- All buttons call their callbacks; the parent performs navigation, saves the Level A result, and transitions to Level B or the review screen
+- If Level B is not yet available/built, the parent may stub the route; the button can still render (confirm whether to disable "Start Level B" when Level B is unavailable — see assumptions)
+
+### Step 5: Thumbnail montage performance
+- Reuse the thumbnail strip's downscale-decode approach (`cacheWidth`/`cacheHeight` matched to grid tile size) so the montage doesn't decode full-res images; placeholder while loading; broken-file fallback
+
+## What NOT to Change
+
+- Do NOT compute the summary, judge completion, or recount captures here — render the supplied `LevelASummary`
+- Do NOT perform navigation, save the result, or start Level B/Review yourself — emit intent; the parent does it
+- Do NOT recompute coverage/accepted differently from the in-capture progress meter/ring map — single source of truth
+- Do NOT decode full-resolution images for the montage — downscale-decode
+- Do NOT modify the capture flow, progress/coverage logic, config, or routing internals — only consume/emit
+- Do NOT hardcode brand colors — theme tokens only
+- Do NOT use a loud, off-brand celebration — keep it restrained and on-brand
+
+## Analytics Events
+
+Event: `level_a_completed`
+Trigger: the completion screen is shown
+Properties:
+  - accepted: int
+  - target: int
+  - coverage_pct: int
+  - rejected: int
+  - device_type: "android" | "ios"
+
+Event: `level_a_complete_action`
+Trigger: user taps a CTA
+Properties:
+  - action: "start_level_b" | "review" | "done_exit"
+
+(Route through the existing dispatcher; otherwise add TODO-marked stubs.)
+
+## Edge Cases to Handle
+
+- [ ] Coverage/accepted exactly at threshold vs over target ("14/12") → display real numbers; bar/fraction clamped; no overflow
+- [ ] No highlights/thumbnails available → montage section hidden or shows a neutral placeholder, no broken tiles
+- [ ] Missing/corrupt highlight file → graceful fallback tile, others render, no crash
+- [ ] Level B unavailable/not built → either disable "Start Level B" with a note, or keep it and let the parent stub the route (per chosen policy); no dead-end crash
+- [ ] Rapid double-tap on a CTA → only one intent fires (debounce)
+- [ ] Summary numbers must match the last in-capture progress meter/ring map values (no discrepancy on transition)
+- [ ] Reduce-motion → static completion, no animation
+- [ ] Very small screen / large font → summary card + montage + CTAs scroll if needed; CTAs remain reachable within safe area
+- [ ] Back/system back on this screen → define behavior (e.g. back == Review, or back returns to capture, or blocked) — confirm and handle without losing the completed result
+
+## Constraints
+
+- Presentational + intent: renders `LevelASummary`, emits `onStartLevelB`/`onReview`/`onDoneExit`; no computation/navigation/save inside
+- Summary numbers derive from the same source as the in-capture progress meter/ring map — guaranteed consistent
+- Montage thumbnails downscale-decoded with graceful fallbacks
+- CTAs debounced to a single intent; primary/secondary hierarchy clear
+- Reduce-motion honored; celebration restrained and on-brand
+- Scrollable on small screens; safe-area aware; accessible labels and adequate tap targets
+- Brand palette via theme tokens (gold/success completion accent, Mirage Red primary CTA, neutral secondary)
+
+## Acceptance Criteria
+
+- [ ] `flutter analyze` passes with zero errors/warnings
+- [ ] On Level A completion, the screen shows a summary card with accepted/target, coverage %, and (if present) a thumbnail montage
+- [ ] Summary numbers exactly match the final in-capture progress meter/ring map values
+- [ ] "Start Level B", "Review", and optional "Done" each fire their callbacks; debounced to single intents
+- [ ] Over-target counts and threshold-edge values display correctly without overflow
+- [ ] Missing/no highlights handled gracefully; montage uses downscale-decoded images (no full-res decode)
+- [ ] Level-B-unavailable case is handled per policy (disabled with note or stubbed route) — no dead-end/crash
+- [ ] Reduce-motion shows a static completion state; celebration is restrained and on-brand
+- [ ] Layout scrolls/holds on small/large screens within safe area; accessible
+- [ ] No leaks; works on Android (mid-range) and iOS — verified on physical devices
+
+## Testing Instructions
+
+1. Confirm the summary source (same as progress meter/ring map), the `onStartLevelB`/`onReview` targets, whether Level B exists, and the back behavior — before coding.
+2. Run `flutter analyze` — confirm no errors.
+3. Drive completion (debug) with a representative summary → confirm the card shows correct counts/coverage and the montage renders.
+4. Cross-check the summary numbers against the last progress meter/ring map state → confirm they match exactly.
+5. Tap each CTA (and double-tap) → confirm single intents fire and the parent navigates/saves accordingly.
+6. Provide over-target counts ("14/12") and threshold-edge coverage → confirm correct display, no overflow.
+7. Provide no highlights and a corrupt highlight path → confirm graceful handling.
+8. Simulate Level B unavailable → confirm the chosen policy (disabled+note or stubbed route), no crash.
+9. Enable reduce-motion → confirm static completion.
+10. Test small screen/large font → confirm scroll/reachable CTAs; press back → confirm defined behavior without losing the result.
+11. Confirm analytics fire for shown and each CTA.
+
+## Assumptions
+
+- Assumed: Level A "complete" is decided by the parent against `CaptureConfig` (target N and `minCoveragePct`) — this screen only displays the achieved summary. Confirm the completion criterion so the summary's "complete" framing matches when this screen is actually shown.
+- Assumed: the summary is assembled from the same progress/coverage source used in-capture (progress meter, ring map) — it must not recompute. Confirm the parent passes the final values to avoid any discrepancy at the transition.
+- Assumed: "Start Level B" continues the multi-level guided capture (A: eye ring → B: presumably a higher/lower pitch ring or different motion) within the same project — confirm Level B exists or stub its route; decide whether to disable the CTA when Level B isn't built vs route to a placeholder.
+- Assumed: "Review" opens a screen to inspect/redo Level A captures (e.g. the thumbnail set with retake/delete) — confirm whether Review is built or stubbed, and what it allows.
+- Assumed: "Done/Save & Exit" is an optional path for users who only need Level A — confirm whether finishing after Level A is valid for the reconstruction pipeline (it may require all levels). If Level A alone is insufficient, omit "Done" or make it save-as-draft.
+- Assumed: completion implies the Level A captures are saved/committed to the project before this screen (or on "Start Level B"/"Done") — confirm where the save happens so progress isn't lost if the user backgrounds the app here.
+- Assumed: a restrained gold-accent celebration fits the brand ("light appears only when something matters") rather than confetti — confirm the desired completion treatment with design.
+- Assumed: this completion screen pattern generalizes to Levels B/C — build it driven by `LevelASummary` (or a generic summary) so higher levels reuse it with their own CTAs.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------->>>>>>>>
+
+
+
+
+

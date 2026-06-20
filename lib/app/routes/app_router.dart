@@ -10,6 +10,7 @@ import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
 import '../../presentation/screens/capture/level_intro_screen.dart';
+import '../../presentation/screens/capture/level_a_intro_screen.dart';
 import '../../presentation/screens/capture/capture_screen.dart';
 import '../../presentation/screens/capture/review_screen.dart';
 import '../../presentation/screens/capture/level_complete_screen.dart';
@@ -155,22 +156,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
         name: AppRouteNames.permissions,
         builder: (_, __) => const PermissionsScreen(),
       ),
-      // Level A
+      // Level A — dedicated Eye Ring intro (animation + rules + Begin/Skip).
       GoRoute(
         path: AppRoutes.levelAIntro,
         name: AppRouteNames.levelAIntro,
-        builder: (_, __) => const LevelIntroScreen(
-          levelLabel: 'A',
-          levelName: 'Eye Ring',
-          levelColor: AppColors.mirageRed,
-          icon: Icons.remove_red_eye_outlined,
-          rules: [
-            'Keep the object inside the box',
-            'Move slowly in a circle',
-            'Overlap shots for best results',
-          ],
-          nextRoute: AppRoutes.levelACapture,
-        ),
+        builder: (_, __) => const LevelAIntroScreen(),
       ),
       GoRoute(
         path: AppRoutes.levelACapture,

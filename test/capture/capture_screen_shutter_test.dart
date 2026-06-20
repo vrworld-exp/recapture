@@ -8,8 +8,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/data/local/active_session_box.dart';
+import 'package:recapture/domain/entities/active_session.dart';
 import 'package:recapture/presentation/screens/capture/capture_screen.dart';
 import 'package:recapture/utils/constants.dart';
+
+/// ActiveSessionBox stand-in (Hive is not initialized in this test host).
+class _FakeSessionBox extends ActiveSessionBox {
+  @override
+  Future<ActiveSession?> read() async => null;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -45,11 +53,12 @@ void main() {
 
   Future<void> pumpScreen(WidgetTester tester) async {
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
         home: CaptureScreen(
           levelLabel: 'Level A',
           levelName: 'Intro',
           nextRoute: '/next',
+          sessionBox: _FakeSessionBox(),
         ),
       ),
     );

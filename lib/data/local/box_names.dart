@@ -23,6 +23,10 @@ abstract final class BoxNames {
   /// doesn't re-prompt or nag on resume. Holds NO grant status — the OS is the
   /// authority; grant status is always re-checked live.
   static const String permissionFlow = 'permission_flow';
+
+  /// Per-intro "seen" / "don't show again" flags for capture-level intro screens
+  /// (keyed by an intro id, e.g. `level_a`). Flow state only — no capture data.
+  static const String levelIntro = 'level_intro';
 }
 
 /// Per-box schema marker. Current migration policy is clear-on-mismatch — when

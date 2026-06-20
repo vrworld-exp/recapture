@@ -9,8 +9,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/data/local/active_session_box.dart';
+import 'package:recapture/domain/entities/active_session.dart';
 import 'package:recapture/presentation/screens/capture/capture_screen.dart';
 import 'package:recapture/utils/constants.dart';
+
+/// ActiveSessionBox stand-in (Hive is not initialized in this test host).
+class _FakeSessionBox extends ActiveSessionBox {
+  @override
+  Future<ActiveSession?> read() async => null;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +27,7 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
   const previewChannel = MethodChannel(AppConfig.channelCameraPreview);
   const captureChannel = MethodChannel(AppConfig.channelCapture);
+  const permissionsChannel = MethodChannel(AppConfig.channelPermissions);
 
   late List<String> calls;
 
@@ -32,20 +41,26 @@ void main() {
     });
     // Capture channel exists (screen constructs CaptureChannel) — not used here.
     messenger.setMockMethodCallHandler(captureChannel, (call) async => null);
+    // Resume re-checks camera permission via the native permissions channel;
+    // grant it so the resume path restarts the preview (revocation is covered
+    // separately in capture_screen_camera_test.dart).
+    messenger.setMockMethodCallHandler(permissionsChannel, (call) async => 'granted');
   });
 
   tearDown(() {
     messenger.setMockMethodCallHandler(previewChannel, null);
     messenger.setMockMethodCallHandler(captureChannel, null);
+    messenger.setMockMethodCallHandler(permissionsChannel, null);
   });
 
   Future<void> pumpScreen(WidgetTester tester) async {
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
         home: CaptureScreen(
           levelLabel: 'A',
           levelName: 'Eye Ring',
           nextRoute: '/next',
+          sessionBox: _FakeSessionBox(),
         ),
       ),
     );
@@ -58,6 +73,8 @@ void main() {
   // WidgetsBindingObserver), then flushes the async channel invocation.
   Future<void> sendLifecycle(WidgetTester tester, AppLifecycleState state) async {
     tester.binding.handleAppLifecycleStateChanged(state);
+    // Extra pump: resume awaits an async camera-permission re-check before start.
+    await tester.pump();
     await tester.pump();
     await tester.pump();
   }

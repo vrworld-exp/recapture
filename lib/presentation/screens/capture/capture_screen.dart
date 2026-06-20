@@ -1,13 +1,21 @@
 // lib/presentation/screens/capture/capture_screen.dart
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../data/local/active_session_box.dart';
+import '../../../domain/entities/permission_item.dart';
 import '../../../platform/camera/camera_preview_controller.dart';
 import '../../../platform/camera/camera_preview_view.dart';
+import '../../../platform/camera/preview_geometry.dart';
 import '../../../platform/method_channels.dart';
+import '../../../platform/permissions_service.dart';
+import '../../../utils/analytics.dart';
+import '../../widgets/capture_overlay_layer.dart';
+import '../../widgets/placement_box_overlay.dart';
 
 class CaptureScreen extends StatefulWidget {
   const CaptureScreen({
@@ -15,11 +23,21 @@ class CaptureScreen extends StatefulWidget {
     required this.levelLabel,
     required this.levelName,
     required this.nextRoute,
+    this.permissionsService = const PermissionsService(),
+    this.sessionBox,
   });
 
   final String levelLabel;
   final String levelName;
   final String nextRoute;
+
+  /// Permission gateway, used to RE-CHECK camera on resume (it is granted
+  /// upstream by the gate). Injectable so tests can drive a revoked status.
+  final PermissionsService permissionsService;
+
+  /// Source of the active project id for analytics. Null → the real
+  /// [ActiveSessionBox]; injectable for tests. Read best-effort (never fatal).
+  final ActiveSessionBox? sessionBox;
 
   @override
   State<CaptureScreen> createState() => _CaptureScreenState();
@@ -46,6 +64,18 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// native side also rejects with BUSY → null, but this avoids spamming it).
   bool _capturing = false;
 
+  /// `level_a_camera_opened` is a once-per-screen reach metric.
+  bool _openedLogged = false;
+
+  /// De-dupes `level_a_camera_error`: only emit when the error code changes.
+  String? _lastErrorCodeLogged;
+
+  /// Guards against firing navigation to the permissions gate more than once.
+  bool _routingToGate = false;
+
+  /// Active project id for analytics; resolved best-effort on mount.
+  String? _projectId;
+
   static const _instructions = [
     'Move clockwise',
     'Keep object centered',
@@ -61,7 +91,9 @@ class _CaptureScreenState extends State<CaptureScreen>
       duration: const Duration(milliseconds: 200),
     );
     _cameraController = CameraPreviewController();
+    _cameraController.addListener(_onCameraStateChanged);
     WidgetsBinding.instance.addObserver(this);
+    _resolveProjectId();
     // Start after the first frame so the engine texture registry is ready.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _cameraController.start();
@@ -74,11 +106,46 @@ class _CaptureScreenState extends State<CaptureScreen>
     });
   }
 
+  /// Best-effort read of the active project id for analytics. Never fatal — a
+  /// missing/corrupt session (or an un-init Hive test host) leaves it null.
+  Future<void> _resolveProjectId() async {
+    try {
+      final session = await (widget.sessionBox ?? ActiveSessionBox()).read();
+      if (!mounted) return;
+      _projectId = session?.projectId;
+    } catch (_) {
+      _projectId = null;
+    }
+  }
+
+  /// Emits the camera analytics on state transitions (not on rebuilds):
+  /// `opened` once when the preview reaches running, and `error` (de-duped by
+  /// code) when the native pipeline reports a fatal error.
+  void _onCameraStateChanged() {
+    final state = _cameraController.value;
+    if (state.status == CameraPreviewStatus.running && !_openedLogged) {
+      _openedLogged = true;
+      Analytics.logEvent(AnalyticsEvents.levelACameraOpened, {
+        'project_id': _projectId,
+        'resolution_preset': _resolutionLabel(state),
+        'device_type': _deviceType,
+      });
+    }
+    if (state.status == CameraPreviewStatus.error &&
+        state.errorCode != _lastErrorCodeLogged) {
+      _lastErrorCodeLogged = state.errorCode;
+      Analytics.logEvent(AnalyticsEvents.levelACameraError, {
+        'reason': _errorReason(state.errorCode, state.errorMessage),
+        'device_type': _deviceType,
+      });
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.resumed:
-        _cameraController.start();
+        _handleResume();
       case AppLifecycleState.inactive:
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
@@ -87,9 +154,54 @@ class _CaptureScreenState extends State<CaptureScreen>
     }
   }
 
+  /// On foreground, RE-CHECK camera permission before rebinding: it can be
+  /// revoked while backgrounded. Granted → restart the preview; revoked → emit
+  /// an error event and route back to the permissions gate (never crash).
+  Future<void> _handleResume() async {
+    final status =
+        await widget.permissionsService.status(AppPermissionType.camera);
+    if (!mounted) return;
+    if (status.isGranted) {
+      _cameraController.start();
+      return;
+    }
+    if (_routingToGate) return;
+    _routingToGate = true;
+    Analytics.logEvent(AnalyticsEvents.levelACameraError, {
+      'reason': 'permission_revoked',
+      'device_type': _deviceType,
+    });
+    context.go(AppRoutes.permissions);
+  }
+
+  String get _deviceType =>
+      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+
+  /// Reports the actual preview resolution (the native pipeline has no
+  /// ResolutionPreset); falls back to 'unknown' before the size is known.
+  String _resolutionLabel(CameraPreviewState state) =>
+      state.previewWidth > 0 && state.previewHeight > 0
+          ? '${state.previewWidth}x${state.previewHeight}'
+          : 'unknown';
+
+  /// Maps a native error code/message to the analytics `reason` taxonomy.
+  /// `permission_revoked` is emitted explicitly from [_handleResume], not here.
+  String _errorReason(String? code, String? message) {
+    final c = (code ?? '').toUpperCase();
+    final m = (message ?? '').toUpperCase();
+    if (c.contains('NO_CAMERA') ||
+        c.contains('NO_DEVICE') ||
+        c == 'UNAVAILABLE' ||
+        m.contains('NO CAMERA')) {
+      return 'no_camera';
+    }
+    return 'init_failed';
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _cameraController.removeListener(_onCameraStateChanged);
     _cameraController.dispose();
     _flashController.dispose();
     _instructionTimer?.cancel();
@@ -158,47 +270,144 @@ class _CaptureScreenState extends State<CaptureScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          CameraPreview(controller: _cameraController),
-          _PlacementBox(),
-          _TopBar(
-            levelLabel: widget.levelLabel,
-            levelName: widget.levelName,
-            onClose: _showExitDialog,
-          ),
-          _InstructionBanner(text: _instructions[_instructionIndex]),
-          const _RingCoverageMap(),
-          const _TiltMeter(),
-          const _StabilityIndicator(),
-          _BottomBar(
-            captureCount: _captureCount,
-            onShutter: _onShutter,
-          ),
-          if (_showFlash)
-            Container(
-              color: Colors.white.withValues(alpha: 0.3),
-            ),
-        ],
+      backgroundColor: AppColors.bgPrimary,
+      // LayoutBuilder gives the on-screen size; the controller value gives the
+      // native frame size/rotation. Together they form the PreviewGeometry the
+      // overlay layer hands to every overlay. This rebuilds only on layout or
+      // preview-state changes (not per camera frame — the Texture updates
+      // independently of the widget tree).
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          return ValueListenableBuilder<CameraPreviewState>(
+            valueListenable: _cameraController,
+            builder: (context, state, _) {
+              final geometry = PreviewGeometry.fromPreviewState(
+                previewWidth: state.previewWidth,
+                previewHeight: state.previewHeight,
+                rotationDegrees: state.rotationDegrees,
+                screenSize: constraints.biggest,
+                fit: BoxFit.cover,
+              );
+              return CaptureOverlayLayer(
+                geometry: geometry,
+                cameraPreview: CameraPreview(
+                  controller: _cameraController,
+                  placeholder: const _CameraLoading(),
+                  errorBuilder: (context, s) => _CameraErrorSurface(
+                    message: s.errorMessage,
+                    onRetry: _cameraController.start,
+                    onBack: () => context.go(AppRoutes.projects),
+                  ),
+                ),
+                overlays: [
+                  // Render-only centre-frame guide. Status is idle until a
+                  // later detection task supplies placement quality.
+                  PlacementBoxOverlay(geometry: geometry),
+                  _TopBar(
+                    levelLabel: widget.levelLabel,
+                    levelName: widget.levelName,
+                    onClose: _showExitDialog,
+                  ),
+                  _InstructionBanner(text: _instructions[_instructionIndex]),
+                  const _RingCoverageMap(),
+                  const _TiltMeter(),
+                  const _StabilityIndicator(),
+                  _BottomBar(
+                    captureCount: _captureCount,
+                    onShutter: _onShutter,
+                  ),
+                  if (_showFlash)
+                    Container(color: Colors.white.withValues(alpha: 0.3)),
+                  // Debug-only: visualizes the PreviewGeometry mapping.
+                  if (kDebugMode && kShowCaptureDebugReticle)
+                    const CaptureDebugReticleOverlay(),
+                ],
+              );
+            },
+          );
+        },
       ),
     );
   }
 }
 
-class _PlacementBox extends StatelessWidget {
+/// Branded loading state shown while the preview is being acquired (Deep Black +
+/// spinner). Replaces the controller's plain black placeholder.
+class _CameraLoading extends StatelessWidget {
+  const _CameraLoading();
+
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        width: 240,
-        height: 300,
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: AppColors.royalGold.withValues(alpha: 0.6),
-            width: 1.5,
+    return const ColoredBox(
+      color: AppColors.bgPrimary,
+      child: Center(
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: AppColors.mirageRed,
           ),
-          borderRadius: BorderRadius.circular(AppRadius.sm),
+        ),
+      ),
+    );
+  }
+}
+
+/// Branded camera-error state with retry + back, on Deep Black. Shown when the
+/// native pipeline reports a fatal error (init failed, camera in use, no camera).
+class _CameraErrorSurface extends StatelessWidget {
+  const _CameraErrorSurface({
+    required this.onRetry,
+    required this.onBack,
+    this.message,
+  });
+
+  final VoidCallback onRetry;
+  final VoidCallback onBack;
+  final String? message;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: AppColors.bgPrimary,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xxl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.videocam_off,
+                  color: AppColors.textSecondary, size: 44),
+              const SizedBox(height: AppSpacing.lg),
+              Text(
+                message ?? 'Camera unavailable',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
+              const SizedBox(height: AppSpacing.xl),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextButton(
+                    onPressed: onBack,
+                    child: Text(
+                      'Back',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.copyWith(color: AppColors.textSecondary),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  ElevatedButton(
+                    onPressed: onRetry,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -58,6 +58,34 @@ abstract final class AnalyticsEvents {
   /// the item id; fires once per genuine open (the tip surface guards stacking).
   static const String precaptureTipOpened = 'precapture_tip_opened';
 
+  // ── Level A (Eye Ring) intro ────────────────────────────────────────────────
+  // TODO(analytics): mirror these two names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
+  // when the analytics destination lands.
+
+  /// The Level A (Eye Ring) intro screen became visible (a REACH metric). Fires
+  /// once per screen entry; NOT fired when the screen auto-skips before paint.
+  /// Props: { project_id, reduce_motion, device_type }.
+  static const String levelAIntroViewed = 'level_a_intro_viewed';
+
+  /// The user left the Level A intro toward capture. Fires once per entry.
+  /// Props: { method: begin|skip|auto_skip, dont_show_again, seconds_on_screen }.
+  static const String levelAIntroDismissed = 'level_a_intro_dismissed';
+
+  // ── Level A camera preview ──────────────────────────────────────────────────
+  // TODO(analytics): mirror these two names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
+  // when the analytics destination lands.
+
+  /// The Level A camera preview reached the ready/running state.
+  /// Props: { project_id, resolution_preset, device_type }.
+  static const String levelACameraOpened = 'level_a_camera_opened';
+
+  /// The Level A camera failed to initialize, was lost at runtime, or its
+  /// permission was revoked (detected on resume).
+  /// Props: { reason: init_failed|permission_revoked|no_camera, device_type }.
+  static const String levelACameraError = 'level_a_camera_error';
+
   // ── Capture decision pipeline ──────────────────────────────────────────────
   // Exactly ONE of [photoCaptured] / [photoRejectedBlur] / [photoRejectedMotion]
   // fires per capture attempt; [photoWarnedExposure] may fire IN ADDITION to any
