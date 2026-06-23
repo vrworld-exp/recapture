@@ -2,6 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../domain/entities/level_a_summary.dart';
+import '../../domain/entities/retake_request.dart';
 import '../../presentation/screens/auth/splash_screen.dart';
 import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
@@ -13,6 +15,7 @@ import '../../presentation/screens/capture/level_intro_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
 import '../../presentation/screens/capture/capture_screen.dart';
 import '../../presentation/screens/capture/review_screen.dart';
+import '../../presentation/screens/capture/level_a_complete_screen.dart';
 import '../../presentation/screens/capture/level_complete_screen.dart';
 import '../../presentation/screens/capture/capture_summary_screen.dart';
 import '../../presentation/screens/capture/uploading_screen.dart';
@@ -165,10 +168,16 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
       GoRoute(
         path: AppRoutes.levelACapture,
         name: AppRouteNames.levelACapture,
-        builder: (_, __) => const CaptureScreen(
+        // Optionally entered in RETAKE mode: Review passes a [RetakeRequest] via
+        // `extra` to force the active target to one segment. A normal entry has
+        // no extra (null → standard guided capture).
+        builder: (context, state) => CaptureScreen(
           levelLabel: 'A',
           levelName: 'Eye Ring',
           nextRoute: AppRoutes.levelAReview,
+          retakeRequest: state.extra is RetakeRequest
+              ? state.extra! as RetakeRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -183,15 +192,19 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
       GoRoute(
         path: AppRoutes.levelAComplete,
         name: AppRouteNames.levelAComplete,
-        builder: (_, __) => const LevelCompleteScreen(
-          levelLabel: 'A',
-          levelName: 'Eye Ring',
-          photosAccepted: 34,
-          coveragePercent: 92,
-          warningsCount: 1,
-          nextRoute: AppRoutes.levelBIntro,
-          nextLabel: 'Start Level B',
-          reviewRoute: AppRoutes.levelAReview,
+        // TODO(capture): supply the REAL summary from the aggregated Level A
+        // result (same source as the in-capture progress meter / ring map).
+        // Placeholder values until the completion-summary aggregation lands.
+        builder: (context, _) => LevelACompleteScreen(
+          summary: const LevelASummary(
+            accepted: 34,
+            target: 36,
+            coveragePct: 92,
+            rejected: 1,
+          ),
+          onStartLevelB: () => context.go(AppRoutes.levelBIntro),
+          onReview: () => context.push(AppRoutes.levelAReview),
+          onDoneExit: () => context.go(AppRoutes.projects),
         ),
       ),
       // Level B

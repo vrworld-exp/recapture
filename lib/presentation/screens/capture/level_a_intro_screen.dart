@@ -13,6 +13,7 @@ import '../../../data/local/storage_providers.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/capture_tip.dart';
 import '../../widgets/eye_ring_intro_animation.dart';
 
 /// Stable persistence/analytics key for this intro.
@@ -160,13 +161,11 @@ class _LevelAIntroScreenState extends ConsumerState<LevelAIntroScreen> {
     }
 
     final segments = _eyeRingSegments(ref.watch(captureConfigProvider));
-    final rules = <String>[
-      'Stay at eye level with the object',
-      'Move slowly in a circle — cover all $segments positions',
-      'Keep the object centered in frame',
-      'Hold steady; avoid quick movements',
-      'Capture in good, even lighting',
-    ];
+    // Rules are sourced from the SHARED tip list (also used by the Help sheet),
+    // so the copy never drifts between the intro and Help.
+    final rules = levelACaptureTips
+        .map((t) => t.formattedBody(segments))
+        .toList(growable: false);
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,

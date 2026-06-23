@@ -118,6 +118,17 @@ class CaptureConfig {
   /// Total capture positions across all bands.
   int get totalSegments => pitchBands.fold(0, (sum, b) => sum + b.segments);
 
+  /// Segment count (N) of the Level A Eye Ring — the 'mid' (eye-level) band the
+  /// ring map and tilt meter target. Falls back to the first band, then a sane
+  /// default if config is somehow empty. Single source so the ring map and the
+  /// segment-fill state model can never disagree on N.
+  int get eyeRingSegments {
+    for (final b in pitchBands) {
+      if (b.id == 'mid') return b.segments;
+    }
+    return pitchBands.isNotEmpty ? pitchBands.first.segments : 12;
+  }
+
   /// Defensive parse — missing/ill-typed fields fall back to bundled values;
   /// empty/absent bands fall back to bundled bands. Never throws on a Map input.
   /// (Run [sanitizeCaptureConfig] afterwards to clamp out-of-range values.)

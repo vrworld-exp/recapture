@@ -27,6 +27,15 @@ abstract final class BoxNames {
   /// Per-intro "seen" / "don't show again" flags for capture-level intro screens
   /// (keyed by an intro id, e.g. `level_a`). Flow state only — no capture data.
   static const String levelIntro = 'level_intro';
+
+  /// Small per-capture UI preferences (e.g. the Level A auto-capture ON/OFF
+  /// choice). User preference only — no capture data.
+  static const String capturePrefs = 'capture_prefs';
+
+  /// Resumable guided-capture session snapshots (ring fill counts + the
+  /// accepted/warned/rejected photo ledger), keyed by `projectId::levelId`, so a
+  /// kill/relaunch restores exact in-progress capture state.
+  static const String captureSessions = 'capture_sessions';
 }
 
 /// Per-box schema marker. Current migration policy is clear-on-mismatch — when

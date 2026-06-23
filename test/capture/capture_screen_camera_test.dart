@@ -10,11 +10,21 @@
 // driven through the native permissions channel mock.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
+import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/stability_provider.dart';
+import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';
+import 'package:recapture/data/local/auto_capture_box.dart';
+import 'package:recapture/data/local/capture_settings_box.dart';
+import 'package:recapture/domain/entities/capture_settings.dart';
 import 'package:recapture/domain/entities/active_session.dart';
+import 'package:recapture/domain/entities/capture_config.dart';
+import 'package:recapture/platform/imu_rotation_channel.dart';
+import 'package:recapture/platform/stability_channel.dart';
 import 'package:recapture/presentation/screens/capture/capture_screen.dart';
 import 'package:recapture/utils/analytics.dart';
 import 'package:recapture/utils/constants.dart';
@@ -25,6 +35,43 @@ class _FakeSessionBox extends ActiveSessionBox {
   @override
   Future<ActiveSession?> read() async => null;
 }
+
+/// Serves the bundled config synchronously (no network bootstrap timer).
+class _StubConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault;
+}
+
+/// AutoCaptureStore stand-in — no Hive in this test host.
+class _FakeAutoCaptureStore implements AutoCaptureStore {
+  @override
+  Future<bool?> getEnabled() async => null;
+  @override
+  Future<void> setEnabled(bool enabled) async {}
+}
+
+class _FakeCaptureSettingsStore implements CaptureSettingsStore {
+  @override
+  Future<bool?> getSaveToGallery() async => null;
+  @override
+  Future<void> setSaveToGallery(bool enabled) async {}
+  @override
+  Future<QualityMode?> getQuality() async => null;
+  @override
+  Future<void> setQuality(QualityMode mode) async {}
+}
+
+/// Wraps the screen with the providers the TiltMeterOverlay depends on.
+Widget _scoped(Widget child) => ProviderScope(
+      overrides: [
+        captureConfigProvider.overrideWith(() => _StubConfigNotifier()),
+        orientationSourceProvider
+            .overrideWithValue(const Stream<SmoothedOrientation>.empty()),
+        stabilityEventSourceProvider
+            .overrideWithValue(const Stream<StabilityEvent>.empty()),
+      ],
+      child: child,
+    );
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -77,6 +124,8 @@ void main() {
               levelName: 'Eye Ring',
               nextRoute: '/next',
               sessionBox: _FakeSessionBox(),
+              autoCaptureStore: _FakeAutoCaptureStore(),
+              captureSettingsStore: _FakeCaptureSettingsStore(),
             ),
           ),
           GoRoute(
@@ -92,7 +141,8 @@ void main() {
       );
 
   Future<void> pumpScreen(WidgetTester tester) async {
-    await tester.pumpWidget(MaterialApp.router(routerConfig: buildRouter()));
+    await tester.pumpWidget(
+        _scoped(MaterialApp.router(routerConfig: buildRouter())));
     await tester.pump(); // postframe start()
     await tester.pump(); // resolve start channel result
     await tester.pump();

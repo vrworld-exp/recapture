@@ -2,34 +2,84 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/capture/analytics/capture_analytics.dart';
+import '../../../application/capture/analytics/capture_level_events.dart';
+import '../../../application/capture/analytics/capture_level_session.dart';
+import '../../../application/capture/analytics/capture_trigger_analytics.dart';
+import '../../../application/capture/current_pitch_provider.dart';
+import '../../../application/capture/stability_provider.dart';
+import '../../../application/config/config_notifier.dart';
 import '../../../data/local/active_session_box.dart';
+import '../../../data/local/auto_capture_box.dart';
+import '../../../data/local/capture_settings_box.dart';
+import '../../../domain/entities/auto_capture_state.dart';
+import '../../../domain/entities/capture_config.dart';
+import '../../../domain/entities/capture_evaluation.dart';
+import '../../../domain/entities/capture_instruction.dart';
+import '../../../domain/entities/capture_progress.dart';
+import '../../../domain/entities/capture_readiness.dart';
+import '../../../domain/entities/capture_settings.dart';
+import '../../../domain/entities/capture_thumbnail.dart';
+import '../../../domain/entities/capture_top_bar_state.dart';
+import '../../../domain/entities/save_exit_decision.dart';
+import '../../../domain/entities/direction_hint.dart';
 import '../../../domain/entities/permission_item.dart';
+import '../../../domain/entities/retake_request.dart';
+import '../../../domain/entities/ring_coverage.dart';
+import '../../../domain/entities/tilt_target.dart';
+import '../../../application/capture/retake_session_provider.dart';
 import '../../../platform/camera/camera_preview_controller.dart';
 import '../../../platform/camera/camera_preview_view.dart';
 import '../../../platform/camera/preview_geometry.dart';
 import '../../../platform/method_channels.dart';
 import '../../../platform/permissions_service.dart';
 import '../../../utils/analytics.dart';
+import '../../widgets/auto_capture_indicator.dart';
 import '../../widgets/capture_overlay_layer.dart';
+import '../../widgets/capture_top_bar.dart';
+import '../../widgets/direction_arrow_overlay.dart';
+import '../../widgets/instruction_banner.dart';
+import '../../widgets/level_a_help_sheet.dart';
+import '../../widgets/level_a_settings_sheet.dart';
 import '../../widgets/placement_box_overlay.dart';
+import '../../widgets/post_shot_toast.dart';
+import '../../widgets/progress_meter.dart';
+import '../../widgets/save_exit_modal.dart';
+import '../../widgets/ring_coverage_map.dart';
+import '../../widgets/shutter_button.dart';
+import '../../widgets/stability_indicator_overlay.dart';
+import '../../widgets/thumbnail_strip.dart';
+import '../../widgets/tilt_meter_overlay.dart';
 
-class CaptureScreen extends StatefulWidget {
+class CaptureScreen extends ConsumerStatefulWidget {
   const CaptureScreen({
     super.key,
     required this.levelLabel,
     required this.levelName,
     required this.nextRoute,
+    this.retakeRequest,
     this.permissionsService = const PermissionsService(),
     this.sessionBox,
+    this.autoCaptureStore,
+    this.captureSettingsStore,
   });
 
   final String levelLabel;
   final String levelName;
   final String nextRoute;
+
+  /// When non-null, the screen enters RETAKE mode for [RetakeRequest.ringIndex]:
+  /// it forces that segment as the active target (overriding normal next-
+  /// uncaptured selection), highlights it in the ring map, and on an accepted
+  /// shot completes the retake (returning to Review or resuming, per the
+  /// request). An out-of-range index falls back to normal targeting — see
+  /// [_CaptureScreenState._primeRetake]. Routed in via GoRouter `extra`.
+  final RetakeRequest? retakeRequest;
 
   /// Permission gateway, used to RE-CHECK camera on resume (it is granted
   /// upstream by the gate). Injectable so tests can drive a revoked status.
@@ -39,17 +89,67 @@ class CaptureScreen extends StatefulWidget {
   /// [ActiveSessionBox]; injectable for tests. Read best-effort (never fatal).
   final ActiveSessionBox? sessionBox;
 
+  /// Persists the auto-capture ON/OFF preference. Null → the real
+  /// [AutoCaptureBox]; injectable for tests. Read/written best-effort.
+  final AutoCaptureStore? autoCaptureStore;
+
+  /// Persists save-to-gallery + quality (the non-auto-capture settings). Null →
+  /// the real [CaptureSettingsBox]; injectable for tests. Best-effort.
+  final CaptureSettingsStore? captureSettingsStore;
+
   @override
-  State<CaptureScreen> createState() => _CaptureScreenState();
+  ConsumerState<CaptureScreen> createState() => _CaptureScreenState();
 }
 
-class _CaptureScreenState extends State<CaptureScreen>
+class _CaptureScreenState extends ConsumerState<CaptureScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   int _captureCount = 0;
   bool _showFlash = false;
   int _instructionIndex = 0;
   Timer? _instructionTimer;
   late final AnimationController _flashController;
+
+  /// Auto-capture mode. Defaults ON (smoother guided experience); corrected from
+  /// the persisted preference on mount. The auto-capture FIRE loop is a separate
+  /// task — this screen only owns/persists the ON/OFF choice.
+  AutoCaptureState _autoCapture = const AutoCaptureState(mode: AutoCaptureMode.on);
+
+  /// Preference gateway (injectable). Resolved once.
+  late final AutoCaptureStore _autoCaptureStore =
+      widget.autoCaptureStore ?? AutoCaptureBox();
+
+  /// Save-to-gallery + quality persistence (injectable). Auto-capture stays in
+  /// [_autoCaptureStore] so the pill and Settings sheet share one source.
+  late final CaptureSettingsStore _captureSettingsStore =
+      widget.captureSettingsStore ?? CaptureSettingsBox();
+
+  /// Save-to-gallery preference (default OFF). Persisted via [_captureSettingsStore].
+  bool _saveToGallery = false;
+
+  /// Quality mode (default Standard). Persisted via [_captureSettingsStore].
+  QualityMode _quality = QualityMode.standard;
+
+  /// Single live projection of the capture settings the Settings sheet is driven
+  /// by. Composed from the auto-capture source + [_saveToGallery]/[_quality], so
+  /// auto-capture never diverges from the pill. Reverts (e.g. denied gallery
+  /// permission) push back here and the open sheet reflects them.
+  late final ValueNotifier<CaptureSettings> _settings =
+      ValueNotifier<CaptureSettings>(_composeSettings());
+
+  /// Most recent captures for the thumbnail strip (newest-first, capped). This
+  /// is a display slice only — the authoritative capture set lives elsewhere.
+  List<CaptureThumbnail> _recentThumbnails = const [];
+  static const int _maxThumbnails = 5;
+
+  /// The latest capture's evaluation, fed to the post-shot toast (null = hidden).
+  /// The real verdict comes from a (separate) capture-evaluation task; until then
+  /// every real frame is treated as accepted — see [_performCapture].
+  CaptureEvaluation? _lastEvaluation;
+
+  /// True while a blocking surface (e.g. the Help sheet) is open: auto-capture is
+  /// suspended so the (separate) fire loop will not arm/shoot behind it. Distinct
+  /// from the persisted ON/OFF preference — this is transient and never saved.
+  bool _autoCaptureSuspended = false;
 
   /// Drives the native back-camera preview (CAMERA assumed granted by the P2
   /// gate). Released on dispose; stopped on background and rebound on resume.
@@ -59,10 +159,6 @@ class _CaptureScreenState extends State<CaptureScreen>
   /// (CameraX ImageCapture / AVCapturePhotoOutput). Degrades gracefully: a
   /// missing/unbound session or a busy capturer resolves to null, never throws.
   final CaptureChannel _captureChannel = CaptureChannel();
-
-  /// Guards against overlapping shutter taps while a capture is in flight (the
-  /// native side also rejects with BUSY → null, but this avoids spamming it).
-  bool _capturing = false;
 
   /// `level_a_camera_opened` is a once-per-screen reach metric.
   bool _openedLogged = false;
@@ -75,6 +171,23 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   /// Active project id for analytics; resolved best-effort on mount.
   String? _projectId;
+
+  /// The active retake (null = normal guided capture). Set on mount from
+  /// [CaptureScreen.retakeRequest] once its index is validated against the live
+  /// segment count; drives the post-retake return + the "don't advance the ring"
+  /// rule. The HUD highlight is driven separately by [retakeSessionProvider].
+  RetakeRequest? _retake;
+
+  /// Guards `capture_level_retake` to a single emission per entry.
+  bool _retakeStartedLogged = false;
+
+  /// Guards `capture_level_started` to a single emission per capture session
+  /// (this State instance = one entry; a rebuild won't refire, a fresh entry —
+  /// including resuming a draft — starts a new session and refires).
+  bool _levelStartedLogged = false;
+
+  /// This level as the canonical analytics enum (from the screen's level label).
+  CaptureLevel get _captureLevel => captureLevelFromLabel(widget.levelLabel);
 
   static const _instructions = [
     'Move clockwise',
@@ -94,9 +207,17 @@ class _CaptureScreenState extends State<CaptureScreen>
     _cameraController.addListener(_onCameraStateChanged);
     WidgetsBinding.instance.addObserver(this);
     _resolveProjectId();
+    _loadAutoCapturePref();
+    _loadCaptureSettings();
     // Start after the first frame so the engine texture registry is ready.
+    // Priming the retake target is deferred here too: writing to a provider in
+    // initState would land mid-build (and reading config is cheap to defer one
+    // frame).
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _cameraController.start();
+      if (!mounted) return;
+      _primeRetake();
+      _logCaptureStartedIfNeeded();
+      _cameraController.start();
     });
     _instructionTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted) return;
@@ -116,6 +237,155 @@ class _CaptureScreenState extends State<CaptureScreen>
     } catch (_) {
       _projectId = null;
     }
+  }
+
+  /// Enters retake mode from the route arg, or guarantees normal targeting.
+  ///
+  /// Validates the requested [RetakeRequest.ringIndex] against the live segment
+  /// count: a valid index forces that segment as the active target (highlighted
+  /// via [retakeSessionProvider]) and emits the canonical `capture_level_retake`;
+  /// a null/out-of-range request CLEARS any stale forced target so this entry
+  /// starts with normal next-uncaptured targeting (no crash, no retake mode).
+  void _primeRetake() {
+    final request = widget.retakeRequest;
+    final segments = ref.read(captureConfigProvider).eyeRingSegments;
+    final notifier = ref.read(retakeSessionProvider.notifier);
+
+    if (request == null || !request.isValidFor(segments)) {
+      _retake = null;
+      notifier.clear(); // defensive: never inherit a prior entry's forced target
+      return;
+    }
+
+    _retake = request;
+    notifier.begin(request);
+    if (!_retakeStartedLogged) {
+      _retakeStartedLogged = true;
+      // A retake re-entry LINKS to the in-progress session (ensure, not start).
+      final session = ref.read(captureLevelSessionProvider.notifier).ensure(
+            level: _captureLevel,
+            projectId: _projectId ?? '',
+          );
+      CaptureAnalytics.log(CaptureLevelRetake(
+        level: _captureLevel,
+        projectId: session.projectId,
+        sessionId: session.sessionId,
+        ringIndex: request.ringIndex,
+        replacingExisting: !request.isFillingMissing,
+        returnMode: request.returnMode,
+        deviceType: _deviceType,
+      ));
+    }
+  }
+
+  /// Fires `capture_level_started` ONCE per capture session — but only for a fresh
+  /// guided entry, not a retake re-entry (which emits `capture_level_retake`
+  /// instead, so the funnel never double-counts a retake as a new start). Starts
+  /// the shared analytics session so the completion screen can stitch the funnel
+  /// and report `duration_seconds`. Best-effort fields: `target_segments` falls
+  /// back to the bundled-default N, `sensor_supported` reflects what is known at
+  /// first frame (false while sensors are still warming up / unavailable).
+  void _logCaptureStartedIfNeeded() {
+    if (_retake != null || _levelStartedLogged) return;
+    _levelStartedLogged = true;
+
+    final session = ref.read(captureLevelSessionProvider.notifier).start(
+          level: _captureLevel,
+          projectId: _projectId ?? '',
+        );
+    CaptureAnalytics.log(CaptureLevelStarted(
+      level: _captureLevel,
+      projectId: session.projectId,
+      sessionId: session.sessionId,
+      captureMode: _autoCapture.isOn ? 'guided' : 'manual',
+      targetSegments: ref.read(captureConfigProvider).eyeRingSegments,
+      sensorSupported: _sensorSupportedNow(),
+      deviceType: _deviceType,
+    ));
+  }
+
+  /// Best-effort read of whether BOTH IMU-derived signals are usable right now
+  /// (mirrors the shutter's gate). False while sensors are warming up.
+  bool _sensorSupportedNow() {
+    final pitch = ref.read(currentPitchProvider).asData?.value;
+    final stability = ref.read(stabilityProvider).asData?.value;
+    return (pitch?.sensorSupported ?? false) &&
+        (stability?.sensorSupported ?? false);
+  }
+
+  /// Best-effort read of the persisted auto-capture preference (default ON when
+  /// none is stored / persistence is unavailable). Corrects [_autoCapture] only
+  /// when it differs, so there is no needless rebuild.
+  Future<void> _loadAutoCapturePref() async {
+    final enabled = await _autoCaptureStore.getEnabled() ?? true;
+    if (!mounted || enabled == _autoCapture.isOn) return;
+    setState(() {
+      _autoCapture = AutoCaptureState(
+        mode: enabled ? AutoCaptureMode.on : AutoCaptureMode.off,
+      );
+    });
+    _syncSettings();
+  }
+
+  /// Best-effort load of the save-to-gallery + quality preferences (defaults:
+  /// OFF / Standard). Never fatal — a missing record or unavailable Hive host
+  /// leaves the defaults in place.
+  Future<void> _loadCaptureSettings() async {
+    final save = await _captureSettingsStore.getSaveToGallery();
+    final quality = await _captureSettingsStore.getQuality();
+    if (!mounted) return;
+    setState(() {
+      _saveToGallery = save ?? false;
+      _quality = quality ?? QualityMode.standard;
+    });
+    _syncSettings();
+  }
+
+  /// The current settings projection (auto-capture from its own source).
+  CaptureSettings _composeSettings() => CaptureSettings(
+        autoCapture: _autoCapture.isOn,
+        saveToGallery: _saveToGallery,
+        quality: _quality,
+      );
+
+  /// Pushes the latest projection into [_settings] so the (possibly open) sheet
+  /// reflects it.
+  void _syncSettings() => _settings.value = _composeSettings();
+
+  /// Flips the auto-capture mode, persists the new preference (last-write-wins),
+  /// and logs the toggle. Armed/countdown are owned by the (separate) auto-capture
+  /// loop, so a manual toggle just sets the mode.
+  void _toggleAutoCapture() {
+    final newOn = !_autoCapture.isOn;
+    setState(() {
+      _autoCapture = AutoCaptureState(
+        mode: newOn ? AutoCaptureMode.on : AutoCaptureMode.off,
+      );
+    });
+    unawaited(_autoCaptureStore.setEnabled(newOn));
+    _syncSettings();
+    Analytics.logEvent(AnalyticsEvents.autoCaptureToggled, {
+      'new_state': newOn ? 'on' : 'off',
+      'device_type': _deviceType,
+    });
+  }
+
+  /// Retake intent from the post-shot toast. Dismisses the toast; the real
+  /// discard + re-arm for the shot's ring position is a separate capture task.
+  // TODO(capture): discard the rejected/flagged frame and re-arm capture for the
+  // same ring position once the evaluator + ring-progress resolver land.
+  void _onRetake() {
+    if (_lastEvaluation == null) return;
+    setState(() => _lastEvaluation = null);
+  }
+
+  /// A recent-capture thumbnail was tapped. No preview is built here (the parent
+  /// could open one later) — just the analytics signal.
+  void _onThumbnailTap(CaptureThumbnail thumb) {
+    Analytics.logEvent(AnalyticsEvents.thumbnailTapped, {
+      'capture_id': thumb.id,
+      'device_type': _deviceType,
+    });
   }
 
   /// Emits the camera analytics on state transitions (not on rebuilds):
@@ -205,30 +475,80 @@ class _CaptureScreenState extends State<CaptureScreen>
     _cameraController.dispose();
     _flashController.dispose();
     _instructionTimer?.cancel();
+    _settings.dispose();
     super.dispose();
   }
 
-  Future<void> _onShutter() async {
-    if (_capturing) return;
-    _capturing = true;
-    // Capture a real frame on the native session before any UI feedback, so the
-    // flash + counter reflect frames actually written to disk (not phantom taps).
+  /// Capture-initiation analytics for a manual shutter tap. Fires once per
+  /// non-blocked tap (the [ShutterButton] only invokes this when it proceeds, and
+  /// before [_performCapture] runs), emitting `manual_capture_triggered` with the
+  /// live readiness + the session-shared attempt number. `ring_index` is the
+  /// retake target when retaking, else null until live ring-progress is wired.
+  void _onManualTriggered(CaptureReadiness readiness) {
+    final session = ref.read(captureLevelSessionProvider);
+    final attempt = ref.read(captureLevelSessionProvider.notifier).nextAttempt();
+    CaptureTriggerAnalytics.manual(
+      level: _captureLevel,
+      projectId: session?.projectId ?? '',
+      sessionId: session?.sessionId ?? '',
+      attemptNumber: attempt,
+      ringIndex: _retake?.ringIndex,
+      inBand: readiness.inBand,
+      stable: readiness.stable,
+      sensorSupported: readiness.sensorSupported,
+      placed: readiness.placed,
+      deviceType: _deviceType,
+    );
+  }
+
+  /// The capture itself, handed to the [ShutterButton] as its `onCapture`. The
+  /// button owns the in-flight guard, haptics, and state; this just performs the
+  /// native single still and advances the HUD on a real frame. A null frame (no
+  /// bound session / busy / non-device test host) is a no-op, not an error.
+  Future<void> _performCapture() async {
     final frame = await _captureChannel.captureSingle();
     if (!mounted) return;
-    _capturing = false;
-
-    // Null = no bound session / busy / unsupported (e.g. permission-denied
-    // preview, or a non-device test host). Keep the preview running; do not
-    // advance the counter for a capture that did not happen.
     if (frame == null) return;
 
+    // RETAKE mode: a single targeted shot. It must NOT touch the normal frame
+    // counter / thumbnail strip / next-route advance — exactly one segment is in
+    // focus and the ring must never advance past it.
+    if (_retake != null) {
+      _handleRetakeCapture();
+      return;
+    }
+
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final thumb = CaptureThumbnail(
+      id: frame.id,
+      filePath: frame.path,
+      capturedAt: DateTime.now(),
+    );
+    // TODO(capture): replace with the real CaptureEvaluation from the evaluator
+    // (sharpness/exposure/coverage). Until it lands every real frame is treated
+    // as accepted, and the (noisy) accepted toast is suppressed during
+    // auto-capture bursts — the ring map + progress meter already confirm. Once
+    // the evaluator exists, warn/reject must always surface.
+    final evaluation = _autoCapture.isOn
+        ? null
+        : CaptureEvaluation(
+            captureId: frame.id,
+            verdict: CaptureVerdict.accepted,
+          );
     setState(() {
-      _showFlash = true;
       _captureCount++;
+      _lastEvaluation = evaluation;
+      // Newest-first, capped — off-strip images are dropped so this never grows.
+      _recentThumbnails =
+          [thumb, ..._recentThumbnails].take(_maxThumbnails).toList();
+      if (!reduceMotion) _showFlash = true;
     });
-    Future.delayed(const Duration(milliseconds: 200), () {
-      if (mounted) setState(() => _showFlash = false);
-    });
+    if (!reduceMotion) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) setState(() => _showFlash = false);
+      });
+    }
     if (_captureCount >= 5) {
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) context.go(widget.nextRoute);
@@ -236,41 +556,243 @@ class _CaptureScreenState extends State<CaptureScreen>
     }
   }
 
-  void _showExitDialog() {
-    showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.surface1,
-        title: Text(
-          'Save and exit?',
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-        content: Text(
-          'You can resume this capture anytime.',
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Keep Capturing'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              context.go(AppRoutes.projects);
-            },
-            style: TextButton.styleFrom(foregroundColor: AppColors.mirageRed),
-            child: const Text('Save & Exit'),
-          ),
-        ],
+  /// Completes (or holds) a retake shot for the forced target.
+  ///
+  /// A REJECTED retake keeps the existing good capture and stays on the same
+  /// target (reject discards the NEW shot, never the old one). An ACCEPTED retake
+  /// replaces/fills the segment, clears retake mode, and either returns to Review
+  /// (single retake) or resumes normal targeting.
+  void _handleRetakeCapture() {
+    final request = _retake;
+    if (request == null) return;
+
+    // TODO(capture): real verdict from the evaluator (sharpness/exposure). Until
+    // it lands a retake frame is treated as accepted, so the flow below always
+    // completes. Once the evaluator exists, a REJECT must early-return here
+    // (keeping the old capture, surfacing the reject toast, staying on the
+    // target) and a WARN must report new_verdict: 'warn'.
+
+    // TODO(capture): route the replace/add through the captured-set source of
+    // truth — replace the [replacingCaptureId] record (and clean its old file via
+    // CaptureStorage) or ADD + fill the missing segment in the per-level ledger +
+    // SegmentCoverage, then recompute coverage/progress/verdict. This needs the
+    // capture→ledger write path (the capture-evaluation / ring-progress task);
+    // until then the routing + target-priming + return flow below is the wired
+    // slice.
+    Analytics.logEvent(AnalyticsEvents.retakeCompleted, {
+      'ring_index': request.ringIndex,
+      'new_verdict': 'accepted',
+      'device_type': _deviceType,
+    });
+
+    _retake = null;
+    ref.read(retakeSessionProvider.notifier).clear();
+
+    if (request.returnToReviewAfter) {
+      // Single retake → return to the Review grid it was pushed from.
+      _returnToReview();
+    }
+    // Resume mode: stay in capture; the cleared forced target lets normal
+    // next-segment targeting resume.
+  }
+
+  /// Returns to the Level A Review grid after a single retake (or backing out of
+  /// retake mode). Pops when the capture screen was pushed from Review; otherwise
+  /// navigates there directly.
+  void _returnToReview() {
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go(AppRoutes.levelAReview);
+    }
+  }
+
+  /// Top-bar level code for analytics, e.g. "Level A" → "A". The bar is generic;
+  /// the screen owns the level taxonomy.
+  String get _levelCode => widget.levelLabel.split(' ').last;
+
+  void _logTopBarAction(String action) {
+    Analytics.logEvent(AnalyticsEvents.captureTopbarAction, {
+      'action': action,
+      'level': _levelCode,
+      'device_type': _deviceType,
+    });
+  }
+
+  /// Back/close intent from the top bar. The bar already debounced the tap; the
+  /// screen owns whether to confirm before leaving (the same flow the system
+  /// back gesture funnels through).
+  void _onTopBarBack() {
+    _logTopBarAction('back');
+    unawaited(_confirmExit());
+  }
+
+  /// Help intent. Opens the quick-tips sheet, suspending auto-capture while it is
+  /// up and resuming on dismissal (every dismiss path returns from the await).
+  void _onTopBarHelp() {
+    _logTopBarAction('help');
+    unawaited(_openHelpSheet());
+  }
+
+  Future<void> _openHelpSheet() async {
+    setState(() => _autoCaptureSuspended = true); // pause around the sheet
+    try {
+      await showLevelAHelpSheet(context, onReplayIntro: _onReplayIntro);
+    } finally {
+      if (mounted) setState(() => _autoCaptureSuspended = false); // resume
+    }
+  }
+
+  /// Replay intro from the Help sheet (the sheet already dismissed itself).
+  void _onReplayIntro() {
+    if (mounted) context.go(AppRoutes.levelAIntro);
+  }
+
+  /// Settings intent. Opens the capture-settings sheet, suspending auto-capture
+  /// while it is up and resuming on dismissal (every dismiss path returns).
+  void _onTopBarSettings() {
+    _logTopBarAction('settings');
+    unawaited(_openSettingsSheet());
+  }
+
+  Future<void> _openSettingsSheet() async {
+    _syncSettings(); // present the latest values, no wrong-state flash
+    setState(() => _autoCaptureSuspended = true);
+    try {
+      await showLevelASettingsSheet(
+        context,
+        settings: _settings,
+        onChanged: _onSettingChanged,
+      );
+    } finally {
+      if (mounted) setState(() => _autoCaptureSuspended = false);
+    }
+  }
+
+  /// Applies a single changed setting (the sheet emits the analytics; the parent
+  /// persists + applies). Auto-capture routes through the SAME store/key as the
+  /// pill; save-to-gallery requests permission and reverts if denied.
+  void _onSettingChanged(CaptureSettings next) {
+    final cur = _settings.value;
+    if (next.autoCapture != cur.autoCapture) {
+      _applyAutoCaptureSetting(next.autoCapture);
+    } else if (next.quality != cur.quality) {
+      _applyQualitySetting(next.quality);
+    } else if (next.saveToGallery != cur.saveToGallery) {
+      unawaited(_applySaveToGallerySetting(next.saveToGallery));
+    }
+  }
+
+  void _applyAutoCaptureSetting(bool on) {
+    setState(() {
+      _autoCapture = AutoCaptureState(
+        mode: on ? AutoCaptureMode.on : AutoCaptureMode.off,
+      );
+    });
+    unawaited(_autoCaptureStore.setEnabled(on)); // shared pill key
+    _syncSettings();
+  }
+
+  void _applyQualitySetting(QualityMode quality) {
+    setState(() => _quality = quality);
+    unawaited(_captureSettingsStore.setQuality(quality));
+    _syncSettings();
+    // TODO(capture): apply live (reconfigure capture resolution) or on the next
+    // capture — the quality→resolution mapping is owned by a separate task.
+  }
+
+  /// Save-to-gallery: turning OFF just persists. Turning ON optimistically
+  /// reflects ON, requests photo permission, and reverts (the open sheet shows
+  /// OFF via [_settings]) if it is denied. Permission lives here, not the sheet.
+  Future<void> _applySaveToGallerySetting(bool on) async {
+    if (!on) {
+      setState(() => _saveToGallery = false);
+      unawaited(_captureSettingsStore.setSaveToGallery(false));
+      _syncSettings();
+      return;
+    }
+    setState(() => _saveToGallery = true); // optimistic
+    _syncSettings();
+    final status =
+        await widget.permissionsService.request(AppPermissionType.photos);
+    if (!mounted) return;
+    if (status.isGranted) {
+      unawaited(_captureSettingsStore.setSaveToGallery(true));
+    } else {
+      setState(() => _saveToGallery = false); // revert
+      unawaited(_captureSettingsStore.setSaveToGallery(false));
+      _syncSettings();
+    }
+  }
+
+  /// Unsaved progress = at least one capture this session not yet committed as a
+  /// draft. Drives both the [PopScope] gate and the top-bar back flow.
+  bool get _hasUnsavedProgress => _captureCount > 0;
+
+  /// The single exit flow both the top-bar back AND the system back funnel
+  /// through. No progress → leave directly; otherwise confirm via the modal.
+  Future<void> _confirmExit() async {
+    // Retake mode: backing out makes NO changes (the old capture/segment state is
+    // preserved) and returns to Review — not the Save & Exit flow, since a retake
+    // has no committed new progress until an accepted shot (which navigates away
+    // on its own).
+    if (_retake != null) {
+      _retake = null;
+      ref.read(retakeSessionProvider.notifier).clear();
+      _returnToReview();
+      return;
+    }
+    if (!_hasUnsavedProgress) {
+      _exitToProjects();
+      return;
+    }
+    final choice = await showSaveExitConfirmation(
+      context,
+      ctx: SaveExitContext(
+        capturedCount: _captureCount,
+        hasUnsavedProgress: true,
       ),
     );
+    if (!mounted) return;
+    _handleExitChoice(choice);
+  }
+
+  /// Applies the user's choice. Persistence/discard of the session is owned by a
+  /// separate capture-session task; here each exit choice just navigates out.
+  void _handleExitChoice(SaveExitChoice choice) {
+    switch (choice) {
+      case SaveExitChoice.saveExit:
+        // TODO(capture): persist the session as a resumable draft (project
+        // status + active_session) before leaving.
+        _exitToProjects();
+      case SaveExitChoice.discardExit:
+        // TODO(capture): discard this session's captures + temp files before
+        // leaving (NativeProjectCaptureCleanup hook).
+        _exitToProjects();
+      case SaveExitChoice.cancel:
+        break; // stay on the capture screen
+    }
+  }
+
+  void _exitToProjects() => context.go(AppRoutes.projects);
+
+  /// System/hardware back: when there is unsaved progress the route is blocked
+  /// ([PopScope.canPop] false) and this confirms via the SAME flow as the
+  /// top-bar back, so both behave identically.
+  void _onPopInvoked(bool didPop, Object? result) {
+    if (didPop) return;
+    unawaited(_confirmExit());
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.bgPrimary,
+    return PopScope(
+      // Blocked while there is unsaved progress so the system back gesture/button
+      // funnels through the same Save & Exit confirmation as the top-bar back.
+      canPop: !_hasUnsavedProgress,
+      onPopInvokedWithResult: _onPopInvoked,
+      child: Scaffold(
+        backgroundColor: AppColors.bgPrimary,
       // LayoutBuilder gives the on-screen size; the controller value gives the
       // native frame size/rotation. Together they form the PreviewGeometry the
       // overlay layer hands to every overlay. This rebuilds only on layout or
@@ -303,18 +825,75 @@ class _CaptureScreenState extends State<CaptureScreen>
                   // Render-only centre-frame guide. Status is idle until a
                   // later detection task supplies placement quality.
                   PlacementBoxOverlay(geometry: geometry),
-                  _TopBar(
-                    levelLabel: widget.levelLabel,
-                    levelName: widget.levelName,
-                    onClose: _showExitDialog,
+                  CaptureTopBar(
+                    state: CaptureTopBarState(
+                      levelLabel: widget.levelLabel,
+                      levelSubtitle: widget.levelName,
+                    ),
+                    onBack: _onTopBarBack,
+                    onHelp: _onTopBarHelp,
+                    onSettings: _onTopBarSettings,
                   ),
-                  _InstructionBanner(text: _instructions[_instructionIndex]),
-                  const _RingCoverageMap(),
-                  const _TiltMeter(),
-                  const _StabilityIndicator(),
+                  // Single authoritative instruction pill. Fed here by the
+                  // existing demo cycling; a later priority-resolver task will
+                  // map live HUD state into this one CaptureInstruction.
+                  InstructionBanner(
+                    instruction: CaptureInstruction(
+                      id: 'demo_$_instructionIndex',
+                      message: _instructions[_instructionIndex],
+                    ),
+                  ),
+                  // Segmented ring coverage (N from the Level A config band).
+                  // Filled/target come from a later ring-progress resolver.
+                  const _RingCoverageHud(),
+                  // Textual progress meter (top-centre) reading the same source
+                  // as the ring map so the numbers never disagree.
+                  const _ProgressMeterHud(),
+                  // Live pitch-vs-band tilt guidance (needle + target band).
+                  const TiltMeterOverlay(),
+                  // Live steadiness dot driven by the native stability gate.
+                  const StabilityIndicatorOverlay(),
+                  // Ring-direction arrow. Hidden until a later resolver task maps
+                  // yaw + ring progress into a DirectionHint.
+                  const DirectionArrowOverlay(hint: DirectionHint.hidden),
+                  // Auto-capture ON/OFF pill (top-right, below the top bar).
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.only(
+                          top: 44,
+                          right: AppSpacing.lg,
+                        ),
+                        child: AutoCaptureIndicator(
+                          // While suspended (e.g. Help sheet open) the loop is
+                          // paused, so it can never be armed.
+                          state: _autoCaptureSuspended
+                              ? AutoCaptureState(mode: _autoCapture.mode)
+                              : _autoCapture,
+                          onToggle: _toggleAutoCapture,
+                        ),
+                      ),
+                    ),
+                  ),
                   _BottomBar(
                     captureCount: _captureCount,
-                    onShutter: _onShutter,
+                    shutter: _ShutterControl(
+                      onCapture: _performCapture,
+                      onTriggered: _onManualTriggered,
+                    ),
+                    thumbnails: ThumbnailStrip(
+                      recent: _recentThumbnails,
+                      maxVisible: 3,
+                      onTapThumbnail: _onThumbnailTap,
+                    ),
+                  ),
+                  // Post-shot quality feedback (single instance, latest-wins).
+                  // Sits above the shutter/HUD in its own band.
+                  PostShotToast(
+                    evaluation: _lastEvaluation,
+                    onRetake: _onRetake,
                   ),
                   if (_showFlash)
                     Container(color: Colors.white.withValues(alpha: 0.3)),
@@ -326,6 +905,7 @@ class _CaptureScreenState extends State<CaptureScreen>
             },
           );
         },
+      ),
       ),
     );
   }
@@ -414,227 +994,121 @@ class _CameraErrorSurface extends StatelessWidget {
   }
 }
 
-class _TopBar extends StatelessWidget {
-  const _TopBar({
-    required this.levelLabel,
-    required this.levelName,
-    required this.onClose,
-  });
+/// Assembles [CaptureReadiness] from the tilt + stability providers (the button
+/// does not subscribe to sensors itself) and renders the gated [ShutterButton].
+/// Guided mode; placement is not gated yet (no detection). Until sensor samples
+/// arrive — or if sensors are unavailable — `sensorSupported` is false, so the
+/// shutter fails OPEN (never locks the user out).
+class _ShutterControl extends ConsumerWidget {
+  const _ShutterControl({required this.onCapture, this.onTriggered});
 
-  final String levelLabel;
-  final String levelName;
-  final VoidCallback onClose;
+  final Future<void> Function() onCapture;
+
+  /// Capture-initiation hook (fires once per non-blocked tap) — the parent emits
+  /// `manual_capture_triggered` with full context from the readiness.
+  final void Function(CaptureReadiness readiness)? onTriggered;
+
+  /// Eye Ring = the 'mid' band (the band the tilt meter targets).
+  static TiltTarget _band(CaptureConfig config) {
+    for (final b in config.pitchBands) {
+      if (b.id == 'mid') return TiltTarget.fromBand(b);
+    }
+    return config.pitchBands.isNotEmpty
+        ? TiltTarget.fromBand(config.pitchBands.first)
+        : const TiltTarget(minDegrees: 30, maxDegrees: 60, bandId: 'mid');
+  }
 
   @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm,
-            vertical: AppSpacing.xs,
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(Icons.close, color: Colors.white),
-                onPressed: onClose,
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                  vertical: AppSpacing.xs,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.surface1,
-                  borderRadius: BorderRadius.circular(AppRadius.xs),
-                ),
-                child: Text(
-                  '$levelLabel • $levelName',
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: AppColors.textPrimary),
-                ),
-              ),
-              const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.help_outline, color: Colors.white),
-                onPressed: () {},
-              ),
-            ],
-          ),
-        ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final config = ref.watch(captureConfigProvider);
+    final pitch = ref.watch(currentPitchProvider).asData?.value;
+    final stability = ref.watch(stabilityProvider).asData?.value;
+    final target = _band(config);
+
+    final pitchSupported = pitch?.sensorSupported ?? false;
+    final stabilitySupported = stability?.sensorSupported ?? false;
+
+    return ShutterButton(
+      key: const ValueKey('capture_shutter'),
+      readiness: CaptureReadiness(
+        mode: CaptureMode.guided,
+        inBand: pitchSupported && target.contains(pitch!.pitchDegrees),
+        stable: stabilitySupported && stability!.stability == Stability.stable,
+        // Both sensors must be usable to gate; otherwise fail open.
+        sensorSupported: pitchSupported && stabilitySupported,
+      ),
+      onCapture: onCapture,
+      onTriggered: onTriggered,
+    );
+  }
+}
+
+/// Derives the Level A ring segment count (N) from [captureConfigProvider]'s
+/// eye-level band and renders the [RingCoverageMap]. The filled/target coverage
+/// is empty until a later ring-progress resolver supplies it.
+class _RingCoverageHud extends ConsumerWidget {
+  const _RingCoverageHud();
+
+  /// Eye Ring = the 'mid' band (same band the tilt meter targets); falls back to
+  /// the first band, then a sane default if config is somehow empty.
+  static int _segments(CaptureConfig config) => config.eyeRingSegments;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final config = ref.watch(captureConfigProvider);
+    final segments = _segments(config);
+    // In retake mode the forced segment is THE target — it flows through the same
+    // RingCoverage.targetIndex the normal next-uncaptured target uses, so the
+    // chosen angle is the one highlighted. Out-of-range requests are ignored
+    // (RingCoverage guards), falling back to no forced target.
+    final retake = ref.watch(retakeSessionProvider);
+    final forcedTarget =
+        (retake != null && retake.isValidFor(segments)) ? retake.ringIndex : null;
+    return RingCoverageMap(
+      coverage: RingCoverage(
+        segmentCount: segments,
+        targetIndex: forcedTarget,
       ),
     );
   }
 }
 
-class _InstructionBanner extends StatelessWidget {
-  const _InstructionBanner({required this.text});
-  final String text;
+/// Renders the textual [ProgressMeter] from the SAME source as the ring map —
+/// segment count (N) from the config band, accepted/coverage from the shared
+/// [RingCoverage] — so the two HUD readouts can never disagree. Empty until the
+/// ring-progress resolver supplies filled segments; the completion threshold is
+/// CaptureConfig's `minCoveragePct`.
+class _ProgressMeterHud extends ConsumerWidget {
+  const _ProgressMeterHud();
 
   @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      top: MediaQuery.of(context).size.height * 0.30,
-      left: 0,
-      right: 0,
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.lg,
-            vertical: AppSpacing.sm,
-          ),
-          decoration: BoxDecoration(
-            color: AppColors.surface1.withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(AppRadius.lg),
-          ),
-          child: Text(
-            text,
-            style: Theme.of(context)
-                .textTheme
-                .bodyLarge
-                ?.copyWith(color: Colors.white),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _RingCoverageMap extends StatelessWidget {
-  const _RingCoverageMap();
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      left: AppSpacing.lg,
-      bottom: 120,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 80,
-            height: 80,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                const CircularProgressIndicator(
-                  value: 0.68,
-                  strokeWidth: 6,
-                  backgroundColor: AppColors.surface2,
-                  color: AppColors.mirageRed,
-                ),
-                Text(
-                  '68%',
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: AppColors.textPrimary),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TiltMeter extends StatelessWidget {
-  const _TiltMeter();
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      right: AppSpacing.lg,
-      top: 150,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            'Tilt',
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          SizedBox(
-            width: 8,
-            height: 120,
-            child: Stack(
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.surface1,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                Positioned(
-                  top: 120 * 0.4,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: AppColors.mirageRed,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StabilityIndicator extends StatelessWidget {
-  const _StabilityIndicator();
-
-  @override
-  Widget build(BuildContext context) {
-    return Positioned(
-      left: AppSpacing.lg,
-      bottom: 108,
-      child: Row(
-        children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: const BoxDecoration(
-              color: AppColors.success,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: AppSpacing.xs),
-          Text(
-            'Stable',
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(color: AppColors.textPrimary),
-          ),
-        ],
+  Widget build(BuildContext context, WidgetRef ref) {
+    final config = ref.watch(captureConfigProvider);
+    final coverage =
+        RingCoverage(segmentCount: _RingCoverageHud._segments(config));
+    return ProgressMeter(
+      progress: CaptureProgress.fromCoverage(
+        coverage,
+        completeAtPct: config.thresholds.minCoveragePct,
       ),
     );
   }
 }
 
 class _BottomBar extends StatelessWidget {
-  const _BottomBar({required this.captureCount, required this.onShutter});
+  const _BottomBar({
+    required this.captureCount,
+    required this.shutter,
+    required this.thumbnails,
+  });
 
   final int captureCount;
-  final VoidCallback onShutter;
+
+  /// The gated shutter control (assembles its own readiness from providers).
+  final Widget shutter;
+
+  /// The recent-capture thumbnail strip (bottom-left slot).
+  final Widget thumbnails;
 
   @override
   Widget build(BuildContext context) {
@@ -650,62 +1124,17 @@ class _BottomBar extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: List.generate(
-                  3,
-                  (i) => Padding(
-                    padding: const EdgeInsets.only(right: AppSpacing.xs),
-                    child: Container(
-                      width: 50,
-                      height: 50,
-                      decoration: BoxDecoration(
-                        color: AppColors.surface2,
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              GestureDetector(
-                key: const ValueKey('capture_shutter'),
-                onTap: onShutter,
-                child: Container(
-                  width: 70,
-                  height: 70,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: AppColors.textPrimary, width: 3),
-                  ),
-                  child: Center(
-                    child: Container(
-                      width: 58,
-                      height: 58,
-                      decoration: const BoxDecoration(
-                        color: AppColors.mirageRed,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    '${captureCount + 12}/36',
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelSmall
-                        ?.copyWith(color: Colors.white),
-                  ),
-                  Text(
-                    'Auto: ON',
-                    style: Theme.of(context)
-                        .textTheme
-                        .labelSmall
-                        ?.copyWith(color: AppColors.textMuted),
-                  ),
-                ],
+              // Recent-capture thumbnail strip (replaces the old static tiles).
+              SizedBox(width: 160, child: thumbnails),
+              shutter,
+              // Frame counter. The auto-capture ON/OFF state now lives in the
+              // top-right AutoCaptureIndicator pill (single source of truth).
+              Text(
+                '${captureCount + 12}/36',
+                style: Theme.of(context)
+                    .textTheme
+                    .labelSmall
+                    ?.copyWith(color: Colors.white),
               ),
             ],
           ),
