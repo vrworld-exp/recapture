@@ -7,10 +7,17 @@
 // must not still count toward its segment's fill (that would make coverage lie).
 //
 // Everything it touches is an injected seam, so it is exhaustively unit-testable
-// with fakes and carries no Flutter/Riverpod/IO imports of its own. The real
-// wiring (native per-frame delete, the live ledger + SegmentCoverageNotifier, the
-// platform confirm + GoRouter navigation) is supplied by the parent that owns the
-// screen.
+// with fakes and carries no Riverpod/IO imports of its own. The real wiring
+// (native per-frame delete, the live ledger + SegmentCoverageNotifier, the
+// platform confirm + GoRouter navigation, and the analytics context) is supplied
+// by the parent that owns the screen.
+//
+// ANALYTICS: when [ReviewActionsAnalytics] is supplied, a SUCCESSFUL action emits
+// exactly one funnel event with the ACTUAL affected count — `photo_deleted` for a
+// pure delete, `photo_retaken` for a retake (its internal delete step is silent so
+// the action never double-reports). A cancelled confirm or a fully-failed action
+// emits nothing. The emit is fire-and-forget (guarded `Analytics` dispatcher), so
+// it can never break the action.
 //
 // Action semantics (from the task):
 //   - delete : confirm → remove files+sidecars + metadata + decrement coverage,
@@ -21,6 +28,7 @@
 //   - backToCapture : just resume guided capture (exits selection first).
 import '../../domain/entities/confirm_kind.dart';
 import '../../domain/entities/retake_request.dart';
+import 'analytics/review_flow_events.dart';
 import 'ledger/captured_photo_record.dart';
 
 /// Deletes the image file + its JSON sidecar for [framePath]. Returns `true` only
@@ -92,12 +100,14 @@ class ReviewActionsController {
     required ConfirmDestructive confirm,
     required NavigateToCapture navigateToCapture,
     void Function()? exitSelection,
+    ReviewActionsAnalytics? analytics,
   })  : _deletePhotoFile = deletePhotoFile,
         _removeFromLedger = removeFromLedger,
         _decrementSegment = decrementSegment,
         _confirm = confirm,
         _navigateToCapture = navigateToCapture,
-        _exitSelection = exitSelection;
+        _exitSelection = exitSelection,
+        _analytics = analytics;
 
   final DeletePhotoFile _deletePhotoFile;
   final RemoveFromLedger _removeFromLedger;
@@ -105,6 +115,11 @@ class ReviewActionsController {
   final ConfirmDestructive _confirm;
   final NavigateToCapture _navigateToCapture;
   final void Function()? _exitSelection;
+
+  /// Optional funnel-analytics seam. Null → the controller emits nothing (older
+  /// call sites + most unit tests). When set, a successful action emits one
+  /// `photo_deleted`/`photo_retaken` with the actual affected count.
+  final ReviewActionsAnalytics? _analytics;
 
   /// Guards against overlapping actions (a double-tap or a tap while one is
   /// in-flight) so a photo is never deleted twice.
@@ -148,6 +163,17 @@ class ReviewActionsController {
 
       if (deleted.isNotEmpty) _exitSelection?.call();
       final freedSorted = freed.toList()..sort();
+
+      // Funnel: a PURE delete reports `photo_deleted` here with the ACTUAL count.
+      // A retake routes through this method with `kind == retake` — stay silent so
+      // `retakeSelected` reports `photo_retaken` instead (one event per action).
+      if (kind == ConfirmKind.delete && deleted.isNotEmpty) {
+        _analytics?.deleted(
+          count: deleted.length,
+          segmentsNowMissing: freedSorted,
+        );
+      }
+
       return ReviewActionResult(
         deleted: deleted,
         failed: failed,
@@ -166,6 +192,13 @@ class ReviewActionsController {
   Future<ReviewActionResult> retakeSelected(Set<String> ids) async {
     final result = await deleteSelected(ids, kind: ConfirmKind.retake);
     if (result.cancelled || !result.anyDeleted) return result;
+
+    // Funnel: one `photo_retaken` per completed retake, ACTUAL count + freed
+    // targets. (deleteSelected stayed silent for kind == retake.)
+    _analytics?.retaken(
+      count: result.deleted.length,
+      segmentIndices: result.freedSegments,
+    );
 
     final target =
         result.freedSegments.isNotEmpty ? result.freedSegments.first : null;

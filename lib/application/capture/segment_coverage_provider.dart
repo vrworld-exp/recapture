@@ -59,6 +59,11 @@ class SegmentCoverageNotifier extends Notifier<SegmentCoverage> {
   void updatePosition(int currentSegment) =>
       state = state.updatePosition(currentSegment);
 
+  /// Swaps in a fully-formed [coverage] snapshot — used when RESUMING a saved
+  /// session (the codec rebuilds the exact [SegmentCoverage]; the capture screen
+  /// installs it here). Replaces fill counts + position wholesale.
+  void restore(SegmentCoverage coverage) => state = coverage;
+
   /// Clears coverage for a new run (keeps the ring shape).
   void reset() => state = state.reset();
 

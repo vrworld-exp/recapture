@@ -121,6 +121,38 @@ abstract final class AnalyticsEvents {
   /// Props: { method: begin|skip|auto_skip, dont_show_again, seconds_on_screen }.
   static const String levelAIntroDismissed = 'level_a_intro_dismissed';
 
+  // ── Level B (Top Ring) intro ────────────────────────────────────────────────
+  // Granular per-level intro events, mirroring the Level A pair above (kept
+  // granular alongside the canonical `capture_level_*` funnel).
+  // TODO(analytics): mirror these two names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
+  // when the analytics destination lands.
+
+  /// The Level B (Top Ring) intro screen became visible (a REACH metric). Fires
+  /// once per screen entry; NOT fired when the screen auto-skips before paint.
+  /// Props: { project_id, reduce_motion, device_type }.
+  static const String levelBIntroViewed = 'level_b_intro_viewed';
+
+  /// The user left the Level B intro toward capture. Fires once per entry.
+  /// Props: { method: begin|skip|auto_skip, dont_show_again, seconds_on_screen }.
+  static const String levelBIntroDismissed = 'level_b_intro_dismissed';
+
+  // ── Level C (Low Ring) intro ────────────────────────────────────────────────
+  // Granular per-level intro events, mirroring the Level A/B pairs above (kept
+  // granular alongside the canonical `capture_level_*` funnel).
+  // TODO(analytics): mirror these two names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
+  // when the analytics destination lands.
+
+  /// The Level C (Low Ring) intro screen became visible (a REACH metric). Fires
+  /// once per screen entry; NOT fired when the screen auto-skips before paint.
+  /// Props: { project_id, reduce_motion, device_type }.
+  static const String levelCIntroViewed = 'level_c_intro_viewed';
+
+  /// The user left the Level C intro toward capture. Fires once per entry.
+  /// Props: { method: begin|skip|auto_skip, dont_show_again, seconds_on_screen }.
+  static const String levelCIntroDismissed = 'level_c_intro_dismissed';
+
   // ── Level A camera preview ──────────────────────────────────────────────────
   // TODO(analytics): mirror these two names + props in the shared server schema
   // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
@@ -175,6 +207,19 @@ abstract final class AnalyticsEvents {
   /// shown long enough to matter. Throttled (once per unstable stretch), never
   /// per frame. Props: { device_type }.
   static const String captureHoldSteady = 'capture_hold_steady';
+
+  // ── Guided Capture roll constraint (Levels B & C) ──────────────────────────
+  // TODO(analytics): mirror this name + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
+  // when the analytics destination lands.
+
+  /// The roll advisory ("Keep the phone level") was raised during Guided Capture
+  /// (Level B/C) — the device rolled past ±15° off level. Fires on the RISING
+  /// EDGE only (inactive→active), never per frame while roll stays out of
+  /// tolerance. Advisory only — capture is never blocked. Props:
+  /// { level: B|C, capture_session_id, roll_degrees (signed), device_type }.
+  static const String guidedCaptureRollWarningShown =
+      'guided_capture_roll_warning_shown';
 
   // ── Level A shutter ────────────────────────────────────────────────────────
 
@@ -264,18 +309,107 @@ abstract final class AnalyticsEvents {
   /// { action: start_level_b|review|done_exit }.
   static const String levelACompleteAction = 'level_a_complete_action';
 
+  /// A generic per-level completion-screen CTA was tapped (Levels B & C; the
+  /// Level A screen uses [levelACompleteAction]). Debounced to one. Props:
+  /// { action: start_next|review, level, device_type }.
+  static const String levelCompleteAction = 'level_complete_action';
+
   // ── Level A review grid (Screen 7A) ────────────────────────────────────────
   // TODO(analytics): mirror these names + props in the shared server schema
   // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
   // when the analytics destination lands.
 
-  /// The Level A review grid was shown. Fires once per screen entry. Props:
-  /// { total, accepted, warned, rejected, device_type }.
+  /// The review grid was shown. Fires once per screen entry. Props:
+  /// { level?, total, accepted, warned, rejected, device_type }. `level` (A/B/C)
+  /// is carried by the level-aware flow review screen (Eye/Top/Bottom Ring); the
+  /// reusable display grid omits it (it has only a title, not a level).
   static const String reviewGridViewed = 'review_grid_viewed';
+
+  /// A review-screen action was tapped — the level-tagged counterpart of the
+  /// completion screen's [levelACompleteAction], for the in-flow review screen's
+  /// CTAs. Props: { action: proceed|back_to_capture|retake, level, frame_id?,
+  /// device_type }. `frame_id` is carried only for `retake` (the captured frame's
+  /// stable path id that the retake re-shoots).
+  static const String reviewAction = 'review_action';
 
   /// The user tapped a review-grid tile. Props:
   /// { capture_id, verdict: accepted|warn|reject }.
   static const String reviewTileTapped = 'review_tile_tapped';
+
+  // ── Capture complete summary (Screen 6C-Complete) ──────────────────────────
+  // The terminal post-all-levels summary. Repo-style names (capture_*, NOT the
+  // brief's `guided_capture_complete_*` — the same remap precedent that kept
+  // level_b_intro_* over `guided_capture_*`); the `phase: guided_capture` semantic
+  // is preserved as a property.
+  // TODO(analytics): mirror these names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// The Capture complete summary became visible (once per entry). Props:
+  /// { phase: guided_capture, session_id, levels_complete, levels_total,
+  ///   device_type }.
+  static const String captureSummaryViewed = 'capture_summary_viewed';
+
+  /// A Capture complete CTA was tapped. Props: { phase: guided_capture, session_id,
+  /// action: continue|review, all_complete? (continue), level? (per-card review),
+  /// device_type }.
+  static const String captureSummaryAction = 'capture_summary_action';
+
+  // ── Final completion gate (all levels → unlock Summary) ────────────────────
+  // The single completion gate (lib/domain/capture/completion_gate.dart) that
+  // unlocks Screen 6C-Complete. TODO(analytics): mirror these two names + props in
+  // the shared server schema (recapture-api/src/validation/analyticsSchemas.ts) +
+  // the tracking-plan doc when the analytics destination lands.
+
+  /// The completion gate flipped locked→unlocked (every configured level met its
+  /// threshold) for a session. Fires ONCE per transition, not per evaluation.
+  /// Props: { session_id, phase: guided_capture, levels_total, device_type }.
+  static const String guidedCaptureSummaryUnlocked =
+      'guided_capture_summary_unlocked';
+
+  /// A Summary-access attempt was blocked because the gate is still locked. Props:
+  /// { session_id, phase: guided_capture, incomplete_levels (comma-separated level
+  /// ids), device_type }.
+  static const String guidedCaptureSummaryBlocked =
+      'guided_capture_summary_blocked';
+
+  /// The full guided-capture session finished — EVERY configured level (A/B/C) met
+  /// its completion threshold. The funnel-end counterpart to the per-level
+  /// `capture_level_completed` events. Fires EXACTLY ONCE per locked→unlocked
+  /// transition (same latch as [guidedCaptureSummaryUnlocked]), never per level /
+  /// per frame / on rebuild. Props: { session_id, phase: guided_capture,
+  /// levels_total, levels_completed, total_frame_count, level_<code>_frame_count
+  /// per level, device_type }. `session_id` is the same opaque funnel id the
+  /// per-level events carry, so the funnel joins on it.
+  static const String captureSessionComplete = 'capture_session_complete';
+
+  // ── Level A review flow (Screen 7A) — funnel events ────────────────────────
+  // The review-session funnel, typed in
+  // lib/application/capture/analytics/review_flow_events.dart. DISTINCT from
+  // [reviewGridViewed] above: that is the display/QA event carrying verdict
+  // tallies; these three are the review FUNNEL (session open + the destructive
+  // actions, keyed on the opaque project_id/session_id the rest of the funnel
+  // uses — NOT raw PII, file paths, or image data).
+  // TODO(analytics): mirror these three names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc
+  // when the analytics destination lands (same deferred status as the rest of the
+  // capture funnel).
+
+  /// The review grid (Screen 7A) opened — review session start. Fires once per
+  /// screen OPEN (debounced via initState; not per rebuild/rotation). Props:
+  /// { level, project_id, session_id, photo_count, coverage_pct, entry_point?,
+  ///   device_type }.
+  static const String photoReviewOpened = 'photo_review_opened';
+
+  /// A Retake action completed on a selection — ONE event per action (NOT per
+  /// photo), on success only, with the ACTUAL count retaken. Props:
+  /// { level, project_id, session_id, count, segment_indices, device_type }.
+  static const String photoRetaken = 'photo_retaken';
+
+  /// A Delete action completed on a selection — ONE event per action (NOT per
+  /// photo), on success only, with the ACTUAL count deleted. Props:
+  /// { level, project_id, session_id, count, resulting_coverage_pct?,
+  ///   segments_now_missing, device_type }.
+  static const String photoDeleted = 'photo_deleted';
 
   // ── Level A retake (Review → Capture) ──────────────────────────────────────
   // NOTE: retake INITIATION is the canonical lifecycle event [captureLevelRetake]

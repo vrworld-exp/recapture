@@ -1,12 +1,29 @@
 // lib/presentation/screens/capture/level_complete_screen.dart
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/capture/analytics/capture_analytics.dart';
+import '../../../application/capture/analytics/capture_level_events.dart';
+import '../../../application/capture/analytics/capture_level_session.dart';
+import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 
-class LevelCompleteScreen extends StatelessWidget {
+/// Generic per-level completion interstitial (Levels B & C; Screen 6B-Complete is
+/// the Level B instance). A parameterized recap once a level's capture pass meets
+/// its gate, with the next actions — "[nextLabel]" (advance) and "Review
+/// [levelName]" (this level's review grid). The last level passes a finish-style
+/// [nextLabel]/[nextRoute] (e.g. "Continue" → the summary) instead of a next level.
+///
+/// Presentational + intent: it renders the supplied stats and navigates via
+/// [nextRoute]/[reviewRoute]. Parity with the rich Level A completion screen: it
+/// emits the canonical level-tagged `capture_level_completed` once per session
+/// completion (the ONLY emitter of that funnel event for B/C) and guards a rapid
+/// double-tap so each CTA dispatches a single navigation.
+class LevelCompleteScreen extends ConsumerStatefulWidget {
   const LevelCompleteScreen({
     super.key,
     required this.levelLabel,
@@ -27,6 +44,65 @@ class LevelCompleteScreen extends StatelessWidget {
   final String nextRoute;
   final String nextLabel;
   final String reviewRoute;
+
+  @override
+  ConsumerState<LevelCompleteScreen> createState() =>
+      _LevelCompleteScreenState();
+}
+
+class _LevelCompleteScreenState extends ConsumerState<LevelCompleteScreen> {
+  /// Photos-accepted denominator shown in the recap ("X / 36") AND reported as
+  /// `target` in the completion analytics — one place so the two never disagree.
+  static const int _displayTarget = 36;
+
+  /// One-shot guard so a rapid double-tap on either CTA fires a single nav.
+  bool _dispatched = false;
+
+  static String get _deviceType =>
+      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+
+  CaptureLevel get _level => captureLevelFromLabel(widget.levelLabel);
+
+  @override
+  void initState() {
+    super.initState();
+    // Canonical lifecycle event — once per session completion, level-tagged. The
+    // session (started by the capture screen) supplies the shared session_id +
+    // duration; the provider's latch stops a re-visit from double-emitting. For
+    // B/C this is the ONLY emitter of capture_level_completed (the Level A screen
+    // covers level A), so without it the funnel has no completed event past A.
+    final claim =
+        ref.read(captureLevelSessionProvider.notifier).claimCompletion();
+    if (claim.shouldEmit) {
+      final session = claim.session;
+      CaptureAnalytics.log(CaptureLevelCompleted(
+        level: _level,
+        projectId: session?.projectId ?? '',
+        sessionId: session?.sessionId ?? '',
+        accepted: widget.photosAccepted,
+        target: _displayTarget,
+        // This screen surfaces warnings, not rejects; rejected isn't tracked here
+        // (the stats are placeholders until real per-level aggregation lands).
+        rejected: 0,
+        coveragePct: widget.coveragePercent.clamp(0, 100),
+        durationSeconds: session?.durationSecondsUntil(DateTime.now()) ?? 0,
+        deviceType: _deviceType,
+      ));
+    }
+  }
+
+  /// Logs the CTA [action] (level-tagged) then runs [nav] — once. A second rapid
+  /// tap (on either CTA) is swallowed so navigation fires a single time.
+  void _dispatch(String action, VoidCallback nav) {
+    if (_dispatched) return;
+    _dispatched = true;
+    Analytics.logEvent(AnalyticsEvents.levelCompleteAction, {
+      'action': action,
+      'level': _level.code,
+      'device_type': _deviceType,
+    });
+    nav();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -53,7 +129,7 @@ class LevelCompleteScreen extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.lg),
               Text(
-                'Level $levelLabel complete',
+                'Level ${widget.levelLabel} complete',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: AppSpacing.xxl),
@@ -62,22 +138,22 @@ class LevelCompleteScreen extends StatelessWidget {
                   children: [
                     _StatRow(
                       label: 'Photos accepted',
-                      value: '$photosAccepted / 36',
+                      value: '${widget.photosAccepted} / $_displayTarget',
                       valueColor: AppColors.textPrimary,
                     ),
                     const _GoldDivider(),
                     _StatRow(
                       label: 'Coverage',
-                      value: '$coveragePercent%',
-                      valueColor: coveragePercent > 80
+                      value: '${widget.coveragePercent}%',
+                      valueColor: widget.coveragePercent > 80
                           ? AppColors.success
                           : AppColors.warning,
                     ),
                     const _GoldDivider(),
                     _StatRow(
                       label: 'Warnings',
-                      value: '$warningsCount',
-                      valueColor: warningsCount > 0
+                      value: '${widget.warningsCount}',
+                      valueColor: widget.warningsCount > 0
                           ? AppColors.warning
                           : AppColors.success,
                     ),
@@ -86,13 +162,15 @@ class LevelCompleteScreen extends StatelessWidget {
               ),
               const SizedBox(height: AppSpacing.xxl),
               AppButton(
-                label: nextLabel,
-                onPressed: () => context.go(nextRoute),
+                label: widget.nextLabel,
+                onPressed: () =>
+                    _dispatch('start_next', () => context.go(widget.nextRoute)),
               ),
               const SizedBox(height: AppSpacing.md),
               AppButton.secondary(
-                label: 'Review $levelName',
-                onPressed: () => context.push(reviewRoute),
+                label: 'Review ${widget.levelName}',
+                onPressed: () =>
+                    _dispatch('review', () => context.push(widget.reviewRoute)),
               ),
             ],
           ),

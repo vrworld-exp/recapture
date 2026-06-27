@@ -25,6 +25,7 @@ import '../../domain/entities/tilt_target.dart';
 import '../../utils/analytics.dart';
 import '../config/config_notifier.dart';
 import 'current_pitch_provider.dart';
+import 'ring_progress_provider.dart' show ringDirectionStateProvider;
 import 'stability_provider.dart';
 
 /// Instruction ids that preempt the dwell (commit immediately): the two warnings
@@ -123,12 +124,9 @@ class GuidanceEngine {
 final captureModeProvider =
     Provider<CaptureMode>((ref) => CaptureMode.guided);
 
-/// Ring-progress snapshot for the engine. Stubbed to [RingDirectionState.pending]
-/// (falls through to the capture branch); OVERRIDE with the real ring-progress
-/// provider when that Capture Logic task lands. Defining the contract here lets
-/// the engine be wired and tested now.
-final ringDirectionStateProvider =
-    Provider<RingDirectionState>((ref) => RingDirectionState.pending);
+// The live `ringDirectionStateProvider` now lives in ring_progress_provider.dart
+// (the real yaw→RingDirectionState resolver), imported above. It replaced the
+// former stub that returned [RingDirectionState.pending].
 
 /// Holds the single [GuidanceEngine] (its dwell state persists across rebuilds).
 final guidanceEngineProvider = Provider<GuidanceEngine>((ref) => GuidanceEngine());

@@ -51,6 +51,25 @@ class TiltTarget {
   bool contains(double pitch) => pitch >= minDegrees && pitch < maxDegrees;
 }
 
+/// A display gauge range (degrees) that frames [target] with head/foot room for
+/// the out-of-band "tilt up / tilt down" excursions, scaled to the band's own
+/// span. This is what makes the indicator *tuned* per band and *adaptive*: the
+/// zone re-centres and re-scales to whatever band the level configures — Eye Ring
+/// ('mid' [30,60) → [0,90]), Top Ring ('high' [60,90) → [30,120]), Bottom Ring
+/// (e.g. [-60,-30) → [-90,0]) — with no hardcoded bounds.
+///
+/// The margin is ~one band span on each side (so an out-of-band excursion is
+/// always visible), floored at [minMargin] so a very narrow band still gets
+/// legible headroom. Returns `min < max`.
+({double min, double max}) tiltGaugeRangeForBand(
+  TiltTarget target, {
+  double minMargin = 15,
+}) {
+  final span = (target.maxDegrees - target.minDegrees).abs();
+  final margin = span < minMargin ? minMargin : span;
+  return (min: target.minDegrees - margin, max: target.maxDegrees + margin);
+}
+
 /// The raw (no-hysteresis) tilt state for [pitch] against [target]. Used where a
 /// stateless decision is wanted; the meter itself uses
 /// [tiltStateWithHysteresis] to avoid boundary flicker.

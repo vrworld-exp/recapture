@@ -137,10 +137,20 @@ void main() {
     await tester.pump();
   }
 
+  // The ring-coverage HUD's target now pulses (a legitimately perpetual
+  // animation), so `pumpAndSettle` can't be used. A few bounded frames flush the
+  // multi-hop chain (modal pop → choice future → navigation → route build)
+  // without waiting for a settle that never comes.
+  Future<void> settle(WidgetTester tester) async {
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+  }
+
   /// Captures one photo so the session has unsaved progress.
   Future<void> captureOne(WidgetTester tester) async {
     await tester.tap(find.byKey(const ValueKey('capture_shutter')));
-    await tester.pumpAndSettle();
+    await settle(tester);
   }
 
   Future<void> teardown(WidgetTester tester) async {
@@ -151,7 +161,7 @@ void main() {
       (tester) async {
     await pumpScreen(tester);
     await tester.tap(find.byTooltip('Back'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(find.text('Save your progress?'), findsNothing);
     expect(find.text('PROJECTS'), findsOneWidget); // exited directly
@@ -164,7 +174,7 @@ void main() {
     await captureOne(tester);
 
     await tester.tap(find.byTooltip('Back'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(find.text('Save your progress?'), findsOneWidget);
     expect(find.textContaining('1 photo'), findsOneWidget);
@@ -175,10 +185,10 @@ void main() {
     await pumpScreen(tester);
     await captureOne(tester);
     await tester.tap(find.byTooltip('Back'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     await tester.tap(find.text('Keep Capturing'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(find.text('PROJECTS'), findsNothing); // stayed
     expect(find.byTooltip('Back'), findsOneWidget); // still on capture
@@ -189,10 +199,10 @@ void main() {
     await pumpScreen(tester);
     await captureOne(tester);
     await tester.tap(find.byTooltip('Back'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     await tester.tap(find.text('Save & Exit'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(find.text('PROJECTS'), findsOneWidget);
     await teardown(tester);
@@ -202,10 +212,10 @@ void main() {
     await pumpScreen(tester);
     await captureOne(tester);
     await tester.tap(find.byTooltip('Back'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     await tester.tap(find.text('Discard & Exit'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(find.text('PROJECTS'), findsOneWidget);
     await teardown(tester);

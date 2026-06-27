@@ -150,6 +150,10 @@ class _Pill extends StatelessWidget {
     final isWarning = instruction.severity == InstructionSeverity.warning;
 
     return ConstrainedBox(
+      // Test-only stable handle so a widget test can deterministically COUNT the
+      // pills present (no two persistent pills). Non-visual; the live key that
+      // drives the AnimatedSwitcher crossfade is the _Pill's own ValueKey(id).
+      key: const Key('instruction_pill'),
       constraints: BoxConstraints(maxWidth: maxWidth),
       child: Container(
         padding: const EdgeInsets.symmetric(

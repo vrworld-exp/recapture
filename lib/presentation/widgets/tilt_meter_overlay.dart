@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
+import '../../application/capture/analytics/capture_level_events.dart';
+import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/current_pitch_provider.dart';
 import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
@@ -29,21 +31,41 @@ class TiltMeterOverlay extends ConsumerStatefulWidget {
   const TiltMeterOverlay({
     super.key,
     this.levelBandId = 'mid',
-    this.gaugeMinDeg = -30,
-    this.gaugeMaxDeg = 120,
+    this.band,
+    this.level,
+    this.gaugeMinDeg,
+    this.gaugeMaxDeg,
     this.hysteresisDeg = 2.0,
     this.outSustain = const Duration(seconds: 2),
     this.outCooldown = const Duration(seconds: 3),
   });
 
-  /// The config band id this level targets. Level A "Eye Ring" ≈ the `mid`
-  /// (eye-level) band; resolved by id with a safe fallback, so retuning config
-  /// moves the meter zone.
+  /// The config band id this level targets, resolved by id with a safe fallback
+  /// so retuning config moves the meter zone. A=Eye Ring (`mid`), B=Top Ring
+  /// (`high`), C=Bottom Ring (`low`) — see `pitchBandIdForLevel`. Used only when
+  /// [band] is null.
   final String levelBandId;
 
-  /// Displayable gauge range (degrees), clamped. The needle never overflows it.
-  final double gaugeMinDeg;
-  final double gaugeMaxDeg;
+  /// The pre-resolved effective band (override → remote/cache → default), held
+  /// stable for the capture pass. When supplied it takes precedence over
+  /// [levelBandId], so the meter shows the SAME band the shutter gate enforces
+  /// (incl. an active override) and does not drift if config changes mid-pass.
+  final PitchBand? band;
+
+  /// The capture level code ('A'/'B'/'C') this meter guides, carried on the
+  /// `tilt_meter_out_of_band` analytics event so the out-of-band signal is
+  /// level-parameterized like the rest of the capture funnel. Null when the meter
+  /// is shown outside a tagged level (the event falls back to the active analytics
+  /// session's level, or omits it).
+  final String? level;
+
+  /// Displayable gauge range (degrees), clamped — the needle never overflows it.
+  /// When null (the default), the range is DERIVED from the resolved band via
+  /// [tiltGaugeRangeForBand] so the gauge auto-tunes to whatever band the level
+  /// configures (the +30–+60 Eye Ring, the steeper Top Ring, a negative Bottom
+  /// Ring). Provide both to pin a fixed range.
+  final double? gaugeMinDeg;
+  final double? gaugeMaxDeg;
 
   /// Hysteresis margin (degrees) on the in/out-of-band decision.
   final double hysteresisDeg;
@@ -68,6 +90,10 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
   DateTime? _lastEmit; // last emission (cooldown anchor)
 
   TiltTarget _resolveTarget(CaptureConfig config) {
+    // A pre-resolved (held) band wins — keeps the meter consistent with the gate
+    // (incl. an active override) and stable across mid-pass config changes.
+    final held = widget.band;
+    if (held != null) return TiltTarget.fromBand(held);
     for (final b in config.pitchBands) {
       if (b.id == widget.levelBandId) return TiltTarget.fromBand(b);
     }
@@ -94,7 +120,9 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
       target,
       marginDegrees: widget.hysteresisDeg,
     );
-    _maybeEmitOutOfBand(next, target);
+    // Pass the CURRENT sample pitch: _pitch is not updated until the setState
+    // below, so reading the field here would log the previous sample's value.
+    _maybeEmitOutOfBand(next, target, sample.pitchDegrees);
     if (!_supported || _state != next || _pitch != sample.pitchDegrees) {
       setState(() {
         _supported = true;
@@ -104,7 +132,7 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
     }
   }
 
-  void _maybeEmitOutOfBand(TiltState state, TiltTarget target) {
+  void _maybeEmitOutOfBand(TiltState state, TiltTarget target, double pitch) {
     final now = DateTime.now();
     if (state == TiltState.inBand) {
       _outSince = null;
@@ -116,9 +144,20 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
         _lastEmit == null || now.difference(_lastEmit!) >= widget.outCooldown;
     if (sustained && cooled) {
       _lastEmit = now;
+      // Level + opaque ids come from the active capture-level analytics session
+      // (null outside a tagged level — then the explicit widget.level wins and
+      // the ids fall back to empty), so this guidance signal stitches into the
+      // same level-parameterized funnel as the capture events.
+      final session = ref.read(captureLevelSessionProvider);
       Analytics.logEvent(AnalyticsEvents.tiltMeterOutOfBand, {
+        // `direction` keeps its established above/below vocabulary (the gauge
+        // hint maps above→"Tilt down", below→"Tilt up").
         'direction': state == TiltState.aboveBand ? 'above' : 'below',
         'target_band_id': target.bandId,
+        'level': widget.level ?? session?.level.code,
+        'pitch': pitch,
+        'session_id': session?.sessionId ?? '',
+        'project_id': session?.projectId ?? '',
         'device_type':
             defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
       });
@@ -135,6 +174,11 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
     });
 
     final target = _resolveTarget(ref.watch(captureConfigProvider));
+    // Derive the gauge range from the band when not explicitly pinned, so the
+    // zone is tuned/adaptive to whatever band the level configures.
+    final range = (widget.gaugeMinDeg != null && widget.gaugeMaxDeg != null)
+        ? (min: widget.gaugeMinDeg!, max: widget.gaugeMaxDeg!)
+        : tiltGaugeRangeForBand(target);
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
 
@@ -147,8 +191,8 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
                 target: target,
                 pitch: _pitch,
                 state: _state,
-                gaugeMinDeg: widget.gaugeMinDeg,
-                gaugeMaxDeg: widget.gaugeMaxDeg,
+                gaugeMinDeg: range.min,
+                gaugeMaxDeg: range.max,
                 reduceMotion: reduceMotion,
               )
             : const _TiltFallback(),

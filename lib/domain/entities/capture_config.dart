@@ -87,17 +87,84 @@ class CaptureThresholds {
       );
 }
 
+/// Default minimum accepted frames a level needs to count as complete when no
+/// per-level override is configured. Validated `>= 1`.
+const int kDefaultMinAcceptedFrames = 1;
+
+/// Per-level completion thresholds: how many ACCEPTED frames each level needs
+/// before the final completion gate ([SummaryGate]) treats it as done. Pure,
+/// immutable, config-driven (defaultable + remote-overridable). Keyed by the
+/// display level code ("A"/"B"/"C"); lookups are case-insensitive and any level
+/// without a valid override falls back to [kDefaultMinAcceptedFrames].
+class CompletionThresholds {
+  /// [perLevelMinAcceptedFrames] is keyed by UPPERCASE level code. Use
+  /// [CompletionThresholds.fromMap] for untrusted (remote) input — it validates.
+  const CompletionThresholds({
+    Map<String, int> perLevelMinAcceptedFrames = const {},
+  }) : _perLevel = perLevelMinAcceptedFrames;
+
+  final Map<String, int> _perLevel;
+
+  /// No overrides — every level uses [kDefaultMinAcceptedFrames]. The const
+  /// default carried by [CaptureConfig].
+  static const CompletionThresholds bundledDefault = CompletionThresholds();
+
+  /// The minimum accepted frames [levelCode] needs (case-insensitive). Falls back
+  /// to [kDefaultMinAcceptedFrames] for an absent or (defensively) invalid entry.
+  int minAcceptedFramesFor(String levelCode) {
+    final v = _perLevel[levelCode.toUpperCase()];
+    return (v != null && v >= 1) ? v : kDefaultMinAcceptedFrames;
+  }
+
+  /// Parses the remote-config block (keyed by level code → `{minAcceptedFrames}`):
+  /// `{ "A": { "minAcceptedFrames": 5 }, "B": { "minAcceptedFrames": 3 } }`.
+  /// Only positive-integer entries survive; non-positive / ill-typed / non-map
+  /// entries are dropped so that level falls back to the default. A non-map input
+  /// yields all-defaults. Never throws.
+  factory CompletionThresholds.fromMap(Object? raw) {
+    if (raw is! Map) return bundledDefault;
+    final parsed = <String, int>{};
+    raw.forEach((key, value) {
+      if (key is! String || value is! Map) return;
+      final n = value['minAcceptedFrames'];
+      if (n is num && n.toInt() >= 1) parsed[key.toUpperCase()] = n.toInt();
+    });
+    return CompletionThresholds(perLevelMinAcceptedFrames: parsed);
+  }
+
+  /// Round-trips back to the wire shape [fromMap] consumes (only stored overrides).
+  Map<String, dynamic> toMap() => {
+        for (final e in _perLevel.entries)
+          e.key: {'minAcceptedFrames': e.value},
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      other is CompletionThresholds &&
+      _perLevel.length == other._perLevel.length &&
+      _perLevel.entries.every((e) => other._perLevel[e.key] == e.value);
+
+  @override
+  int get hashCode => Object.hashAllUnordered(
+        _perLevel.entries.map((e) => Object.hash(e.key, e.value)),
+      );
+}
+
 /// App-wide capture configuration. Server-tunable without an app release.
 class CaptureConfig {
   const CaptureConfig({
     required this.version,
     required this.pitchBands,
     required this.thresholds,
+    this.completionThresholds = CompletionThresholds.bundledDefault,
   });
 
   final int version;
   final List<PitchBand> pitchBands;
   final CaptureThresholds thresholds;
+
+  /// Per-level minimum accepted-frame thresholds for the final completion gate.
+  final CompletionThresholds completionThresholds;
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
@@ -149,6 +216,8 @@ class CaptureConfig {
           ? CaptureThresholds.fromMap(
               (m['thresholds'] as Map).cast<String, dynamic>())
           : bundledDefault.thresholds,
+      completionThresholds: CompletionThresholds.fromMap(
+          m['guided_capture_completion_thresholds']),
     );
   }
 
@@ -156,16 +225,19 @@ class CaptureConfig {
         'version': version,
         'pitchBands': pitchBands.map((b) => b.toMap()).toList(),
         'thresholds': thresholds.toMap(),
+        'guided_capture_completion_thresholds': completionThresholds.toMap(),
       };
 
   CaptureConfig copyWith({
     int? version,
     List<PitchBand>? pitchBands,
     CaptureThresholds? thresholds,
+    CompletionThresholds? completionThresholds,
   }) =>
       CaptureConfig(
         version: version ?? this.version,
         pitchBands: pitchBands ?? this.pitchBands,
         thresholds: thresholds ?? this.thresholds,
+        completionThresholds: completionThresholds ?? this.completionThresholds,
       );
 }

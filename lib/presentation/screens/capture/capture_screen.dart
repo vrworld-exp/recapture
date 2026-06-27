@@ -12,8 +12,17 @@ import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/capture/analytics/capture_trigger_analytics.dart';
 import '../../../application/capture/current_pitch_provider.dart';
+import '../../../application/capture/ledger/captured_photo_record.dart';
+import '../../../application/capture/ledger/level_capture_ledger.dart';
+import '../../../application/capture/ledger/level_capture_ledger_registry_provider.dart';
+import '../../../application/capture/pitch_band_resolver.dart';
+import '../../../application/capture/ring_progress_provider.dart';
+import '../../../application/capture/segment_coverage_provider.dart';
+import '../../../application/capture/session/capture_session_codec.dart';
+import '../../../application/capture/session/capture_session_store.dart';
 import '../../../application/capture/stability_provider.dart';
 import '../../../application/config/config_notifier.dart';
+import '../../../domain/capture/level_completion.dart';
 import '../../../data/local/active_session_box.dart';
 import '../../../data/local/auto_capture_box.dart';
 import '../../../data/local/capture_settings_box.dart';
@@ -21,6 +30,7 @@ import '../../../domain/entities/auto_capture_state.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../../../domain/entities/capture_evaluation.dart';
 import '../../../domain/entities/capture_instruction.dart';
+import '../../../domain/entities/capture_pitch_guide.dart';
 import '../../../domain/entities/capture_progress.dart';
 import '../../../domain/entities/capture_readiness.dart';
 import '../../../domain/entities/capture_settings.dart';
@@ -31,7 +41,6 @@ import '../../../domain/entities/direction_hint.dart';
 import '../../../domain/entities/permission_item.dart';
 import '../../../domain/entities/retake_request.dart';
 import '../../../domain/entities/ring_coverage.dart';
-import '../../../domain/entities/tilt_target.dart';
 import '../../../application/capture/retake_session_provider.dart';
 import '../../../platform/camera/camera_preview_controller.dart';
 import '../../../platform/camera/camera_preview_view.dart';
@@ -49,12 +58,23 @@ import '../../widgets/level_a_settings_sheet.dart';
 import '../../widgets/placement_box_overlay.dart';
 import '../../widgets/post_shot_toast.dart';
 import '../../widgets/progress_meter.dart';
+import '../../widgets/roll_warning_overlay.dart';
 import '../../widgets/save_exit_modal.dart';
 import '../../widgets/ring_coverage_map.dart';
 import '../../widgets/shutter_button.dart';
 import '../../widgets/stability_indicator_overlay.dart';
 import '../../widgets/thumbnail_strip.dart';
 import '../../widgets/tilt_meter_overlay.dart';
+import 'capture_instructions.dart';
+
+// Re-export the per-level instruction cycles so existing call sites (the router)
+// and tests that import them from this file keep resolving unchanged after the
+// constants were extracted into capture_instructions.dart.
+export 'capture_instructions.dart'
+    show
+        kDefaultCaptureInstructions,
+        kLevelBCaptureInstructions,
+        kLevelCCaptureInstructions;
 
 class CaptureScreen extends ConsumerStatefulWidget {
   const CaptureScreen({
@@ -62,16 +82,25 @@ class CaptureScreen extends ConsumerStatefulWidget {
     required this.levelLabel,
     required this.levelName,
     required this.nextRoute,
+    this.instructions = kDefaultCaptureInstructions,
     this.retakeRequest,
     this.permissionsService = const PermissionsService(),
     this.sessionBox,
     this.autoCaptureStore,
     this.captureSettingsStore,
+    this.sessionStore,
   });
 
   final String levelLabel;
   final String levelName;
   final String nextRoute;
+
+  /// The level-tuned instruction cycle shown in the HUD pill. Defaults to
+  /// [kDefaultCaptureInstructions] (Level A's copy), so a level that passes
+  /// nothing renders identically to today. An empty list falls back to the
+  /// default at render time (never an empty/crashing cycle) — see
+  /// [_CaptureScreenState._instructions].
+  final List<String> instructions;
 
   /// When non-null, the screen enters RETAKE mode for [RetakeRequest.ringIndex]:
   /// it forces that segment as the active target (overriding normal next-
@@ -96,6 +125,12 @@ class CaptureScreen extends ConsumerStatefulWidget {
   /// Persists save-to-gallery + quality (the non-auto-capture settings). Null →
   /// the real [CaptureSettingsBox]; injectable for tests. Best-effort.
   final CaptureSettingsStore? captureSettingsStore;
+
+  /// Persists the resumable capture-session snapshot (filled segments + ledger)
+  /// for Save & Exit → Resume. Null → the real [CaptureSessionStore]; injectable
+  /// for tests. Every access is guarded, so an unavailable Hive host degrades to
+  /// "no resume" rather than crashing.
+  final CaptureSessionStore? sessionStore;
 
   @override
   ConsumerState<CaptureScreen> createState() => _CaptureScreenState();
@@ -189,16 +224,51 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// This level as the canonical analytics enum (from the screen's level label).
   CaptureLevel get _captureLevel => captureLevelFromLabel(widget.levelLabel);
 
-  static const _instructions = [
-    'Move clockwise',
-    'Keep object centered',
-    'Maintain distance',
-    'Move slowly',
-  ];
+  /// The PitchBand.id keying this level's ledger + persisted session AND its
+  /// pitch band — the single source [pitchBandIdForLevel] (Level A Eye Ring =
+  /// 'mid', B Top Ring = 'high', C Bottom Ring = 'low'). The same id drives the
+  /// shutter pitch gate and the tilt indicator, so guidance and enforcement can
+  /// never target different bands.
+  String get _levelLedgerId => pitchBandIdForLevel(_captureLevel);
+
+  /// The config band id this level's pitch gate + tilt indicator target (alias of
+  /// [_levelLedgerId] for read-clarity at the HUD call sites).
+  String get _levelBandId => _levelLedgerId;
+
+  /// This level's EFFECTIVE pitch band, resolved ONCE at level entry (initState)
+  /// via [resolvedPitchBandProvider] (override → remote/cache → bundled default)
+  /// and held STABLE for the whole capture pass — a mid-pass remote/override
+  /// change never shifts the target window under the user (it applies next entry).
+  /// Drives both the shutter pitch gate and the tilt indicator, so guidance and
+  /// enforcement share one band.
+  late final PitchBand _resolvedBand;
+
+  /// This level's capture ledger (accepted/warned/rejected), from the root-scoped
+  /// registry — a single instance per level across the app session.
+  LevelCaptureLedger get _ledger =>
+      ref.read(levelCaptureLedgerRegistryProvider).ledgerFor(_levelLedgerId);
+
+  /// Resumable-session persistence (injectable; defaults to the real store).
+  late final CaptureSessionStore _sessionStore =
+      widget.sessionStore ?? CaptureSessionStore();
+
+  /// Guards the coverage→completion navigation to a single fire per entry (so a
+  /// re-capture of an already-filled segment never re-navigates).
+  bool _levelCompleteNavigated = false;
+
+  /// The active instruction cycle for this level — the widget's tuned copy, or
+  /// [kDefaultCaptureInstructions] when none/empty was supplied (so the cycle is
+  /// never empty: `% length` and `[index]` below stay safe).
+  List<String> get _instructions => widget.instructions.isNotEmpty
+      ? widget.instructions
+      : kDefaultCaptureInstructions;
 
   @override
   void initState() {
     super.initState();
+    // Resolve this level's pitch band once, at ring/phase entry, and hold it for
+    // the pass (override → remote/cache → bundled default).
+    _resolvedBand = ref.read(resolvedPitchBandProvider(_levelBandId));
     _flashController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 200),
@@ -215,6 +285,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // frame).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _resetRingYawBaseline();
       _primeRetake();
       _logCaptureStartedIfNeeded();
       _cameraController.start();
@@ -237,6 +308,47 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     } catch (_) {
       _projectId = null;
     }
+    // Once the project context is known, restore any saved draft for this level.
+    await _tryResume();
+  }
+
+  /// Best-effort RESUME of a saved Level A draft into the live state: loads the
+  /// snapshot for (project, level) and installs the exact [SegmentCoverage] +
+  /// ledger, so the ring map / progress meter / target pick up precisely where the
+  /// user left off. A retake entry never resumes (it targets one segment). Absent,
+  /// corrupt, or a ring-shape (N) change → start fresh (never a crash). Mirrors the
+  /// contract pinned by test/capture/session/save_exit_resume_test.dart.
+  Future<void> _tryResume() async {
+    final projectId = _projectId;
+    if (projectId == null || _retake != null) return;
+    try {
+      final snap = await _sessionStore.load(projectId, _levelLedgerId);
+      if (snap == null || !mounted) return;
+      final n = ref.read(captureConfigProvider).eyeRingSegments;
+      if (snap.segmentCount != n) return; // ring density changed → fresh start
+      final coverage = CaptureSessionCodec.restoreCoverage(snap);
+      ref.read(segmentCoverageProvider.notifier).restore(coverage);
+      CaptureSessionCodec.restoreLedger(snap, _ledger);
+      setState(() => _captureCount = coverage.filledCount);
+      _maybeAutoComplete();
+    } catch (_) {
+      // Corrupt / unavailable persistence → leave the fresh session in place.
+    }
+  }
+
+  /// Ring-begin reset of the per-ring yaw reference. This is the SINGLE,
+  /// level-agnostic place the reset fires — the capture screen is shared by Levels
+  /// A/B/C, so every ring re-establishes its own `yawStart` from the heading the
+  /// user is facing when that ring begins (Level C is measured from Level C's
+  /// start, never Level B's stale baseline).
+  ///
+  /// Skipped on a RETAKE re-entry: a retake must keep the original ring reference
+  /// so its frames stay aligned with the already-captured ones (it does not begin
+  /// a new ring). The actual baseline value is then established by the first valid
+  /// yaw sample — an unset baseline gates downstream segment/progress until then.
+  void _resetRingYawBaseline() {
+    if (widget.retakeRequest != null) return; // retake keeps the ring reference
+    ref.read(ringYawBaselineProvider.notifier).reset();
   }
 
   /// Enters retake mode from the route arg, or guarantees normal targeting.
@@ -514,7 +626,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // counter / thumbnail strip / next-route advance — exactly one segment is in
     // focus and the ring must never advance past it.
     if (_retake != null) {
-      _handleRetakeCapture();
+      _handleRetakeCapture(frame);
       return;
     }
 
@@ -536,6 +648,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
             captureId: frame.id,
             verdict: CaptureVerdict.accepted,
           );
+    // Record the accepted shot against the ring's current segment (the single
+    // source of truth the HUD + completion gate read). Gated on a KNOWN live
+    // segment: when sensors are unavailable (no yaw → no segment) the shot still
+    // advances the counter/strip but cannot fill a segment — coverage never lies.
+    _recordAcceptedCapture(frame);
     setState(() {
       _captureCount++;
       _lastEvaluation = evaluation;
@@ -549,11 +666,54 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         if (mounted) setState(() => _showFlash = false);
       });
     }
-    if (_captureCount >= 5) {
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (mounted) context.go(widget.nextRoute);
-      });
-    }
+    // Auto-complete on real ring coverage (replaces the former demo counter): the
+    // pure gate over the live SegmentCoverage + accepted ledger decides, and we
+    // navigate to the completion route exactly once.
+    _maybeAutoComplete();
+  }
+
+  /// Fills the live [SegmentCoverage] + appends a ledger record for an accepted
+  /// [frame], keyed on the ring's current segment. No-op when the current segment
+  /// is unknown (sensors warming up / unavailable) — so coverage stays truthful.
+  /// Quality fields are placeholders until the capture-evaluation task lands; the
+  /// path + segment + sensor timestamp are real (enough for resume + review).
+  void _recordAcceptedCapture(CapturedFrame frame) {
+    final seg =
+        ref.read(currentRingSegmentProvider).valueOrNull?.currentSegment;
+    if (seg == null) return;
+    ref.read(segmentCoverageProvider.notifier).recordCapture(seg);
+    final pitch = ref.read(currentPitchProvider).asData?.value;
+    final n = ref.read(segmentCoverageProvider).segmentCount;
+    _ledger.recordAccepted(CapturedPhotoRecord(
+      segmentIndex: seg,
+      framePath: frame.path,
+      blurScore: 100, // placeholder (accept band) — evaluator not yet wired
+      meanLuminance: 128, // placeholder (mid) — evaluator not yet wired
+      yawDegrees: seg * (360.0 / n),
+      pitchDegrees: pitch?.pitchDegrees ?? 0,
+      sensorTimestampNs: frame.timestampNs,
+    ));
+  }
+
+  /// Evaluates the Level A completion gate against the live coverage + accepted
+  /// count and, when complete, navigates to [CaptureScreen.nextRoute] once.
+  /// `minAcceptedCount` is 1: the repo has no Dart count-config field, so coverage
+  /// (`CaptureConfig.thresholds.minCoveragePct`) is the effective production gate —
+  /// reaching it already implies ≥1 accepted. Retake mode never auto-completes.
+  void _maybeAutoComplete() {
+    if (_levelCompleteNavigated || _retake != null) return;
+    final coverage = ref.read(segmentCoverageProvider);
+    final completion = evaluateLevelAFromCoverage(
+      coverage,
+      acceptedCount: _ledger.accepted.length,
+      minAcceptedCount: 1,
+      minCoveragePct: ref.read(captureConfigProvider).thresholds.minCoveragePct,
+    );
+    if (!completion.isComplete) return;
+    _levelCompleteNavigated = true;
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) context.go(widget.nextRoute);
+    });
   }
 
   /// Completes (or holds) a retake shot for the forced target.
@@ -562,7 +722,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// target (reject discards the NEW shot, never the old one). An ACCEPTED retake
   /// replaces/fills the segment, clears retake mode, and either returns to Review
   /// (single retake) or resumes normal targeting.
-  void _handleRetakeCapture() {
+  void _handleRetakeCapture(CapturedFrame frame) {
     final request = _retake;
     if (request == null) return;
 
@@ -572,13 +732,25 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // (keeping the old capture, surfacing the reject toast, staying on the
     // target) and a WARN must report new_verdict: 'warn'.
 
-    // TODO(capture): route the replace/add through the captured-set source of
-    // truth — replace the [replacingCaptureId] record (and clean its old file via
-    // CaptureStorage) or ADD + fill the missing segment in the per-level ledger +
-    // SegmentCoverage, then recompute coverage/progress/verdict. This needs the
-    // capture→ledger write path (the capture-evaluation / ring-progress task);
-    // until then the routing + target-priming + return flow below is the wired
-    // slice.
+    // Fill the FORCED target in the live coverage + ledger so the freed/missing
+    // segment becomes covered (the whole point of the retake). The segment is the
+    // request's ringIndex — known without sensors, so a retake fills deterministically.
+    // TODO(capture): a REPLACE retake should also remove the old [replacingCaptureId]
+    // record + its file (CaptureStorage); until that lands the new accept is added
+    // and `filled` stays correct (idempotent re-fill of an already-filled segment).
+    ref.read(segmentCoverageProvider.notifier).recordCapture(request.ringIndex);
+    final n = ref.read(segmentCoverageProvider).segmentCount;
+    final pitch = ref.read(currentPitchProvider).asData?.value;
+    _ledger.recordAccepted(CapturedPhotoRecord(
+      segmentIndex: request.ringIndex,
+      framePath: frame.path,
+      blurScore: 100, // placeholder — evaluator not yet wired
+      meanLuminance: 128, // placeholder — evaluator not yet wired
+      yawDegrees: request.ringIndex * (360.0 / n),
+      pitchDegrees: pitch?.pitchDegrees ?? 0,
+      sensorTimestampNs: frame.timestampNs,
+    ));
+
     Analytics.logEvent(AnalyticsEvents.retakeCompleted, {
       'ring_index': request.ringIndex,
       'new_verdict': 'accepted',
@@ -757,21 +929,54 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     _handleExitChoice(choice);
   }
 
-  /// Applies the user's choice. Persistence/discard of the session is owned by a
-  /// separate capture-session task; here each exit choice just navigates out.
+  /// Applies the user's choice. Save persists a resumable snapshot (the exact
+  /// filled segments + ledger) so Resume restores it losslessly; Discard clears
+  /// any saved draft and the in-memory state; both then navigate out. Persistence
+  /// is best-effort and guarded — an unavailable store never blocks the exit.
   void _handleExitChoice(SaveExitChoice choice) {
     switch (choice) {
       case SaveExitChoice.saveExit:
-        // TODO(capture): persist the session as a resumable draft (project
-        // status + active_session) before leaving.
-        _exitToProjects();
+        unawaited(_saveSessionThenExit());
       case SaveExitChoice.discardExit:
-        // TODO(capture): discard this session's captures + temp files before
-        // leaving (NativeProjectCaptureCleanup hook).
-        _exitToProjects();
+        unawaited(_discardSessionThenExit());
       case SaveExitChoice.cancel:
         break; // stay on the capture screen
     }
+  }
+
+  /// Persists the current coverage + ledger as a resumable draft, then exits.
+  Future<void> _saveSessionThenExit() async {
+    await _persistSession();
+    if (mounted) _exitToProjects();
+  }
+
+  /// Clears any saved draft + the in-memory coverage/ledger, then exits.
+  Future<void> _discardSessionThenExit() async {
+    final projectId = _projectId;
+    if (projectId != null) {
+      try {
+        await _sessionStore.clear(projectId, _levelLedgerId);
+      } catch (_) {/* best-effort */}
+    }
+    ref.read(segmentCoverageProvider.notifier).reset();
+    _ledger.reset();
+    if (mounted) _exitToProjects();
+  }
+
+  /// Best-effort save of the resumable snapshot. No-op without a project context
+  /// (analytics/session not resolved) or when the store is unavailable.
+  Future<void> _persistSession() async {
+    final projectId = _projectId;
+    if (projectId == null) return;
+    try {
+      await _sessionStore.save(CaptureSessionCodec.capture(
+        projectId: projectId,
+        levelId: _levelLedgerId,
+        coverage: ref.read(segmentCoverageProvider),
+        ledger: _ledger,
+        savedAtMs: DateTime.now().millisecondsSinceEpoch,
+      ));
+    } catch (_) {/* best-effort — never block the exit */}
   }
 
   void _exitToProjects() => context.go(AppRoutes.projects);
@@ -786,6 +991,12 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Keep the live yaw→segment position synced into SegmentCoverage so the ring
+    // map highlights the correct target. Watching it here keeps the binder (and
+    // thus the single shared orientation subscription) alive for the screen's life
+    // and auto-disposes on leave. No-op until the first valid yaw / when sensors
+    // are unavailable.
+    ref.watch(ringPositionBinderProvider);
     return PopScope(
       // Blocked while there is unsaved progress so the system back gesture/button
       // funnels through the same Save & Exit confirmation as the top-bar back.
@@ -849,10 +1060,21 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   // Textual progress meter (top-centre) reading the same source
                   // as the ring map so the numbers never disagree.
                   const _ProgressMeterHud(),
-                  // Live pitch-vs-band tilt guidance (needle + target band).
-                  const TiltMeterOverlay(),
+                  // Live pitch-vs-band tilt guidance (needle + target band),
+                  // targeting THIS level's band (Eye/Top/Bottom Ring) — the gauge
+                  // zone + scale auto-tune to it.
+                  TiltMeterOverlay(
+                    levelBandId: _levelBandId,
+                    band: _resolvedBand,
+                    level: _captureLevel.code,
+                  ),
                   // Live steadiness dot driven by the native stability gate.
                   const StabilityIndicatorOverlay(),
+                  // Roll advisory ("Keep the phone level") — Levels B & C only.
+                  // Non-blocking and read by nothing in the capture path; it
+                  // warns past ±15° roll but never gates frames or completion.
+                  if (_captureLevel != CaptureLevel.a)
+                    RollWarningOverlay(level: _captureLevel),
                   // Ring-direction arrow. Hidden until a later resolver task maps
                   // yaw + ring progress into a DirectionHint.
                   const DirectionArrowOverlay(hint: DirectionHint.hidden),
@@ -880,6 +1102,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   _BottomBar(
                     captureCount: _captureCount,
                     shutter: _ShutterControl(
+                      band: _resolvedBand,
                       onCapture: _performCapture,
                       onTriggered: _onManualTriggered,
                     ),
@@ -1000,7 +1223,17 @@ class _CameraErrorSurface extends StatelessWidget {
 /// arrive — or if sensors are unavailable — `sensorSupported` is false, so the
 /// shutter fails OPEN (never locks the user out).
 class _ShutterControl extends ConsumerWidget {
-  const _ShutterControl({required this.onCapture, this.onTriggered});
+  const _ShutterControl({
+    required this.band,
+    required this.onCapture,
+    this.onTriggered,
+  });
+
+  /// The EFFECTIVE pitch band THIS level enforces — resolved once at level entry
+  /// (override → remote/cache → bundled default) and held stable for the pass by
+  /// the parent. The same band drives the tilt indicator, so guidance and the gate
+  /// agree; and a mid-pass config/override change never shifts the gate.
+  final PitchBand band;
 
   final Future<void> Function() onCapture;
 
@@ -1008,22 +1241,10 @@ class _ShutterControl extends ConsumerWidget {
   /// `manual_capture_triggered` with full context from the readiness.
   final void Function(CaptureReadiness readiness)? onTriggered;
 
-  /// Eye Ring = the 'mid' band (the band the tilt meter targets).
-  static TiltTarget _band(CaptureConfig config) {
-    for (final b in config.pitchBands) {
-      if (b.id == 'mid') return TiltTarget.fromBand(b);
-    }
-    return config.pitchBands.isNotEmpty
-        ? TiltTarget.fromBand(config.pitchBands.first)
-        : const TiltTarget(minDegrees: 30, maxDegrees: 60, bandId: 'mid');
-  }
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final config = ref.watch(captureConfigProvider);
     final pitch = ref.watch(currentPitchProvider).asData?.value;
     final stability = ref.watch(stabilityProvider).asData?.value;
-    final target = _band(config);
 
     final pitchSupported = pitch?.sensorSupported ?? false;
     final stabilitySupported = stability?.sensorSupported ?? false;
@@ -1032,7 +1253,10 @@ class _ShutterControl extends ConsumerWidget {
       key: const ValueKey('capture_shutter'),
       readiness: CaptureReadiness(
         mode: CaptureMode.guided,
-        inBand: pitchSupported && target.contains(pitch!.pitchDegrees),
+        // Reuse the SHARED pitch-band gate (min inclusive, max exclusive) — the
+        // same membership the auto-capture trigger's isInPitchBand uses.
+        inBand: pitchSupported &&
+            CapturePitchGuide.isInBand(band, pitch!.pitchDegrees),
         stable: stabilitySupported && stability!.stability == Stability.stable,
         // Both sensors must be usable to gate; otherwise fail open.
         sensorSupported: pitchSupported && stabilitySupported,
@@ -1043,32 +1267,28 @@ class _ShutterControl extends ConsumerWidget {
   }
 }
 
-/// Derives the Level A ring segment count (N) from [captureConfigProvider]'s
-/// eye-level band and renders the [RingCoverageMap]. The filled/target coverage
-/// is empty until a later ring-progress resolver supplies it.
+/// Renders the [RingCoverageMap] from the live [segmentCoverageProvider] (filled
+/// segments + nearest-missing target), with the retake-forced target overriding
+/// when present. Segment count (N) comes from that provider, seeded off the same
+/// eye-ring config band the rest of the HUD uses.
 class _RingCoverageHud extends ConsumerWidget {
   const _RingCoverageHud();
 
-  /// Eye Ring = the 'mid' band (same band the tilt meter targets); falls back to
-  /// the first band, then a sane default if config is somehow empty.
-  static int _segments(CaptureConfig config) => config.eyeRingSegments;
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final config = ref.watch(captureConfigProvider);
-    final segments = _segments(config);
+    // Live fill state (single source of truth). The map renders the actual filled
+    // segments + the nearest-missing target (or, in retake mode, the forced one).
+    final coverage = ref.watch(segmentCoverageProvider);
     // In retake mode the forced segment is THE target — it flows through the same
     // RingCoverage.targetIndex the normal next-uncaptured target uses, so the
-    // chosen angle is the one highlighted. Out-of-range requests are ignored
-    // (RingCoverage guards), falling back to no forced target.
+    // chosen angle is the one highlighted. Out-of-range requests are ignored,
+    // falling back to coverage's own nearest-missing target.
     final retake = ref.watch(retakeSessionProvider);
-    final forcedTarget =
-        (retake != null && retake.isValidFor(segments)) ? retake.ringIndex : null;
+    final forcedTarget = (retake != null && retake.isValidFor(coverage.segmentCount))
+        ? retake.ringIndex
+        : null;
     return RingCoverageMap(
-      coverage: RingCoverage(
-        segmentCount: segments,
-        targetIndex: forcedTarget,
-      ),
+      coverage: coverage.toRingCoverage(targetIndex: forcedTarget),
     );
   }
 }
@@ -1084,8 +1304,8 @@ class _ProgressMeterHud extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final config = ref.watch(captureConfigProvider);
-    final coverage =
-        RingCoverage(segmentCount: _RingCoverageHud._segments(config));
+    // Same live source as the ring map → the two readouts can never disagree.
+    final coverage = ref.watch(segmentCoverageProvider).toRingCoverage();
     return ProgressMeter(
       progress: CaptureProgress.fromCoverage(
         coverage,

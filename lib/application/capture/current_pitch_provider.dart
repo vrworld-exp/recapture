@@ -50,12 +50,24 @@ final orientationSourceProvider =
   (ref) => ImuOrientationStream().orientation(),
 );
 
+/// The SHARED, multi-listenable smoothed-orientation stream. Both
+/// [currentPitchProvider] (tilt) and the ring-progress resolver
+/// (`currentRingSegmentProvider`) consume THIS — so the raw
+/// [orientationSourceProvider] is listened to exactly ONCE regardless of how many
+/// HUD consumers exist (the "single shared sensor subscription" rule), and a
+/// single-subscription test stream is never double-listened. `asBroadcastStream`
+/// is a no-op when the source is already a broadcast stream.
+final sharedOrientationProvider =
+    Provider.autoDispose<Stream<SmoothedOrientation>>(
+  (ref) => ref.watch(orientationSourceProvider).asBroadcastStream(),
+);
+
 /// Smoothed current pitch for the tilt meter. Emits a [PitchSample] per native
 /// tick; a stream error (absent sensor) is mapped to an unsupported sample so
 /// consumers see a graceful fallback rather than an [AsyncError]. NaN/Infinity
 /// samples (broken reads) are dropped, never forwarded.
 final currentPitchProvider = StreamProvider.autoDispose<PitchSample>((ref) {
-  final source = ref.watch(orientationSourceProvider);
+  final source = ref.watch(sharedOrientationProvider);
   final controller = StreamController<PitchSample>();
   double? smoothed;
 

@@ -37,6 +37,21 @@ CaptureLevel captureLevelFromLabel(String label) =>
       _ => CaptureLevel.a,
     };
 
+/// The config `PitchBand.id` each level targets — the SINGLE source for the
+/// level→band mapping, shared by the capture ledger/session key, the pitch gate
+/// (shutter + auto-capture `isInPitchBand`), and the tilt indicator, so none of
+/// them can disagree on which band a level enforces. The bands tile the capture
+/// sphere: A = Eye Ring (`mid`), B = Top Ring (`high`), C = Bottom Ring (`low`).
+///
+/// Only the band ID is mapped here — the DEGREES live in
+/// `CaptureConfig.pitchBands` (remote-config-overridable), so retuning a band
+/// (or the Top/Bottom ranges) needs no code change.
+String pitchBandIdForLevel(CaptureLevel level) => switch (level) {
+      CaptureLevel.a => 'mid',
+      CaptureLevel.b => 'high',
+      CaptureLevel.c => 'low',
+    };
+
 /// A typed capture-level lifecycle event: its dispatcher [name] + its [properties].
 abstract class CaptureLevelEvent {
   /// The canonical event name (an [AnalyticsEvents] constant).

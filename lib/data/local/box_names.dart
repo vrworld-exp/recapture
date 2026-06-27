@@ -36,6 +36,12 @@ abstract final class BoxNames {
   /// accepted/warned/rejected photo ledger), keyed by `projectId::levelId`, so a
   /// kill/relaunch restores exact in-progress capture state.
   static const String captureSessions = 'capture_sessions';
+
+  /// Multi-level progression state (current level index + per-level completion
+  /// summary), keyed by `projectId`, so the A→B→C sequence + overall completion
+  /// resume on relaunch. Per-segment coverage lives in [captureSessions]; this is
+  /// the sequencing layer above it.
+  static const String captureProgression = 'capture_progression';
 }
 
 /// Per-box schema marker. Current migration policy is clear-on-mismatch — when

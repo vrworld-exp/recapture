@@ -1,158 +1,57 @@
 
 
-                                        [[[[[[[[[[[[[[[[[[[ Phase - 4  ]]]]]]]]]]]]]]]]]]]
 
+                                [[[[[[[[[[[[[ Phase - 6 : Capture summary + upload pipline ]]]]]]]]]]]]]
 
 
 
 
-                  [[[[[[[[[[[[[[[[[[ Analytics / QA ]]]]]]]]]]]]]]]]]]
 
 
 
 
-[[[[[[[[[[ 7 ]]]]]]]]]]
 
 
-Generate a coding prompt for this task: Analytics: photo_review_opened, photo_retaken, photo_deleted — Phase: Guided Capture — Level A (Eye Ring), Track: Analytics / QA
 
 
---------------------------------------------------------------->>>>>>>>>>>>>>>>>>>>
+                                
 
+            [[[[[[[[[[[[[    Flutter UI     ]]]]]]]]]]]]]
 
 
-# NEW: Analytics — photo_review_opened, photo_retaken, photo_deleted
-# Product: MayasabhaXR — maya-viewer (Flutter client)
-# Scope: New Feature / Analytics (client emission), consistent with the canonical analytics layer
-# Phase: Guided Capture — Level A (Eye Ring)
-# Track: Analytics / QA
-# Priority: Medium
 
----
+[[[[ 10 ]]]]
 
-## Task Description
 
-Emit three review-flow analytics events instrumenting Screen 7A (review grid), consistent with the canonical analytics layer (constants, typed/validated payloads, PII guardrail, fire-and-forget):
-- **photo_review_opened** — the review grid (Screen 7A) is opened (review session start). Once per open.
-- **photo_retaken** — the Retake action completes on a selection. Once per action, with the count affected.
-- **photo_deleted** — the Delete action completes on a selection. Once per action, with the count affected.
+Generate a coding prompt for this task: Screen 8: Capture Summary — per-level cards (accepted/min, coverage%, warnings), collapsible warnings list — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
-Two design rules: `photo_review_opened` fires once per SCREEN OPEN (not per rebuild); `photo_retaken`/`photo_deleted` are AGGREGATE-PER-ACTION with a `count` (NOT one event per photo — per-photo floods the funnel). Action events fire on SUCCESSFUL completion with the ACTUAL affected count (cancelled confirmation → no event; partial failure → count actually affected). Emit from the review-grid action handlers / screen open — do not pollute pure models.
+====================================================================================================================================================>>>
 
-- [ ] Add the three events to the canonical AnalyticsEvent layer (constants + typed/validated payloads)
-- [ ] `photo_review_opened` once per screen open (debounced; not per rebuild), with context (count, coverage, level)
-- [ ] `photo_retaken` / `photo_deleted` once per completed action with `count` (+ affected segments), not per-photo
-- [ ] Fire on success only; reflect the actual affected count; no event on cancelled actions
-- [ ] PII guardrail (hashed ids; no raw PII / image data / file paths / location); fire-and-forget
-- [ ] Emit from action handlers / navigation; keep pure models analytics-free; conform to backend schema if present
 
-## Files to Inspect First
 
-> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
 
-1. The canonical analytics layer (P1/P2 + the prior `segment_filled`/`coverage_milestone` task) — constants, payload typing/validation, PII guardrail, fire-and-forget; REUSE it
-2. The bottom-action-bar task (Screen 7A) — the `deleteSelected`/`retakeSelected` handlers; emit `photo_deleted`/`photo_retaken` on their successful completion (with the actual count)
-3. The multi-select task — selection size (the `count`) for the action events
-4. The review-grid screen / navigation — the open event source for `photo_review_opened`
-5. The segment-state model — coverage/affected segments for payload context (delete/retake reduce coverage)
-6. Backend analytics schema (if events are validated server-side) — payload field/type parity
 
-## Implementation Instructions
 
-### Step 1: Canonical event definitions
-- Add to AnalyticsEvent constants: `photo_review_opened`, `photo_retaken`, `photo_deleted`. Typed payloads consistent with the layer (+ backend schema):
-  - `photo_review_opened`: `{ levelIndex, photoCount, coveragePct, projectIdHash, jobIdHash, entryPoint?, ts }`.
-  - `photo_retaken`: `{ levelIndex, count, segmentIndices?, projectIdHash, jobIdHash, ts }`.
-  - `photo_deleted`: `{ levelIndex, count, resultingCoveragePct?, segmentsNowMissing?, projectIdHash, jobIdHash, ts }`.
-- Validate per the layer; no raw PII.
 
-### Step 2: photo_review_opened (once per open)
-- Emit when the review grid opens (navigation into Screen 7A / review session start). Debounce so it fires once per OPEN, not on every rebuild/orientation change. Include context (photo count, coverage%, level, optional entry point — from capture vs from project).
 
-### Step 3: photo_retaken / photo_deleted (aggregate per action)
-- Emit ONE event per completed action with `count` = number of photos affected (the selection size actually processed). Do NOT emit per-photo.
-- Fire on SUCCESSFUL completion: after `deleteSelected`/`retakeSelected` finish. If the confirmation was cancelled → NO event. On partial failure (some files failed) → `count` = number actually deleted/retaken (reflect reality, not the attempted count).
-- Include affected context where useful (segment indices freed for retake; resulting coverage / segments-now-missing for delete) — derived, no PII.
 
-### Step 4: PII + fire-and-forget
-- Hashed/pseudonymous ids; no raw PII, image data, file paths, or location. Fire-and-forget: non-blocking; analytics failures swallowed; NEVER block or crash the review action or navigation.
 
-### Step 5: Wiring (models stay pure)
-- Emit from the review-grid action handlers (bottom action bar) and the screen-open/navigation — NOT from inside the pure segment-state/ring engine. Analytics is a side-channel observing the action results.
 
-## Event Payloads (illustrative — conform to the canonical layer + backend schema)
 
-```
-photo_review_opened: { levelIndex, photoCount, coveragePct, projectIdHash, jobIdHash, entryPoint?, ts }
-photo_retaken:       { levelIndex, count, segmentIndices?, projectIdHash, jobIdHash, ts }
-photo_deleted:       { levelIndex, count, resultingCoveragePct?, segmentsNowMissing?, projectIdHash, jobIdHash, ts }
-```
-Rules: canonical layer; review-open once-per-open; action events aggregate-per-action with count; fire on success with actual count; hashed ids, no raw PII/image/location; fire-and-forget; emitted from handlers.
 
-## What NOT to Do
 
-- Do NOT fire `photo_review_opened` on every rebuild/rotation — once per screen open (debounced).
-- Do NOT emit `photo_retaken`/`photo_deleted` per-photo — aggregate per action with a `count`.
-- Do NOT fire on cancelled actions (delete confirm cancelled) — only on completed actions.
-- Do NOT report the attempted count on partial failure — report the count actually affected.
-- Do NOT include raw PII, image data, file paths, or location — hashed ids only.
-- Do NOT block/crash the action or navigation on analytics — fire-and-forget.
-- Do NOT create a parallel analytics path — use the canonical layer.
-- Do NOT emit from inside pure models — emit from action handlers / navigation.
 
-## Edge Cases to Handle
 
-- [ ] Review opened, closed, reopened → one `photo_review_opened` per open (not per rebuild).
-- [ ] Retake/Delete a selection of 1 vs N → one event with `count` = 1 / N.
-- [ ] Delete confirmation cancelled → no `photo_deleted`.
-- [ ] Partial deletion failure → `count` = actually deleted (not attempted); consistent with the action result.
-- [ ] Retake → `photo_retaken` with count + freed segments (and the subsequent navigation does not double-fire).
-- [ ] Review opened with 0 photos → fires with `photoCount: 0` (or per the defined policy) — confirm.
-- [ ] Rapid open/close or action while one is in-flight → one event per completed open/action; no duplicates.
-- [ ] Analytics service unavailable → swallowed; action/navigation unaffected.
 
-## Constraints
 
-- All three events MUST be in the canonical AnalyticsEvent layer (constants + typed/validated payloads), conforming to any backend schema.
-- `photo_review_opened` MUST fire once per screen open (debounced), not per rebuild.
-- `photo_retaken`/`photo_deleted` MUST be one event per completed action with a `count`, never per-photo; fire on success; report the ACTUAL affected count; no event on cancel.
-- Payloads MUST use hashed ids and contain NO raw PII, image data, file paths, or location.
-- Emission MUST be fire-and-forget and MUST NOT block/crash the action or navigation.
-- Emission MUST come from action handlers / navigation; pure models stay analytics-free.
 
-## Acceptance Criteria
 
-- [ ] `photo_review_opened` fires once when the review grid opens (with count/coverage/level context), not on rebuilds.
-- [ ] `photo_retaken`/`photo_deleted` fire once per completed action with `count` = affected photos (not per-photo).
-- [ ] Cancelled delete → no event; partial failure → `count` = actually affected.
-- [ ] Payloads match the canonical layer + backend schema; ids hashed; no raw PII/image/location.
-- [ ] Emission is fire-and-forget; an unavailable analytics service doesn't block/crash the action or navigation.
-- [ ] Events are emitted from the action handlers/navigation; pure models contain no analytics calls.
-- [ ] `flutter analyze` passes; unit tests pass.
+[[[[[ 9 ]]]]]
 
-## Testing Instructions
 
-(Unit tests with a fake analytics sink + action-handler/navigation hooks.)
-1. Open the review grid → assert one `photo_review_opened` with correct count/coverage/level; rebuild/rotate → assert NO additional event.
-2. Delete a selection of 3 → assert one `photo_deleted` with `count: 3` (not three events); cancel the confirm → assert no event.
-3. Partial deletion (1 of 3 fails) → assert `count: 2` (actually deleted).
-4. Retake a selection of 2 → assert one `photo_retaken` with `count: 2` + freed segments; assert the navigation doesn't double-fire.
-5. Open with 0 photos → assert the defined behavior (fires with `photoCount: 0` or per policy).
-6. Make the sink throw → assert the action/navigation is unaffected (swallowed).
-7. Inspect payloads → assert hashed ids, no raw PII/image/location, schema parity.
-8. Confirm no analytics calls inside the pure segment-state/ring engine (handler/nav-only).
-9. `flutter analyze` + tests → clean/pass.
 
-## Assumptions
+Generate a coding prompt for this task: Summary: 'Upload' primary, 'Fix Issues' routes to level needing most work, 'Save for later' — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
-- **Canonical layer:** Assumes the established analytics layer (constants, typed/validated payloads, PII guardrail, fire-and-forget) and the prior capture-analytics task; this extends it. Conform to the backend schema if events are validated server-side.
-- **photo_review_opened scope:** Defaulted to the review GRID (Screen 7A) opening (review session start). If the product wants a per-photo-detail-open event instead/also, confirm and add separately.
-- **Aggregate-per-action:** `photo_retaken`/`photo_deleted` are one event per action with `count` (selection size actually processed), fired on success — not per-photo, not on cancel. Confirm whether per-segment detail is wanted in the payload.
-- **Source of emission:** Assumes the bottom-action-bar handlers (`deleteSelected`/`retakeSelected`) and the review-screen navigation are the emit points; pure models stay analytics-free.
-- **PII:** ids hashed; no raw PII, image data, file paths, or location.
-- **0-photo open:** Defaulted to firing with `photoCount: 0`; confirm.
-- **Scope:** Client emission of the three review-flow events only — not the analytics transport (canonical layer), not the review/action logic (Screen 7A tasks), not the capture-flow events (prior task).
-- **Stack:** Dart (Flutter) via the canonical analytics service; emitted from action handlers/navigation; unit-tested. Adjust to the app's structure.
 
 
 
@@ -175,151 +74,52 @@ Rules: canonical layer; review-open once-per-open; action events aggregate-per-a
 
 
 
+[[ 8 ]]
 
+Generate a coding prompt for this task: Hard gate: upload disabled if any level below absolute minimum accepted shots — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
 
+======================================================================================================>>>>
 
 
 
 
 
-[[[[[[ 6 ]]]]]]
 
 
-Generate a coding prompt for this task: Test: 360° ring fully covered → level auto-completes — Phase: Guided Capture — Level A (Eye Ring), Track: Analytics / QA
 
 
 
-=======================================================================================>>>>>>
 
 
-# QA / TEST: 360° Ring Fully Covered → Level Auto-Completes — Level A
-# Product: maya-viewer
-# Scope: QA (Automated Test — Integration/Widget)
-# Priority: High
 
----
 
-## Task Description
 
-Write an automated test proving the core Level A completion invariant: when the 360° eye-ring reaches full coverage (all target segments captured / coverage ≥ threshold), the level **auto-completes** — the completion screen (`6A-Complete`) is shown and `capture_level_completed` fires exactly once. The test runs deterministically with faked camera/sensors/repositories (no real hardware), is fast and CI-safe, and also guards the near-miss boundary (one segment short does NOT complete).
 
-- [ ] Write a widget/integration test driving captured coverage from incomplete → fully covered
-- [ ] Assert that on full coverage the completion screen appears (and the capture HUD is dismissed/replaced)
-- [ ] Assert `capture_level_completed` fires exactly once with correct properties (accepted/target/coverage)
-- [ ] Assert the negative case: N−1 of N segments does NOT auto-complete
-- [ ] Assert idempotency: coverage staying at/above threshold does not re-fire completion or re-show the screen
-- [ ] Run fully faked (no camera/sensor/network); deterministic and CI-safe
 
-## Files to Inspect First
 
-1. `lib/features/capture/level_a/level_a_capture_screen.dart` — where completion is decided and the completion screen is shown; identify the seam to drive coverage in a test
-2. `lib/features/capture/level_a/domain/ring_coverage.dart` + the ring-progress/coverage source — how "fully covered" is represented; the test fills all segments through this
-3. `lib/features/capture/level_a/domain/capture_progress.dart` + `CaptureConfig` — target N and `minCoveragePct` completion threshold
-4. `lib/features/capture/level_a/widgets/level_a_complete_screen.dart` — the widget to assert appears (find a stable key/finder)
-5. `lib/features/capture/analytics/capture_level_events.dart` + `capture_analytics.dart` — the `capture_level_completed` event + dispatcher seam to fake
-6. `lib/features/capture/level_a/camera/capture_camera_controller.dart` + sensor providers — must be fakeable (override providers) so the test needs no hardware
-7. Existing test setup (`test/`, any `ProviderContainer`/`pumpWidget` helpers, fakes) — reuse the project's test harness conventions
 
-## Implementation Instructions
 
-### Step 1: Test harness + fakes
-In `test/features/capture/level_a/ring_auto_complete_test.dart`:
-- Use `flutter_test` (widget test) — prefer widget over full `integration_test` so it runs in CI without a device, unless the flow genuinely needs the integration harness
-- Override Riverpod providers with fakes:
-  - **Camera**: a fake `CaptureCameraController` whose `takePicture` returns a deterministic fake file/result instantly (no real camera)
-  - **Sensors**: fake pitch/stability providers returning "in-band" + "stable" so capture is allowed
-  - **Config**: a fixed `CaptureConfig` with a small N (e.g. target = 4 segments) so the test fills the ring quickly and deterministically
-  - **Coverage/ring-progress**: drive segment fills directly (preferred) OR via the capture path — pick the lowest-flakiness seam
-  - **Analytics dispatcher**: a `FakeAnalyticsDispatcher` that records `(name, properties)` calls for assertions
-  - **Projects/captured-set**: an in-memory fake so captures accumulate without a backend
-- Pump the Level A capture screen inside a `ProviderScope(overrides: [...])`
 
-### Step 2: Drive to full coverage
-- Simulate capturing each of the N segments in turn — either by invoking the capture trigger N times (with sensors faked to allow it and the ring target advancing) or by directly setting the coverage/ring-progress fake to all-filled (whichever is the project's clean test seam)
-- After each fill, `await tester.pump()`/`pumpAndSettle()` to let state propagate
-- Ensure the final fill brings coverage to 100% / all N segments captured
+[[[[[[ 7 ]]]]]]
 
-### Step 3: Assert auto-completion
-- `expect(find.byType(LevelACompleteScreen), findsOneWidget)` (or a stable key finder)
-- Assert the capture HUD (e.g. the shutter or ring map) is no longer present / replaced, confirming the transition
-- Assert the completion summary reflects the right numbers (accepted == target, coverage 100%)
+Generate a coding prompt for this task: Screen 9: Uploading — determinate progress bar, files + MB counter, Wi-Fi hint — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
-### Step 4: Assert analytics single-fire
-- From the fake dispatcher, filter events named `capture_level_completed`
-- Assert it was recorded **exactly once**, with `level == "A"`, `accepted`/`target` correct, `coverage_pct == 100` (or ≥ threshold), and no PII fields
+==========================================================================>>>>>>>>
 
-### Step 5: Negative + idempotency cases (same file, separate `testWidgets`)
-- **Near-miss**: fill N−1 segments → assert `LevelACompleteScreen` is NOT shown and `capture_level_completed` did NOT fire
-- **Idempotency**: after reaching full coverage, trigger another state tick / pump again (or re-emit coverage at 100%) → assert the completion screen is still shown once and `capture_level_completed` did NOT fire a second time (latch holds)
-- **Threshold (if coverage threshold < 100%)**: if completion is by `minCoveragePct` rather than all-segments, add a case at exactly the threshold → completes; just below → does not
 
-### Step 6: Determinism + CI
-- No real timers/delays that cause flakiness — use `pump(Duration(...))` deliberately if the completion has a debounce/dwell; otherwise `pumpAndSettle`
-- No reliance on real files: fake capture results; if the completion screen loads thumbnails, point them at a test asset or stub the image loading so missing files don't fail the test
-- Keep the test fast (small N) and hermetic (all I/O faked)
 
-## What NOT to Change
 
-- Do NOT modify production completion logic to make the test pass — the test asserts existing behavior; if completion is untestable due to missing seams, add minimal provider overrides/injection points, not behavior changes (flag any such seam additions)
-- Do NOT use real camera, sensors, network, or filesystem — everything faked
-- Do NOT assert on volatile/implementation-detail internals — assert on observable outcomes (completion screen shown, analytics event recorded)
-- Do NOT introduce sleeps/arbitrary real delays that cause flakiness — pump deterministically
-- Do NOT couple the test to a large N — use a small deterministic target
 
-## Edge Cases / Scenarios to Cover
 
-- [ ] All N segments captured → completion screen shown + `capture_level_completed` fires once
-- [ ] N−1 segments → no completion, no event
-- [ ] Coverage exactly at threshold (if threshold-based completion) → completes; just below → does not
-- [ ] Over-capture (extra shots beyond N) → still completes once; no duplicate event
-- [ ] Reaching completion, then extra state ticks at full coverage → no re-fire, screen not re-pushed (latch)
-- [ ] Rejected captures don't count toward coverage (fill only on accepted) → near-miss with a rejected last shot does NOT complete
-- [ ] Completion summary numbers match coverage source (accepted/target/coverage consistent)
-- [ ] Test is hermetic: passes with no device, no network, no real files
 
-## Constraints
 
-- Deterministic and CI-safe: all hardware/IO faked via Riverpod overrides; small fixed N; no flaky real delays
-- Assert observable outcomes only (completion widget present, faked analytics recorded), not private internals
-- `capture_level_completed` must be asserted exactly-once on completion and not-fired on near-miss/idempotency cases
-- The test must not alter production completion behavior to pass
-- Reuse the project's existing test harness/fakes and finder conventions
-- Thumbnails/images in the completion screen must be stubbed/asset-backed so the test doesn't fail on missing files
 
-## Acceptance Criteria
 
-- [ ] `flutter analyze` (and the test file) compiles with zero errors/warnings
-- [ ] `flutter test` runs the new test green, deterministically, with no device/network/filesystem dependency
-- [ ] Full-coverage case: `LevelACompleteScreen` appears and `capture_level_completed` is recorded exactly once with correct properties
-- [ ] Near-miss case (N−1): completion screen NOT shown, event NOT fired
-- [ ] Idempotency case: extra ticks at full coverage do not re-fire the event or re-push the screen
-- [ ] Threshold case (if applicable): exact-threshold completes, just-below does not
-- [ ] Rejected captures don't count toward coverage (verified via a near-miss-with-rejected scenario)
-- [ ] Test runs fast (small N) and is hermetic (all IO faked)
-- [ ] No production completion logic changed solely to satisfy the test (only test seams/overrides added if necessary)
 
-## Testing Instructions
 
-1. Confirm the completion criterion (all-segments vs `minCoveragePct`), the cleanest seam to drive coverage, the completion-screen finder, and the analytics dispatcher fake before writing.
-2. Set up `ProviderScope` overrides for camera, sensors, config (small N), coverage/ring-progress, projects/captured-set, and a `FakeAnalyticsDispatcher`.
-3. Write the full-coverage `testWidgets`: drive to 100%, `pumpAndSettle`, assert completion screen + single `capture_level_completed` with correct props.
-4. Write the near-miss `testWidgets`: N−1, assert no completion/event.
-5. Write the idempotency `testWidgets`: complete, then extra ticks, assert no re-fire/re-push.
-6. Add the threshold and rejected-last-shot cases if the completion model warrants them.
-7. Run `flutter test test/features/capture/level_a/ring_auto_complete_test.dart` repeatedly (e.g. 10×) to confirm no flakiness.
-8. Run `flutter analyze` — confirm no warnings.
-9. Confirm the test passes in CI without a connected device.
 
-## Assumptions
 
-- Assumed: completion is decided by the parent against `CaptureConfig` (all N segments captured and/or coverage ≥ `minCoveragePct`) and shows `LevelACompleteScreen` + fires `capture_level_completed` — confirm the exact criterion so the test asserts the right trigger (all-segments vs threshold).
-- Assumed: the capture flow is testable via Riverpod provider overrides (camera/sensors/config/coverage/analytics) — if some of these are not injectable yet, add minimal injection seams (not behavior changes). The auto-complete behavior must exist already; if it doesn't, this test will fail and that's a signal the completion logic task isn't done — flag rather than implement it here.
-- Assumed: rejected captures do not count toward coverage (per the post-shot/acceptance model) — confirm so the rejected-last-shot near-miss is valid.
-- Assumed: a small N (e.g. 4) is acceptable for the test config — confirm there's no hard-coded production assumption of a specific N that would make a small test N invalid.
-- Assumed: the completion latch (fire once) exists per the lifecycle-analytics task — this test verifies it; if completion currently re-fires, the idempotency case will catch it.
-- Assumed: a widget test (not full `integration_test`) suffices since all IO is faked — if the completion transition genuinely requires the integration harness (e.g. native channels that can't be faked), use `integration_test` instead and note the device requirement; prefer the faked widget test for CI speed.
-- Assumed: the completion screen's thumbnails can be stubbed/asset-backed in tests — confirm the image-loading seam so the test isn't dependent on real capture files.
 
 
 
@@ -327,10 +127,13 @@ In `test/features/capture/level_a/ring_auto_complete_test.dart`:
 
 
 
+[[[[[[[[[[ 6 ]]]]]]]]]]
 
 
 
+Generate a coding prompt for this task: Pause/Resume/Cancel upload buttons — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
+===========================================================================================>>>>>>
 
 
 
@@ -349,141 +152,51 @@ In `test/features/capture/level_a/ring_auto_complete_test.dart`:
 
 
 
-[[[[[[[[ 5 ]]]]]]]]
 
-Generate a coding prompt for this task: Test: coverage <80% → missing segments highlighted on ring map — Phase: Guided Capture — Level A (Eye Ring), Track: Analytics / QA
 
 
-=======================================================================================>>>>>
 
 
-# QA / TEST: Coverage < 80% → Missing Segments Highlighted on Ring Map — Level A
-# Product: maya-viewer
-# Scope: QA (Automated Test — Widget)
-# Priority: Medium
 
----
 
-## Task Description
 
-Write an automated widget test proving that while Level A coverage is below the completion threshold (e.g. < 80%), the ring coverage map correctly shows which segments are still **missing** (uncaptured) vs **filled** (captured) vs **target** (current), and that the level does NOT auto-complete in this state. The test runs deterministically with faked providers (no camera/sensors/network), verifying the ring map's per-segment state directly so the user always sees what's left to capture.
 
-- [ ] Write a widget test that sets a partial coverage state (< threshold) and asserts the ring map renders the correct filled / target / missing segment states
-- [ ] Assert the count of missing segments matches the expected uncaptured set
-- [ ] Assert the level does NOT complete (no completion screen, no `capture_level_completed`) below threshold
-- [ ] Cover representative partial states (e.g. a few filled, a gap, a target) — not just one
-- [ ] Assert the progress meter/summary numbers (if asserted) stay consistent with the ring map
-- [ ] Run fully faked, deterministic, CI-safe
+[[[[[[[ 5 ]]]]]]]
 
-## Files to Inspect First
 
-1. `lib/features/capture/level_a/domain/ring_coverage.dart` (`RingCoverage`, `SegmentState`, `stateOf`) — the model the test sets and asserts against
-2. `lib/features/capture/level_a/widgets/ring_coverage_map.dart` — the widget under test; find a stable way to assert per-segment state (a finder, a test key per segment, or a `CustomPainter` inspection seam)
-3. `lib/features/capture/level_a/domain/capture_progress.dart` + `CaptureConfig` (`minCoveragePct`, target N) — the threshold below which completion must not occur
-4. `lib/features/capture/level_a/level_a_capture_screen.dart` — to confirm no completion below threshold (and where the ring map is composed)
-5. `lib/features/capture/analytics/capture_level_events.dart` — `capture_level_completed`; assert it does NOT fire below threshold
-6. Existing test harness/fakes and any prior ring/coverage tests (e.g. the auto-complete test) — reuse conventions, fakes, and provider-override patterns
+Generate a coding prompt for this task: Cancel → confirm 'Keep project as Draft' — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
-## Implementation Instructions
 
-### Step 1: Make per-segment state assertable
-The ring map is a `CustomPainter`, so segment colors aren't directly queryable. Choose the cleanest assertion seam (prefer the first that exists / is easy to add without changing visuals):
-- **Preferred — pure-model test for state, widget test for render:** unit-test `RingCoverage.stateOf(i)` for every index (filled/target/missing) AND a widget test that the map builds without error for the partial state. The per-index state correctness is best asserted at the model level (deterministic, no painter introspection).
-- **If painter-level assertion is required:** add a minimal test seam — e.g. expose the computed `List<SegmentState>` the painter uses via an `@visibleForTesting` getter, or render each segment as a keyed sub-widget — without altering the visual output. Flag this as a test-only seam.
+=====================================================================================================================>>>>>>>>>>
 
-### Step 2: Widget test setup
-In `test/features/capture/level_a/ring_missing_segments_test.dart`:
-- `ProviderScope` overrides: fixed `CaptureConfig` with a small target N (e.g. 10) and `minCoveragePct = 80`; faked camera/sensors (not strictly needed if testing the map in isolation); a `FakeAnalyticsDispatcher`; coverage/ring-progress fake set to a partial state
-- Pump either the `RingCoverageMap` in isolation with a constructed `RingCoverage`, OR the capture screen with the coverage provider overridden to the partial state (prefer isolating the map for the state assertions, plus a screen-level case for the no-completion assertion)
 
-### Step 3: Partial-coverage scenarios
-Construct `RingCoverage` instances below threshold and assert states:
-- e.g. N=10, `filledIndices = {0,1,2,3,4,5,6}` (7/10 = 70% < 80%), `targetIndex = 7`
-- Assert: indices 0–6 → `filled`; index 7 → `target`; indices 8,9 → `missing`
-- Assert missing count == 2 (or N − filled − [target counted as missing? define]) — confirm whether `target` counts as missing-but-current; assert per the model's `stateOf`
-- Add a second scenario with a non-contiguous gap (e.g. filled {0,1,2,4,5}, missing {3,6,7,8,9}) to ensure missing detection isn't assuming contiguity
 
-### Step 4: No-completion below threshold
-- With the partial coverage active in the capture screen, `pumpAndSettle` and assert:
-  - `find.byType(LevelACompleteScreen)` → `findsNothing`
-  - the fake dispatcher recorded zero `capture_level_completed` events
-  - the ring map is still present (HUD not dismissed)
 
-### Step 5: Consistency (optional but recommended)
-- If the progress meter is in the same screen, assert its coverage readout (e.g. "70%") is consistent with the ring's `filledCount`/`progress` — guarding against the map and meter diverging
 
-### Step 6: Determinism + CI
-- All states constructed directly / via faked providers — no real capture, sensors, files, or timers
-- Keep N small and fixed; `pumpAndSettle` deterministically; no real delays
 
-## What NOT to Change
 
-- Do NOT modify the ring map's visuals or production coverage logic to make the test pass — assert existing behavior; only add `@visibleForTesting` seams if painter-level assertion is unavoidable
-- Do NOT use real camera/sensors/network/filesystem — all faked/constructed
-- Do NOT assert on raw pixel colors via screenshot/golden in this test (brittle) unless the project already uses goldens — prefer model/state assertions (golden tests can be a separate task)
-- Do NOT couple to a large or production-specific N — use a small fixed N
-- Do NOT introduce flaky real delays
 
-## Edge Cases / Scenarios to Cover
 
-- [ ] Contiguous partial fill (e.g. 7/10) → first 7 filled, target next, remainder missing; missing count correct
-- [ ] Non-contiguous fill with gaps → missing segments detected correctly regardless of position
-- [ ] `targetIndex` null (no current target) below threshold → no `target` state; filled/missing only; no crash
-- [ ] Exactly at threshold boundary handled by a sibling test (the auto-complete test) — here assert strictly below threshold does NOT complete
-- [ ] Zero captured (all missing) → all segments `missing`, no completion
-- [ ] Out-of-range/invalid filled indices in the constructed model → `stateOf` handles defensively (consistent with the ring map task)
-- [ ] Map and progress meter remain consistent for the partial state (if asserting both)
-- [ ] Test is hermetic and deterministic (passes with no device/network/files, stable across repeated runs)
 
-## Constraints
 
-- Deterministic, CI-safe, hardware-free: faked providers / directly constructed `RingCoverage`; small fixed N; no flaky delays
-- Assert per-segment state via the model (`stateOf`) and/or a non-visual test seam — not brittle pixel/golden comparison (unless goldens are already standard)
-- Assert observable outcomes for no-completion (completion widget absent, analytics not fired), not private internals
-- No production visual/logic changes solely to pass the test (test-only `@visibleForTesting` seams allowed and flagged)
-- Reuse existing test harness, fakes, and finder conventions
 
-## Acceptance Criteria
 
-- [ ] The test file compiles; `flutter analyze` is clean
-- [ ] `flutter test` runs the new test green, deterministically, with no device/network/filesystem dependency
-- [ ] For partial coverage below threshold, the ring map's per-segment states are correct: filled for captured, target for current, missing for uncaptured (asserted via `stateOf`/seam)
-- [ ] The count of missing segments matches the expected uncaptured set, including non-contiguous gaps
-- [ ] Below threshold, `LevelACompleteScreen` is not shown and `capture_level_completed` does not fire
-- [ ] Null-target and all-missing partial states are handled without crashing
-- [ ] (If asserted) the progress meter coverage matches the ring map's coverage
-- [ ] Test is fast, hermetic, and stable across repeated runs
-- [ ] No production behavior changed solely to satisfy the test (only flagged test seams if needed)
 
-## Testing Instructions
 
-1. Confirm how to assert per-segment ring state (model-level `stateOf` vs a `@visibleForTesting` painter seam), the completion threshold value, and the analytics fake before writing.
-2. Unit-test `RingCoverage.stateOf` for contiguous, non-contiguous, null-target, all-missing, and out-of-range inputs.
-3. Widget-test the `RingCoverageMap` with the partial `RingCoverage` instances → assert it builds and (via the chosen seam) reflects the correct states.
-4. Screen-level test: override the coverage provider to a sub-threshold partial state, pump the capture screen → assert no `LevelACompleteScreen`, zero `capture_level_completed`, ring map present.
-5. (Optional) Assert progress-meter/ring-map coverage consistency.
-6. Run `flutter test test/features/capture/level_a/ring_missing_segments_test.dart` repeatedly (e.g. 10×) to confirm no flakiness.
-7. Run `flutter analyze` — confirm clean.
-8. Confirm the test passes in CI with no connected device.
 
-## Assumptions
 
-- Assumed: the completion threshold is `CaptureConfig.thresholds.minCoveragePct` (80% in the task title) and completion is gated on it — confirm the exact value/criterion so "below threshold" is correctly defined; the test should read the threshold from the (faked) config, not hardcode 80.
-- Assumed: per-segment state is exposed via `RingCoverage.stateOf` and the map paints from it — confirm; if the map computes state internally instead of consuming `RingCoverage`, add a small `@visibleForTesting` accessor for the painted states (test-only seam, no visual change).
-- Assumed: `target` is a distinct state from `missing` (current vs not-yet-captured) — confirm how `target` is counted relative to "missing" so the missing-count assertion matches the model's semantics.
-- Assumed: rejected captures don't fill segments (consistent with the acceptance model) — so a partial state from accepted-only captures is what the user sees; confirm.
-- Assumed: a small fixed N (e.g. 10) is valid for testing and doesn't violate a production-specific N assumption — confirm.
-- Assumed: golden/pixel testing is out of scope here (brittle); per-segment state is asserted via model/seam. If the project standardizes on golden tests for HUD overlays, a golden of the partial ring map could be an additional separate task.
-- Assumed: the no-completion-below-threshold behavior already exists (verified by the auto-complete sibling test) — this test guards the missing-segment visualization specifically; if completion logic isn't built, the screen-level assertion will trivially pass (no completion) but the ring-state assertions remain the core value.
 
 
 
 
 
+[[[[[[[[[ 4 ]]]]]]]]]
 
+Generate a coding prompt for this task: iOS: 'Keep app open to upload faster' microcopy — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
 
 
+===============================================================================================================================>>>>>>>>>>
 
 
 
@@ -505,452 +218,49 @@ Construct `RingCoverage` instances below threshold and assert states:
 
 
 
-[[[[[ 4 ]]]]]
 
+[[[[[[ 3 ]]]]]]
 
-Generate a coding prompt for this task: Test: retake from review → correct segment targeted in camera — Phase: Guided Capture — Level A (Eye Ring), Track: Analytics / QA
 
-=====================================================================================>>>>>>
+Generate a coding prompt for this task: Android: foreground service notification for background upload (stub) — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
 
+===========================================================================================================================>>>>>>>>>
 
-# NEW: Test — Retake from Review → Correct Segment Targeted in Camera
-# Product: MayasabhaXR — maya-viewer (Flutter client)
-# Scope: New Feature / Integration test (Dart/Flutter)
-# Phase: Guided Capture — Level A (Eye Ring)
-# Track: Analytics / QA
-# Priority: High
 
----
 
-## Task Description
 
-Write a hermetic integration test verifying the retake flow's core behavioral contract: when the user retakes a photo from the review grid (Screen 7A), the capture flow re-targets the guidance to the SEGMENT THAT WAS FREED by the retake — so the user re-shoots exactly what they removed.
 
-The DISCRIMINATING assertion: the target must be the FREED segment specifically, EVEN WHEN a different missing segment is nearer. The naive bug this guards against is a retake that relies only on the segment-state's default nearest-missing `currentTarget` policy and therefore targets the merely-closest gap rather than the segment the user retook. The test sets up freed ≠ nearest-missing and asserts the freed segment wins.
 
-This is a logic/state integration test — no real camera, sensors, storage, or navigation. It exercises the retake handler → segment-state unfill → currentTarget → capture targeting path with fakes.
 
-- [ ] Hermetic setup: fakes for storage (deletion), navigation, capture; real (or test-driven) segment state + ring engine
-- [ ] Arrange a filled session with a photo in a KNOWN segment; perform retake on it via the retake handler
-- [ ] Assert: that segment becomes missing (unfilled), and `currentTarget` == that freed segment
-- [ ] Discriminating case: another missing segment is NEARER → assert the FREED segment is targeted, not the nearer one
-- [ ] Cover single retake, multiple retake (first/expected freed targeted), retake-the-only-fill, and confirm-cancelled (no change)
-- [ ] Deterministic (await completion); no flakiness; platform-agnostic (no UI-render coupling)
 
-## Files to Inspect First
 
-> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
 
-1. The bottom-action-bar task — the `retakeSelected` handler (delete + navigate-targeting-freed-segment); the behavior under test
-2. The segment-state model — `recordCapture`/`removeCapture` (unfill), `currentTarget`, nearest-missing policy
-3. The ring engine — segment indexing + wraparound-aware distance (so "nearer" in the discriminating case is well-defined)
-4. The storage manager / metadata — per-photo deletion (faked here) and the photo↔segment mapping
-5. Prior test tasks (P1/P2: camera-gate, token-refresh) — the hermetic test conventions/fakes pattern to mirror
-6. The capture screen — how it consumes `currentTarget` (what "targeted in camera" means to assert)
 
-## Test Design
 
-### Setup (hermetic)
-- Fakes/mocks: storage (records deletions, no real FS), navigation (records the navigate-to-capture call + args), capture (not exercised). Use the REAL segment-state + ring engine (or a faithful test double) so the targeting logic is genuinely tested.
-- Build a Level A session: `segmentCount` (e.g. 12), `fillThreshold` (e.g. 1). Fill a known set of segments with photos (each photo mapped to its segment).
 
-### Core test — freed segment targeted
-1. Arrange: segments {3, 5, 9} filled; a photo `p5` in segment 5; current position near segment 5.
-2. Act: select `p5` in review → `retakeSelected({p5})` (confirm).
-3. Assert:
-   - segment 5 is now missing (unfilled); `p5` removed (storage + metadata fakes show deletion).
-   - navigation to capture occurred.
-   - `currentTarget` == 5 (the freed segment).
 
-### Discriminating test — freed ≠ nearest-missing
-1. Arrange so that after the retake, a DIFFERENT missing segment is NEARER to the current position than the freed one. E.g. current position near segment 1; segment 2 is already missing (nearest); fill + then retake segment 8 (`p8`).
-2. Act: retake `p8`.
-3. Assert: `currentTarget` == 8 (the FREED segment), NOT 2 (the nearer missing). This proves retake explicitly targets the freed segment rather than falling back to nearest-missing.
 
-### Additional cases
-- **Multiple retake:** retake a selection freeing segments {6, 10} → assert both become missing and `currentTarget` is the expected one (first/defined-policy freed), not an unrelated nearest.
-- **Retake the only fill:** only segment 7 filled → retake → segment 7 missing, `currentTarget` == 7.
-- **Confirm cancelled:** initiate retake but cancel the confirmation → assert NO deletion, NO navigation, `currentTarget` unchanged.
-- **Re-fill after retake:** after retake targets the freed segment, simulate a capture there → assert it fills (recordCapture) and target advances.
 
-### Determinism
-- Await the async retake completion before asserting. No timers/real delays. Fakes resolve synchronously/deterministically. The test must not be flaky.
 
-## What NOT to Do (test)
 
-- Do NOT use real camera/sensors/storage/navigation — hermetic fakes only.
-- Do NOT assert merely that navigation happened — assert the CORRECT (freed) segment is the target (the contract's meat).
-- Do NOT let the test pass if retake targets the nearest-missing when that differs from the freed segment — include the discriminating case.
-- Do NOT test only the single happy case — cover multiple-freed, other-missing-present, only-fill, and cancelled.
-- Do NOT couple to UI rendering details — assert the logic/state (`currentTarget`, segment missing, nav call), platform-agnostic.
-- Do NOT introduce real delays/timers — keep it deterministic.
 
-## Edge Cases to Cover
 
-- [ ] Single retake → freed segment missing + targeted.
-- [ ] Freed ≠ nearest-missing → freed segment targeted (discriminating).
-- [ ] Multiple retake → all freed missing; target = first/defined freed (not an unrelated nearest).
-- [ ] Retake the only filled segment → it becomes missing + targeted.
-- [ ] Confirm cancelled → no deletion, no navigation, target unchanged.
-- [ ] Re-fill the targeted freed segment → fills; target advances per policy.
-- [ ] Partial deletion failure (one of multiple fails) → freed set reflects actual deletions; target among actually-freed.
-- [ ] Wraparound: freed segment across the ±180° seam from current → distance/targeting still correct (uses the ring engine's wraparound-aware distance).
 
-## Constraints
 
-- The test MUST be hermetic (no real hardware/FS/nav) and deterministic (await completion; no timers).
-- It MUST assert the FREED segment is targeted (`currentTarget`), not merely that navigation occurred.
-- It MUST include the discriminating case where freed ≠ nearest-missing and assert the freed segment wins.
-- It MUST use the real segment-state + ring engine (or faithful doubles) so targeting logic is genuinely exercised.
-- It MUST cover single/multiple/only-fill/cancelled cases and be platform-agnostic (no UI-render coupling).
+[[[[[ 2 ]]]]]
 
-## Acceptance Criteria
 
-- [ ] Retaking a photo frees its segment (now missing) and sets `currentTarget` to that segment; navigation to capture occurs.
-- [ ] When a different missing segment is nearer, the test confirms the FREED segment is targeted (not the nearer) — the discriminating guarantee.
-- [ ] Multiple retake, only-fill, cancelled-confirm, and re-fill cases pass as specified.
-- [ ] The test is hermetic, deterministic, and platform-agnostic; it exercises the real targeting logic.
-- [ ] The test fails if retake falls back to nearest-missing instead of the freed segment (verified by intentionally breaking the handler).
-- [ ] `flutter analyze` passes; the test passes (and fails on the seeded regression).
 
-## Testing Instructions (meta — how to validate the test itself)
 
-1. Run the test against the correct implementation → all cases pass.
-2. Sabotage check: make `retakeSelected` rely on nearest-missing (drop the explicit freed-segment targeting) → assert the discriminating test FAILS (proving it catches the real bug).
-3. Sabotage check: make retake skip `removeCapture` (segment stays filled) → assert the "segment becomes missing" assertion FAILS.
-4. Sabotage check: make retake skip navigation → assert the navigation assertion FAILS.
-5. Confirm determinism: run repeatedly → no flakiness.
-6. `flutter analyze` + run the suite → clean/pass.
+Generate a coding prompt for this task: Screen 9F: Upload failed — error reason + Retry / Back to Projects — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
-## Assumptions
 
-- **Behavior under test:** Assumes the bottom-action-bar `retakeSelected` performs deletion (via `removeCapture`/unfill) AND explicitly targets the freed segment (`currentTarget`) on navigation — the contract from that task. If retake instead only marks-for-recapture or relies on nearest-missing, this test pins the intended behavior; reconcile with the handler.
-- **currentTarget = "targeted in camera":** Assumes the capture screen guides to `currentTarget`; asserting `currentTarget` == freed segment is the proxy for "correct segment targeted in camera." Confirm the capture screen consumes `currentTarget`.
-- **removeCapture exists:** Assumes the segment-state has (or gains) `removeCapture`/unfill (flagged by the bottom-action-bar task). Blocked if absent.
-- **Nearest-missing default:** Assumes the segment-state's default `currentTarget` is nearest-missing; the discriminating test relies on freed ≠ nearest to prove retake overrides it.
-- **Hermetic fakes:** Mirrors the P1/P2 hermetic test convention (fakes for storage/nav/capture); real segment-state + ring engine. Confirm the fakes/harness.
-- **Scope:** This is the integration TEST only — it does not implement retake; it verifies the existing flow. Build the handler in the bottom-action-bar task.
-- **Stack:** Dart/Flutter test (`flutter_test`), fakes, deterministic. Adjust to the app's structure.
 
 
+===================================================================================>>>>>>>>>>>>
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[[[[[[[[ 3 ]]]]]]]]]]]
-
-
-Generate a coding prompt for this task: Test: Save & Exit → resume restores exact segment + photo state — Phase: Guided Capture — Level A (Eye Ring), Track: Analytics / QA
-
-=======================================================================================>>>>>>>
-
-
-# QA / TEST: Save & Exit → Resume Restores Exact Segment + Photo State — Level A
-# Product: maya-viewer
-# Scope: QA (Automated Test — Widget/Integration)
-# Priority: High
-
----
-
-## Task Description
-
-Write an automated test proving the Save & Exit → Resume round-trip is lossless: after a user saves a partially-completed Level A session and exits, resuming that project restores the exact capture state — the same set of captured segments (filled indices), their verdicts, the captured photo references, the ring coverage, and the next/active target — so the user continues precisely where they left off. The test runs deterministically with faked camera/sensors/storage (no hardware), exercising the real persistence (`active_session`) and restore path.
-
-- [ ] Write a test that builds a partial Level A session, performs Save & Exit, and then resumes it
-- [ ] Assert the resumed session restores: filled segment indices, per-segment verdicts, photo references, coverage %, and the active/next target
-- [ ] Assert the ring map, progress meter, and target reflect the restored state on resume (consistent with pre-exit)
-- [ ] Assert Discard & Exit, by contrast, does NOT restore captures (negative control)
-- [ ] Assert no orphaned/duplicated captures after the round-trip
-- [ ] Run fully faked, deterministic, CI-safe, exercising the real `active_session` persistence
-
-## Files to Inspect First
-
-1. `lib/features/capture/level_a/widgets/save_exit_modal.dart` + `domain/save_exit_decision.dart` (Screen 6X) — the Save & Exit flow producing the `saveExit`/`discardExit` choices
-2. `lib/features/capture/level_a/level_a_capture_screen.dart` — handles the save-as-draft (persist session) and resume (restore) logic
-3. `lib/core/storage/active_session_box.dart` (Hive `active_session`) — where the resumable session is persisted; the test drives the real gateway against a temp Hive dir
-4. `lib/features/projects/application/projects_notifier.dart` + `ProjectStatus` — draft/capturing status; Resume from the projects list re-enters capture with the saved session
-5. `lib/features/capture/level_a/domain/ring_coverage.dart` + coverage/ring-progress source — the segment/coverage state to assert
-6. `lib/features/capture/level_a/domain/capture_evaluation.dart` — per-segment verdicts to assert
-7. Existing test harness/fakes (auto-complete & missing-segment tests) — reuse provider-override patterns, fake analytics, and any temp-Hive setup
-
-## Implementation Instructions
-
-### Step 1: Test harness + fakes
-In `test/features/capture/level_a/save_exit_resume_test.dart`:
-- Initialize Hive against a **temp directory** (so `active_session`/token/cache boxes are real but isolated and cleaned up in `tearDown`)
-- `ProviderScope` overrides:
-  - Fake `CaptureCameraController.takePicture` → returns deterministic fake photo references (stable paths/ids), no real camera
-  - Faked sensors (in-band + stable) so captures proceed
-  - Fixed `CaptureConfig` with a small target N (e.g. 6)
-  - In-memory fake projects repository (so the project exists and can be resumed)
-  - Real `active_session` Hive gateway (the thing under test) — do NOT fake this
-  - `FakeAnalyticsDispatcher` (optional assertions)
-- Helper to build a partial session: capture K of N segments (e.g. 3 of 6) with known indices and verdicts (mix of accepted/warn)
-
-### Step 2: Build the partial state + Save & Exit
-- Pump the Level A capture screen for a fresh project; drive K captures so coverage/ring state is partial and deterministic (filled indices known, e.g. {0,1,3}; verdicts known; active target advanced accordingly)
-- Snapshot the expected state: `filledIndices`, per-segment verdicts, photo references, coverage %, active target index
-- Trigger the back/exit path → choose **Save & Exit** → assert:
-  - the session is written to `active_session` (read the box and assert the persisted shape matches the snapshot)
-  - the project is in a resumable status (draft/capturing)
-  - navigation leaves capture (completion not triggered; no data loss)
-
-### Step 3: Resume + assert restoration
-- Simulate Resume: re-enter the Level A capture screen for that project (the way the projects-list Resume action does), with the persisted `active_session` available
-- After `pumpAndSettle`, assert the restored runtime state equals the snapshot:
-  - filled segment indices match exactly
-  - per-segment verdicts match
-  - photo references match (same ids/paths, same count — no duplicates, none missing)
-  - coverage % matches
-  - the active/next target matches what it was at save time (so guidance continues correctly)
-- Assert the HUD reflects it: ring map shows the same filled/missing/target segments; progress meter shows the same accepted/coverage numbers
-
-### Step 4: Negative control — Discard & Exit
-- In a separate `testWidgets`, build the same partial session, choose **Discard & Exit**, then attempt to resume:
-  - assert NO captures are restored (filled set empty / no resumable session, per the discard policy)
-  - assert discarded photo references are cleaned up (no orphaned files/entries in the fakes)
-
-### Step 5: Integrity assertions
-- Assert no orphaned captures after Save→Resume (counts and ids consistent end-to-end)
-- Assert no duplicate segments (resuming doesn't double-add captures)
-- Assert the round-trip is idempotent: resuming twice yields the same restored state (no drift on a second restore)
-
-### Step 6: Determinism + CI
-- All capture/sensor IO faked; only the `active_session` persistence is real (temp Hive) — clean up in `tearDown`
-- Deterministic photo ids/paths; no real files needed (stub image loading if the HUD/thumbnails decode images, so missing files don't fail the test)
-- No flaky real delays; `pumpAndSettle` deterministically; small N
-
-## What NOT to Change
-
-- Do NOT modify production save/restore logic to make the test pass — assert existing behavior; add only minimal test seams (provider overrides, temp Hive) if needed, and flag them
-- Do NOT fake the `active_session` persistence — the round-trip through real persistence is the point of the test
-- Do NOT use real camera/sensors/network or real capture files
-- Do NOT assert private internals — assert the restored, observable state (indices, verdicts, photo refs, coverage, target) and HUD reflection
-- Do NOT leave temp Hive data between tests — isolate and clean up
-- Do NOT couple to a large/production-specific N — small fixed N
-
-## Edge Cases / Scenarios to Cover
-
-- [ ] Partial session (K of N) with mixed verdicts → Save & Exit → Resume restores exact filled indices, verdicts, photos, coverage, and target
-- [ ] Non-contiguous filled set (gaps) → restored correctly (resume doesn't assume contiguity)
-- [ ] Active target preserved → resumed guidance points to the same next segment as before exit
-- [ ] Discard & Exit → nothing restored; discarded captures cleaned up (negative control)
-- [ ] Resume when no saved session exists → starts fresh (empty), no crash
-- [ ] Corrupt `active_session` data on resume → degrades to a fresh/empty session (no crash) per the Hive corruption policy
-- [ ] Resuming twice → identical restored state both times (idempotent restore)
-- [ ] No orphaned or duplicated captures after the round-trip (id/count integrity)
-- [ ] Hermetic & deterministic: passes with no device/network, stable across repeated runs
-
-## Constraints
-
-- Real `active_session` persistence exercised against a temp Hive dir; all other IO faked
-- Deterministic, CI-safe, hardware-free; small fixed N; no flaky delays; temp data cleaned up
-- Assert the full restored state set: filled indices, verdicts, photo refs, coverage, active target — plus HUD reflection
-- Discard path is a negative control asserting no restoration + cleanup
-- No production save/restore behavior changed solely to pass the test (flagged test seams only)
-- Reuse existing fakes/harness; stub image loading so the HUD doesn't fail on absent files
-
-## Acceptance Criteria
-
-- [ ] The test file compiles; `flutter analyze` is clean
-- [ ] `flutter test` runs green, deterministically, with no device/network/filesystem dependency (temp Hive only)
-- [ ] After Save & Exit and Resume, the restored session exactly matches the pre-exit snapshot: filled indices, per-segment verdicts, photo references (same ids/count), coverage %, and active target
-- [ ] The ring map and progress meter reflect the restored state on resume
-- [ ] Non-contiguous filled sets restore correctly; the active target is preserved
-- [ ] Discard & Exit restores nothing and cleans up discarded captures (negative control passes)
-- [ ] No saved session → fresh start; corrupt session → graceful fresh start (no crash)
-- [ ] Resuming twice yields identical state (idempotent); no orphaned/duplicated captures
-- [ ] Temp Hive data is isolated and cleaned up; test is stable across repeated runs
-- [ ] No production save/restore logic changed solely to satisfy the test (only flagged seams)
-
-## Testing Instructions
-
-1. Confirm the `active_session` persisted shape (what a saved Level A session contains), how Resume re-enters capture, the draft status mapping, and the discard cleanup policy before writing.
-2. Set up temp Hive (`Hive.init(tempDir)`) in `setUp`, clean up in `tearDown`; configure `ProviderScope` overrides (fake camera/sensors/config/projects, real `active_session`, fake analytics).
-3. Build the partial session helper (K captures, known indices/verdicts/photo refs), snapshot expected state.
-4. Save-&-Exit test: choose Save & Exit, read `active_session` and assert the persisted shape matches the snapshot and the project is resumable.
-5. Resume test: re-enter capture for the project, `pumpAndSettle`, assert the runtime + HUD state matches the snapshot exactly (indices, verdicts, photo refs, coverage, target).
-6. Negative-control test: same partial session → Discard & Exit → resume → assert nothing restored + cleanup.
-7. Edge tests: no-session fresh start; corrupt-session graceful start; double-resume idempotency; integrity (no orphans/dupes).
-8. Run the file repeatedly (e.g. 10×) to confirm no flakiness; run `flutter analyze`.
-9. Confirm it passes in CI without a connected device.
-
-## Assumptions
-
-- Assumed: Save & Exit persists a resumable Level A session to the `active_session` Hive box and sets the project to a draft/capturing status (per Screen 6X and the projects flow) — confirm the persisted shape (filled indices, verdicts, photo refs, active target, coverage) so the test asserts the real contract. If save/restore isn't implemented yet, this test will fail and that's a signal the draft save/resume wiring task is incomplete — flag rather than implement it here.
-- Assumed: Resume re-enters the Level A capture screen with the saved session injected (the projects-list Resume action) — confirm the resume entry path so the test simulates it correctly.
-- Assumed: captured photos are referenced by stable ids/paths in the persisted session — the test uses deterministic fake refs; confirm whether actual image bytes/files are part of persistence (if files are saved separately, the test should assert the references resolve, with image loading stubbed).
-- Assumed: Discard & Exit removes the session's captures and does not leave a resumable session — confirm the discard scope (and whether a newly-created empty project is also removed) so the negative control matches policy.
-- Assumed: corrupt `active_session` degrades to a fresh session (per the Hive corruption-handling task) — confirm so the corrupt-session edge case is valid.
-- Assumed: a small fixed N (e.g. 6) is acceptable for the test and doesn't violate a production-specific N assumption — confirm.
-- Assumed: per-segment verdicts are persisted with the session (needed so Review/retake state is preserved on resume) — confirm verdicts are part of the saved session, not recomputed on resume (recomputation would require re-evaluating stored images).
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[[[[[ 2 ]]]]]]]]
-
-Generate a coding prompt for this task: Test: auto-capture doesn't fire when outside pitch band — Phase: Guided Capture — Level A (Eye Ring), Track: Analytics / QA
-
-=====================================================================================>>>>>>>>>>>>
-
-
-# NEW: Test — Auto-Capture Does NOT Fire When Outside the Pitch Band
-# Product: MayasabhaXR — maya-viewer (Flutter client)
-# Scope: New Feature / Unit + controller test (Dart/Flutter)
-# Phase: Guided Capture — Level A (Eye Ring)
-# Track: Analytics / QA
-# Priority: High
-
----
-
-## Task Description
-
-Write a hermetic test isolating the `isInPitchBand` condition of the auto-capture trigger: with ALL other conditions satisfied (stable, current segment unfilled, cooldown elapsed, not in-flight), auto-capture MUST NOT fire when device pitch is OUTSIDE Level A's pitch band — and MUST fire when pitch is inside it.
-
-The negative assertion (no fire out of band) is the point; the POSITIVE CONTROL (fires in band, all else equal) is what makes the test rigorous — without it, a trigger that never fires at all would pass a no-fire-only test. ISOLATE pitch: hold the other three conditions true and vary only pitch (out vs in band), so fire/no-fire is attributable specifically to the band gate.
-
-This guards against the bug where the implementation drops/weakens the `inBand` term of the conjunction. Hermetic and deterministic — no real sensors/camera; controllable inputs.
-
-- [ ] Test `shouldCapture(...)` (pure) directly: out-of-band (all else true) → false; in-band (all else true) → true
-- [ ] Controller-level: drive out-of-band pitch while stable/unfilled/cooldown-ok → assert NO capture fired; then in-band → assert capture fires
-- [ ] Cover below-min and above-max pitch; band-edge inclusivity; out→in and in→out transitions; hysteresis if implemented
-- [ ] Include the positive control so the test can't pass against a dead (never-firing) trigger
-- [ ] Hermetic, deterministic (no timers), platform-agnostic (logic-level, not UI)
-
-## Files to Inspect First
-
-> Adjust these paths to the real repo layout. They reflect the assumed conventions in the Assumptions section — confirm before the agent edits anything.
-
-1. The auto-capture trigger task — `shouldCapture(...)` (the pure 4-condition AND) and the controller that fires capture; the behavior under test
-2. The pitch band source — Level A's band (remote-config `pitchBands`); the in/out values to test, and edge inclusivity/hysteresis
-3. The native stability gate / smoothed-pitch sources — faked here (stable=true, controllable pitch)
-4. The segment-state model — current-segment-filled input (set unfilled for the test)
-5. Prior test tasks (retake-targets-segment, P2 camera-gate) — the hermetic conventions, negative-assertion + positive-control + sabotage-check pattern to mirror
-6. The capture fake — to count fires
-
-## Test Design
-
-### Pure-function tests (`shouldCapture`)
-With `isStable=true`, `isCurrentFilled=false`, cooldown elapsed, `isCapturing=false`, vary pitch:
-1. Pitch below band.min → `shouldCapture` == false.
-2. Pitch above band.max → `shouldCapture` == false.
-3. Pitch inside band → `shouldCapture` == true (POSITIVE CONTROL).
-4. Pitch exactly at band.min / band.max → per documented inclusivity (assert the defined behavior).
-
-### Controller-level tests (with fakes)
-- Fakes: capture (counts fires), inputs for pitch/stability/segment/cooldown. Stability=true, current segment unfilled, cooldown elapsed.
-1. Feed a sequence of OUT-OF-BAND pitch values (steady, stable) → assert the capture fake fired ZERO times.
-2. Then move pitch INTO the band (all else still satisfied) → assert the capture fake fires (positive control) — proving the trigger CAN fire and the earlier no-fire was due to the band.
-3. Move pitch back OUT of band → assert no further fires.
-
-### Transition + edge
-- Out→in transition while stable/unfilled/cooldown-ok → fires on entering the band (single-shot).
-- In→out transition → stops firing.
-- Band edge: with hysteresis (if implemented), small dithers around the edge do NOT cause flicker-firing; without, assert the documented inclusivity.
-
-### Determinism
-- Controllable cooldown (inject `now`/clock or a fake), no real timers/delays. Await any async fire. No flakiness.
-
-## What NOT to Do (test)
-
-- Do NOT use real sensors/camera/timers — hermetic fakes; controllable pitch + injected clock.
-- Do NOT omit the POSITIVE CONTROL — a no-fire-only test passes against a trigger that never fires; include the in-band fires-case.
-- Do NOT vary multiple conditions at once — isolate pitch (hold stable/unfilled/cooldown true) so fire/no-fire is attributable to the band.
-- Do NOT couple to UI — test `shouldCapture` and the controller logic, platform-agnostic.
-- Do NOT make it flaky — deterministic clock, await async, no real delays.
-- Do NOT only test one out-of-band side — cover both below-min and above-max.
-
-## Edge Cases to Cover
-
-- [ ] Pitch below band.min (all else true) → no fire.
-- [ ] Pitch above band.max (all else true) → no fire.
-- [ ] Pitch inside band (all else true) → fires (positive control).
-- [ ] Band edge (exactly min/max) → per documented inclusivity.
-- [ ] Out→in transition → fires once on entering; in→out → stops.
-- [ ] Hysteresis at the edge (if implemented) → no flicker-firing on small dithers.
-- [ ] Out-of-band but other conditions ALSO false (e.g. unstable) → still no fire (band alone sufficient to block, and not masking other gates).
-- [ ] In-band but cooldown not elapsed → no fire (confirms the test isn't ignoring other conditions).
-
-## Constraints
-
-- The test MUST isolate the pitch-band condition (other three held true) so results are attributable to `inBand`.
-- It MUST include both the negative case (out of band → no fire) and the positive control (in band → fires).
-- It MUST cover below-min and above-max, the band edge (inclusivity/hysteresis), and out↔in transitions.
-- It MUST be hermetic and deterministic (fakes, injected clock, no timers), and platform-agnostic.
-- It MUST fail if the `inBand` term is dropped/weakened (verified by sabotage check).
-
-## Acceptance Criteria
-
-- [ ] `shouldCapture` is false for out-of-band pitch (below-min and above-max) with all else true, and true in-band.
-- [ ] At controller level, steady out-of-band stable pitch fires ZERO captures; entering the band fires (positive control); leaving stops.
-- [ ] Band-edge inclusivity/hysteresis behaves per the documented contract.
-- [ ] The test is hermetic, deterministic, platform-agnostic.
-- [ ] The test FAILS if the `inBand` condition is removed/weakened (sabotage-verified), and the positive control FAILS if the trigger is made to never fire — proving the test has teeth.
-- [ ] `flutter analyze` passes; the test passes (and fails on the seeded regressions).
-
-## Testing Instructions (meta — validate the test itself)
-
-1. Run against the correct trigger → negative cases no-fire, positive control fires; all pass.
-2. Sabotage: remove the `inBand` term from `shouldCapture` → assert the out-of-band cases now FIRE → the negative test FAILS (catches the bug).
-3. Sabotage: force the trigger to never fire (hardcode false) → assert the POSITIVE CONTROL FAILS (proving the no-fire result was meaningful, not a dead trigger).
-4. Sabotage: weaken the band (e.g. treat any pitch as in-band) → assert out-of-band cases FIRE → test FAILS.
-5. Run repeatedly → no flakiness (deterministic clock/fakes).
-6. `flutter analyze` + suite → clean/pass.
-
-## Assumptions
-
-- **Behavior under test:** Assumes the auto-capture trigger is `inBand && stable && !currentFilled && cooldownOk && !isCapturing` with `shouldCapture` pure and a controller that fires capture. This test pins the `inBand` gate. Blocked on the auto-capture trigger task if absent.
-- **Pitch band:** Assumes Level A's band comes from remote-config `pitchBands`; the test uses representative in/out and edge values. Edge inclusivity/hysteresis per the trigger task's contract.
-- **Faked inputs:** Stability (true), current-segment-filled (false), cooldown (elapsed via injected clock), in-flight (false) are held to isolate pitch. Capture is a fake counting fires.
-- **Positive control (KEY):** Including the in-band fires-case is mandatory so the test can't pass against a never-firing trigger.
-- **Determinism:** Injected clock / fakes; no real timers. Mirrors the P1/P2 hermetic test convention.
-- **Scope:** This is the TEST only — it verifies the existing trigger; it does not implement it. Pitch-band logic lives in the auto-capture trigger task.
-- **Stack:** Dart/Flutter test (`flutter_test`), fakes, injected clock, deterministic. Adjust to the app's structure.
 
 
 
@@ -977,137 +287,31 @@ With `isStable=true`, `isCurrentFilled=false`, cooldown elapsed, `isCapturing=fa
 
 [[[[[[[ 1 ]]]]]]]
 
-Generate a coding prompt for this task: Test: instruction banner only shows one instruction at a time — Phase: Guided Capture — Level A (Eye Ring), Track: Analytics / QA
 
-========================================================================>>>
+Generate a coding prompt for this task: Offline banner on Summary screen if no connectivity — Phase: Capture Summary + Upload Pipeline, Track: Flutter UI
 
 
-# QA / TEST: Instruction Banner Shows Only One Instruction at a Time — Level A
-# Product: maya-viewer
-# Scope: QA (Automated Test — Widget)
-# Priority: Medium
-
----
 
-## Task Description
-
-Write an automated widget test proving the instruction banner's core invariant: at any moment, **at most one** instruction pill is present — new instructions replace (crossfade), never stack or queue; rapid changes coalesce to the latest; identical re-emits don't re-animate; and an empty/null instruction hides the pill. This guards the single-cue UX so the HUD never shows conflicting or piled-up banners. Runs deterministically with controllable inputs (no camera/sensors).
-
-- [ ] Write a widget test driving the `InstructionBanner` with a sequence of instructions
-- [ ] Assert at most one pill widget is present at any pumped frame (including during/after transitions)
-- [ ] Assert a changed instruction replaces the previous (no two persistent pills)
-- [ ] Assert rapid different instructions coalesce to the latest (intermediate ones not left visible)
-- [ ] Assert identical re-emit (same id) does not re-animate / does not create a second pill
-- [ ] Assert null/empty instruction hides the pill; a later instruction brings it back
-- [ ] Run deterministically with `pump`/`pumpAndSettle`, no hardware, CI-safe
-
-## Files to Inspect First
-
-1. `lib/features/capture/level_a/widgets/instruction_banner.dart` — the widget under test; find a stable finder for the pill (a test key, the pill container type, or the displayed text) and confirm the crossfade/coalesce timings (`crossfade`, `coalesceWindow`) so the test pumps correctly
-2. `lib/features/capture/level_a/domain/capture_instruction.dart` (`CaptureInstruction`, `InstructionSeverity`) — the input model (id/message/severity); note that animation keys on `id`
-3. The instruction engine / `guidanceProvider` (if the banner is driven by it) — but prefer testing the banner in isolation with directly supplied instructions, not the full engine (engine has its own tests)
-4. Existing widget-test harness/conventions and any prior overlay tests — reuse finder/pump patterns
-5. `MediaQuery.disableAnimations` handling in the banner — to add a reduce-motion variant of the test
-
-## Implementation Instructions
-
-### Step 1: Stable pill finder
-Determine how to count visible pills deterministically. Prefer (in order):
-- A `Key` on the pill container (add a test-only `key: const Key('instruction_pill')` if absent — non-visual change), then `find.byKey` / a custom finder counting pills
-- Else, find by the pill's distinguishing widget type/container
-- Else, find by displayed text (works for "one of message X" assertions but is weaker for counting during crossfade)
+==================================================================================================================>>>>>>>>
 
-Define a helper `int pillCount(WidgetTester t)` so every assertion uses the same counting logic. Account for the brief crossfade window where an `AnimatedSwitcher` may hold an outgoing + incoming child momentarily — assert "at most one *settled* pill" by pumping past the crossfade where the count must be exactly one, and separately assert the widget never renders two *vertically stacked/persistent* pills (the invariant is no stacking/queueing, not zero overlap during a single transition).
 
-### Step 2: Harness
-In `test/features/capture/level_a/instruction_banner_single_test.dart`:
-- Pump a small host widget that holds a mutable `CaptureInstruction?` and rebuilds the `InstructionBanner` when it changes (use a `StatefulBuilder` or a tiny test driver), inside a `MaterialApp`/`Directionality` and the app theme
-- No provider overrides needed if testing the banner directly; if the banner reads `MediaQuery`, wrap appropriately
 
-### Step 3: Core single-instance assertions
-- **Initial null** → `pillCount == 0`
-- **Set instruction A** → `pumpAndSettle` → `pillCount == 1`, text shows A
-- **Change to B** → during transition pump a frame, then `pumpAndSettle` → final `pillCount == 1`, text shows B (A gone); assert no persistent second pill
-- **Set null** → `pumpAndSettle` → `pillCount == 0`
 
-### Step 4: Coalesce (rapid changes)
-- Set A, then B, then C in quick succession with `pump`s shorter than `coalesceWindow` between them (don't `pumpAndSettle` between) → after settling, assert `pillCount == 1` and the visible text is **C** (the latest), with A and B never left as persistent pills
 
-### Step 5: Identical re-emit
-- Set A (settle), then set another `CaptureInstruction` with the **same id** (same/equal message) → assert no new crossfade is triggered (the pill is not torn down/rebuilt) and `pillCount` stays 1. Verify the "animate only on id change" behavior — e.g. by asserting the same pill element persists (key/element identity) or that no transition is in progress after a single `pump`.
 
-### Step 6: Reduce-motion variant
-- Wrap with `MediaQuery(disableAnimations: true)` → repeat the change A→B → assert instant swap (`pillCount == 1`, text B) without needing to pump through a crossfade, and still never two persistent pills
 
-### Step 7: Determinism + CI
-- Use explicit `pump(Duration(...))` matching the banner's crossfade/coalesce constants where needed; otherwise `pumpAndSettle`
-- No camera/sensors/network/files; pure widget test
 
-## What NOT to Change
 
-- Do NOT modify the banner's production animation/coalesce behavior to make the test pass — assert existing behavior; only add a test-only `Key` on the pill if needed for counting (non-visual)
-- Do NOT test the instruction engine here — supply instructions directly to the banner (engine priority logic is a separate test)
-- Do NOT assert via brittle screenshot/golden — count widgets/elements deterministically
-- Do NOT rely on real timers/delays — pump deterministically against the known crossfade/coalesce durations
-- Do NOT introduce hardware/provider dependencies the banner doesn't need
 
-## Edge Cases / Scenarios to Cover
 
-- [ ] Null → one instruction → null (show/hide round-trip), `pillCount` 0→1→0
-- [ ] A → B change: exactly one settled pill afterward (B), A gone, no stacking
-- [ ] Rapid A→B→C within the coalesce window: settles to one pill showing C; A/B not left visible
-- [ ] Identical re-emit (same id): no re-animation, same pill persists, count stays 1
-- [ ] Severity-only change (same id, different severity): per the banner's policy (likely no crossfade since id unchanged) — assert the chosen behavior, count stays 1
-- [ ] Change mid-crossfade (set C while A→B is animating): settles to exactly one pill (C), no lingering A/B
-- [ ] Reduce-motion: instant swaps, still exactly one pill, no stacking
-- [ ] Long message: still one pill (2-line cap is a separate concern but confirm it doesn't create extra pills)
-- [ ] Widget disposed mid-transition: no errors / no `setState after dispose` (pump then remove the banner)
 
-## Constraints
 
-- Assert "at most one persistent/settled pill" via a deterministic `pillCount` helper; account for the single legitimate crossfade transition (not treated as stacking)
-- Test the banner in isolation with directly supplied `CaptureInstruction?` — no engine/providers/hardware
-- Deterministic pumping against the banner's crossfade/coalesce constants; no flaky real delays
-- Animation-on-id-change behavior verified (identical re-emit does not re-animate)
-- Reduce-motion variant included
-- No production behavior changed solely to pass the test (only a test-only `Key` if necessary, flagged)
-- Reuse existing widget-test harness/conventions
 
-## Acceptance Criteria
 
-- [ ] The test file compiles; `flutter analyze` is clean
-- [ ] `flutter test` runs green, deterministically, with no hardware/network/file dependency
-- [ ] At every settled frame across the scenarios, exactly one pill (or zero when null) is present — never two persistent/stacked pills
-- [ ] A→B change settles to one pill (B); A is gone
-- [ ] Rapid A→B→C coalesces to one pill showing C; A/B not left visible
-- [ ] Identical re-emit (same id) does not re-animate and keeps a single persistent pill
-- [ ] Null/empty hides the pill; a later instruction restores it
-- [ ] Reduce-motion variant: instant swap, single pill, no stacking
-- [ ] Change mid-crossfade resolves to one pill (latest), no lingering pills
-- [ ] Test is stable across repeated runs; no production behavior changed solely to pass (only flagged test seams)
 
-## Testing Instructions
 
-1. Confirm the pill finder approach (test key vs type/text), the banner's `crossfade`/`coalesceWindow` durations, and the same-id animation behavior before writing.
-2. Add a test-only `Key('instruction_pill')` to the pill container if no stable finder exists (non-visual; flag it).
-3. Implement `pillCount(tester)` and a host driver holding a mutable `CaptureInstruction?`.
-4. Write the core show/replace/hide assertions (null→A→B→null), pumping through crossfades deterministically.
-5. Write the coalesce test (A→B→C within the window) → assert one pill showing C.
-6. Write the identical-re-emit test (same id) → assert no re-animation, single persistent pill.
-7. Write the mid-crossfade replacement test → assert settles to one pill (latest).
-8. Add the reduce-motion variant via `MediaQuery(disableAnimations: true)`.
-9. Add the dispose-mid-transition check (remove the banner during a transition) → assert no errors.
-10. Run `flutter test test/.../instruction_banner_single_test.dart` repeatedly (e.g. 10×) for flakiness; run `flutter analyze`.
-11. Confirm it passes in CI without a device.
 
-## Assumptions
 
-- Assumed: the banner animates only when the instruction `id` changes and coalesces rapid changes within a `coalesceWindow` (per the instruction-banner task) — the test asserts this contract. Confirm the exact durations so pumping is deterministic; if they're constructor params, pass small fixed values in the test for speed.
-- Assumed: the banner renders exactly one pill child (via `AnimatedSwitcher`/single child) so the only moment two children coexist is the brief crossfade — the invariant under test is "no stacking/queueing," not "never any pixel overlap during a transition." Confirm the implementation uses a single-child switcher; if it stacks children in a Column/list, that's a defect this test should catch.
-- Assumed: a test-only `Key` on the pill is acceptable for deterministic counting — confirm; otherwise count by the pill's widget type or assert via displayed text (weaker during crossfade).
-- Assumed: severity-only changes (same id) do not trigger a crossfade (animation keyed on id) — confirm the intended behavior so the severity-only edge case asserts correctly.
-- Assumed: testing the banner in isolation (not via the instruction engine) is the right scope — the engine's priority resolution has its own tests; this test specifically guards the banner's single-instance rendering. Confirm this division.
-- Assumed: the 2-line cap / max-width is covered elsewhere (banner task acceptance criteria) — this test only ensures long messages don't spawn extra pills, not the exact truncation.
 
 
 
@@ -1118,251 +322,18 @@ In `test/features/capture/level_a/instruction_banner_single_test.dart`:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-         [[[[[[ Finals for phase 4 ]]]]]]
-
-
-Generate a coding agent prompt for Phase P4: Guided Capture — Level A (Eye Ring) — all tracks.
-
------------------------------------------------------------------------------>>>>
-
-
-
-
-# PHASE P4: Guided Capture — Level A (Eye Ring) — All Tracks (Build Plan)
-# Product: maya-viewer
-# Scope: Phase Epic (orchestrates Flutter UI — Overlays, Capture Logic, Review Grid, Analytics/QA)
-# Priority: Critical
-# Execution: Sequenced — do NOT attempt in one pass. Build foundations → logic → overlays → review → analytics/QA.
-
----
-
-## Phase Goal
-
-Deliver the complete Level A guided-capture experience: the user is guided to capture a full 360° eye-level ring of an object, with live HUD guidance (tilt, stability, direction, ring coverage), gated/auto capture, per-shot quality feedback, save/resume, review of captures, and completion handoff to Level B. The whole phase must run on a real device, be performant on low-end Android, and degrade gracefully when sensors/permissions are unavailable.
-
----
-
-## Shared Foundations (build FIRST, before any overlay/test)
-
-These are consumed by nearly every task. Establish them once as the single source of truth; everything else imports them.
-
-**Domain models (pure Dart, no Flutter):**
-- `ProjectStatus` / `Project` / `CreateProjectParams` (already defined in the projects domain) — reused for draft/resume
-- `ObjectSize` / `CaptureMode`
-- `CaptureConfig` (pitch bands, segment counts, thresholds) from the remote-config layer; the Level A band defines target N and `minCoveragePct`
-- `RingCoverage` (`SegmentState`, `stateOf`, `progress`) and `RingDirectionState` (target index, shorter-arc direction, angular gap, allCaptured)
-- `CaptureInstruction` / `DirectionHint` / `GuidanceInputs` / `GuidanceOutput`
-- `CaptureReadiness` (in-band + stable + placed; fail-open when sensors off)
-- `CaptureEvaluation` (`CaptureVerdict`: accepted/warn/reject; `CaptureIssue[]`)
-- `CaptureProgress`, `LevelASummary`, `RetakeRequest`, `CaptureSettings`, `AutoCaptureState`
-
-**Application/state (Riverpod):**
-- `currentPitchProvider` (smoothed pitch from `sensorStream`), `stabilityProvider`
-- `ringDirectionStateProvider` / ring-coverage source
-- `guidanceProvider` (instruction engine output)
-- capture-settings + auto-capture providers
-- `captureConfigProvider`
-
-**Infrastructure (already specified in earlier phases):**
-- `SensorStreamChannel` (iOS CMDeviceMotion source + Flutter wrapper), `CaptureCameraController` + `PreviewGeometry` + `CaptureOverlayLayer`, `OfflineRetryModal`, `Haptics`, Hive `active_session`, `CaptureAnalytics` + typed event layer
-
-If any foundation is missing when a dependent task starts, build the foundation (or its contract + injected stub) first — never inline-duplicate a definition.
-
----
-
-## Dependency-Ordered Track Plan
-
-Execute roughly top-to-bottom. Items within a step can be parallelized; later steps depend on earlier ones.
-
-### Step 1 — Capture Logic (Dart) [CRITICAL PATH — build before overlays rely on real data]
-1. **Ring-progress & coverage computation** — map device yaw → filled/target segment indices, shorter-arc direction, angular gap, coverage %, allCaptured. Source of `RingCoverage`/`RingDirectionState`. (Foundational; the ring map, progress meter, direction arrow, instruction engine, retake, and all QA tests depend on it.)
-2. **Capture-acceptance / evaluation** — evaluate each shot against `CaptureConfig.thresholds` (sharpness/exposure/coverage/placement) → `CaptureVerdict` + issues; rejected shots do NOT fill segments. Source of verdicts for the post-shot toast and review badges.
-3. **Instruction engine** — priority resolver tilt > stability > direction > capture → single `GuidanceOutput`. (Already specified.)
-4. **Auto-capture loop** — arm when in-band + stable + at a new target segment → fire capture → evaluate → advance; respects the auto-capture setting; emits `autocapture_triggered`.
-5. **Draft save/resume wiring** — persist a resumable session (filled indices, verdicts, photo refs, active target, coverage) to `active_session`; restore on Resume. (The save/resume QA test depends on this.)
-
-### Step 2 — Flutter UI — Overlays (compose over `CaptureOverlayLayer`)
-6. Screen 5A — Level A intro animation + rules + Begin
-7. Screen 6A — full-screen camera preview + overlay composition layer
-8. Placement box overlay (center frame guide)
-9. Tilt meter (band indicator + needle)
-10. Stability indicator (dot + Hold steady/Stable)
-11. Single instruction banner (pill, crossfade, never stacks)
-12. Direction arrow overlay (CW/CCW, shown only when relevant)
-13. Ring coverage map (lower-left, filled/target/missing)
-14. Shutter button (gated by pitch band + stability in guided mode)
-15. Auto-capture indicator (ON/OFF pill)
-16. Thumbnail strip (last 3–5 photos)
-17. Progress meter ("Accepted: X/N • Coverage: P%")
-18. Top bar (level indicator, Help, Settings)
-19. Screen 6A-Check — post-shot toast (Accepted/Warn/Reject + Retake)
-20. Screen 6H — Help bottom sheet (5–7 tips)
-21. Screen 6S — Settings bottom sheet (auto-capture, save-to-gallery, quality)
-22. Screen 6X — Save & Exit confirmation modal
-23. Screen 6A-Complete — summary card + Start Level B / Review
-
-### Step 3 — Screen 7A — Review Grid
-24. Grid of captured thumbnails with Accepted/Warned/Rejected badges
-25. Retake action — routes back to camera with the missing/target segment highlighted
-
-### Step 4 — Analytics / QA
-26. `capture_level_started` / `capture_level_completed` / `capture_level_retake`
-27. `autocapture_triggered` / `manual_capture_triggered`
-28. Test: 360° ring fully covered → auto-completes
-29. Test: coverage < threshold → missing segments highlighted
-30. Test: Save & Exit → resume restores exact state
-31. Test: instruction banner shows one instruction at a time
-
----
-
-## Cross-Cutting Rules (apply to EVERY task in the phase)
-
-- **Single source of truth:** ring coverage, accepted/coverage numbers, verdicts, and capture settings each have ONE owner; the ring map, progress meter, completion summary, and review badges all read from it — they never recompute or diverge.
-- **Overlays are render+intent only:** they consume state and emit callbacks; capture/eval/persistence/navigation live in logic/parent layers.
-- **Sensor fail-open:** guided gating must never permanently lock the user out when sensors are unavailable — fall back to manual capture and warn separately.
-- **Reduce-motion:** every animated overlay honors `MediaQuery.disableAnimations` (functional cues stay; decoration drops).
-- **Brand palette via theme tokens only:** Deep Black surfaces, Mirage Red action/warning, Royal Gold/success accents, muted grey neutral — no hardcoded hex, no off-brand colors.
-- **Low-end Android performance:** downscale-decode all thumbnails; isolate animation repaints; single shared `sensorStream` subscription where possible; no jank.
-- **Lifecycle safety:** release the camera on background; guard all post-async `setState` with `mounted`; dispose controllers/timers/subscriptions; no leaks.
-- **Single-instance HUD cues:** one instruction banner, one toast, no stacked overlays; overlays don't obscure each other or the shutter (coordinate a fixed HUD layout).
-- **No over-engineering:** MVP-first; no speculative abstractions beyond the documented contracts.
-
----
-
-## Phase-Level Acceptance Criteria
-
-- [ ] A user can: see the intro → open the camera → be guided (tilt/stability/direction) → capture (manual + auto) → get per-shot feedback → cover the full ring → auto-complete → review → retake a segment → continue to Level B.
-- [ ] Out-of-band or unstable disables the shutter in guided mode; sensor-off fails open to manual capture.
-- [ ] Rejected shots don't fill segments; accepted/warn do; ring map, progress meter, and review badges agree.
-- [ ] Full ring coverage auto-completes and fires `capture_level_completed` exactly once; below-threshold shows missing segments and does not complete.
-- [ ] Save & Exit → Resume restores the exact segment/photo/verdict/target state; Discard cleans up.
-- [ ] Only one instruction banner and one post-shot toast are ever visible.
-- [ ] Capture funnel analytics (`capture_level_started/completed/retake`, `autocapture_triggered`, `manual_capture_triggered`) fire with correct, PII-free, typed properties.
-- [ ] All four QA tests pass deterministically in CI with no device/network/filesystem dependency.
-- [ ] `flutter analyze` clean across the phase; verified end-to-end on a physical Android (mid-range) and iOS device.
-
----
-
-## Phase Integration / Test Checklist
-
-1. Build Step 1 logic with injected stubs where a sibling isn't ready; unit-test each (resolver purity, coverage math, evaluation thresholds, save/restore round-trip).
-2. Build Step 2 overlays against the real providers; verify the fixed HUD layout has no overlaps on small/large screens.
-3. Walk the full happy path on a real device: intro → capture full ring (auto + manual) → complete → review → retake → continue.
-4. Walk failure/edge paths: sensors off, permission revoked mid-session, offline, background/resume, rapid auto-capture bursts, reject + retake.
-5. Run the four QA tests repeatedly for flakiness; confirm green in CI without a device.
-6. Profile a long capture session on a mid-range Android (memory flat, no jank).
-7. Confirm analytics payloads in the dispatcher/backend; grep for PII/token leakage.
-
----
-
-## Sequencing Guidance for the Agent
-
-- Do NOT generate all files in one pass. Complete and verify Step 1 (logic) before Step 2 (overlays), because overlays driven by stubbed data will hide integration defects.
-- For each task, request/confirm the specific contract points flagged in that task's individual prompt (e.g. pitch sign convention, completion criterion, persisted session shape) before coding — these are the recurring assumptions across the phase.
-- After each track, run `flutter analyze` + the relevant tests; do not proceed on a red track.
-- Treat the individual task prompts (already authored for every item above) as the detailed spec for each step; this plan is the orchestration layer over them.
-
-## Assumptions
-
-- Assumed: the per-task prompts for items 6–31 already exist (authored in this project) and serve as the detailed specs; this phase prompt sequences and unifies them rather than restating each.
-- Assumed: Step 1 logic (ring-progress, evaluation, auto-capture, save/resume) is the critical path and is not yet fully implemented — these gate the overlays and QA tests. If some are partially done, reconcile to the shared contracts above.
-- Assumed: the recurring open questions across tasks — pitch convention/units, which `CaptureConfig` band is Level A, completion criterion (all-segments vs `minCoveragePct`), reject-discard policy, persisted session shape, capture orientation lock — are resolved once at the phase level and applied consistently. Confirm these before Step 1.
-- Assumed: capture is portrait-locked and the camera/overlay foundation is shared across Levels A/B/C, so the overlays and logic are built generically (level-parameterized) for reuse in P5/P6.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                      [[[[[[[[[[[[ Phase 5 - Guided capture ]]]]]]]]]]]]
-
-
-
-[[[[[[[[[[[  Flutter UI ]]]]]]]]]]]
-
-
-[[[[ 10 ]]]]
-
-Generate a coding prompt for this task: Screen 5B: Level B intro — 'Tilt down more to show top' rules + Begin CTA — Phase: Guided Capture — Levels B & C, Track: Flutter UI
-
-====================================================================>>>>>>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+            [[[[[[[[[[[[[[[[[[[[  Upload Engine (Dart + Native)  ]]]]]]]]]]]]]]]]]]]]
 
 
 
 
 [[[[[ 9 ]]]]]
 
-Generate a coding prompt for this task: Screen 6B: Camera capture UI — same as 6A, Level label 'B • Top Ring', tuned instruction copy — Phase: Guided Capture — Levels B & C, Track: Flutter UI
 
+Generate a coding prompt for this task: capture_manifest.json builder: all fields from PRD (per-photo metadata, device info, levels) — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
-=================================================================================================================>>>>>>>>>>>
 
+=========================================================================================================================>>>>>
 
 
 
@@ -1385,13 +356,13 @@ Generate a coding prompt for this task: Screen 6B: Camera capture UI — same as
 
 
 
+[[[[[[ 8 ]]]]]]
 
-[[[ 8 ]]]
 
-Generate a coding prompt for this task: Top Ring pitch band enforcement: +30° to +60°, tilt indicator tuned — Phase: Guided Capture — Levels B & C, Track: Flutter UI
+Generate a coding prompt for this task: Bundle packer: /images/{EYE|TOP|LOW}/{filename}.jpg + manifest — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
------------------------------------------------------------------------------------------------------------------->>>>>
 
+===========================================================================================================================>>>>>>>>>
 
 
 
@@ -1414,15 +385,15 @@ Generate a coding prompt for this task: Top Ring pitch band enforcement: +30° t
 
 
 
+[[[[ 7 ]]]]
 
 
-[[[[[ 7 ]]]]]
 
-Generate a coding prompt for this task: Screen 7B: Level B review grid (clone of 7A, 'Review: Top Ring') — Phase: Guided Capture — Levels B & C, Track: Flutter UI
 
-=============================================================================================>>>>
+Generate a coding prompt for this task: Chunked upload manager: presigned multipart S3 upload via Dio — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
 
+============================================================================================================================>>>>>>>>>
 
 
 
@@ -1446,196 +417,14 @@ Generate a coding prompt for this task: Screen 7B: Level B review grid (clone of
 
 
 
-[[[[[[[ 6 ]]]]]]]
+[[[[[[ 6 ]]]]]]
 
-Generate a coding prompt for this task: Screen 6B-Complete: 'Level B complete' + Start Level C / Review Top Ring — Phase: Guided Capture — Levels B & C, Track: Flutter UI
 
+Generate a coding prompt for this task: Pause/resume: persist chunk offset + ETags in Hive across restarts — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
 
-==================================================================================================================>>>>>>>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[[[ 5 ]]]]]]
-
-Generate a coding prompt for this task: Screen 5C: Level C intro — 'Lower phone, tilt slightly up' rules — Phase: Guided Capture — Levels B & C, Track: Flutter UI
-
-============================================================================================>>>>>>>>>>>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[ 4 ]]]]
-
-Generate a coding prompt for this task: Screen 6C: Camera capture UI — Level label 'C • Low Ring', pitch −30° to −10° — Phase: Guided Capture — Levels B & C, Track: Flutter UI
-
-
-=================================================================================>>>>>>>>>>>>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[[[ 3 ]]]]]]
-
-Generate a coding prompt for this task: Low Ring pitch band enforcement + instruction copy tuning (lower phone, avoid base cutoff) — Phase: Guided Capture — Levels B & C, Track: Flutter UI
-
-
-
-========================================================================================>>>>>>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[[[ 2 ]]]]]]
-
-Generate a coding prompt for this task: Screen 7C: Level C review grid — Phase: Guided Capture — Levels B & C, Track: Flutter UI
-
-=============================================================================================================>>>>>>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[[ 1 ]]]]]
-
-Generate a coding prompt for this task: Screen 6C-Complete: 'Capture complete' — all 3 level summary cards + Continue / Review — Phase: Guided Capture — Levels B & C, Track: Flutter UI
-
-
-======================================================================================================>>>>>>>>>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-[[[[[[[ Capture Logic ]]]]]]]
-
-
-[[[[ 6 ]]]]
-
-Generate a coding prompt for this task: Level progression controller: A → B → C, no skip, persist state per level — Phase: Guided Capture — Levels B & C, Track: Capture Logic
-
-===================================================================================>>>>>
+===============================================================================================================================>>>>>>
 
 
 
@@ -1660,13 +449,11 @@ Generate a coding prompt for this task: Level progression controller: A → B �
 
 [[[[[[[[ 5 ]]]]]]]]
 
-Generate a coding prompt for this task: Per-level yawStart reset at ring begin — Phase: Guided Capture — Levels B & C, Track: Capture Logic
 
-============================================================================================>>>>>>>>>>>
-
+Generate a coding prompt for this task: Retry on network failure: exponential backoff, max 3 retries — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
 
-
+=======================================================================================================================>>>>>>>>>>>
 
 
 
@@ -1686,17 +473,15 @@ Generate a coding prompt for this task: Per-level yawStart reset at ring begin �
 
 
 
-[[[[[[[[[ 4 ]]]]]]]]]
 
-
-Generate a coding prompt for this task: Pitch band config per level from remote config (overridable) — Phase: Guided Capture — Levels B & C, Track: Capture Logic
-
-
-
-===============================================================================================>>>>>>
+[[[[[[[[ 4 ]]]]]]]]
 
 
 
+Generate a coding prompt for this task: Checksum: md5 per file, included in manifest — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
+
+
+===========================================================================================================================>>>>>>>>>>>>
 
 
 
@@ -1720,13 +505,11 @@ Generate a coding prompt for this task: Pitch band config per level from remote 
 
 [[[[ 3 ]]]]
 
-Generate a coding prompt for this task: Level B + C segment state machines (same engine as Level A) — Phase: Guided Capture — Levels B & C, Track: Capture Logic
 
-==================================================================================>>>>>>
-
+Generate a coding prompt for this task: Upload progress stream: bytes uploaded / total, file count — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
 
-
+=================================================================================================================================>>>>>>>>
 
 
 
@@ -1750,11 +533,11 @@ Generate a coding prompt for this task: Level B + C segment state machines (same
 
 [[[[[[[ 2 ]]]]]]]
 
-Generate a coding prompt for this task: Roll constraint warning (±15°): warn but don't block — Phase: Guided Capture — Levels B & C, Track: Capture Logic
 
 
-============================================================================================================================================>>>>>>>
+Generate a coding prompt for this task: Offline queue: detect offline → queue job, auto-resume on connectivity restore — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
+==================================================================================================================================>>>>>>
 
 
 
@@ -1777,14 +560,14 @@ Generate a coding prompt for this task: Roll constraint warning (±15°): warn b
 
 
 
-[[[[[[[[[[[ 1 ]]]]]]]]]]]
 
+[[[[[[[[ 1 ]]]]]]]]
 
-Generate a coding prompt for this task: Final completion gate: all 3 levels complete → unlock Summary — Phase: Guided Capture — Levels B & C, Track: Capture Logic
 
-=====================================================================================================>>>>>>>>>>
+Generate a coding prompt for this task: iOS background upload task via URLSession (BackgroundConfiguration) via native channel — Phase: Capture Summary + Upload Pipeline, Track: Upload Engine (Dart + Native)
 
 
+=====================================================================================================================================>>>>>>>
 
 
 
@@ -1807,20 +590,20 @@ Generate a coding prompt for this task: Final completion gate: all 3 levels comp
 
 
 
-[[[[[[[ Analytics / QA ]]]]]]]
 
-[[[ 7 ]]]
 
-Generate a coding prompt for this task: Analytics: same events as P4 for levels B and C — Phase: Guided Capture — Levels B & C, Track: Analytics / QA
+                   [[[[[[[[[[[[[[[[[[       Backend APIs     ]]]]]]]]]]]]]]]]]]
 
 
-================================================================================================================>>>>
 
+[[[[[[[ 6 ]]]]]]]
 
 
 
+Generate a coding prompt for this task: POST /jobs — create job (projectId, objectSize, expectedFilesCount) → returns jobId + presigned upload plan — Phase: Capture Summary + Upload Pipeline, Track: Backend APIs
 
 
+=============================================================================================================================>>>>>>>
 
 
 
@@ -1840,18 +623,18 @@ Generate a coding prompt for this task: Analytics: same events as P4 for levels 
 
 
 
-[[[ 6 ]]]
 
-Generate a coding prompt for this task: Analytics: capture_session_complete (all 3 levels done) — Phase: Guided Capture — Levels B & C, Track: Analytics / QA
 
-================================================================================================>>>>>>>>>>>>>>>>>
 
+[[[[[ 5 ]]]]]
 
 
 
+Generate a coding prompt for this task: GET /jobs/:jobId/upload-urls — return presigned S3 multipart URLs for each file — Phase: Capture Summary + Upload Pipeline, Track: Backend APIs
 
 
 
+=========================================================================================================>>>>>>>>>>
 
 
 
@@ -1867,16 +650,16 @@ Generate a coding prompt for this task: Analytics: capture_session_complete (all
 
 
 
+[[[[ 4 ]]]]
 
+Generate a coding prompt for this task: POST /jobs/:jobId/finalize — verify manifest exists + file counts → enqueue processing → set state QUEUED — Phase: Capture Summary + Upload Pipeline, Track: Backend APIs
 
 
 
-[[[[[[ 5 ]]]]]]
+==================================================================================================================>>>>>>>>>>
 
-Generate a coding prompt for this task: Test: pitch band tuned correctly for Top Ring (downward tilt camera accepts) — Phase: Guided Capture — Levels B & C, Track: Analytics / QA
 
 
-===============================================================================================================>>>>>>>
 
 
 
@@ -1895,13 +678,198 @@ Generate a coding prompt for this task: Test: pitch band tuned correctly for Top
 
 
 
+[[[[[[ 3 ]]]]]]
 
 
+Generate a coding prompt for this task: Manifest validation: file count matches, required levels present, at least minimum photos — Phase: Capture Summary + Upload Pipeline, Track: Backend APIs
 
 
-[[[[[[ 4 ]]]]]]
 
-Generate a coding prompt for this task: Test: pitch band for Low Ring (upward tilt accepts, cutoff objects rejected from frame) — Phase: Guided Capture — Levels B & C, Track: Analytics / QA
+========================================================================================================================>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[[[[[[[[[ 2 ]]]]]]]]]]]]]]]
+
+
+Generate a coding prompt for this task: S3 key naming: prod/{userId}/{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg — Phase: Capture Summary + Upload Pipeline, Track: Backend APIs
+
+
+
+=========================================================================================================>>>>>>>>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[ 1 ]]]]]]]
+
+
+
+Generate a coding prompt for this task: Update projects.status = UPLOADING on job create, PROCESSING on finalize — Phase: Capture Summary + Upload Pipeline, Track: Backend APIs
+
+
+
+====================================================================================================================================>>>>>>>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                          [[[[[[[[[[[[[[[[[[ Analytics / QA ]]]]]]]]]]]]]]]]]]
+
+
+
+[[[[[ 8 ]]]]]
+
+
+
+
+Generate a coding prompt for this task: Analytics: upload_started, upload_paused, upload_resumed, upload_completed, upload_failed — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
+
+
+
+================================================================================================>>>>>>>>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[ 7 ]]]]]]
+
+
+
+Generate a coding prompt for this task: Analytics: upload_progress (every 25% milestone), upload_size_mb — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
+
+
+
+==============================================================================================================>>>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[ 6 ]]]]]]
+
+
+
+Generate a coding prompt for this task: Test: pause upload mid-way → resume picks up from same chunk — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
+
+
+
+
+========================================================================================================>>>>>>>>>>>>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[[ 5 ]]]]]]]
+
+
+Generate a coding prompt for this task: Test: offline during upload → queues, auto-resumes on reconnect — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
+
+
 
 ==========================================================================================================>>>>>
 
@@ -1925,15 +893,37 @@ Generate a coding prompt for this task: Test: pitch band for Low Ring (upward ti
 
 
 
+[[[[[[[ 4 ]]]]]]]
+
+Generate a coding prompt for this task: Test: below minimum photos → upload button disabled, clear error shown — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
 
 
-[[[[[[[[ 3 ]]]]]]]]
-
-Generate a coding prompt for this task: Test: Level C captures base of object without cutting it off — Phase: Guided Capture — Levels B & C, Track: Analytics / QA
+=======================================================================================================>>>>>>>>>>>>>
 
 
-=====================================================================================================================>>>>>>>>
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[ 3 ]]]]]]
+
+Generate a coding prompt for this task: Test: manifest validation rejects incomplete bundles on backend — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
+
+
+
+==========================================================================================================>>>>>>>>>>>>>>>
 
 
 
@@ -1956,12 +946,10 @@ Generate a coding prompt for this task: Test: Level C captures base of object wi
 
 [[[[[[[ 2 ]]]]]]]
 
-Generate a coding prompt for this task: Test: Full 3-level capture produces expected photo counts per object size — Phase: Guided Capture — Levels B & C, Track: Analytics / QA
-
-===============================================================================================================>>>>>>
+Generate a coding prompt for this task: Test: S3 keys follow correct naming convention — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
 
 
-
+===========================================================================================================================>>>>>>>>>>>>>>>>>>>
 
 
 
@@ -1982,32 +970,21 @@ Generate a coding prompt for this task: Test: Full 3-level capture produces expe
 
 
 
-[[[[[[ 1 ]]]]]]
-
-Generate a coding prompt for this task: Full run: Small object → 90 photos, Medium → 72, Large → 54 (approx) — Phase: Guided Capture — Levels B & C, Track: Analytics / QA
-
-========================================================================================>>>>>>>
 
 
 
 
 
+[[[[[[[[[[[[  1 ]]]]]]]]]]]]
+
+
+Generate a coding prompt for this task: Test: iOS background upload survives app switching to background — Phase: Capture Summary + Upload Pipeline, Track: Analytics / QA
 
 
 
 
 
-
-
-
-
-
-
-  [[[[[[[[[ Final for phase - 5]]]]]]]]]
-
-  Generate a coding agent prompt for Phase P5: Guided Capture — Levels B & C — all tracks.
-
-  ---------------------------------------------------------------------------------------------------------------->>>>>
+===============================================================================================================================>>>>>>>>>>>>>>>>>>>
 
 
 
@@ -2025,8 +1002,37 @@ Generate a coding prompt for this task: Full run: Small object → 90 photos, Me
 
 
 
-                                [[[[[[[[[[[[[ Phase - 6 : Capture summary + upload pipline ]]]]]]]]]]]]]
 
+
+
+
+
+
+
+
+
+
+
+
+[[[[[[ Phase 6 : Final prompt ]]]]]]
+
+
+
+Generate a coding agent prompt for Phase P6: Capture Summary + Upload Pipeline — all tracks.
+
+
+
+==============================================================================================================================>>>>>>>>>>>
+
+
+
+
+
+
+
+
+
+                          [[[[[[[[[[[[[[[[[[[[[[[[[[[[        Phase 7 : Backe processing pipeline           ]]]]]]]]]]]]]]]]]]]]]]]]]]]]
 
 
 

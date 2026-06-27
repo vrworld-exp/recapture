@@ -6,11 +6,13 @@ import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/capture/analytics/review_flow_events.dart';
 import '../../../application/capture/grid_selection.dart';
 import '../../../domain/entities/capture_evaluation.dart';
 import '../../../domain/entities/retake_request.dart';
 import '../../../domain/entities/review_item.dart';
 import '../../../utils/analytics.dart';
+import '../../widgets/app_button.dart';
 import '../../widgets/verdict_badge.dart';
 
 /// Screen 7A — Level A Review grid. Shows every captured photo for the session as
@@ -42,6 +44,10 @@ class ReviewGridScreen extends StatefulWidget {
     this.onRetake,
     this.onRetakeSelected,
     this.onBackToCapture,
+    this.onConfirm,
+    this.confirmLabel = 'Proceed',
+    this.reviewAnalytics,
+    this.analyticsLevel,
     this.title = 'Review — Level A',
   });
 
@@ -77,6 +83,27 @@ class ReviewGridScreen extends StatefulWidget {
   /// available (not selection-gated); the parent performs the navigation.
   final void Function()? onBackToCapture;
 
+  /// Primary "confirm this level + advance" hook. Supplying it makes this the
+  /// in-flow review screen (Screen 7A/7B/7C): the bottom bar gains a primary CTA
+  /// (and keeps Back-to-Capture when also supplied). The grid guards against a
+  /// rapid double-tap so the parent's forward navigation fires at most once.
+  final void Function()? onConfirm;
+
+  /// Label for the [onConfirm] primary CTA (level config supplies the wording).
+  final String confirmLabel;
+
+  /// Funnel-analytics context for `photo_review_opened`. Supplied by the screen
+  /// owner (which knows project/session/coverage — the reusable grid does not).
+  /// When non-null the grid emits one `photo_review_opened` per OPEN (in
+  /// `initState`, so a rebuild/rotation never re-fires). Null → the funnel event
+  /// is skipped (the display-only `review_grid_viewed` still fires).
+  final ReviewOpenAnalytics? reviewAnalytics;
+
+  /// The capture level (A/B/C) this review belongs to, included in the
+  /// `review_grid_viewed` payload so the flow review (Eye/Top/Bottom Ring) is
+  /// funnel-attributed. The reusable display grid (resume/view-later) omits it.
+  final String? analyticsLevel;
+
   /// App-bar title.
   final String title;
 
@@ -108,12 +135,16 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
     super.initState();
     final c = _Counts.of(widget.items);
     Analytics.logEvent(AnalyticsEvents.reviewGridViewed, {
+      if (widget.analyticsLevel != null) 'level': widget.analyticsLevel,
       'total': widget.items.length,
       'accepted': c.accepted,
       'warned': c.warned,
       'rejected': c.rejected,
       'device_type': _deviceType,
     });
+    // Review-session funnel: once per OPEN (initState — never on rebuild/rotate),
+    // even with zero photos. Only when the owner supplied funnel context.
+    widget.reviewAnalytics?.opened(widget.items.length, deviceType: _deviceType);
   }
 
   @override
@@ -186,6 +217,18 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
     widget.onBackToCapture?.call();
   }
 
+  /// True once [_confirm] has fired — guards the primary CTA against a rapid
+  /// double-tap so the parent's forward navigation runs at most once.
+  bool _confirmed = false;
+
+  /// Confirm this level and advance. Single-shot: a second tap (before the route
+  /// transition completes) is swallowed.
+  void _confirm() {
+    if (_confirmed) return;
+    _confirmed = true;
+    widget.onConfirm?.call();
+  }
+
   /// Builds a [RetakeRequest] for [item]'s segment and hands it to the parent,
   /// debounced to a single emission. A tile without a known [ReviewItem.ringIndex]
   /// can't target a segment, so it has no retake control and this is a no-op.
@@ -233,9 +276,15 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
             // action surface at a time, never two competing ones.
             bottomNavigationBar: (selectionMode && isCupertino)
                 ? _buildIosToolbar(context)
-                : (!selectionMode && widget.onBackToCapture != null)
-                    ? _buildBackToCaptureBar(context)
-                    : null,
+                : selectionMode
+                    ? null
+                    // In-flow review: a primary confirm CTA (+ Back-to-Capture).
+                    : widget.onConfirm != null
+                        ? _buildFlowBar(context)
+                        // Reusable display grid: just the Back-to-Capture bar.
+                        : widget.onBackToCapture != null
+                            ? _buildBackToCaptureBar(context)
+                            : null,
             body: SafeArea(
               top: false,
               child: items.isEmpty
@@ -392,6 +441,41 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// In-flow review bottom bar (Screen 7A/7B/7C): a secondary "Back to Capture"
+  /// (when supplied) above a primary confirm CTA that advances the flow. Shown
+  /// when [ReviewGridScreen.onConfirm] is supplied (outside selection mode).
+  Widget _buildFlowBar(BuildContext context) {
+    // A content-sized bar (NOT BottomAppBar, whose fixed height clips a two-button
+    // column). SafeArea keeps the CTAs clear of the gesture inset.
+    return Material(
+      color: AppColors.surface1,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.onBackToCapture != null) ...[
+                AppButton.secondary(
+                  key: const Key('review_back_to_capture'),
+                  label: 'Back to Capture',
+                  onPressed: _backToCapture,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+              ],
+              AppButton(
+                key: const Key('review_confirm'),
+                label: widget.confirmLabel,
+                onPressed: _confirm,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,7 +1,10 @@
 // lib/app/routes/app_router.dart
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../application/capture/analytics/capture_level_events.dart';
+import '../../application/capture/analytics/capture_level_session.dart';
+import '../../application/capture/completion_gate_provider.dart';
+import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
 import '../../domain/entities/retake_request.dart';
 import '../../presentation/screens/auth/splash_screen.dart';
@@ -11,10 +14,11 @@ import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
-import '../../presentation/screens/capture/level_intro_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
+import '../../presentation/screens/capture/level_b_intro_screen.dart';
+import '../../presentation/screens/capture/level_c_intro_screen.dart';
 import '../../presentation/screens/capture/capture_screen.dart';
-import '../../presentation/screens/capture/review_screen.dart';
+import '../../presentation/screens/capture/level_review_grid_screen.dart';
 import '../../presentation/screens/capture/level_a_complete_screen.dart';
 import '../../presentation/screens/capture/level_complete_screen.dart';
 import '../../presentation/screens/capture/capture_summary_screen.dart';
@@ -22,7 +26,6 @@ import '../../presentation/screens/capture/uploading_screen.dart';
 import '../../presentation/screens/capture/processing_screen.dart';
 import '../../presentation/screens/capture/model_ready_screen.dart';
 import '../../presentation/screens/capture/ar_preview_screen.dart';
-import '../theme/app_colors.dart';
 import 'auth_router_notifier.dart';
 import 'route_error_screen.dart';
 
@@ -98,7 +101,7 @@ const Set<String> _authLocations = {
 ///   - Unauthenticated + protected route  → redirect to [AppRoutes.auth].
 ///   - Authenticated + auth route          → redirect to [AppRoutes.projects].
 /// `refreshListenable` re-runs the guard on every sign-in / sign-out.
-GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
+GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
   return GoRouter(
     initialLocation: AppRoutes.splash,
     refreshListenable: authNotifier,
@@ -183,7 +186,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
       GoRoute(
         path: AppRoutes.levelAReview,
         name: AppRouteNames.levelAReview,
-        builder: (_, __) => const ReviewScreen(
+        builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'A',
           levelName: 'Eye Ring',
           nextRoute: AppRoutes.levelAComplete,
@@ -207,36 +210,33 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
           onDoneExit: () => context.go(AppRoutes.projects),
         ),
       ),
-      // Level B
+      // Level B — dedicated Top Ring intro (tilt-down rule + Begin/Skip),
+      // mirroring the Level A intro pattern.
       GoRoute(
         path: AppRoutes.levelBIntro,
         name: AppRouteNames.levelBIntro,
-        builder: (_, __) => const LevelIntroScreen(
-          levelLabel: 'B',
-          levelName: 'Top Ring',
-          levelColor: AppColors.royalGold,
-          icon: Icons.arrow_upward,
-          rules: [
-            'Tilt camera slightly downward',
-            'Keep same circular motion',
-            'Ensure top surface is visible',
-          ],
-          nextRoute: AppRoutes.levelBCapture,
-        ),
+        builder: (_, __) => const LevelBIntroScreen(),
       ),
       GoRoute(
         path: AppRoutes.levelBCapture,
         name: AppRouteNames.levelBCapture,
-        builder: (_, __) => const CaptureScreen(
+        // Reuses the Level A capture screen (6A), driven by Level B's label +
+        // tuned top-ring instruction copy. Analytics `level` is derived from
+        // levelLabel ('B'), so the capture funnel is tagged level=B automatically.
+        // Optionally entered in RETAKE mode from Review (RetakeRequest via `extra`).
+        builder: (context, state) => CaptureScreen(
           levelLabel: 'B',
           levelName: 'Top Ring',
           nextRoute: AppRoutes.levelBReview,
+          instructions: kLevelBCaptureInstructions,
+          retakeRequest:
+              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
         ),
       ),
       GoRoute(
         path: AppRoutes.levelBReview,
         name: AppRouteNames.levelBReview,
-        builder: (_, __) => const ReviewScreen(
+        builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'B',
           levelName: 'Top Ring',
           nextRoute: AppRoutes.levelBComplete,
@@ -256,36 +256,35 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
           reviewRoute: AppRoutes.levelBReview,
         ),
       ),
-      // Level C
+      // Level C — dedicated Low Ring intro (lower-phone/tilt-up rule), reusing
+      // the SAME shared LevelIntroScaffold as Level B (config-driven).
       GoRoute(
         path: AppRoutes.levelCIntro,
         name: AppRouteNames.levelCIntro,
-        builder: (_, __) => const LevelIntroScreen(
-          levelLabel: 'C',
-          levelName: 'Low Ring',
-          levelColor: AppColors.textSecondary,
-          icon: Icons.arrow_downward,
-          rules: [
-            'Tilt camera slightly upward',
-            'Capture bottom and base detail',
-            'Move slowly for sharp shots',
-          ],
-          nextRoute: AppRoutes.levelCCapture,
-        ),
+        builder: (_, __) => const LevelCIntroScreen(),
       ),
       GoRoute(
         path: AppRoutes.levelCCapture,
         name: AppRouteNames.levelCCapture,
-        builder: (_, __) => const CaptureScreen(
+        // Reuses the shared capture screen (6A/6B), driven by Level C's label +
+        // tuned low-ring instruction copy. Analytics `level` is derived from
+        // levelLabel ('C'), so the capture funnel is tagged level=C automatically.
+        // The pitch band (Bottom Ring 'low') is selected per-level via
+        // pitchBandIdForLevel — the tilt meter + shutter gate already target it.
+        // Optionally entered in RETAKE mode from Review (RetakeRequest via `extra`).
+        builder: (context, state) => CaptureScreen(
           levelLabel: 'C',
           levelName: 'Low Ring',
           nextRoute: AppRoutes.levelCReview,
+          instructions: kLevelCCaptureInstructions,
+          retakeRequest:
+              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
         ),
       ),
       GoRoute(
         path: AppRoutes.levelCReview,
         name: AppRouteNames.levelCReview,
-        builder: (_, __) => const ReviewScreen(
+        builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'C',
           levelName: 'Low Ring',
           nextRoute: AppRoutes.levelCComplete,
@@ -308,6 +307,14 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
       GoRoute(
         path: AppRoutes.captureSummary,
         name: AppRouteNames.captureSummary,
+        // The final completion gate: Summary is reachable ONLY when every
+        // configured level is complete. A locked attempt is bounced to the first
+        // incomplete level's review (and reports which levels remain) rather than
+        // crashing or silently advancing. `ref` is absent in tests that build the
+        // router standalone → the gate is not enforced there (each screen still
+        // gates its own Continue).
+        redirect: (context, state) =>
+            _summaryGateRedirect(ref, state.matchedLocation),
         builder: (_, __) => const CaptureSummaryScreen(),
       ),
       GoRoute(
@@ -334,11 +341,51 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier) {
   );
 }
 
+/// Enforces the final completion gate at the Summary entry. Returns null (allow)
+/// when the gate is unlocked — emitting the once-per-transition unlock milestone —
+/// or the first incomplete level's review route (block) after logging the blocked
+/// attempt with the remaining levels. A null [ref] (router built without provider
+/// access, e.g. a focused test) never blocks.
+String? _summaryGateRedirect(Ref? ref, String matchedLocation) {
+  if (ref == null || matchedLocation != AppRoutes.captureSummary) return null;
+  final gate = ref.read(completionGateProvider);
+  final sessionId = ref.read(captureLevelSessionProvider)?.sessionId ?? '';
+  final analytics = ref.read(summaryGateAnalyticsProvider.notifier);
+  if (gate.isUnlocked) {
+    analytics.syncUnlockMilestone(gate, sessionId: sessionId);
+  } else {
+    analytics.logBlockedAttempt(gate, sessionId: sessionId);
+  }
+  return summaryGateRedirectTarget(gate);
+}
+
+/// The pure redirect decision for the Summary route: null (allow) when the gate
+/// is unlocked, else the first still-incomplete level's review route (the
+/// appropriate step to send the user back to). Falls back to Projects if the gate
+/// somehow reports no levels. Side-effect-free — the analytics live in the router
+/// closure — so it is directly unit-testable.
+String? summaryGateRedirectTarget(SummaryGate gate) {
+  if (gate.isUnlocked) return null;
+  final firstIncomplete = gate.incompleteLevelCodes.isEmpty
+      ? null
+      : captureLevelFromLabel(gate.incompleteLevelCodes.first);
+  return firstIncomplete == null
+      ? AppRoutes.projects
+      : _reviewRouteForLevelCode(firstIncomplete);
+}
+
+/// The review grid route for a guided-capture level — the gate's bounce target.
+String _reviewRouteForLevelCode(CaptureLevel level) => switch (level) {
+      CaptureLevel.a => AppRoutes.levelAReview,
+      CaptureLevel.b => AppRoutes.levelBReview,
+      CaptureLevel.c => AppRoutes.levelCReview,
+    };
+
 /// The app router, rebuilt whenever the auth notifier instance changes.
 /// `refreshListenable` handles intra-session auth changes without a rebuild.
 final appRouterProvider = Provider<GoRouter>((ref) {
   final notifier = ref.watch(authRouterNotifierProvider);
-  final router = createAppRouter(notifier);
+  final router = createAppRouter(notifier, ref);
   ref.onDispose(router.dispose);
   return router;
 });

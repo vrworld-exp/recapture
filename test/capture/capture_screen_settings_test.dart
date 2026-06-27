@@ -144,9 +144,18 @@ void main() {
     await tester.pump();
   }
 
+  // The ring-coverage HUD's target now pulses (a legitimately perpetual
+  // animation), so `pumpAndSettle` can't be used. A few bounded frames flush the
+  // sheet-open / setting-apply chain without waiting for a settle that never comes.
+  Future<void> settle(WidgetTester tester) async {
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+  }
+
   Future<void> openSettings(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Settings'));
-    await tester.pumpAndSettle();
+    await settle(tester);
   }
 
   Future<void> teardown(WidgetTester tester) async {
@@ -184,7 +193,7 @@ void main() {
     await openSettings(tester);
 
     await tester.tap(find.byType(Switch).first); // auto-capture off
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     // Persisted through the SAME store the pill uses.
     expect(autoStore.writes.last, isFalse);
@@ -206,7 +215,7 @@ void main() {
     await openSettings(tester);
 
     await tester.tap(find.text('High'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     expect(settingsStore.qualityWrites.last, QualityMode.high);
 
@@ -224,7 +233,7 @@ void main() {
     await openSettings(tester);
 
     await tester.tap(find.byType(Switch).at(1)); // save-to-gallery ON
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     // Reverted: the switch shows OFF and the last persisted value is false.
     final saveSwitch =

@@ -3,8 +3,16 @@
 // Pure Dart — NO Flutter/native imports. The eye-ring guided-capture engine: it
 // consumes smoothed yaw and produces ring coverage state (which segment the user
 // is in, and which segments have been captured). It owns the angular math +
-// coverage for ONE ring (Level A). It renders nothing and triggers no capture —
-// the HUD and the capture trigger are separate tasks that consume this state.
+// coverage for ONE ring. It renders nothing and triggers no capture — the HUD
+// and the capture trigger are separate tasks that consume this state.
+//
+// LEVEL-AGNOSTIC: although first written for Level A (the Eye Ring), this engine
+// carries NO Level-A assumption — `yawStart` and `segmentCount` are arguments to
+// [start], there is no hardcoded count, and there is no static/shared mutable
+// state (RingMath is stateless pure functions). So it is the SAME engine reused
+// per level: instantiate one [RingCoverageEngine] per ring (A/B/C) and each is a
+// fully independent state machine. See [LevelSegmentMachine], which bundles one
+// instance with that level's band + fill state behind a uniform interface.
 //
 // UNIT CONVENTION: DEGREES throughout, matching the rest of the capture-logic
 // layer (PitchBand.minDegrees, CapturePitchGuide, TiltTarget). Feed

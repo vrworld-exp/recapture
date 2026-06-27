@@ -167,6 +167,121 @@ void main() {
     });
   });
 
+  group('per-level independence (B & C)', () {
+    void observeLevel(SegmentCoverage c, CaptureLevel level) =>
+        tracker.onCoverageChanged(
+          c,
+          level: level,
+          projectId: 'proj',
+          sessionId: 'sess_${level.code}',
+          captureMode: 'guided',
+          deviceType: 'android',
+        );
+
+    test('segment_filled is tagged with the EMITTING level', () {
+      observeLevel(SegmentCoverage.initial(segmentCount: 4), CaptureLevel.b);
+      observeLevel(
+          SegmentCoverage.initial(segmentCount: 4).recordCapture(0),
+          CaptureLevel.b);
+      observeLevel(SegmentCoverage.initial(segmentCount: 4), CaptureLevel.c);
+      observeLevel(
+          SegmentCoverage.initial(segmentCount: 4).recordCapture(1),
+          CaptureLevel.c);
+
+      final fills = ofName(AnalyticsEvents.segmentFilled);
+      expect(fills.map((e) => e.properties['level']).toList(), ['B', 'C']);
+      expect(fills[0].properties['segment_index'], 0);
+      expect(fills[1].properties['segment_index'], 1);
+    });
+
+    test('B 50% and C 50% are two independent once-events (no cross-suppression)',
+        () {
+      // Drive Level B to 50% (2/4).
+      var b = SegmentCoverage.initial(segmentCount: 4);
+      observeLevel(b, CaptureLevel.b);
+      b = b.recordCapture(0).recordCapture(1);
+      observeLevel(b, CaptureLevel.b);
+
+      // Drive Level C to 50% (2/4) — must NOT be suppressed by B's fired set.
+      var c = SegmentCoverage.initial(segmentCount: 4);
+      observeLevel(c, CaptureLevel.c);
+      c = c.recordCapture(2).recordCapture(3);
+      observeLevel(c, CaptureLevel.c);
+
+      final milestones = ofName(AnalyticsEvents.coverageMilestone);
+      final bM = milestones
+          .where((e) => e.properties['level'] == 'B')
+          .map((e) => e.properties['milestone'])
+          .toList();
+      final cM = milestones
+          .where((e) => e.properties['level'] == 'C')
+          .map((e) => e.properties['milestone'])
+          .toList();
+      expect(bM, [25, 50]);
+      expect(cM, [25, 50]);
+    });
+
+    test('firedMilestonesFor reports each level independently', () {
+      var b = SegmentCoverage.initial(segmentCount: 4).recordCapture(0);
+      observeLevel(b, CaptureLevel.b); // 25%
+      expect(tracker.firedMilestonesFor(CaptureLevel.b), {25});
+      expect(tracker.firedMilestonesFor(CaptureLevel.c), isEmpty);
+    });
+
+    test('resetLevel clears ONE level, leaving the others intact', () {
+      observeLevel(
+          SegmentCoverage.initial(segmentCount: 4).recordCapture(0),
+          CaptureLevel.b); // B → 25
+      observeLevel(
+          SegmentCoverage.initial(segmentCount: 4).recordCapture(0),
+          CaptureLevel.c); // C → 25
+      tracker.resetLevel(CaptureLevel.b);
+      expect(tracker.firedMilestonesFor(CaptureLevel.b), isEmpty);
+      expect(tracker.firedMilestonesFor(CaptureLevel.c), {25});
+    });
+  });
+
+  group('seedLevel (resume-safe)', () {
+    void observeB(SegmentCoverage c) => tracker.onCoverageChanged(
+          c,
+          level: CaptureLevel.b,
+          projectId: 'proj',
+          sessionId: 'sess_B',
+          captureMode: 'guided',
+          deviceType: 'android',
+        );
+
+    test('a seeded, already-passed milestone does NOT re-fire on resume', () {
+      // Resume Level B already past 50% (2/4 filled, fired {25,50} persisted).
+      final restored = SegmentCoverage.initial(segmentCount: 4)
+          .recordCapture(0)
+          .recordCapture(1);
+      tracker.seedLevel(
+        level: CaptureLevel.b,
+        firedMilestones: {25, 50},
+        prevFilled: restored.filled,
+      );
+
+      // First post-resume observation of the SAME coverage → nothing re-fires.
+      observeB(restored);
+      expect(emitted, isEmpty);
+
+      // Continuing to 75% fires only the remaining milestones.
+      final next = restored.recordCapture(2); // 3/4 = 75%
+      observeB(next);
+      expect(firedMilestones(), [75]);
+      expect(ofName(AnalyticsEvents.segmentFilled), hasLength(1));
+      expect(
+          ofName(AnalyticsEvents.segmentFilled).single.properties['segment_index'],
+          2);
+    });
+
+    test('only canonical milestones survive seeding (garbage dropped)', () {
+      tracker.seedLevel(level: CaptureLevel.b, firedMilestones: {25, 99, -1});
+      expect(tracker.firedMilestonesFor(CaptureLevel.b), {25});
+    });
+  });
+
   group('payload + privacy', () {
     test('segment_filled carries the canonical typed fields', () {
       final c = SegmentCoverage.initial(segmentCount: 8).recordCapture(3);

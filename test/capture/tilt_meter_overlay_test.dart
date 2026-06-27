@@ -44,6 +44,7 @@ Future<void> _pumpMeter(
   bool reduceMotion = false,
   Duration outSustain = const Duration(seconds: 2),
   Duration outCooldown = const Duration(seconds: 3),
+  String? level,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -58,6 +59,7 @@ Future<void> _pumpMeter(
             body: Stack(
               children: [
                 TiltMeterOverlay(
+                  level: level,
                   outSustain: outSustain,
                   outCooldown: outCooldown,
                 ),
@@ -164,6 +166,32 @@ void main() {
     expect(outEvents, isNotEmpty);
     expect(outEvents.first.props['direction'], 'above');
     expect(outEvents.first.props['target_band_id'], 'mid');
+  });
+
+  testWidgets('out-of-band event carries the level + current pitch (Level C)',
+      (tester) async {
+    final source = StreamController<SmoothedOrientation>.broadcast();
+    addTearDown(source.close);
+    await _pumpMeter(
+      tester,
+      source.stream,
+      level: 'C',
+      outSustain: Duration.zero,
+      outCooldown: Duration.zero,
+    );
+
+    source.add(_at(10)); // below the mid band [30,60) → "below"
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    final out = events
+        .firstWhere((e) => e.name == AnalyticsEvents.tiltMeterOutOfBand);
+    expect(out.props['level'], 'C');
+    expect(out.props['direction'], 'below');
+    // The CURRENT sample pitch is logged (smoothed seeds to the first sample).
+    expect(out.props['pitch'], closeTo(10, 0.001));
+    // No analytics session was started in this isolated test → empty ids.
+    expect(out.props['session_id'], '');
   });
 
   testWidgets('reduce-motion still tracks the needle (no crash)',
