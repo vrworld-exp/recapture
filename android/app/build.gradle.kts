@@ -88,6 +88,11 @@ dependencies {
     // bindToLifecycle is driven by start/stop/dispose, decoupled from the Activity.
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
 
+    // WorkManager — background auto-resume of offline-queued uploads under a
+    // NetworkType.CONNECTED constraint (UploadResumeWorker). The OS runs the
+    // resume when connectivity returns, even if the app process was killed.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+
     // JVM unit tests for the pure permission mapping logic (PermissionMapperTest).
     testImplementation("junit:junit:4.13.2")
 }

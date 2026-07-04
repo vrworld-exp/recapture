@@ -55,6 +55,15 @@ object PermissionMapper {
         // Raw IMU needs no Android permission — always granted, no dialog.
         "motion" -> emptyList()
 
+        // API 33+ : posting notifications is a runtime permission (used by the
+        // upload foreground service's progress notification). Below 33 notifications
+        // need no runtime permission → auto-granted, no dialog. The foreground
+        // service runs regardless of the outcome (a denial only suppresses display).
+        "notifications" -> when {
+            sdkInt >= Build.VERSION_CODES.TIRAMISU -> listOf(Manifest.permission.POST_NOTIFICATIONS)
+            else -> emptyList()
+        }
+
         else -> emptyList()
     }
 }

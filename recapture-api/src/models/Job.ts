@@ -1,6 +1,11 @@
 // src/models/Job.ts
 import { Schema, model, Document, Types } from 'mongoose';
-import { CaptureSummary, CaptureLevels, LevelSummary } from './types/capture.types';
+import {
+  CaptureSummary,
+  CaptureLevels,
+  LevelSummary,
+  ObjectSize,
+} from './types/capture.types';
 import {
   JobState,
   StageProgress,
@@ -133,6 +138,21 @@ export interface IJob extends Document {
   /** Manifest/protocol version — used to handle schema evolution gracefully */
   protocolVersion: string;
 
+  /**
+   * Object size preset the capture used — snapshotted from the project at job
+   * creation (POST /jobs cross-checks the client's value against the project)
+   * so later file-count/coverage validation reads the job, not a project that
+   * may have changed.
+   */
+  objectSize?: ObjectSize;
+
+  /**
+   * Client-supplied idempotency key (`Idempotency-Key` header on POST /jobs),
+   * unique per user when present — a retried create resolves to this job
+   * instead of inserting a duplicate.
+   */
+  idempotencyKey?: string;
+
   state: JobState;
 
   /** Live progress within the current processing stage (P7 worker updates this) */
@@ -149,6 +169,9 @@ export interface IJob extends Document {
 
   /** Structured error info — populated on FAILED */
   error?: JobError;
+
+  /** When the job entered the processing queue (set by POST /jobs/:id/finalize) */
+  queuedAt?: Date;
 
   /** Device that created this job — for debugging capture quality issues */
   deviceInfo?: DeviceInfo;
@@ -174,6 +197,14 @@ const JobSchema = new Schema<IJob>(
       required: true,
       default: 'v1.0',
     },
+    objectSize: {
+      type: String,
+      enum: ['SMALL', 'MEDIUM', 'LARGE'],
+    },
+    idempotencyKey: {
+      type: String,
+      maxlength: 128,
+    },
     state: {
       type: String,
       enum: [
@@ -193,6 +224,7 @@ const JobSchema = new Schema<IJob>(
     },
     stageProgress: { type: StageProgressSchema },
     captureSummary: { type: CaptureSummarySchema },
+    queuedAt: { type: Date },
     upload: { type: UploadInfoSchema },
     artifacts: { type: ArtifactsInfoSchema },
     error: { type: JobErrorSchema },
@@ -214,6 +246,15 @@ JobSchema.index({ userId: 1, createdAt: -1 });
 // (used by the P7 processing worker to find QUEUED jobs, and by admin dashboard
 // to find stuck/FAILED jobs)
 JobSchema.index({ state: 1, updatedAt: -1 });
+
+// Idempotent create (POST /jobs): at most ONE job per (user, Idempotency-Key).
+// Partial so the many jobs created WITHOUT a key never collide — uniqueness
+// applies only where the key exists. The unique index is the race authority: a
+// concurrent duplicate create loses with E11000 and is resolved to a replay.
+JobSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true } } }
+);
 
 export const Job = model<IJob>('Job', JobSchema);
 

@@ -7,6 +7,7 @@ import '../../application/capture/completion_gate_provider.dart';
 import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
 import '../../domain/entities/retake_request.dart';
+import '../../domain/upload/upload_failure.dart';
 import '../../presentation/screens/auth/splash_screen.dart';
 import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
@@ -23,6 +24,7 @@ import '../../presentation/screens/capture/level_a_complete_screen.dart';
 import '../../presentation/screens/capture/level_complete_screen.dart';
 import '../../presentation/screens/capture/capture_summary_screen.dart';
 import '../../presentation/screens/capture/uploading_screen.dart';
+import '../../presentation/screens/capture/upload_failed_screen.dart';
 import '../../presentation/screens/capture/processing_screen.dart';
 import '../../presentation/screens/capture/model_ready_screen.dart';
 import '../../presentation/screens/capture/ar_preview_screen.dart';
@@ -54,6 +56,7 @@ abstract final class AppRoutes {
   static const levelCComplete = '/capture/level-c/complete';
   static const captureSummary = '/capture/summary';
   static const uploading = '/upload';
+  static const uploadFailed = '/upload/failed';
   static const processing = '/processing';
   static const modelReady = '/model';
   static const arPreview = '/model/ar';
@@ -83,6 +86,7 @@ abstract final class AppRouteNames {
   static const levelCComplete = 'levelCComplete';
   static const captureSummary = 'captureSummary';
   static const uploading = 'uploading';
+  static const uploadFailed = 'uploadFailed';
   static const processing = 'processing';
   static const modelReady = 'modelReady';
   static const arPreview = 'arPreview';
@@ -321,6 +325,18 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.uploading,
         name: AppRouteNames.uploading,
         builder: (_, __) => const UploadingScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.uploadFailed,
+        name: AppRouteNames.uploadFailed,
+        // Screen 9F — the upload-failure destination. The classified failure rides
+        // in via `extra`; a null/garbled extra (deep-link / refresh) degrades to
+        // the safe generic `unknown` state (see UploadFailedScreen).
+        builder: (context, state) => UploadFailedScreen(
+          failure: state.extra is UploadErrorCategory
+              ? state.extra! as UploadErrorCategory
+              : UploadErrorCategory.unknown,
+        ),
       ),
       GoRoute(
         path: AppRoutes.processing,

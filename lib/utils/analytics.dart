@@ -349,10 +349,251 @@ abstract final class AnalyticsEvents {
   ///   device_type }.
   static const String captureSummaryViewed = 'capture_summary_viewed';
 
-  /// A Capture complete CTA was tapped. Props: { phase: guided_capture, session_id,
-  /// action: continue|review, all_complete? (continue), level? (per-card review),
-  /// device_type }.
+  /// A Capture summary secondary CTA was tapped. Props: { phase: guided_capture,
+  /// session_id, action: fix_issues|save_for_later|review,
+  /// target_level? (fix_issues — the most-work level routed to),
+  /// level? (per-card review), device_type }. The PRIMARY Upload CTA emits the
+  /// dedicated [captureSummaryProceedToUpload] instead.
   static const String captureSummaryAction = 'capture_summary_action';
+
+  /// The aggregated warnings list on the Capture Summary was expanded. Fires on
+  /// each collapsed→expanded transition (never on collapse). Props:
+  /// { phase: guided_capture, session_id, warning_count, device_type }.
+  /// NAMING: the brief lists `capture_session_id` / `device_type: mobile`; this
+  /// funnel uses `session_id` + android/ios so the event joins the rest of the
+  /// capture funnel (same remap precedent as the events above).
+  static const String captureSummaryWarningsExpanded =
+      'capture_summary_warnings_expanded';
+
+  /// The proceed-to-upload CTA was tapped on the Capture Summary (once per entry —
+  /// double-tap guarded). The funnel counterpart to the granular
+  /// [captureSummaryAction]; fires AFTER any below-min confirmation is accepted.
+  /// Props: { phase: guided_capture, session_id, any_level_below_min, device_type }.
+  static const String captureSummaryProceedToUpload =
+      'capture_summary_proceed_to_upload';
+
+  // ── Capture Summary offline banner (connectivity-reactive) ──────────────────
+  // The Summary step's next action is upload, which is impossible offline. These
+  // fire off the CENTRALIZED connectivity source (isOnlineProvider), debounced so
+  // flapping doesn't re-fire. NAMING: the brief lists `capture_session_id` /
+  // `device_type: mobile`; this funnel uses `session_id` + android/ios (same remap
+  // precedent as the other summary events) so they join the capture funnel.
+  // TODO(analytics): mirror these two names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// The offline banner transitioned hidden→shown (rising edge only, NOT per
+  /// rebuild). Props: { session_id, phase: guided_capture, device_type }.
+  static const String captureSummaryOfflineBannerShown =
+      'capture_summary_offline_banner_shown';
+
+  /// The user tapped Upload while offline and was blocked (the CTA allows the tap
+  /// then blocks; a guaranteed-to-fail upload is never navigated into). Props:
+  /// { session_id, phase: guided_capture, device_type }.
+  static const String captureSummaryProceedBlockedOffline =
+      'capture_summary_proceed_blocked_offline';
+
+  // ── Upload hard gate (absolute-minimum accepted shots per level) ────────────
+  // The HARD floor that disables Upload when any level has fewer accepted shots
+  // than its absolute minimum (config `guided_capture_min_accepted_shots`) —
+  // distinct from the soft completion gate. TODO(analytics): mirror these three
+  // names + props in the shared server schema + tracking-plan doc.
+
+  /// An upload was blocked by the hard gate — emitted when the Upload control is
+  /// first shown disabled in a session view AND when a blocked attempt is refused
+  /// at the handler. Props: { session_id, phase: upload, short_levels
+  /// (comma-separated level ids), total_deficit, device_type }.
+  static const String uploadGateBlocked = 'upload_gate_blocked';
+
+  /// The hard upload gate transitioned not-eligible→eligible (every level met its
+  /// absolute minimum) for a session. Fires ONCE per transition, not per
+  /// evaluation. Props: { session_id, phase: upload, device_type }.
+  static const String uploadGatePassed = 'upload_gate_passed';
+
+  /// Upload actually started (the gate was eligible and the handler proceeded).
+  /// Props: { session_id, phase: upload, device_type }.
+  static const String uploadInitiated = 'upload_initiated';
+
+  // ── Bundle packer (pre-upload staging) — pack DIAGNOSTICS ───────────────────
+  // Emitted by the bundle packer (lib/application/upload/capture_bundle_packer.dart)
+  // as it stages accepted images into the /images/{EYE|TOP|LOW}/ + capture_manifest
+  // .json bundle the uploader consumes. These are diagnostics (not user-interaction
+  // analytics) so the upload flow — and Screen 9F's failure mapping — can categorize
+  // PRE-upload failures. `session_id` + android/ios, matching the upload funnel.
+  // TODO(analytics): mirror these three names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// A bundle pack began. Props: { session_id, phase: upload, total_images,
+  ///   eye_count, top_count, low_count, device_type }.
+  static const String bundlePackStarted = 'bundle_pack_started';
+
+  /// A bundle pack completed and a verified bundle was finalized. Props:
+  /// { session_id, phase: upload, total_images, total_bytes, duration_ms,
+  ///   device_type }.
+  static const String bundlePackSucceeded = 'bundle_pack_succeeded';
+
+  /// A bundle pack failed or was cancelled (no bundle released). Props:
+  /// { session_id, phase: upload, reason (missing_source_file|insufficient_storage|
+  ///   encode_error|integrity_mismatch|cancelled|unknown), stage, device_type }.
+  static const String bundlePackFailed = 'bundle_pack_failed';
+
+  // ── Upload engine (chunked multipart transfer) — ENGINE telemetry ───────────
+  // Emitted by the ChunkedUploadManager (lib/application/upload/
+  // chunked_upload_manager.dart) — engine-level events the VIEW cannot see. These
+  // do NOT duplicate Screen 9's view-level upload_started_view/completed/failed_view.
+  // device_type is "mobile" per the engine telemetry spec (a coarse client tag,
+  // distinct from the android/ios used by view events).
+  // TODO(analytics): mirror these two names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// A part upload was retried after a transient failure. Props:
+  /// { capture_session_id, file_index, part_number, attempt, device_type }.
+  static const String uploadPartRetry = 'upload_part_retry';
+
+  /// A multipart upload was aborted (terminal failure or cancel) so S3 keeps no
+  /// incomplete upload. Props: { capture_session_id, reason, files_completed,
+  ///   device_type }.
+  static const String uploadMultipartAborted = 'upload_multipart_aborted';
+
+  // ── Upload auto-retry (session-level exponential backoff) — ENGINE telemetry ─
+  // Emitted by the ResilientUploadRunner (lib/application/upload/
+  // resilient_upload_runner.dart) as it auto-retries a transient session failure
+  // (max 3 retries / 4 attempts). Diagnostics, NOT user-interaction analytics; the
+  // categories align with Screen 9F's error_category. Distinct from 9F's own
+  // user-initiated Retry (upload_retry_tapped). device_type is "mobile".
+  // TODO(analytics): mirror these four names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// An upload attempt began. Props: { session_id, attempt (1-based),
+  ///   is_retry (bool), device_type }.
+  static const String uploadAttemptStarted = 'upload_attempt_started';
+
+  /// An upload attempt failed. Props: { session_id, attempt, error_category,
+  ///   retryable (bool), next_delay_ms (present only when a retry follows),
+  ///   device_type }.
+  static const String uploadAttemptFailed = 'upload_attempt_failed';
+
+  /// Auto-retries were exhausted (terminal). Props: { session_id, total_attempts,
+  ///   error_category, device_type }.
+  static const String uploadRetriesExhausted = 'upload_retries_exhausted';
+
+  /// An upload succeeded (possibly after retries). Props: { session_id,
+  ///   attempts_used, device_type }. Distinct from the VIEW event [uploadCompleted].
+  static const String uploadSucceeded = 'upload_succeeded';
+
+  /// A coarse upload byte-progress milestone (25/50/75/100%) was first crossed —
+  /// once per milestone per upload, NOT per progress emit. Observability only.
+  /// Props: { session_id, milestone, device_type }.
+  static const String uploadProgressMilestone = 'upload_progress_milestone';
+
+  // ── Offline upload queue (detect offline → queue → auto-resume) — ENGINE ────
+  // Emitted by the OfflineUploadQueue coordinator (lib/application/upload/
+  // offline_upload_queue.dart) when a job enters "waiting for connection" or is
+  // auto-resumed on connectivity restore. Diagnostics, NOT user-interaction
+  // analytics — the user-paused/resumed events (upload_paused/upload_resumed)
+  // stay the buttons' territory. device_type is "mobile".
+  // TODO(analytics): mirror these names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// An upload job was queued to wait for connectivity instead of failing.
+  /// Props: { session_id, reason (offline_at_start|network_failure),
+  ///   pending_count, device_type }.
+  static const String uploadOfflineQueued = 'upload_offline_queued';
+
+  /// A previously offline-queued job was auto-resumed (connectivity restored or
+  /// reachability re-probe) — continues from the persisted offset/ETags. Fires
+  /// per resumed job, never for user-paused jobs. Props: { session_id,
+  ///   attempt (queue-level run count, 1-based), pending_count, device_type }.
+  static const String uploadOfflineAutoResumed = 'upload_offline_auto_resumed';
+
+  // ── Uploading screen (Screen 9) — view-level upload progress ────────────────
+  // VIEW-level events from the Uploading screen observing the upload pipeline's
+  // progress stream — distinct from any future service-layer transfer events.
+  // NAMING: the brief lists `capture_session_id` / `device_type: mobile`; this
+  // funnel uses `session_id` + android/ios so these join the upload funnel
+  // (capture_summary_proceed_to_upload / upload_initiated / upload_gate_*).
+  // TODO(analytics): mirror in the shared server schema + tracking-plan doc.
+
+  /// The Uploading screen became visible — fired once per entry, on the first
+  /// progress snapshot (so totals are populated). Props: { session_id,
+  /// phase: upload, total_files, total_mb, device_type }.
+  static const String uploadStartedView = 'upload_started_view';
+
+  /// The observed upload reached the completed state (once). Props: { session_id,
+  /// phase: upload, total_files, total_mb, duration_ms, device_type }.
+  static const String uploadCompleted = 'upload_completed';
+
+  /// The observed upload reached a failed/error state (once). Props: { session_id,
+  /// phase: upload, files_uploaded_at_failure, device_type }.
+  static const String uploadFailedView = 'upload_failed_view';
+
+  // ── Upload Failed screen (Screen 9F) — reason + Retry / Back to Projects ────
+  // The failure DESTINATION (distinct from the observation event above): it maps
+  // the pipeline failure to a friendly category + retryable classification and
+  // owns the recovery actions. `error_category` is the MAPPED bucket (never raw).
+  // `session_id` + android/ios, matching the rest of the upload funnel.
+  // TODO(analytics): mirror these three names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// Screen 9F became visible. Props: { session_id, phase: upload, error_category,
+  /// retryable, device_type }.
+  static const String uploadFailedViewed = 'upload_failed_viewed';
+
+  /// Retry was tapped on Screen 9F (retryable failures only; double-tap guarded).
+  /// Props: { session_id, error_category, device_type }.
+  static const String uploadRetryTapped = 'upload_retry_tapped';
+
+  /// Back to Projects was tapped on Screen 9F. Props: { session_id, error_category,
+  /// device_type }.
+  static const String uploadFailedBackToProjects =
+      'upload_failed_back_to_projects';
+
+  // ── Uploading screen (Screen 9) — Pause / Resume / Cancel controls ──────────
+  // The user SIGNALLED a transfer control. These are UI-intent events (the user
+  // tapped a control that passed the state + in-flight guards), distinct from the
+  // pipeline's own state transitions — the pipeline owns the mechanics. Each fires
+  // once per accepted tap (wrong-state / double taps are guarded and emit nothing).
+  // NAMING: `session_id` + android/ios, matching the rest of the upload funnel.
+  // TODO(analytics): mirror in the shared server schema + tracking-plan doc.
+
+  /// The user signalled Pause on an in-progress upload. Props: { session_id,
+  /// phase: upload, device_type }.
+  static const String uploadPaused = 'upload_paused';
+
+  /// The user signalled Resume on a paused upload (continues from the durable
+  /// queue). Props: { session_id, phase: upload, device_type }.
+  static const String uploadResumed = 'upload_resumed';
+
+  /// The user CONFIRMED Cancel — the transfer is aborted but the local captured
+  /// data is retained (re-uploadable), so this is NOT a delete. Fires only after
+  /// the confirmation is accepted (a dismissed confirmation emits nothing). Props:
+  /// { session_id, phase: upload, from_state: uploading|paused, device_type }.
+  static const String uploadCancelled = 'upload_cancelled';
+
+  // ── Cancel → Keep as Draft (Capture Summary / Uploading leave-flow) ─────────
+  // The safe-leave confirmation whose primary outcome keeps the work as a draft.
+  // `phase` is `capture_summary` or `upload` (whichever step the user left from);
+  // `upload_in_progress` reflects whether a transfer was aborted first. Each fires
+  // ONCE per resolution — the kept-draft event only after a SUCCESSFUL save (a
+  // failed save keeps the user on-screen and emits nothing). `session_id` +
+  // android/ios so these join the rest of the capture/upload funnel.
+  // TODO(analytics): mirror these four names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// The cancel confirmation was shown. Props: { session_id, phase,
+  /// upload_in_progress, device_type }.
+  static const String captureCancelOpened = 'capture_cancel_opened';
+
+  /// Keep as Draft succeeded and the user left. Fires ONLY after a successful
+  /// save. Props: { session_id, phase, device_type }.
+  static const String captureCancelKeptDraft = 'capture_cancel_kept_draft';
+
+  /// Discard completed and the user left (the only deletion path). Props:
+  /// { session_id, phase, device_type }.
+  static const String captureCancelDiscarded = 'capture_cancel_discarded';
+
+  /// The user chose Keep editing / dismissed the confirmation (unchanged). Props:
+  /// { session_id, phase, device_type }.
+  static const String captureCancelDismissed = 'capture_cancel_dismissed';
 
   // ── Final completion gate (all levels → unlock Summary) ────────────────────
   // The single completion gate (lib/domain/capture/completion_gate.dart) that

@@ -8,6 +8,7 @@ import { notFound } from '@/middleware/notFound';
 import healthRouter from '@/routes/health';
 import authRouter from '@/routes/auth';
 import projectsRouter from '@/routes/projects';
+import jobsRouter from '@/routes/jobs';
 import remoteConfigRouter from '@/routes/remoteConfig';
 
 export function createApp(): express.Express {
@@ -24,6 +25,7 @@ export function createApp(): express.Express {
   app.use('/health', healthRouter);
   app.use('/auth', authRouter);
   app.use('/projects', projectsRouter);
+  app.use('/jobs', jobsRouter);
   // Public (no JWT) — consumed at client startup, possibly pre-login.
   app.use('/remote-config', remoteConfigRouter);
 

@@ -1,9 +1,11 @@
 // test/capture/capture_summary_provider_test.dart
 //
-// The aggregation behind Screen 6C-Complete: one LevelCaptureSummary per
+// The aggregation behind the Capture Summary: one LevelCaptureSummary per
 // configured level (CaptureLevel.values — not a hardcoded 3-tuple), sourced from
-// the real per-level ledger. Verifies counts, warned tally, representative
-// thumbnail (first frame), and the isComplete (≥1 frame) gate signal.
+// the real per-level ledger + config. Verifies counts, warned tally, coverage %,
+// the composed completion (evaluateLevelA: 80%-coverage AND min-count) with its
+// shortfall, the aggregated warnings, the representative thumbnail, and the
+// most-work ranking + all-complete helpers.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/analytics/capture_level_events.dart';
@@ -12,6 +14,14 @@ import 'package:recapture/application/capture/ledger/captured_photo_record.dart'
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry.dart';
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry_provider.dart';
 import 'package:recapture/application/capture/ledger/warned_photo_record.dart';
+import 'package:recapture/application/config/config_notifier.dart';
+import 'package:recapture/domain/entities/capture_config.dart';
+
+/// Bundled default (bands low=12 / mid=10 / high=8, minCoveragePct=80, min count=1).
+class _StubConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault;
+}
 
 CapturedPhotoRecord _accepted(int seg, String path) => CapturedPhotoRecord(
       segmentIndex: seg,
@@ -23,13 +33,29 @@ CapturedPhotoRecord _accepted(int seg, String path) => CapturedPhotoRecord(
       sensorTimestampNs: seg * 1000 + 1,
     );
 
+LevelCaptureLedgerRegistry _registry(Map<String, int> framesPerBand) {
+  final reg = LevelCaptureLedgerRegistry();
+  framesPerBand.forEach((band, n) {
+    final ledger = reg.ledgerFor(band);
+    for (var i = 0; i < n; i++) {
+      ledger.recordAccepted(_accepted(i, '/$band/$i.jpg'));
+    }
+  });
+  return reg;
+}
+
+ProviderContainer _container(LevelCaptureLedgerRegistry reg) {
+  final c = ProviderContainer(overrides: [
+    levelCaptureLedgerRegistryProvider.overrideWithValue(reg),
+    captureConfigProvider.overrideWith(_StubConfigNotifier.new),
+  ]);
+  addTearDown(c.dispose);
+  return c;
+}
+
 void main() {
-  test('one summary per level, in order, with counts/thumb/complete', () {
-    final reg = LevelCaptureLedgerRegistry();
-    reg.ledgerFor('mid')
-      ..recordAccepted(_accepted(0, '/mid/0.jpg'))
-      ..recordAccepted(_accepted(1, '/mid/1.jpg'));
-    reg.ledgerFor('high').recordAccepted(_accepted(0, '/high/0.jpg'));
+  test('per-level counts/coverage/completion/shortfall/warnings/thumb', () {
+    final reg = _registry({'mid': 2, 'high': 1, 'low': 0});
     reg.ledgerFor('high').recordWarned(const WarnedPhotoRecord(
           framePath: '/high/0.jpg',
           isUnderexposed: true,
@@ -37,44 +63,77 @@ void main() {
           meanLuminance: 10,
           sensorTimestampNs: 1,
         ));
-    // 'low' (Level C) left empty → incomplete.
 
-    final container = ProviderContainer(overrides: [
-      levelCaptureLedgerRegistryProvider.overrideWithValue(reg),
-    ]);
-    addTearDown(container.dispose);
-
-    final summaries = container.read(captureSummaryProvider);
+    final summaries = _container(reg).read(captureSummaryProvider);
 
     expect(summaries.map((s) => s.level).toList(),
         [CaptureLevel.a, CaptureLevel.b, CaptureLevel.c]);
 
-    // Display data only — completeness is the completion gate's concern now
-    // (see completion_gate_test.dart), not a property of this summary type.
-    final a = summaries[0];
+    final a = summaries[0]; // mid: 2 frames of 10, need 80% → 8 segments
     expect(a.name, 'Eye Ring');
     expect(a.frameCount, 2);
     expect(a.warnedCount, 0);
+    expect(a.minRequired, 1);
+    expect(a.coveragePct, 20);
+    expect(a.isComplete, isFalse);
+    expect(a.completion.segmentsShort, 6); // ceil(0.8*10)=8, filled 2
+    expect(a.completion.photosShort, 0); // 2 >= 1
+    expect(a.shortfall, 6);
     expect(a.thumbnailPath, '/mid/0.jpg');
 
-    final b = summaries[1];
+    final b = summaries[1]; // high: 1 of 8, need ceil(6.4)=7
     expect(b.frameCount, 1);
     expect(b.warnedCount, 1);
+    expect(b.coveragePct, 13); // 12.5 → 13
+    expect(b.completion.segmentsShort, 6);
+    expect(b.warnings.single.message, contains('too dark'));
 
-    final c = summaries[2];
+    final c = summaries[2]; // low: 0 of 12, need 10; 0 photos
     expect(c.frameCount, 0);
+    expect(c.coveragePct, 0);
+    expect(c.completion.segmentsShort, 10);
+    expect(c.completion.photosShort, 1);
+    expect(c.shortfall, 11);
     expect(c.thumbnailPath, isNull);
   });
 
-  test('empty registry → every level has zero frames', () {
-    final container = ProviderContainer(overrides: [
-      levelCaptureLedgerRegistryProvider
-          .overrideWithValue(LevelCaptureLedgerRegistry()),
-    ]);
-    addTearDown(container.dispose);
+  test('mostWorkLevel = greatest shortfall among incomplete', () {
+    final summaries =
+        _container(_registry({'mid': 2, 'high': 1, 'low': 0}))
+            .read(captureSummaryProvider);
+    // C has the largest shortfall (11) → most work.
+    expect(mostWorkLevel(summaries), CaptureLevel.c);
+    expect(allLevelsComplete(summaries), isFalse);
+  });
 
-    final summaries = container.read(captureSummaryProvider);
+  test('all levels complete → mostWorkLevel null, allLevelsComplete true', () {
+    // mid≥8, high≥7, low≥10 → each meets 80% coverage + ≥1 photo.
+    final summaries = _container(_registry({'mid': 8, 'high': 7, 'low': 10}))
+        .read(captureSummaryProvider);
+    expect(summaries.every((s) => s.isComplete), isTrue);
+    expect(mostWorkLevel(summaries), isNull);
+    expect(allLevelsComplete(summaries), isTrue);
+  });
+
+  test('empty registry → every level zero frames, incomplete', () {
+    final summaries =
+        _container(LevelCaptureLedgerRegistry()).read(captureSummaryProvider);
     expect(summaries, hasLength(CaptureLevel.values.length));
     expect(summaries.every((s) => s.frameCount == 0), isTrue);
+    expect(summaries.every((s) => !s.isComplete), isTrue);
+    expect(allLevelsComplete(summaries), isFalse);
+  });
+
+  test('overexposed warning maps to a bright message', () {
+    final reg = LevelCaptureLedgerRegistry();
+    reg.ledgerFor('mid').recordWarned(const WarnedPhotoRecord(
+          framePath: '/mid/0.jpg',
+          isUnderexposed: false,
+          isOverexposed: true,
+          meanLuminance: 250,
+          sensorTimestampNs: 1,
+        ));
+    final summaries = _container(reg).read(captureSummaryProvider);
+    expect(summaries[0].warnings.single.message, contains('too bright'));
   });
 }

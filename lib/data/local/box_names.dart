@@ -42,6 +42,20 @@ abstract final class BoxNames {
   /// resume on relaunch. Per-segment coverage lives in [captureSessions]; this is
   /// the sequencing layer above it.
   static const String captureProgression = 'capture_progression';
+
+  /// Durable resumable-upload progress (per session+file: server uploadId, the
+  /// confirmed part ETags, byte offset, status), keyed by `sessionId::fileId`, so
+  /// a paused/killed multipart upload resumes across restarts WITHOUT re-uploading
+  /// confirmed parts. The P2 offline-outbox durability pattern applied to chunked
+  /// uploads. Cleared on cancel/complete; holds no capture image data.
+  static const String uploadProgress = 'upload_progress';
+
+  /// Durable offline UPLOAD JOB queue (per session: the re-runnable session spec
+  /// + queue state), keyed by `jobId`. The queue-level layer ABOVE
+  /// [uploadProgress]: it remembers WHICH uploads are waiting for connection
+  /// (offline-queued, auto-resumed on restore) vs user-paused (never
+  /// auto-resumed) so a relaunch while offline stays queued instead of failing.
+  static const String uploadQueue = 'upload_queue';
 }
 
 /// Per-box schema marker. Current migration policy is clear-on-mismatch — when

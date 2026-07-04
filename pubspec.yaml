@@ -38,6 +38,9 @@ dependencies:
   # Connectivity
   connectivity_plus: ^7.1.1
 
+  # Hashing (per-file MD5 checksums for the upload manifest — streaming digest)
+  crypto: ^3.0.3
+
   # Code generation annotations
   freezed_annotation: ^2.4.1
   json_annotation: ^4.9.0

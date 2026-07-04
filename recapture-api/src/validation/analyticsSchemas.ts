@@ -29,6 +29,10 @@ export const AnalyticsEvent = {
   PROJECT_RENAMED: 'project_renamed',
   PROJECT_DELETED: 'project_deleted',
   PROJECT_RESUMED: 'project_resumed',
+  // ── Upload pipeline (jobs) ────────────────────────────────────────────────
+  JOB_CREATED: 'job_created',
+  JOB_UPLOAD_STARTED: 'job_upload_started',
+  JOB_QUEUED: 'job_queued',
   // ── Config delivery ───────────────────────────────────────────────────────
   REMOTE_CONFIG_SERVED: 'remote_config_served',
   // ── Pre-Capture & Permissions (client-emitted) ────────────────────────────
@@ -185,6 +189,31 @@ const projectResumedProps = z
   })
   .strict();
 
+const jobCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    project_id: z.string().min(1),
+    job_id: z.string().min(1),
+    object_size: z.enum(OBJECT_SIZE_VALUES),
+    expected_files_count: z.number().int().positive(),
+  })
+  .strict();
+
+const jobUploadStartedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    job_id: z.string().min(1),
+  })
+  .strict();
+
+const jobQueuedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    job_id: z.string().min(1),
+    files_verified: z.number().int().positive(),
+  })
+  .strict();
+
 const remoteConfigServedProps = z
   .object({
     config_version: z.number().int().nonnegative(),
@@ -258,6 +287,9 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PROJECT_RENAMED]: projectRenamedProps,
   [AnalyticsEvent.PROJECT_DELETED]: projectDeletedProps,
   [AnalyticsEvent.PROJECT_RESUMED]: projectResumedProps,
+  [AnalyticsEvent.JOB_CREATED]: jobCreatedProps,
+  [AnalyticsEvent.JOB_UPLOAD_STARTED]: jobUploadStartedProps,
+  [AnalyticsEvent.JOB_QUEUED]: jobQueuedProps,
   [AnalyticsEvent.REMOTE_CONFIG_SERVED]: remoteConfigServedProps,
   [AnalyticsEvent.PERMISSION_CAMERA_GRANTED]: permissionCameraGrantedProps,
   [AnalyticsEvent.PERMISSION_MOTION_GRANTED]: permissionMotionGrantedProps,

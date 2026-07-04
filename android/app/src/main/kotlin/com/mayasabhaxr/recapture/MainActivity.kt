@@ -8,6 +8,8 @@ import com.mayasabhaxr.recapture.permissions.PermissionManager
 import com.mayasabhaxr.recapture.sensors.ImuRotationStreamManager
 import com.mayasabhaxr.recapture.sensors.StabilityStreamManager
 import com.mayasabhaxr.recapture.storage.CaptureStorage
+import com.mayasabhaxr.recapture.upload.UploadForegroundService
+import com.mayasabhaxr.recapture.upload.UploadResumeWorker
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -219,6 +221,58 @@ class MainActivity : FlutterActivity() {
                 "setManualFocusDistance" ->
                     cameraControls.setManualFocusDistance(call.argument<Double>("distance") ?: 0.0, result)
                 "unlockAll" -> cameraControls.unlockAll(result)
+                else -> result.notImplemented()
+            }
+        }
+
+        // Background-upload foreground-service channel (STUB scaffolding). The
+        // upload pipeline (Dart) starts the service when an upload begins (or the
+        // app backgrounds during one), pushes progress, and stops it on
+        // complete/cancel. The service owns the notification + version matrix; the
+        // transport itself is stubbed for the pipeline to plug in. See
+        // UploadForegroundService.
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            UploadForegroundService.CHANNEL_NAME,
+        ).setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
+            when (call.method) {
+                "startUploadService" -> {
+                    UploadForegroundService.start(
+                        applicationContext,
+                        call.argument<Int>("done") ?: 0,
+                        call.argument<Int>("total") ?: 0,
+                    )
+                    result.success(null)
+                }
+                "updateProgress" -> {
+                    UploadForegroundService.update(
+                        applicationContext,
+                        call.argument<Int>("done") ?: 0,
+                        call.argument<Int>("total") ?: 0,
+                    )
+                    result.success(null)
+                }
+                "stopUploadService" -> {
+                    UploadForegroundService.stop(applicationContext)
+                    result.success(null)
+                }
+                "hasNotificationsPermission" ->
+                    result.success(
+                        UploadForegroundService.hasPostNotificationsPermission(applicationContext),
+                    )
+                // Background auto-resume of offline-queued uploads: a unique
+                // WorkManager request constrained to NetworkType.CONNECTED. The
+                // Dart offline queue handles the foreground; this is the OS-side
+                // counterpart for when the app is backgrounded/killed with jobs
+                // waiting for connection. See UploadResumeWorker.
+                "scheduleNetworkResume" -> {
+                    UploadResumeWorker.schedule(applicationContext)
+                    result.success(null)
+                }
+                "cancelNetworkResume" -> {
+                    UploadResumeWorker.cancel(applicationContext)
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }

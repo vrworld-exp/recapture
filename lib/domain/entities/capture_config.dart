@@ -150,6 +150,69 @@ class CompletionThresholds {
       );
 }
 
+/// Default absolute-minimum accepted shots a level needs to be UPLOADABLE at all
+/// (the hard upload floor — distinct from, and never above, the soft completion
+/// minimum). Validated `>= 1`: a level always needs at least one accepted shot.
+const int kDefaultMinAcceptedShots = 1;
+
+/// Per-level ABSOLUTE-MINIMUM accepted shots required before the captured set may
+/// be uploaded at all — the hard upload gate's floor. Pure, immutable,
+/// config-driven (defaultable + remote-overridable), keyed by display level code
+/// ("A"/"B"/"C"); lookups are case-insensitive and any level without a valid
+/// override falls back to [kDefaultMinAcceptedShots].
+///
+/// This is a SEPARATE threshold from [CompletionThresholds] (the soft completion
+/// gate): completion is "good enough to count as done"; this is "enough raw shots
+/// that the pipeline can use it at all". They are evaluated independently.
+class UploadMinShots {
+  /// [perLevelMinShots] is keyed by UPPERCASE level code. Use
+  /// [UploadMinShots.fromMap] for untrusted (remote) input — it validates.
+  const UploadMinShots({Map<String, int> perLevelMinShots = const {}})
+      : _perLevel = perLevelMinShots;
+
+  final Map<String, int> _perLevel;
+
+  /// No overrides — every level uses [kDefaultMinAcceptedShots].
+  static const UploadMinShots bundledDefault = UploadMinShots();
+
+  /// The absolute-minimum accepted shots [levelCode] needs (case-insensitive).
+  /// Falls back to [kDefaultMinAcceptedShots] for an absent or invalid entry.
+  int minShotsFor(String levelCode) {
+    final v = _perLevel[levelCode.toUpperCase()];
+    return (v != null && v >= 1) ? v : kDefaultMinAcceptedShots;
+  }
+
+  /// Parses the remote-config block (keyed by level code → int):
+  /// `{ "A": 3, "B": 2, "C": 4 }`. Only positive-integer entries survive;
+  /// non-positive / ill-typed entries are dropped so that level falls back to the
+  /// default. A non-map input yields all-defaults. Never throws.
+  factory UploadMinShots.fromMap(Object? raw) {
+    if (raw is! Map) return bundledDefault;
+    final parsed = <String, int>{};
+    raw.forEach((key, value) {
+      if (key is! String) return;
+      if (value is num && value.toInt() >= 1) parsed[key.toUpperCase()] = value.toInt();
+    });
+    return UploadMinShots(perLevelMinShots: parsed);
+  }
+
+  /// Round-trips back to the wire shape [fromMap] consumes (only stored overrides).
+  Map<String, dynamic> toMap() => {
+        for (final e in _perLevel.entries) e.key: e.value,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      other is UploadMinShots &&
+      _perLevel.length == other._perLevel.length &&
+      _perLevel.entries.every((e) => other._perLevel[e.key] == e.value);
+
+  @override
+  int get hashCode => Object.hashAllUnordered(
+        _perLevel.entries.map((e) => Object.hash(e.key, e.value)),
+      );
+}
+
 /// App-wide capture configuration. Server-tunable without an app release.
 class CaptureConfig {
   const CaptureConfig({
@@ -157,6 +220,7 @@ class CaptureConfig {
     required this.pitchBands,
     required this.thresholds,
     this.completionThresholds = CompletionThresholds.bundledDefault,
+    this.uploadMinShots = UploadMinShots.bundledDefault,
   });
 
   final int version;
@@ -165,6 +229,9 @@ class CaptureConfig {
 
   /// Per-level minimum accepted-frame thresholds for the final completion gate.
   final CompletionThresholds completionThresholds;
+
+  /// Per-level absolute-minimum accepted shots required to upload (hard gate).
+  final UploadMinShots uploadMinShots;
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
@@ -218,6 +285,8 @@ class CaptureConfig {
           : bundledDefault.thresholds,
       completionThresholds: CompletionThresholds.fromMap(
           m['guided_capture_completion_thresholds']),
+      uploadMinShots:
+          UploadMinShots.fromMap(m['guided_capture_min_accepted_shots']),
     );
   }
 
@@ -226,6 +295,7 @@ class CaptureConfig {
         'pitchBands': pitchBands.map((b) => b.toMap()).toList(),
         'thresholds': thresholds.toMap(),
         'guided_capture_completion_thresholds': completionThresholds.toMap(),
+        'guided_capture_min_accepted_shots': uploadMinShots.toMap(),
       };
 
   CaptureConfig copyWith({
@@ -233,11 +303,13 @@ class CaptureConfig {
     List<PitchBand>? pitchBands,
     CaptureThresholds? thresholds,
     CompletionThresholds? completionThresholds,
+    UploadMinShots? uploadMinShots,
   }) =>
       CaptureConfig(
         version: version ?? this.version,
         pitchBands: pitchBands ?? this.pitchBands,
         thresholds: thresholds ?? this.thresholds,
         completionThresholds: completionThresholds ?? this.completionThresholds,
+        uploadMinShots: uploadMinShots ?? this.uploadMinShots,
       );
 }

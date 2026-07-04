@@ -99,6 +99,27 @@
   (`projects_list`|`deep_link`|`direct`, optional — from `?source=`, lenient),
   `seconds_since_last_update` (int ≥ 0, optional)
 
+### `job_created`
+- **When:** `POST /jobs` persists a NEW upload job (201). An idempotent replay
+  (same `Idempotency-Key`, 200) emits **nothing** — one job, one event. Nothing
+  fires on validation/authorization failures.
+- **Props:** `user_id_hash` (string), `project_id` (string), `job_id` (string),
+  `object_size` (`small`|`medium`|`large`), `expected_files_count` (int > 0)
+
+### `job_upload_started`
+- **When:** the FIRST successful `POST /jobs/:jobId/uploads/initiate` for a job
+  (the CREATED → UPLOADING transition — a conditional update, so concurrent
+  initiates emit it exactly once). Later per-file initiates emit nothing (a
+  per-file event at ~90 files/job would be noise).
+- **Props:** `user_id_hash` (string), `job_id` (string)
+
+### `job_queued`
+- **When:** `POST /jobs/:jobId/finalize` verifies the upload (manifest present,
+  S3 object count matches) and performs the one-time transition to `QUEUED` —
+  the enqueue itself. An idempotent re-finalize of an already-QUEUED job emits
+  **nothing** (one queue entry, one event); verification failures emit nothing.
+- **Props:** `user_id_hash` (string), `job_id` (string), `files_verified` (int > 0)
+
 ### `remote_config_served`
 - **When:** sampled (~1%) on `200` responses from `GET /remote-config` (never on
   `304`). `served_defaults` is `true` when baked defaults were used.

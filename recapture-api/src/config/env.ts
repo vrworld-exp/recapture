@@ -55,6 +55,14 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+
+  // ── Upload pipeline (POST /jobs) ────────────────────────────────────────────
+  /**
+   * Validity window of a job's upload plan (seconds). Bounded but long enough
+   * for a full mobile session upload of the largest object size on a slow
+   * connection. Default 24h.
+   */
+  UPLOAD_PLAN_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
 });
 
 const parsed = envSchema.safeParse(process.env);

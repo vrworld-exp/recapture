@@ -42,6 +42,15 @@
     <!-- Needed to start foreground service on Android 14+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
 
+    <!-- API 34+ : the upload runs as a `dataSync` foreground service so it survives
+         backgrounding; the type-specific permission is required to start it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- API 33+ : posting the upload notification needs this runtime permission. If
+         denied, the foreground service still runs (the system suppresses the
+         notification's display) — see UploadForegroundService. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Network state — optional but recommended for connectivity checks -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
@@ -105,6 +114,14 @@
             </intent-filter>
 
         </activity>
+
+        <!-- Background-upload foreground service. `dataSync` FGS type (required on
+             API 34+, and matched at startForeground). Not exported — started only
+             from within the app via the upload_service MethodChannel. -->
+        <service
+            android:name=".upload.UploadForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
 
         <!-- Flutter background isolate bridge — required for Firebase -->
         <meta-data

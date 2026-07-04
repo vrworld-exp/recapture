@@ -31,6 +31,11 @@ import FirebaseCore
   /// FlutterMethodChannel keeps a live handler (see CaptureStorageChannelHandler).
   private var captureStorageHandler: CaptureStorageChannelHandler?
 
+  /// Strong reference to the background-upload event stream handler so its
+  /// FlutterEventChannel keeps a live delegate (see UploadEventStreamHandler /
+  /// BackgroundUploadManager).
+  private var uploadEventStreamHandler: UploadEventStreamHandler?
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -45,8 +50,53 @@ import FirebaseCore
     registerSensorStream()
     registerImuOrientationStream()
     registerCaptureStorage()
+    registerBackgroundUpload()
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  /// Registers the background-upload MethodChannel (`enqueueUpload`) and the
+  /// upload-events EventChannel (progress/success/failure pushed from the
+  /// URLSession delegate). The manager is a singleton because the background
+  /// relaunch path ([application(_:handleEventsForBackgroundURLSession:...)])
+  /// must reach the SAME session/delegate before any channel exists. See
+  /// BackgroundUploadManager.
+  private func registerBackgroundUpload() {
+    guard let registrar = registrar(forPlugin: "BackgroundUploadPlugin") else { return }
+    let manager = BackgroundUploadManager.shared
+    FlutterMethodChannel(
+      name: BackgroundUploadManager.methodChannelName,
+      binaryMessenger: registrar.messenger()
+    ).setMethodCallHandler { call, result in
+      manager.handle(call, result: result)
+    }
+    let streamHandler = UploadEventStreamHandler()
+    uploadEventStreamHandler = streamHandler
+    FlutterEventChannel(
+      name: BackgroundUploadManager.eventsChannelName,
+      binaryMessenger: registrar.messenger()
+    ).setStreamHandler(streamHandler)
+  }
+
+  /// iOS relaunched (or woke) the app to deliver background URLSession events.
+  /// Touching `BackgroundUploadManager.shared` recreates the background session
+  /// with its delegate so the pending events can be delivered; the completion
+  /// handler is stored and invoked only when the session reports
+  /// `urlSessionDidFinishEvents` (never earlier — even if the Flutter engine is
+  /// not up yet). Unrelated identifiers (e.g. a plugin's session) go to super.
+  override func application(
+    _ application: UIApplication,
+    handleEventsForBackgroundURLSession identifier: String,
+    completionHandler: @escaping () -> Void
+  ) {
+    if identifier == BackgroundUploadManager.sessionIdentifier {
+      BackgroundUploadManager.shared.backgroundCompletionHandler = completionHandler
+    } else {
+      super.application(
+        application,
+        handleEventsForBackgroundURLSession: identifier,
+        completionHandler: completionHandler)
+    }
   }
 
   /// Registers the app-scoped capture-storage `FlutterMethodChannel` — the iOS

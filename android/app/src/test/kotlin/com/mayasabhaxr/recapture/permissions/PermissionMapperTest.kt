@@ -96,6 +96,24 @@ class PermissionMapperTest {
     }
 
     @Test
+    fun notifications_postNotificationsOnApi33Plus_autoGrantedBelow() {
+        for (sdk in intArrayOf(24, 28, 29, 30, 32)) {
+            assertEquals(
+                "notifications @ API $sdk (pre-33 needs no runtime permission)",
+                emptyList<String>(),
+                PermissionMapper.concretePermissions("notifications", sdk),
+            )
+        }
+        for (sdk in intArrayOf(33, 34)) {
+            assertEquals(
+                "notifications @ API $sdk",
+                listOf(Manifest.permission.POST_NOTIFICATIONS),
+                PermissionMapper.concretePermissions("notifications", sdk),
+            )
+        }
+    }
+
+    @Test
     fun unknownKey_mapsToEmpty() {
         assertEquals(emptyList<String>(), PermissionMapper.concretePermissions("bogus", 33))
     }

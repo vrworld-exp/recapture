@@ -108,4 +108,27 @@ abstract final class AppConfig {
   /// cleanup hook). Frame writing/allocation stays native (the burst task).
   static const String channelCaptureStorage =
       'com.mayasabhaxr.recapture/capture_storage';
+
+  /// Native Android upload foreground-service MethodChannel — must match
+  /// UploadForegroundService.CHANNEL_NAME on the Kotlin side. Starts/stops/updates
+  /// the background-upload foreground service + its persistent notification so a
+  /// long upload survives backgrounding. Android-only (no-op elsewhere); the
+  /// transport itself is a STUB the upload pipeline plugs into.
+  static const String channelUploadService =
+      'com.mayasabhaxr.recapture/upload_service';
+
+  /// Native iOS background-upload MethodChannel — must match
+  /// BackgroundUploadManager.methodChannelName on the Swift side. `enqueueUpload`
+  /// hands a file to a background URLSession so the transfer survives
+  /// suspension/kill. iOS-only (no-op elsewhere; Android's counterpart is the
+  /// foreground service + WorkManager pair on [channelUploadService]).
+  static const String channelUploadEngine =
+      'com.mayasabhaxr.recapture/upload_engine';
+
+  /// Native iOS background-upload EventChannel — must match
+  /// BackgroundUploadManager.eventsChannelName on the Swift side. Streams
+  /// progress / success / failure payloads for enqueued background uploads
+  /// (buffered natively across background relaunches until Dart subscribes).
+  static const String channelUploadEvents =
+      'com.mayasabhaxr.recapture/upload_events';
 }

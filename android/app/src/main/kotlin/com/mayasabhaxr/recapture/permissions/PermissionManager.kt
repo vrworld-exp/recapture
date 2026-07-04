@@ -70,6 +70,7 @@ class PermissionManager(private val appContext: Context) {
             "storage" to 7002,
             "activityRecognition" to 7003,
             "motion" to 7004,
+            "notifications" to 7005,
         )
 
         // Severity ordering for aggregating multiple concrete permissions into a

@@ -1,10 +1,11 @@
 // test/capture/capture_summary_screen_test.dart
 //
-// Screen 6C-Complete — the terminal "Capture complete" summary. Verifies: heading;
-// one card per configured level (A/B/C) with real per-level frame counts + status
-// from the ledger; Continue is gated (disabled + reason) until every level has
-// frames, and advances to uploading when all complete; global + per-card Review
-// route to the review grids; and the view/CTA analytics fire with correct props.
+// Capture Summary — per-level cards (accepted/min, coverage %, completeness +
+// shortfall, warning indicator), aggregated collapsible warnings, totals, and the
+// three actions: Upload (primary, warn-then-allow → upload pipeline), Fix Issues
+// (→ greatest-shortfall level's capture, hidden when all complete), Save for later
+// (→ projects). Completeness uses evaluateLevelA (80% coverage + ≥1 photo) over the
+// live ledger; with the bundled config a level needs ceil(0.8*N) filled segments.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,16 +14,55 @@ import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/application/capture/ledger/captured_photo_record.dart';
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry.dart';
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry_provider.dart';
+import 'package:recapture/application/capture/ledger/warned_photo_record.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/presentation/screens/capture/capture_summary_screen.dart';
 import 'package:recapture/utils/analytics.dart';
 
-/// Serves the bundled default synchronously (no remote bootstrap timer) so the
-/// gate's config read resolves without an async config fetch in widget tests.
+/// Bundled default (bands low=12 / mid=10 / high=8, minCoveragePct=80, count=1).
 class _StubConfigNotifier extends ConfigNotifier {
   @override
   CaptureConfig build() => CaptureConfig.bundledDefault;
+}
+
+/// Three equal-size bands (10 segments each) — for the deterministic tiebreak.
+class _EqualBandsConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => const CaptureConfig(
+        version: 0,
+        pitchBands: [
+          PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 10),
+          PitchBand(id: 'high', minDegrees: 60, maxDegrees: 90, segments: 10),
+          PitchBand(id: 'low', minDegrees: 0, maxDegrees: 30, segments: 10),
+        ],
+        thresholds: CaptureThresholds(
+            minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
+      );
+}
+
+/// Raises the absolute upload floor: A=3, B=2, C=4 (bundled bands).
+class _HighFloorConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault.copyWith(
+        uploadMinShots: const UploadMinShots(
+          perLevelMinShots: {'A': 3, 'B': 2, 'C': 4},
+        ),
+      );
+}
+
+/// 'low' band absent → Level C coverage unavailable (placeholder).
+class _NoLowBandConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => const CaptureConfig(
+        version: 0,
+        pitchBands: [
+          PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 10),
+          PitchBand(id: 'high', minDegrees: 60, maxDegrees: 90, segments: 8),
+        ],
+        thresholds: CaptureThresholds(
+            minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
+      );
 }
 
 CapturedPhotoRecord _accepted(int seg, String path) => CapturedPhotoRecord(
@@ -47,8 +87,10 @@ void main() {
   List<({String name, Map<String, Object?> props})> named(String name) =>
       events.where((e) => e.name == name).toList();
 
-  /// Registry seeded with frames for the given band ids.
-  LevelCaptureLedgerRegistry registryWith(Map<String, int> framesPerBand) {
+  LevelCaptureLedgerRegistry registryWith(
+    Map<String, int> framesPerBand, {
+    Map<String, int> warnedPerBand = const {},
+  }) {
     final reg = LevelCaptureLedgerRegistry();
     framesPerBand.forEach((band, n) {
       final ledger = reg.ledgerFor(band);
@@ -56,19 +98,41 @@ void main() {
         ledger.recordAccepted(_accepted(i, '/$band/$i.jpg'));
       }
     });
+    warnedPerBand.forEach((band, n) {
+      final ledger = reg.ledgerFor(band);
+      for (var i = 0; i < n; i++) {
+        ledger.recordWarned(WarnedPhotoRecord(
+          framePath: '/$band/$i.jpg',
+          isUnderexposed: true,
+          isOverexposed: false,
+          meanLuminance: 10,
+          sensorTimestampNs: i + 1,
+        ));
+      }
+    });
     return reg;
   }
 
-  Future<void> pump(WidgetTester tester, LevelCaptureLedgerRegistry reg) async {
+  Future<void> pump(
+    WidgetTester tester,
+    LevelCaptureLedgerRegistry reg, {
+    ConfigNotifier Function() config = _StubConfigNotifier.new,
+  }) async {
     Widget stub(String label) => Scaffold(body: Text(label));
     final router = GoRouter(
       initialLocation: AppRoutes.captureSummary,
       routes: [
         GoRoute(
-          path: AppRoutes.captureSummary,
-          builder: (_, __) => const CaptureSummaryScreen(),
-        ),
+            path: AppRoutes.captureSummary,
+            builder: (_, __) => const CaptureSummaryScreen()),
         GoRoute(path: AppRoutes.uploading, builder: (_, __) => stub('UPLOADING')),
+        GoRoute(path: AppRoutes.projects, builder: (_, __) => stub('PROJECTS')),
+        GoRoute(
+            path: AppRoutes.levelACapture, builder: (_, __) => stub('CAPTURE A')),
+        GoRoute(
+            path: AppRoutes.levelBCapture, builder: (_, __) => stub('CAPTURE B')),
+        GoRoute(
+            path: AppRoutes.levelCCapture, builder: (_, __) => stub('CAPTURE C')),
         GoRoute(
             path: AppRoutes.levelAReview, builder: (_, __) => stub('REVIEW A')),
         GoRoute(
@@ -81,7 +145,7 @@ void main() {
       ProviderScope(
         overrides: [
           levelCaptureLedgerRegistryProvider.overrideWithValue(reg),
-          captureConfigProvider.overrideWith(_StubConfigNotifier.new),
+          captureConfigProvider.overrideWith(config),
         ],
         child: MaterialApp.router(routerConfig: router),
       ),
@@ -89,94 +153,272 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('heading + one card per level with real counts/status',
+  testWidgets('cards show accepted/min, coverage, completeness + shortfall',
       (tester) async {
-    await pump(tester, registryWith({'mid': 3, 'high': 2, 'low': 4}));
+    // A complete (8/10=80%), B short (3/8), C complete (10/12).
+    await pump(tester, registryWith({'mid': 8, 'high': 3, 'low': 10}));
 
-    expect(find.text('Capture complete'), findsOneWidget);
+    expect(find.text('Capture summary'), findsOneWidget);
     expect(find.text('Level A • Eye Ring'), findsOneWidget);
-    expect(find.text('Level B • Top Ring'), findsOneWidget);
-    expect(find.text('Level C • Low Ring'), findsOneWidget);
-    expect(find.text('3 frames'), findsOneWidget);
-    expect(find.text('2 frames'), findsOneWidget);
-    expect(find.text('4 frames'), findsOneWidget);
-    // All complete → three "Complete" chips, no gate reason.
-    expect(find.text('Complete'), findsNWidgets(3));
-    expect(find.byKey(const Key('continue_gate_reason')), findsNothing);
+    expect(find.text('8 / 1'), findsOneWidget);
+    expect(find.text('3 / 1'), findsOneWidget);
+    expect(find.text('10 / 1'), findsOneWidget);
+    expect(find.text('80%'), findsOneWidget);
+    expect(find.text('38%'), findsOneWidget); // 3/8 = 37.5 → 38
+    expect(find.text('83%'), findsOneWidget); // 10/12 = 83.3 → 83
+
+    expect(find.text('Complete'), findsNWidgets(2));
+    expect(find.text('Incomplete'), findsOneWidget);
+    // B needs ceil(0.8*8)=7 segments, has 3 → 4 short, surfaced.
+    expect(find.text('Need 4 more segments'), findsOneWidget);
+    expect(find.text('Total photos: 21'), findsOneWidget);
+    expect(find.byKey(const Key('below_min_notice')), findsOneWidget);
+    expect(find.byKey(const Key('summary_fix_issues')), findsOneWidget);
   });
 
-  testWidgets('viewed analytics: levels_complete/total', (tester) async {
-    await pump(tester, registryWith({'mid': 1, 'high': 1, 'low': 0}));
+  testWidgets('viewed analytics carries totals + any_level_below_min',
+      (tester) async {
+    await pump(
+      tester,
+      registryWith({'mid': 8, 'high': 0, 'low': 10},
+          warnedPerBand: {'mid': 2}),
+    );
     final viewed = named(AnalyticsEvents.captureSummaryViewed);
     expect(viewed, hasLength(1));
-    expect(viewed.first.props['phase'], 'guided_capture');
     expect(viewed.first.props['levels_total'], 3);
     expect(viewed.first.props['levels_complete'], 2);
+    expect(viewed.first.props['total_accepted_frames'], 18);
+    expect(viewed.first.props['total_warning_count'], 2);
+    expect(viewed.first.props['any_level_below_min'], true);
   });
 
-  testWidgets('incomplete level → card shows incomplete + Continue gated',
+  testWidgets('Fix Issues → greatest-shortfall level (B), routes to its capture',
       (tester) async {
-    await pump(tester, registryWith({'mid': 2, 'high': 2, 'low': 0}));
+    // A & C complete; B empty → only/worst incomplete.
+    await pump(tester, registryWith({'mid': 8, 'high': 0, 'low': 10}));
 
-    expect(find.text('No frames captured'), findsOneWidget);
-    expect(find.text('Incomplete'), findsOneWidget);
-    expect(find.byKey(const Key('continue_gate_reason')), findsOneWidget);
-
-    // Tapping the disabled Continue does nothing — no action, no nav.
-    await tester.tap(find.byKey(const Key('summary_continue')));
-    await tester.pump();
-    expect(named(AnalyticsEvents.captureSummaryAction), isEmpty);
-    expect(find.text('Capture complete'), findsOneWidget);
-  });
-
-  testWidgets('Continue (all complete) → action + advances to uploading',
-      (tester) async {
-    await pump(tester, registryWith({'mid': 1, 'high': 1, 'low': 1}));
-
-    await tester.tap(find.byKey(const Key('summary_continue')));
+    await tester.tap(find.byKey(const Key('summary_fix_issues')));
     await tester.pumpAndSettle();
 
+    expect(find.text('CAPTURE B'), findsOneWidget);
     final action = named(AnalyticsEvents.captureSummaryAction);
     expect(action, hasLength(1));
-    expect(action.first.props['action'], 'continue');
-    expect(action.first.props['all_complete'], true);
-    expect(find.text('UPLOADING'), findsOneWidget);
+    expect(action.first.props['action'], 'fix_issues');
+    expect(action.first.props['target_level'], 'B');
   });
 
-  testWidgets('Continue double-tap advances once', (tester) async {
-    await pump(tester, registryWith({'mid': 1, 'high': 1, 'low': 1}));
-    final btn = find.byKey(const Key('summary_continue'));
+  testWidgets('Fix Issues routes to the WORSE of two incomplete levels',
+      (tester) async {
+    // A short by 2 (6/10→need 8), C short by 8 (2/12→need 10), B complete.
+    await pump(tester, registryWith({'mid': 6, 'high': 7, 'low': 2}));
+
+    await tester.tap(find.byKey(const Key('summary_fix_issues')));
+    await tester.pumpAndSettle();
+    expect(find.text('CAPTURE C'), findsOneWidget);
+    expect(named(AnalyticsEvents.captureSummaryAction).first.props['target_level'],
+        'C');
+  });
+
+  testWidgets('tie in shortfall → deterministic lowest-index (A)',
+      (tester) async {
+    // Equal bands (10 each): A & B empty (equal shortfall), C complete.
+    await pump(
+      tester,
+      registryWith({'mid': 0, 'high': 0, 'low': 10}),
+      config: _EqualBandsConfigNotifier.new,
+    );
+    await tester.tap(find.byKey(const Key('summary_fix_issues')));
+    await tester.pumpAndSettle();
+    expect(find.text('CAPTURE A'), findsOneWidget);
+  });
+
+  testWidgets('all complete → Fix Issues hidden, no below-min notice',
+      (tester) async {
+    await pump(tester, registryWith({'mid': 8, 'high': 7, 'low': 10}));
+    expect(find.byKey(const Key('summary_fix_issues')), findsNothing);
+    expect(find.byKey(const Key('below_min_notice')), findsNothing);
+    expect(find.text('Incomplete'), findsNothing);
+  });
+
+  testWidgets('Upload (all complete) → kicks off pipeline directly',
+      (tester) async {
+    await pump(tester, registryWith({'mid': 8, 'high': 7, 'low': 10}));
+
+    await tester.tap(find.byKey(const Key('summary_upload')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('below_min_dialog')), findsNothing);
+    expect(find.text('UPLOADING'), findsOneWidget);
+    final proceed = named(AnalyticsEvents.captureSummaryProceedToUpload);
+    expect(proceed, hasLength(1));
+    expect(proceed.first.props['any_level_below_min'], false);
+    // The hard gate is satisfied → upload actually initiates + passed milestone.
+    expect(named(AnalyticsEvents.uploadInitiated), hasLength(1));
+    expect(named(AnalyticsEvents.uploadGatePassed), hasLength(1));
+  });
+
+  testWidgets('Upload (eligible but incomplete) → confirm; cancel/confirm',
+      (tester) async {
+    // All levels ≥1 shot (clears the hard floor) but B short of completion.
+    await pump(tester, registryWith({'mid': 8, 'high': 3, 'low': 10}));
+
+    await tester.tap(find.byKey(const Key('summary_upload')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('below_min_dialog')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('below_min_cancel')));
+    await tester.pumpAndSettle();
+    expect(find.text('Capture summary'), findsOneWidget);
+    expect(named(AnalyticsEvents.captureSummaryProceedToUpload), isEmpty);
+
+    await tester.tap(find.byKey(const Key('summary_upload')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('below_min_confirm')));
+    await tester.pumpAndSettle();
+    expect(find.text('UPLOADING'), findsOneWidget);
+    final proceed = named(AnalyticsEvents.captureSummaryProceedToUpload);
+    expect(proceed, hasLength(1));
+    expect(proceed.first.props['any_level_below_min'], true);
+  });
+
+  testWidgets('Save for later → exits to projects', (tester) async {
+    await pump(tester, registryWith({'mid': 8, 'high': 7, 'low': 10}));
+    await tester.tap(find.byKey(const Key('summary_save')));
+    await tester.pumpAndSettle();
+    expect(find.text('PROJECTS'), findsOneWidget);
+    final action = named(AnalyticsEvents.captureSummaryAction);
+    expect(action.single.props['action'], 'save_for_later');
+  });
+
+  testWidgets('Upload double-tap kicks off once', (tester) async {
+    await pump(tester, registryWith({'mid': 8, 'high': 7, 'low': 10}));
+    final btn = find.byKey(const Key('summary_upload'));
+    await tester.tap(btn, warnIfMissed: false);
+    await tester.tap(btn, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(named(AnalyticsEvents.captureSummaryProceedToUpload), hasLength(1));
+  });
+
+  testWidgets('Fix Issues double-tap navigates once', (tester) async {
+    await pump(tester, registryWith({'mid': 8, 'high': 0, 'low': 10}));
+    final btn = find.byKey(const Key('summary_fix_issues'));
     await tester.tap(btn, warnIfMissed: false);
     await tester.tap(btn, warnIfMissed: false);
     await tester.pumpAndSettle();
     expect(named(AnalyticsEvents.captureSummaryAction), hasLength(1));
   });
 
-  testWidgets('global Review → action (no level) + routes to Level A review',
-      (tester) async {
-    await pump(tester, registryWith({'mid': 1, 'high': 1, 'low': 1}));
-
-    await tester.tap(find.byKey(const Key('summary_review')));
-    await tester.pumpAndSettle();
-
-    final action = named(AnalyticsEvents.captureSummaryAction);
-    expect(action, hasLength(1));
-    expect(action.first.props['action'], 'review');
-    expect(action.first.props.containsKey('level'), isFalse);
-    expect(find.text('REVIEW A'), findsOneWidget);
+  testWidgets('zero warnings → no-warnings state, no expandable', (tester) async {
+    await pump(tester, registryWith({'mid': 8, 'high': 7, 'low': 10}));
+    expect(find.byKey(const Key('no_warnings')), findsOneWidget);
+    expect(find.byKey(const Key('warnings_expansion')), findsNothing);
   });
 
-  testWidgets('per-card Review → action with level + routes to that grid',
+  testWidgets('warnings present → collapsed list expands + fires analytics',
       (tester) async {
-    await pump(tester, registryWith({'mid': 1, 'high': 1, 'low': 1}));
+    await pump(
+      tester,
+      registryWith({'mid': 8, 'high': 7, 'low': 10},
+          warnedPerBand: {'mid': 1, 'high': 2}),
+    );
 
-    await tester.tap(find.text('Level B • Top Ring'));
+    expect(find.byKey(const Key('warnings_expansion')), findsOneWidget);
+    expect(find.textContaining('too dark'), findsNothing);
+    expect(named(AnalyticsEvents.captureSummaryWarningsExpanded), isEmpty);
+
+    await tester.ensureVisible(find.byKey(const Key('warnings_expansion')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('warnings_expansion')));
     await tester.pumpAndSettle();
 
-    final action = named(AnalyticsEvents.captureSummaryAction);
-    expect(action, hasLength(1));
-    expect(action.first.props['action'], 'review');
-    expect(action.first.props['level'], 'B');
+    expect(find.textContaining('too dark'), findsWidgets);
+    final expanded = named(AnalyticsEvents.captureSummaryWarningsExpanded);
+    expect(expanded, hasLength(1));
+    expect(expanded.first.props['warning_count'], 3);
+  });
+
+  testWidgets('missing band → coverage placeholder, no crash', (tester) async {
+    await pump(
+      tester,
+      registryWith({'mid': 8, 'high': 7, 'low': 1}),
+      config: _NoLowBandConfigNotifier.new,
+    );
+    expect(find.text('—'), findsOneWidget); // Level C coverage unavailable
+    expect(find.text('Capture summary'), findsOneWidget);
+  });
+
+  testWidgets('per-card tap → review route', (tester) async {
+    await pump(tester, registryWith({'mid': 8, 'high': 7, 'low': 10}));
+    await tester.tap(find.text('Level B • Top Ring'));
+    await tester.pumpAndSettle();
     expect(find.text('REVIEW B'), findsOneWidget);
+    final action = named(AnalyticsEvents.captureSummaryAction);
+    expect(action.single.props['action'], 'review');
+    expect(action.single.props['level'], 'B');
+  });
+
+  group('hard upload gate', () {
+    testWidgets('level with 0 shots → Upload disabled + gate notice + blocked',
+        (tester) async {
+      await pump(tester, registryWith({'mid': 8, 'high': 0, 'low': 10}));
+
+      // Disabled: tapping does nothing — no upload, no initiate.
+      expect(find.byKey(const Key('upload_gate_notice')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('summary_upload')));
+      await tester.pumpAndSettle();
+      expect(find.text('UPLOADING'), findsNothing);
+      expect(named(AnalyticsEvents.uploadInitiated), isEmpty);
+
+      // Blocked analytics fired on the first disabled view, with the deficit.
+      final blocked = named(AnalyticsEvents.uploadGateBlocked);
+      expect(blocked, isNotEmpty);
+      expect(blocked.first.props['short_levels'], 'B');
+      expect(blocked.first.props['total_deficit'], 1);
+      expect(blocked.first.props['phase'], 'upload');
+
+      // Card flags the hard-blocked level.
+      expect(find.text('Below upload minimum — add 1 more'), findsOneWidget);
+    });
+
+    testWidgets('multiple short levels → both listed, total_deficit summed',
+        (tester) async {
+      await pump(tester, registryWith({'mid': 0, 'high': 0, 'low': 10}));
+      final blocked = named(AnalyticsEvents.uploadGateBlocked);
+      expect(blocked.first.props['short_levels'], 'A,B');
+      expect(blocked.first.props['total_deficit'], 2);
+      expect(find.byKey(const Key('upload_remedy_A')), findsOneWidget);
+      expect(find.byKey(const Key('upload_remedy_B')), findsOneWidget);
+    });
+
+    testWidgets('remedy row → routes to that level\'s capture', (tester) async {
+      await pump(tester, registryWith({'mid': 8, 'high': 0, 'low': 10}));
+      await tester.tap(find.byKey(const Key('upload_remedy_B')));
+      await tester.pumpAndSettle();
+      expect(find.text('CAPTURE B'), findsOneWidget);
+      expect(named(AnalyticsEvents.captureSummaryAction).single.props['action'],
+          'fix_issues');
+    });
+
+    testWidgets('exactly at the minimum is inclusive → not blocked',
+        (tester) async {
+      // Default min = 1; every level at exactly 1 shot is uploadable.
+      await pump(tester, registryWith({'mid': 1, 'high': 1, 'low': 1}));
+      expect(find.byKey(const Key('upload_gate_notice')), findsNothing);
+      // Eligible but incomplete (coverage) → warn-then-allow, not hard-blocked.
+      await tester.tap(find.byKey(const Key('summary_upload')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('below_min_dialog')), findsOneWidget);
+    });
+
+    testWidgets('config override raises the floor (B needs 2)', (tester) async {
+      await pump(
+        tester,
+        registryWith({'mid': 3, 'high': 1, 'low': 4}),
+        config: _HighFloorConfigNotifier.new,
+      );
+      expect(find.byKey(const Key('upload_gate_notice')), findsOneWidget);
+      expect(named(AnalyticsEvents.uploadGateBlocked).first.props['short_levels'],
+          'B');
+    });
   });
 }
