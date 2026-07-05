@@ -16,6 +16,13 @@ import { env } from '@/config/env';
 import { s3Client } from '@/config/s3';
 import { Project } from '@/models/Project';
 import { Job } from '@/models/Job';
+import {
+  buildImageKey,
+  buildJobKeyPrefix,
+  buildManifestKey,
+  parseImageKey,
+  CAPTURE_LEVEL_SEGMENTS,
+} from '@/utils/s3Keys';
 
 const app = createApp();
 let mongod: MongoMemoryServer;
@@ -309,6 +316,65 @@ describe('POST /jobs/:jobId/uploads/initiate', () => {
     expect(res.status).toBe(500);
     const saved = await Job.findById(jobId).exec();
     expect(saved!.state).toBe('CREATED'); // no half-initiated state persisted
+  });
+});
+
+describe('canonical key convention — end-to-end agreement with @/utils/s3Keys', () => {
+  // The advertised plan, the keys the canonical builders produce, the
+  // containment check, and the presigned URLs must all agree — one scheme,
+  // one source of truth. This drives the REAL create + initiate endpoints and
+  // cross-checks every artifact against the utility.
+  it('a real job accepts exactly the keys the canonical builders produce', async () => {
+    const p = await Project.create({
+      userId: new Types.ObjectId(userId),
+      name: 'Brass Vase',
+      objectSize: 'MEDIUM',
+      mode: 'GUIDED',
+    });
+    const created = await request(app)
+      .post('/jobs')
+      .set(auth)
+      .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 73 });
+    expect(created.status).toBe(201);
+    const scope = { userId, projectId: p.id as string, jobId: created.body.job.id as string };
+
+    // The route's advertised plan IS the utility's output — never a divergent
+    // inline template.
+    expect(created.body.uploadPlan.keyPrefix).toBe(buildJobKeyPrefix(scope));
+    expect(created.body.uploadPlan.manifestKey).toBe(buildManifestKey(scope));
+
+    // Every canonically built image key is contained by the plan prefix and
+    // round-trips through the strict parser.
+    for (const level of CAPTURE_LEVEL_SEGMENTS) {
+      const levelKey = buildImageKey({ ...scope, level, filename: 'frame_0001.jpg' });
+      expect(levelKey.startsWith(created.body.uploadPlan.keyPrefix)).toBe(true);
+      expect(parseImageKey(levelKey)).toEqual({
+        ok: true,
+        value: { env: 'dev', ...scope, level, filename: 'frame_0001.jpg' },
+      });
+    }
+
+    // The initiate endpoint accepts a canonical image key and the REAL
+    // presigned URL embeds that exact key path.
+    mockS3Initiate();
+    const key = buildImageKey({ ...scope, level: 'EYE', filename: 'eye_0001.jpg' });
+    const initiated = await request(app)
+      .post(`/jobs/${scope.jobId}/uploads/initiate`)
+      .set(auth)
+      .send({ key, fileSize: TWELVE_MIB, partCount: 3 });
+    expect(initiated.status).toBe(201);
+    expect(initiated.body.key).toBe(key);
+    for (const part of initiated.body.parts) {
+      expect(decodeURIComponent(new URL(part.url).pathname)).toContain(`/${key}`);
+    }
+
+    // The canonical manifest key (job root, .json) also passes containment —
+    // the per-file gate accepts the whole canonical bundle, not just images.
+    const manifested = await request(app)
+      .post(`/jobs/${scope.jobId}/uploads/initiate`)
+      .set(auth)
+      .send({ key: buildManifestKey(scope), fileSize: 1024 * 1024, partCount: 1 });
+    expect(manifested.status).toBe(201);
   });
 });
 

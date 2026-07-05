@@ -21,33 +21,28 @@
 // It does NOT own the outcome: success/failure/cancel stays with the upload
 // controller / Screen 9F. On a terminal source status this emits the final snapshot
 // then CLOSES — no events after close.
+//
+// ANALYTICS: this layer emits NONE. The 25% milestone event (`upload_progress`)
+// and the lifecycle funnel are emitted by the ENGINE itself (ChunkedUploadManager)
+// at its progress/transition points — a reporter is optional, so putting events
+// here would silently drop them for engine runs without one attached. (The old
+// reporter-level `upload_progress_milestone` was removed as superseded.)
 import 'dart:async';
 
 import '../../domain/entities/upload_progress.dart';
 import '../../domain/upload/upload_progress_view.dart';
-import '../../utils/analytics.dart';
 
 class UploadProgressReporter {
   UploadProgressReporter(
     Stream<UploadProgress> source, {
     this.minFractionDelta = 0.01,
-    this.emitMilestones = true,
-    String? sessionId,
-    String deviceType = 'mobile',
-    void Function(String name, Map<String, Object?> props)? analytics,
-  })  : _sessionId = sessionId,
-        _deviceType = deviceType,
-        _analytics = analytics ?? Analytics.logEvent {
+  }) {
     _sub = source.listen(_onSource, onError: (_) {}, onDone: _close);
   }
 
   /// Minimum byte-fraction change (0..1) that triggers an emit between milestones
   /// (1% default) — the coalescing threshold that keeps the UI from being flooded.
   final double minFractionDelta;
-  final bool emitMilestones;
-  final String? _sessionId;
-  final String _deviceType;
-  final void Function(String, Map<String, Object?>) _analytics;
 
   final StreamController<UploadProgressView> _out =
       StreamController<UploadProgressView>.broadcast();
@@ -58,7 +53,6 @@ class UploadProgressReporter {
   int _maxBytes = 0; // monotonic guard baseline
   UploadPhase _phase = UploadPhase.uploading;
   int _retryAttempt = 0;
-  final Set<int> _milestonesFired = {};
   bool _closed = false;
 
   /// The current snapshot — readable synchronously so a subscriber attaching late
@@ -107,7 +101,6 @@ class UploadProgressReporter {
   void reset() {
     if (_closed) return;
     _maxBytes = 0;
-    _milestonesFired.clear();
     _phase = UploadPhase.uploading;
     _retryAttempt = 0;
     final base = _latest.progress.copyWith(
@@ -139,8 +132,6 @@ class UploadProgressReporter {
       retryAttempt: phase == UploadPhase.retrying ? _retryAttempt : 0,
     );
     _latest = view;
-
-    if (emitMilestones) _fireMilestones(view.fraction);
 
     if (terminal) {
       _publish(view, force: true); // always emit the final snapshot
@@ -175,19 +166,6 @@ class UploadProgressReporter {
     if (!shouldEmit) return;
     _lastEmitted = view;
     _out.add(view);
-  }
-
-  void _fireMilestones(double fraction) {
-    final pct = (fraction * 100).floor();
-    for (final m in const [25, 50, 75, 100]) {
-      if (pct >= m && _milestonesFired.add(m)) {
-        _analytics(AnalyticsEvents.uploadProgressMilestone, {
-          'session_id': _sessionId,
-          'milestone': m,
-          'device_type': _deviceType,
-        });
-      }
-    }
   }
 
   bool _isTerminal(UploadStatus s) =>

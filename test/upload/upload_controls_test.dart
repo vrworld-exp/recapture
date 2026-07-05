@@ -102,7 +102,7 @@ void main() {
     await tester.pump();
     expect(controller.pauseCount, 1);
     expect(controller.resumeCount, 0);
-    final e = named(AnalyticsEvents.uploadPaused);
+    final e = named(AnalyticsEvents.uploadPauseTapped);
     expect(e, hasLength(1));
     expect(e.first.props['session_id'], 'sess-1');
     expect(e.first.props['phase'], 'upload');
@@ -114,7 +114,7 @@ void main() {
     await tester.tap(resume);
     await tester.pump();
     expect(controller.resumeCount, 1);
-    expect(named(AnalyticsEvents.uploadResumed), hasLength(1));
+    expect(named(AnalyticsEvents.uploadResumeTapped), hasLength(1));
   });
 
   testWidgets('Cancel → confirm → pipeline.cancel() (retain, not delete) + log',
@@ -160,7 +160,7 @@ void main() {
     await tester.tap(pause); // before the pipeline reflects paused
     await tester.pump();
     expect(controller.pauseCount, 1);
-    expect(named(AnalyticsEvents.uploadPaused), hasLength(1));
+    expect(named(AnalyticsEvents.uploadPauseTapped), hasLength(1));
   });
 
   testWidgets('re-arms when the pipeline reflects the new state', (tester) async {

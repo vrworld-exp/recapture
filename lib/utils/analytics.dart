@@ -436,12 +436,64 @@ abstract final class AnalyticsEvents {
   ///   encode_error|integrity_mismatch|cancelled|unknown), stage, device_type }.
   static const String bundlePackFailed = 'bundle_pack_failed';
 
-  // ── Upload engine (chunked multipart transfer) — ENGINE telemetry ───────────
+  // ── Upload lifecycle (canonical session funnel) — ENGINE transitions ────────
+  // THE canonical upload funnel. Emitted by ChunkedUploadManager._setStatus —
+  // the engine's single status-transition point — once per genuine EDGE, never
+  // per rebuild, part, or progress poll. These own the bare names; the view/tap
+  // events are suffixed (_view / _tapped) so one real-world transition never
+  // emits two events of the same name. A user CANCEL is deliberately NOT a
+  // lifecycle failure: it emits no lifecycle event ([uploadCancelled] carries
+  // the tap intent; [uploadMultipartAborted] reason:cancelled the mechanics).
+  // `capture_session_id` + device_type "mobile", matching the rest of the
+  // engine telemetry so all five join one funnel.
+  // TODO(analytics): mirror these five names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
+
+  /// The session upload began transferring (idle → uploading) — once per engine
+  /// run (an auto-retry re-run is a new run; attempt context lives in
+  /// [uploadAttemptStarted]). Props: { capture_session_id, total_files,
+  ///   total_bytes, upload_size_mb, device_type }.
+  static const String uploadStarted = 'upload_started';
+
+  /// The upload transitioned uploading → paused — once per pause edge; multiple
+  /// cycles emit multiple pairs. Props: { capture_session_id, files_uploaded,
+  ///   bytes_uploaded, pause_reason (user|connectivity|other), device_type }.
+  static const String uploadPaused = 'upload_paused';
+
+  /// The upload transitioned paused → uploading — once per resume edge. Props:
+  /// { capture_session_id, files_uploaded, bytes_uploaded, device_type }.
+  static const String uploadResumed = 'upload_resumed';
+
+  /// The upload reached completed (all files confirmed) — once per run. Owns
+  /// the bare name (Screen 9's observation event is [uploadCompletedView]).
+  /// Props: { capture_session_id, total_files, total_bytes, upload_size_mb,
+  ///   duration_ms (null if no start timestamp), device_type }.
+  static const String uploadCompleted = 'upload_completed';
+
+  /// The upload entered the terminal failed state — once per run; NOT emitted
+  /// for a user cancel. Props: { capture_session_id, files_uploaded,
+  ///   bytes_uploaded, failure_reason, device_type }.
+  static const String uploadFailed = 'upload_failed';
+
+  /// Intra-upload byte-progress milestone: cumulative progress FIRST crossed
+  /// 25/50/75/100% — at most once per milestone per engine run (highest-reached
+  /// guard: pause/resume and part-retry dips never re-fire; a multi-milestone
+  /// jump fires each crossed one in ascending order). Emitted from the engine's
+  /// single progress point ([ChunkedUploadManager]), never from UI, and only
+  /// when totalBytes > 0. The 100% milestone is a progress signal — it does NOT
+  /// replace [uploadCompleted]. SUPERSEDES the reporter-level
+  /// `upload_progress_milestone` (removed; it was never wired or mirrored).
+  /// Props: { capture_session_id, milestone_pct (25|50|75|100), bytes_uploaded,
+  ///   upload_size_mb (bytesToMb(totalBytes), same conversion as Screen 9's
+  ///   total_mb), device_type }.
+  static const String uploadProgress = 'upload_progress';
+
+  // ── Upload engine (chunked multipart transfer) — part-level ENGINE telemetry ─
   // Emitted by the ChunkedUploadManager (lib/application/upload/
-  // chunked_upload_manager.dart) — engine-level events the VIEW cannot see. These
-  // do NOT duplicate Screen 9's view-level upload_started_view/completed/failed_view.
-  // device_type is "mobile" per the engine telemetry spec (a coarse client tag,
-  // distinct from the android/ios used by view events).
+  // chunked_upload_manager.dart) — part-level diagnostics BELOW the lifecycle
+  // events above (a part retry is not a lifecycle edge). device_type is "mobile"
+  // per the engine telemetry spec (a coarse client tag, distinct from the
+  // android/ios used by view events).
   // TODO(analytics): mirror these two names + props in the shared server schema
   // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
 
@@ -477,20 +529,20 @@ abstract final class AnalyticsEvents {
   static const String uploadRetriesExhausted = 'upload_retries_exhausted';
 
   /// An upload succeeded (possibly after retries). Props: { session_id,
-  ///   attempts_used, device_type }. Distinct from the VIEW event [uploadCompleted].
+  ///   attempts_used, device_type }. Distinct from the lifecycle event
+  ///   [uploadCompleted] and the VIEW event [uploadCompletedView].
   static const String uploadSucceeded = 'upload_succeeded';
 
-  /// A coarse upload byte-progress milestone (25/50/75/100%) was first crossed —
-  /// once per milestone per upload, NOT per progress emit. Observability only.
-  /// Props: { session_id, milestone, device_type }.
-  static const String uploadProgressMilestone = 'upload_progress_milestone';
+  // NOTE: the reporter-level `upload_progress_milestone` const was removed —
+  // the engine-emitted canonical [uploadProgress] supersedes it.
 
   // ── Offline upload queue (detect offline → queue → auto-resume) — ENGINE ────
   // Emitted by the OfflineUploadQueue coordinator (lib/application/upload/
   // offline_upload_queue.dart) when a job enters "waiting for connection" or is
   // auto-resumed on connectivity restore. Diagnostics, NOT user-interaction
-  // analytics — the user-paused/resumed events (upload_paused/upload_resumed)
-  // stay the buttons' territory. device_type is "mobile".
+  // analytics — the user tap-intent events (upload_pause_tapped/
+  // upload_resume_tapped) stay the buttons' territory, and the state edges
+  // themselves are the lifecycle events above. device_type is "mobile".
   // TODO(analytics): mirror these names + props in the shared server schema
   // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc.
 
@@ -518,9 +570,12 @@ abstract final class AnalyticsEvents {
   /// phase: upload, total_files, total_mb, device_type }.
   static const String uploadStartedView = 'upload_started_view';
 
-  /// The observed upload reached the completed state (once). Props: { session_id,
-  /// phase: upload, total_files, total_mb, duration_ms, device_type }.
-  static const String uploadCompleted = 'upload_completed';
+  /// The observed upload reached the completed state (once). RENAMED from the
+  /// bare `upload_completed` — the engine lifecycle event [uploadCompleted] owns
+  /// that name now; this is the Screen 9 observation, suffixed like its
+  /// _view siblings. Props: { session_id, phase: upload, total_files, total_mb,
+  /// duration_ms, device_type }.
+  static const String uploadCompletedView = 'upload_completed_view';
 
   /// The observed upload reached a failed/error state (once). Props: { session_id,
   /// phase: upload, files_uploaded_at_failure, device_type }.
@@ -555,13 +610,17 @@ abstract final class AnalyticsEvents {
   // NAMING: `session_id` + android/ios, matching the rest of the upload funnel.
   // TODO(analytics): mirror in the shared server schema + tracking-plan doc.
 
-  /// The user signalled Pause on an in-progress upload. Props: { session_id,
+  /// The user signalled Pause on an in-progress upload. RENAMED from the bare
+  /// `upload_paused` (now the engine lifecycle event [uploadPaused]) — this is
+  /// the tap INTENT, named like 9F's [uploadRetryTapped]. Props: { session_id,
   /// phase: upload, device_type }.
-  static const String uploadPaused = 'upload_paused';
+  static const String uploadPauseTapped = 'upload_pause_tapped';
 
   /// The user signalled Resume on a paused upload (continues from the durable
-  /// queue). Props: { session_id, phase: upload, device_type }.
-  static const String uploadResumed = 'upload_resumed';
+  /// queue). RENAMED from the bare `upload_resumed` (now the engine lifecycle
+  /// event [uploadResumed]) — tap INTENT only. Props: { session_id,
+  /// phase: upload, device_type }.
+  static const String uploadResumeTapped = 'upload_resume_tapped';
 
   /// The user CONFIRMED Cancel — the transfer is aborted but the local captured
   /// data is retained (re-uploadable), so this is NOT a delete. Fires only after

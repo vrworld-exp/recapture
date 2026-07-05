@@ -1,7 +1,8 @@
 // test/upload/upload_progress_reporter_test.dart
 //
 // Reporting layer: throttle/coalesce, phase (retrying/finalizing), full-restart
-// reset, late-subscriber snapshot, terminal close, zero totals, milestones.
+// reset, late-subscriber snapshot, terminal close, zero totals. Emits NO
+// analytics — the milestone event (upload_progress) moved to the engine.
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -184,21 +185,18 @@ void main() {
     expect(reporter.latest.status, UploadStatus.completed);
   });
 
-  test('coarse milestones fire once each (25/50/75/100)', () async {
-    final milestones = <int>[];
-    Analytics.testSink = (n, p) {
-      if (n == AnalyticsEvents.uploadProgressMilestone) {
-        milestones.add(p['milestone'] as int);
-      }
-    };
+  test('emits NO analytics — milestones belong to the engine (upload_progress)',
+      () async {
+    final events = <String>[];
+    Analytics.testSink = (n, _) => events.add(n);
     src = StreamController<UploadProgress>();
-    reporter = UploadProgressReporter(src.stream, sessionId: 's', minFractionDelta: 0.0);
+    reporter = UploadProgressReporter(src.stream, minFractionDelta: 0.0);
     listen();
     for (var pct = 0; pct <= 100; pct += 5) {
       src.add(_p(UploadStatus.inProgress, pct * 10, 1000, 0, 1));
     }
     src.add(_p(UploadStatus.completed, 1000, 1000, 1, 1));
     await _pump();
-    expect(milestones, [25, 50, 75, 100]);
+    expect(events, isEmpty);
   });
 }

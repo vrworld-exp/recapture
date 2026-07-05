@@ -88,7 +88,7 @@ class _UploadControlsState extends ConsumerState<UploadControls> {
     if (_inFlight || widget.status != UploadStatus.inProgress) return;
     setState(() => _inFlight = true);
     _controller.pause();
-    _logControl(AnalyticsEvents.uploadPaused);
+    _logControl(AnalyticsEvents.uploadPauseTapped);
   }
 
   void _onResume() {
@@ -97,7 +97,7 @@ class _UploadControlsState extends ConsumerState<UploadControls> {
     if (_inFlight || widget.status != UploadStatus.paused) return;
     setState(() => _inFlight = true);
     _controller.resume();
-    _logControl(AnalyticsEvents.uploadResumed);
+    _logControl(AnalyticsEvents.uploadResumeTapped);
   }
 
   Future<void> _onCancel() async {

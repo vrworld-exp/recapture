@@ -348,6 +348,119 @@ describe('POST /jobs/:jobId/finalize — idempotency + state guards', () => {
   });
 });
 
+describe('POST /jobs/:jobId/finalize — rejection side-effects: zero enqueue + boundaries', () => {
+  // The QUEUED flip IS the enqueue in this codebase; the job_queued analytics
+  // emission is its observable signal. Every rejection below asserts BOTH zero
+  // emissions AND no state advance — a 4xx that still enqueued is the exact
+  // failure this block guards against.
+  const queuedEvents = (logSpy: { mock: { calls: unknown[][] } }) =>
+    logSpy.mock.calls.filter((c) => String(c[0]).includes('[analytics] job_queued'));
+
+  it('one object short of expected (N-1) → 422, zero job_queued, state unchanged', async () => {
+    const jobId = await makeUploadingJob();
+    // Boundary derives from the seeded job record, not a free-standing literal.
+    const expected = (await Job.findById(jobId).exec())!.upload!.expectedFilesCount;
+    mockS3({ objectCount: expected - 1 });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe('count_mismatch');
+    expect(res.body.expectedFilesCount).toBe(expected);
+    expect(res.body.actualFilesCount).toBe(expected - 1);
+    expect(queuedEvents(logSpy)).toHaveLength(0);
+    const saved = await Job.findById(jobId).exec();
+    expect(saved!.state).toBe('UPLOADING');
+    expect(saved!.queuedAt).toBeUndefined();
+  });
+
+  it('empty bundle (zero objects) → 422, zero job_queued, state unchanged', async () => {
+    const jobId = await makeUploadingJob();
+    mockS3({ objectCount: 0 });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe('count_mismatch');
+    expect(res.body.actualFilesCount).toBe(0);
+    expect(queuedEvents(logSpy)).toHaveLength(0);
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+  });
+
+  it('every rejection reason → zero job_queued and no state advance', async () => {
+    const cases: { mock: Parameters<typeof mockS3>[0]; body?: { reportedFilesCount: number } }[] = [
+      { mock: { manifestExists: false } }, // manifest_missing
+      { mock: { manifestBody: '{not json' } }, // manifest_invalid (unreadable)
+      { mock: { manifestBody: validManifestBody(5) } }, // manifest_invalid (content rules)
+      { mock: { objectCount: 80 } }, // count_mismatch (over-count)
+      { mock: {}, body: { reportedFilesCount: 72 } }, // reported_count_mismatch
+    ];
+    for (const c of cases) {
+      const jobId = await makeUploadingJob();
+      mockS3(c.mock);
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      let req = request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+      if (c.body) req = req.send(c.body);
+      const res = await req;
+
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('VERIFICATION_FAILED');
+      expect(queuedEvents(logSpy)).toHaveLength(0);
+      const saved = await Job.findById(jobId).exec();
+      expect(saved!.state).toBe('UPLOADING');
+      expect(saved!.queuedAt).toBeUndefined();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('concurrent finalizes on an incomplete bundle → both rejected, zero job_queued', async () => {
+    const jobId = await makeUploadingJob();
+    mockS3({ objectCount: 60 });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const [a, b] = await Promise.all([
+      request(app).post(`/jobs/${jobId}/finalize`).set(auth),
+      request(app).post(`/jobs/${jobId}/finalize`).set(auth),
+    ]);
+
+    expect(a.status).toBe(422);
+    expect(b.status).toBe(422);
+    expect(queuedEvents(logSpy)).toHaveLength(0);
+    const saved = await Job.findById(jobId).exec();
+    expect(saved!.state).toBe('UPLOADING');
+    expect(saved!.queuedAt).toBeUndefined();
+  });
+
+  it('a rejected job re-finalizes successfully once the upload completes', async () => {
+    const jobId = await makeUploadingJob();
+    const expected = (await Job.findById(jobId).exec())!.upload!.expectedFilesCount;
+    mockS3({ objectCount: expected - 1 });
+
+    const rejected = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+    expect(rejected.status).toBe(422);
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+
+    // The missing object arrives; the same job finalizes cleanly — exactly one
+    // enqueue, and only on the successful attempt.
+    vi.restoreAllMocks();
+    mockS3({ objectCount: expected });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const accepted = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.state).toBe('QUEUED');
+    expect(accepted.body.idempotentReplay).toBeUndefined();
+    expect(queuedEvents(logSpy)).toHaveLength(1);
+    const saved = await Job.findById(jobId).exec();
+    expect(saved!.state).toBe('QUEUED');
+    expect(saved!.queuedAt).toBeInstanceOf(Date);
+  });
+});
+
 describe('POST /jobs/:jobId/finalize — request validation + auth', () => {
   it('401 without a token; 400 malformed jobId; 404 unknown/foreign job', async () => {
     const jobId = await makeUploadingJob();

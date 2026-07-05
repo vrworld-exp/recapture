@@ -48,6 +48,9 @@ export interface IProject extends Document {
   mode: CaptureMode;
   category?: string;
   status: ProjectStatus;
+  /** When `status` last changed — written on EVERY transition (see
+   * projectsService.updateProjectStatus); null until the first transition. */
+  statusUpdatedAt?: Date | null;
   activeJobId?: Types.ObjectId;
   latestCompletedJobId?: Types.ObjectId;
   stats?: ProjectStats;
@@ -89,6 +92,10 @@ const ProjectSchema = new Schema<IProject>(
       enum: ['DRAFT', 'CAPTURING', 'UPLOADING', 'PROCESSING', 'COMPLETED', 'FAILED'],
       default: 'DRAFT',
       required: true,
+    },
+    statusUpdatedAt: {
+      type: Date,
+      default: null,
     },
     activeJobId: {
       type: Schema.Types.ObjectId,

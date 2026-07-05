@@ -86,7 +86,8 @@ describe('POST /jobs — happy path', () => {
     // Plan: job-scoped key space + echoed S3 hard limits + bounded expiry.
     expect(uploadPlan.uploadMethod).toBe('S3_PRESIGNED_MULTIPART');
     expect(uploadPlan.bucket).toBe('recapture-test-raw'); // env S3_BUCKET_RAW
-    expect(uploadPlan.keyPrefix).toBe(`development/${userId}/${projectId}/${job.id}/`);
+    // {env} is config-driven: NODE_ENV=development (vitest.config) → "dev/".
+    expect(uploadPlan.keyPrefix).toBe(`dev/${userId}/${projectId}/${job.id}/`);
     expect(uploadPlan.manifestKey).toBe(`${uploadPlan.keyPrefix}capture_manifest.json`);
     expect(uploadPlan.keyTemplate).toBe(`${uploadPlan.keyPrefix}{relativePath}`);
     expect(uploadPlan.partSizeMin).toBe(PART_SIZE_MIN);

@@ -18,7 +18,9 @@
 // layout (images/{EYE|TOP|LOW}/eye_0001.jpg + capture_manifest.json), so the
 // plan does NOT enumerate per-file slots — it provides the authoritative
 // `keyPrefix` (+ a template documenting the rule) that the initiate endpoint
-// must enforce as a containment check.
+// must enforce as a containment check. The prefix and manifest key come from
+// the CANONICAL key utility (@/utils/s3Keys) — the single source of truth for
+// the {env}/{userId}/{projectId}/{jobId}/… scheme — never inline templates.
 import { Types } from 'mongoose';
 import { Job, type IJob } from '@/models/Job';
 import { Project } from '@/models/Project';
@@ -44,14 +46,14 @@ import {
   presignPartUrls,
 } from '@/services/s3MultipartService';
 import { getObjectText, countObjectsUnderPrefix } from '@/services/s3ObjectStore';
+import { updateProjectStatus } from '@/services/projectsService';
+import { buildJobKeyPrefix, buildManifestKey } from '@/utils/s3Keys';
 import { validateCaptureManifest, REQUIRED_CAPTURE_LEVELS } from '@/services/manifestValidationService';
 import type { ManifestValidationError } from '@/models/types/manifest.types';
 
 // The S3 hard limits live with the S3 helpers; re-exported here because the
 // create response echoes them in the upload plan.
 export { PART_SIZE_MIN, MAX_PARTS };
-
-const MANIFEST_FILENAME = 'capture_manifest.json';
 
 // Client wire values (lowercase, same as POST /projects) ↔ model enums.
 type WireSize = CreateJobInput['objectSize'];
@@ -163,14 +165,16 @@ export async function createJob(
   if (idempotencyKey) {
     const existing = await Job.findOne({ userId: ownerId, idempotencyKey }).exec();
     if (existing) {
-      return replayOrConflict(existing, input);
+      return withUploadingStatus(replayOrConflict(existing, input));
     }
   }
 
   // The jobId is minted first so the key prefix can embed it; the insert is a
-  // single document write (atomic — a failure persists nothing).
+  // single document write (atomic — a failure persists nothing). Both keys
+  // come from the canonical builder ({env} is config-driven there).
   const jobId = new Types.ObjectId();
-  const rawPrefix = `${env.NODE_ENV}/${userId}/${input.projectId}/${jobId.toHexString()}/`;
+  const keyScope = { userId, projectId: input.projectId, jobId: jobId.toHexString() };
+  const rawPrefix = buildJobKeyPrefix(keyScope);
 
   try {
     const job = await Job.create({
@@ -187,21 +191,39 @@ export async function createJob(
         checksumAlgo: 'md5',
         rawBucket: BUCKET_RAW,
         rawPrefix,
-        manifestKey: `${rawPrefix}${MANIFEST_FILENAME}`,
+        manifestKey: buildManifestKey(keyScope),
       },
     });
-    return { outcome: 'CREATED', job: toDto(job), uploadPlan: planFor(job) };
+    return withUploadingStatus({ outcome: 'CREATED', job: toDto(job), uploadPlan: planFor(job) });
   } catch (err) {
     // Concurrent duplicate with the same key: the unique index rejected this
     // insert — resolve against the job that won the race.
     if (idempotencyKey && isDuplicateKeyError(err)) {
       const winner = await Job.findOne({ userId: ownerId, idempotencyKey }).exec();
       if (winner) {
-        return replayOrConflict(winner, input);
+        return withUploadingStatus(replayOrConflict(winner, input));
       }
     }
     throw err;
   }
+}
+
+/**
+ * Project lifecycle: a successful create outcome moves the parent project to
+ * UPLOADING — strictly AFTER the job document is known to persist (a project
+ * must never enter UPLOADING for a job that failed to insert). Idempotent
+ * replays re-assert the status too: the duplicate-submission spec calls for
+ * refreshing statusUpdatedAt, and it self-heals a crash that landed between
+ * the original insert and its status write. A status-write failure PROPAGATES
+ * (→ 500) rather than rolling back the job: this codebase uses sequential
+ * writes, not transactions — the persisted-job/stale-status window is a known
+ * MVP consistency gap (compensating logic is a future concern).
+ */
+async function withUploadingStatus(result: CreateJobResult): Promise<CreateJobResult> {
+  if (result.outcome === 'CREATED' || result.outcome === 'REPLAYED') {
+    await updateProjectStatus(result.job.projectId, 'UPLOADING');
+  }
+  return result;
 }
 
 /**
@@ -457,6 +479,11 @@ export async function finalizeJob(
     return { outcome: 'JOB_NOT_FINALIZABLE', state: job.state };
   }
 
+  // The persisted rawPrefix/manifestKey ARE the canonical builder's output,
+  // stored at create time — finalize verifies under the exact prefix the plan
+  // advertised (writer and verifier share one source by construction). They
+  // are deliberately NOT recomputed here: recomputing would silently re-point
+  // verification if the env prefix or scheme ever changed mid-flight.
   const { rawBucket, rawPrefix, manifestKey, expectedFilesCount } = job.upload;
 
   // Verification 1: the manifest object must exist (the upload engine writes
@@ -546,7 +573,26 @@ export async function finalizeJob(
   return { outcome: 'JOB_NOT_FINALIZABLE', state: current?.state ?? job.state };
 }
 
-function queuedResult(job: IJob, alreadyQueued: boolean): FinalizeJobResult {
+/**
+ * The single funnel for every QUEUED outcome (fresh flip, early replay, and
+ * lost-race replay), so the project's PROCESSING transition happens on all of
+ * them and always AFTER the job's own QUEUED write. Replays re-assert the
+ * status (refreshing statusUpdatedAt per the duplicate-finalize spec, and
+ * self-healing a crash between the original flip and its status write). Same
+ * error rule as create: a status-write failure propagates (→ 500) with the
+ * job left QUEUED — known MVP consistency gap, no transactions here.
+ */
+async function queuedResult(job: IJob, alreadyQueued: boolean): Promise<FinalizeJobResult> {
+  const projectId = job.projectId?.toHexString();
+  if (!projectId) {
+    // Defensive only (the schema requires projectId today): a job without a
+    // project would be standalone and doesn't drive any project status.
+    console.warn(
+      `[ProjectStatus] job ${job.id} has no projectId — skipping PROCESSING transition`
+    );
+  } else {
+    await updateProjectStatus(projectId, 'PROCESSING');
+  }
   return {
     outcome: 'QUEUED',
     jobId: job.id as string,

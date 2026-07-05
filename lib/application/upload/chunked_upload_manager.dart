@@ -28,6 +28,7 @@ import '../../domain/upload/upload_part_plan.dart';
 import '../../domain/upload/upload_session_spec.dart';
 import '../../domain/entities/upload_progress.dart';
 import '../../utils/analytics.dart';
+import '../../utils/byte_format.dart';
 import 'multipart_upload_api.dart';
 import 'upload_controller.dart';
 import 'upload_progress_provider.dart';
@@ -103,6 +104,13 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
   Completer<void>? _pauseGate;
   final Set<CancelToken> _activeTokens = {};
 
+  // Lifecycle analytics context (see _logLifecycle).
+  DateTime? _startedAt;
+  String? _pendingPauseReason;
+
+  /// Milestones (25/50/75/100) already fired this run (see _fireProgressMilestones).
+  final Set<int> _milestonesFired = {};
+
   String? _lastFailureReason;
   Object? _lastFailureError;
 
@@ -133,6 +141,7 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
   void pause() {
     if (_progress.status != UploadStatus.inProgress) return;
     _paused = true;
+    _pendingPauseReason = 'user';
     _setStatus(UploadStatus.paused);
   }
 
@@ -482,6 +491,7 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
   void _autoPause() {
     if (!_paused) {
       _paused = true;
+      _pendingPauseReason = 'connectivity';
       _setStatus(UploadStatus.paused);
     }
   }
@@ -510,9 +520,105 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
       bytesUploaded: _reportedBytes,
       filesUploaded: _filesUploaded,
     ));
+    _fireProgressMilestones();
   }
 
-  void _setStatus(UploadStatus status) => _push(_progress.copyWith(status: status));
+  /// Emits `upload_progress` the first time cumulative progress crosses each
+  /// 25% milestone — at most once per milestone per run ([_milestonesFired],
+  /// cleared in [_reset]); a multi-milestone jump fires each crossed one in
+  /// ascending order. Based on [_reportedBytes], which is MONOTONIC, so
+  /// pause/resume and part-retry dips can never re-fire a milestone. Skipped
+  /// entirely while totalBytes is 0/unknown (no div-by-zero, no bogus 100%).
+  /// The 100% milestone is intra-upload signal — [uploadCompleted] (status
+  /// edge) remains the completion event.
+  void _fireProgressMilestones() {
+    if (_totalBytes <= 0) return;
+    final pct = _reportedBytes * 100 ~/ _totalBytes;
+    for (final m in const [25, 50, 75, 100]) {
+      if (pct >= m && _milestonesFired.add(m)) {
+        Analytics.logEvent(AnalyticsEvents.uploadProgress, {
+          'capture_session_id': _sessionId,
+          'milestone_pct': m,
+          'bytes_uploaded': _reportedBytes,
+          'upload_size_mb': bytesToMb(_totalBytes),
+          'device_type': _deviceType,
+        });
+      }
+    }
+  }
+
+  void _setStatus(UploadStatus status) {
+    final previous = _progress.status;
+    _push(_progress.copyWith(status: status));
+    // Emission rides the transition itself: a status change cannot happen
+    // without its lifecycle event, and repeated reads/rebuilds (which never
+    // reach here) cannot re-emit. Same-status calls are edge-guarded.
+    if (previous != status) _logLifecycle(previous, status);
+  }
+
+  /// Canonical upload lifecycle funnel (upload_started/paused/resumed/
+  /// completed/failed), fired once per genuine status EDGE from the engine's
+  /// single transition point. Part-level telemetry ([_emitRetry], [_abort])
+  /// sits below this and never fires lifecycle events. CANCEL is deliberately
+  /// silent here — it is not a failure; the tap-intent `upload_cancelled` and
+  /// `upload_multipart_aborted{reason: cancelled}` already cover it. An
+  /// auto-retry re-[start] is a new engine run and emits a fresh
+  /// upload_started (attempt context lives in the runner's
+  /// upload_attempt_started).
+  void _logLifecycle(UploadStatus previous, UploadStatus status) {
+    switch (status) {
+      case UploadStatus.inProgress:
+        if (previous == UploadStatus.paused) {
+          Analytics.logEvent(AnalyticsEvents.uploadResumed, {
+            'capture_session_id': _sessionId,
+            'files_uploaded': _filesUploaded,
+            'bytes_uploaded': _reportedBytes,
+            'device_type': _deviceType,
+          });
+        } else {
+          _startedAt = DateTime.now();
+          Analytics.logEvent(AnalyticsEvents.uploadStarted, {
+            'capture_session_id': _sessionId,
+            'total_files': _totalFiles,
+            'total_bytes': _totalBytes,
+            'upload_size_mb': bytesToMb(_totalBytes),
+            'device_type': _deviceType,
+          });
+        }
+      case UploadStatus.paused:
+        Analytics.logEvent(AnalyticsEvents.uploadPaused, {
+          'capture_session_id': _sessionId,
+          'files_uploaded': _filesUploaded,
+          'bytes_uploaded': _reportedBytes,
+          'pause_reason': _pendingPauseReason ?? 'other',
+          'device_type': _deviceType,
+        });
+        _pendingPauseReason = null;
+      case UploadStatus.completed:
+        Analytics.logEvent(AnalyticsEvents.uploadCompleted, {
+          'capture_session_id': _sessionId,
+          'total_files': _totalFiles,
+          'total_bytes': _totalBytes,
+          'upload_size_mb': bytesToMb(_totalBytes),
+          'duration_ms': _startedAt == null
+              ? null
+              : DateTime.now().difference(_startedAt!).inMilliseconds,
+          'device_type': _deviceType,
+        });
+      case UploadStatus.failed:
+        Analytics.logEvent(AnalyticsEvents.uploadFailed, {
+          'capture_session_id': _sessionId,
+          'files_uploaded': _filesUploaded,
+          'bytes_uploaded': _reportedBytes,
+          // Set by the failure site BEFORE the status flip (see _uploadOneFile).
+          'failure_reason': _lastFailureReason ?? 'unknown',
+          'device_type': _deviceType,
+        });
+      case UploadStatus.cancelled:
+      case UploadStatus.idle:
+        break; // cancel ≠ failure; idle is never entered via _setStatus.
+    }
+  }
 
   void _push(UploadProgress next) {
     _progress = next;
@@ -532,6 +638,9 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
     _pauseGate = null;
     _lastFailureReason = null;
     _lastFailureError = null;
+    _startedAt = null;
+    _pendingPauseReason = null;
+    _milestonesFired.clear(); // fresh run reports its milestones again
     _progress = UploadProgress(
       status: UploadStatus.idle,
       bytesUploaded: 0,

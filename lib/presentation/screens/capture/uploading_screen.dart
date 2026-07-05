@@ -103,7 +103,7 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
     if (_terminalLogged) return;
     if (p.isComplete) {
       _terminalLogged = true;
-      Analytics.logEvent(AnalyticsEvents.uploadCompleted, {
+      Analytics.logEvent(AnalyticsEvents.uploadCompletedView, {
         'session_id': _sessionId,
         'phase': 'upload',
         'total_files': p.totalFiles,

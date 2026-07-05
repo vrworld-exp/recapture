@@ -1,7 +1,14 @@
 // src/services/projectsService.ts
 import { Types, type FilterQuery } from 'mongoose';
-import { Project, type IProject, type ObjectSize, type CaptureMode } from '@/models/Project';
+import {
+  Project,
+  type IProject,
+  type ObjectSize,
+  type CaptureMode,
+  type ProjectStatus,
+} from '@/models/Project';
 import { encodeCursor, type ProjectCursor } from '@/utils/cursor';
+import { NotFoundError } from '@/utils/errors';
 import type { CreateProjectInput } from '@/validation/projectSchemas';
 
 /** Minimal project shape for the Hub list view — no internal-only fields. */
@@ -9,6 +16,8 @@ export interface ProjectListItem {
   id: string;
   name: string;
   status: IProject['status'];
+  /** ISO instant of the last status transition; null before the first one. */
+  statusUpdatedAt: string | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -252,7 +261,72 @@ function toListItem(p: IProject): ProjectListItem {
     id: p.id as string,
     name: p.name,
     status: p.status,
+    statusUpdatedAt: p.statusUpdatedAt ? p.statusUpdatedAt.toISOString() : null,
     updatedAt: p.updatedAt.toISOString(),
     createdAt: p.createdAt.toISOString(),
   };
+}
+
+// ── Project status lifecycle ──────────────────────────────────────────────────
+
+/**
+ * Expected status transitions, SOFT-enforced (warn, never block — see
+ * updateProjectStatus). Grounded to this codebase's full status set: the app
+ * flow is DRAFT → CAPTURING → UPLOADING → PROCESSING → COMPLETED/FAILED, a
+ * job may be created straight from DRAFT (tests/dev tools do), and a
+ * COMPLETED/FAILED project can start a new job version (re-capture/retry).
+ * Self-transitions (duplicate create/finalize) intentionally warn.
+ */
+const VALID_TRANSITIONS: Partial<Record<ProjectStatus, ProjectStatus[]>> = {
+  DRAFT: ['CAPTURING', 'UPLOADING'],
+  CAPTURING: ['UPLOADING'],
+  UPLOADING: ['PROCESSING'],
+  PROCESSING: ['COMPLETED', 'FAILED'],
+  COMPLETED: ['UPLOADING'],
+  FAILED: ['UPLOADING'],
+};
+
+/**
+ * Sets a project's status and ALWAYS stamps `statusUpdatedAt` — the timestamp
+ * is enforced here, never left to call sites. Both job-pipeline transition
+ * sites (createJob → UPLOADING, finalizeJob → PROCESSING) go through this
+ * helper; raw status writes elsewhere are a bug.
+ *
+ * Unexpected transitions are logged as warnings, NOT rejected (MVP soft
+ * guard): the read-before-write costs one extra query per transition, which
+ * is fine at MVP scale — if it ever matters, drop the read or move it to an
+ * async audit path. `runValidators: true` makes the schema's status enum fire
+ * even if a bad string bypasses TypeScript at runtime (which also means the
+ * schema enum must contain a status before code starts writing it —
+ * deployment-order dependency).
+ *
+ * Throws {@link NotFoundError} (→ 500) when the project doesn't exist: a job
+ * referencing a vanished project is a data-integrity bug that must surface,
+ * not be swallowed. Intentionally NOT scoped to deletedAt — ownership and
+ * liveness were already checked by the calling job operation.
+ */
+export async function updateProjectStatus(
+  projectId: string,
+  status: ProjectStatus
+): Promise<void> {
+  const current = await Project.findById(projectId).select('status').exec();
+  if (current) {
+    const allowed = VALID_TRANSITIONS[current.status] ?? [];
+    if (!allowed.includes(status)) {
+      console.warn(
+        `[ProjectStatus] Unexpected transition: ${current.status} → ${status} for project ${projectId}`
+      );
+    }
+  }
+
+  // $set only — never document replacement, so unrelated fields are safe.
+  const result = await Project.findByIdAndUpdate(
+    projectId,
+    { $set: { status, statusUpdatedAt: new Date() } },
+    { new: false, runValidators: true }
+  ).exec();
+
+  if (!result) {
+    throw new NotFoundError(`Project ${projectId} not found — cannot set status to ${status}`);
+  }
 }

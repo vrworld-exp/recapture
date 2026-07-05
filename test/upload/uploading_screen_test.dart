@@ -142,7 +142,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('PROCESSING'), findsOneWidget);
-    final done = named(AnalyticsEvents.uploadCompleted);
+    final done = named(AnalyticsEvents.uploadCompletedView);
     expect(done, hasLength(1));
     expect(done.first.props['total_files'], 10);
     expect(done.first.props['duration_ms'], isA<int>());
@@ -275,6 +275,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('PROCESSING'), findsOneWidget);
     expect(named(AnalyticsEvents.uploadStartedView), hasLength(1));
-    expect(named(AnalyticsEvents.uploadCompleted), hasLength(1));
+    expect(named(AnalyticsEvents.uploadCompletedView), hasLength(1));
   });
 }
