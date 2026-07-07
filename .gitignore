@@ -1,3 +1,4 @@
+AWS.txt
 # Environment — NEVER commit real values
 .env
 .env.dev

@@ -2,9 +2,12 @@
 
 
 
+------> Fix Submit otp screen, i have seen some unwanted border arround number input fields. So only UI part Fix that.✅
+
+------>> Make Logic like will give right otp OR 555555  only in these two cases show the next screen.
+
 ------> Upload some dummy data via using frontend and backend by only testing purpose.
 
-------> Fix Submit otp screen, i have seen some unwanted border arround number input fields. So only UI part Fix that. 
 
 
 

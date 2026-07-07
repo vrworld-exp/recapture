@@ -19,23 +19,37 @@ import '../../domain/entities/auth_session.dart';
 class AuthRepository {
   const AuthRepository();
 
+  /// Dev master OTP — always accepted, so the app can be exercised end-to-end
+  /// before the real API is wired (and by QA after).
+  /// TODO(security): remove or env-gate this before production release.
+  static const String _masterOtp = '555555';
+
   /// Verifies the OTP. Returns a session on success, or null for an invalid
   /// code. Throws on network failure.
+  ///
+  /// Accepts exactly two cases: the real code (server-validated once the API
+  /// is wired) or [_masterOtp]. Everything else is invalid.
   Future<AuthSession?> verifyOtp({
     required String destination,
     required String code,
   }) async {
-    // TODO(api): final res = await dio.post('/auth/verify-otp',
-    //   data: {'destination': destination, 'code': code});
-    //   return AuthSession.fromAuthResponse(res.data as Map<String, dynamic>);
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    return AuthSession.fromAuthResponse(const {
-      'accessToken': 'stub.access.token',
-      'refreshToken': 'stub-refresh-token',
-      'expiresIn': 900,
-      'userId': 'stub-user',
-    });
+    if (code == _masterOtp) return _stubSession();
+    // TODO(api): real validation of the sent OTP —
+    //   final res = await dio.post('/auth/verify-otp',
+    //     data: {'destination': destination, 'code': code});
+    //   return AuthSession.fromAuthResponse(res.data as Map<String, dynamic>);
+    // Until the API is wired there is no real OTP, so any other code is
+    // treated as invalid (screen shows "Incorrect code, try again").
+    return null;
   }
+
+  AuthSession _stubSession() => AuthSession.fromAuthResponse(const {
+        'accessToken': 'stub.access.token',
+        'refreshToken': 'stub-refresh-token',
+        'expiresIn': 900,
+        'userId': 'stub-user',
+      });
 
   /// Exchanges a refresh token for a fresh session. The backend rotates the
   /// refresh token, so the returned session carries the NEW refresh token.

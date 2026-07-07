@@ -302,8 +302,18 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
                 LengthLimitingTextInputFormatter(kOtpLength),
               ],
               style: const TextStyle(color: Colors.transparent, height: 0.1),
+              // Every state border must be cleared explicitly: the app theme's
+              // InputDecorationTheme sets enabledBorder/focusedBorder etc.,
+              // which win over a plain `border:` override and would draw an
+              // outline around this hidden field.
               decoration: const InputDecoration(
                 border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                errorBorder: InputBorder.none,
+                focusedErrorBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
+                filled: false,
                 counterText: '',
                 contentPadding: EdgeInsets.zero,
               ),
