@@ -6,18 +6,25 @@
 
 /**
  * Job processing lifecycle states.
- * Mirrors the state machine described in the ReCapture PRD.
+ * Mirrors the state machine described in the ReCapture PRD, plus the
+ * queue-internal CLAIMED state the background worker uses between winning the
+ * atomic claim and starting processing (worker-only; never surfaced to the
+ * client, which sees QUEUED/PROCESSING around it).
  *
- * Flow: CREATED → UPLOADING → UPLOADED → QUEUED → PROCESSING
+ * Flow: CREATED → UPLOADING → UPLOADED → QUEUED → CLAIMED → PROCESSING
  *       → TEXTURING → OPTIMIZING → COMPLETED
  *                                 ↘ FAILED (from any state)
  *                                 ↘ CANCELED (from CREATED/UPLOADING/UPLOADED)
+ *
+ * Retry loop (worker): PROCESSING → QUEUED (attempts < maxAttempts, delayed
+ * via nextRetryAt) or → FAILED (attempts exhausted).
  */
 export type JobState =
   | 'CREATED'
   | 'UPLOADING'
   | 'UPLOADED'
   | 'QUEUED'
+  | 'CLAIMED'
   | 'PROCESSING'
   | 'TEXTURING'
   | 'OPTIMIZING'

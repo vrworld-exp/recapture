@@ -155,6 +155,43 @@ export interface IJob extends Document {
 
   state: JobState;
 
+  // ── Worker queue fields (P7 background worker — src/worker/) ───────────────
+  // The Job document IS the queue entry: finalize's QUEUED flip is the enqueue,
+  // and the worker claims work with an atomic conditional findOneAndUpdate.
+
+  /** Discriminator the worker's processor registry dispatches on. */
+  jobType: string;
+
+  /** Claim ordering — higher is picked first (FIFO within a priority). */
+  priority: number;
+
+  /** Processing attempts consumed so far (incremented on each failure). */
+  attempts: number;
+
+  /** Attempts allowed before the job goes terminally FAILED. */
+  maxAttempts: number;
+
+  /** Message of the most recent processing failure (also on retried jobs). */
+  lastError?: string | null;
+
+  /** Lease start of the current claim — stale-claim recovery compares this. */
+  claimedAt?: Date | null;
+
+  /** Worker instance id (`worker-{host}-{pid}`) holding the current claim. */
+  claimedBy?: string | null;
+
+  /** Earliest instant a failed-and-requeued job may be claimed again. */
+  nextRetryAt?: Date | null;
+
+  /** When processing of the current/most recent attempt began. */
+  startedAt?: Date | null;
+
+  /** When the job reached COMPLETED. */
+  completedAt?: Date | null;
+
+  /** Processor return value — stub/diagnostic output (real artifacts go in `artifacts`). */
+  result?: Record<string, unknown> | null;
+
   /** Live progress within the current processing stage (P7 worker updates this) */
   stageProgress?: StageProgress;
 
@@ -212,6 +249,7 @@ const JobSchema = new Schema<IJob>(
         'UPLOADING',
         'UPLOADED',
         'QUEUED',
+        'CLAIMED',
         'PROCESSING',
         'TEXTURING',
         'OPTIMIZING',
@@ -222,6 +260,17 @@ const JobSchema = new Schema<IJob>(
       default: 'CREATED',
       required: true,
     },
+    jobType: { type: String, required: true, default: 'CAPTURE_PROCESSING' },
+    priority: { type: Number, required: true, default: 0 },
+    attempts: { type: Number, required: true, default: 0 },
+    maxAttempts: { type: Number, required: true, default: 3 },
+    lastError: { type: String, default: null },
+    claimedAt: { type: Date, default: null },
+    claimedBy: { type: String, default: null },
+    nextRetryAt: { type: Date, default: null },
+    startedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null },
+    result: { type: Schema.Types.Mixed, default: null },
     stageProgress: { type: StageProgressSchema },
     captureSummary: { type: CaptureSummarySchema },
     queuedAt: { type: Date },
@@ -243,9 +292,14 @@ JobSchema.index({ projectId: 1, createdAt: -1 });
 JobSchema.index({ userId: 1, createdAt: -1 });
 
 // Ops monitoring query pattern: "find all jobs in a given state, oldest first"
-// (used by the P7 processing worker to find QUEUED jobs, and by admin dashboard
-// to find stuck/FAILED jobs)
+// (admin dashboard: stuck/FAILED jobs)
 JobSchema.index({ state: 1, updatedAt: -1 });
+
+// Worker claim query (src/worker/jobQueue.ts claimNextJob): covers the exact
+// filter+sort shape of the atomic claim — state match, retry-window check,
+// priority-then-FIFO ordering — so every poll is an index walk, never a
+// collection scan.
+JobSchema.index({ state: 1, priority: -1, nextRetryAt: 1, createdAt: 1 });
 
 // Idempotent create (POST /jobs): at most ONE job per (user, Idempotency-Key).
 // Partial so the many jobs created WITHOUT a key never collide — uniqueness

@@ -18,6 +18,8 @@ However, unlike the Atlas task, there's a substantial codeable piece here that's
 
 The recapture-api scaffold has src/config/s3.ts with the S3Client singleton and bucket name constants — but zero actual S3 operations exist yet. No presigned URL generation, no upload/download helper functions, no bucket policy/CORS configuration as Infrastructure-as-Code, and no verification script.
 
+
+
 Given the PRD's heavy reliance on presigned multipart uploads (P6) and CloudFront-only artifact delivery (constraint repeated throughout), the most valuable codeable output here is:
 
 A Terraform/CloudFormation-lite approach is overkill for MVP — but a setup script using AWS SDK that creates the buckets, applies the correct bucket policies (private, CORS for presigned uploads), and lifecycle rules — run once by the founder with their AWS credentials — IS agent-codeable and removes most manual console clicking.
@@ -41,13 +43,13 @@ AWS S3 Setup Checklist (manual — 10 minutes)
 1. Create the two buckets
 Go to S3 Console → Create bucket
 
-Bucket 1 — msxr-raw-captures
+Bucket 1 — msxr-raw-captures   ✅
 
 Region: ap-south-1 (Mumbai) — matches Render region: singapore reasonably well; pick whichever is closer to your primary user base and keep both buckets + Render in the same region to avoid cross-region transfer costs
 Block all public access: ON (keep default — never make this public)
 Bucket Versioning: Off (not needed for raw captures)
 Default encryption: SSE-S3 (default, fine)
-Bucket 2 — msxr-model-artifacts
+Bucket 2 — msxr-model-artifacts    ✅
 
 Same region as above
 Block all public access: ON (CloudFront will access via Origin Access Control, not public ACLs)
@@ -68,7 +70,7 @@ json
   }
 }
 ]
-Tighten AllowedOrigins later if the mobile app ever runs uploads from a known web domain — for native mobile apps "*" is standard since there's no browser origin to restrict.
+Tighten AllowedOrigins later if the mobile app ever runs uploads from a known web domain — for native mobile apps "*" is standard since there's no browser origin to restrict.   ✅
 
 3. Configure lifecycle rule on msxr-raw-captures
 Go to bucket → Management → Create lifecycle rule:
@@ -76,7 +78,9 @@ Go to bucket → Management → Create lifecycle rule:
 Rule name: expire-raw-captures
 Scope: entire bucket
 Action: Expire current versions of objects
-Days after object creation: 90 (matches PRD: "retain 30–90 days")
+Days after object creation: 90 (matches PRD: "retain 30–90 days")   ✅
+
+
 4. Create IAM user for the backend API
 Go to IAM Console → Users → Create user
 
@@ -84,7 +88,7 @@ Name: recapture-api-service
 No console access — programmatic access only
 Attach policy: create a custom inline policy (don't use AWS-managed AmazonS3FullAccess):
 json
-{
+{ 
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -104,18 +108,27 @@ json
     }
   ]
 }
-Create an access key (Access key ID + Secret access key) — save both to the team password manager immediately. This key is never shown again.
+Create an access key (Access key ID + Secret access key) — save both to the team password manager immediately. This key is never shown again.   ✅
+
+
 5. Set up CloudFront for msxr-model-artifacts
 This is the only way artifacts are served to clients — never raw S3 URLs (enforced throughout the backend prompts).
 
 Go to CloudFront Console → Create distribution:
 
 Origin domain: select msxr-model-artifacts.s3.ap-south-1.amazonaws.com
+
 Origin access: Origin access control settings (recommended) → Create new OAC
-After creating the distribution, CloudFront will show a bucket policy to copy — go back to msxr-model-artifacts → Permissions → Bucket policy → paste it (this grants CloudFront-only read access, keeping the bucket private)
+
+After creating the distribution, CloudFront will show a bucket policy to copy — go back to msxr-model-artifacts → Permissions → Bucket policy → paste it (this grants CloudFront-only read access, keeping the bucket private)  ✅
+
+
 Viewer protocol policy: Redirect HTTP to HTTPS
+
 Cache policy: CachingOptimized (default — fine for immutable model artifacts)
-Once deployed (takes ~5–15 min to propagate), copy the distribution domain, e.g.:
+
+Once deployed (takes ~5–15 min to propagate), copy the distribution domain, e.g.:  ✅
+
 
 https://d1a2b3c4d5e6f7.cloudfront.net
 6. Fill in .env
@@ -126,6 +139,8 @@ AWS_SECRET_ACCESS_KEY=<from step 4>
 S3_BUCKET_RAW=msxr-raw-captures
 S3_BUCKET_ARTIFACTS=msxr-model-artifacts
 CLOUDFRONT_BASE_URL=https://d1a2b3c4d5e6f7.cloudfront.net
+
+
 7. Verify
 Run npm run dev in recapture-api — the Zod env validation from the scaffold will fail loudly if any of these are missing or malformed. If it boots clean, the env contract is satisfied. Actual upload/read verification happens once P6's s3.service.ts exists — that's the natural point to write a quick putObject/getObject smoke test against both buckets.
 

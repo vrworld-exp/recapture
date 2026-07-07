@@ -63,6 +63,20 @@ const envSchema = z.object({
    * connection. Default 24h.
    */
   UPLOAD_PLAN_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
+
+  // ── Background worker (src/worker — separate process, `npm run worker`) ─────
+  /** How often the worker polls for claimable jobs (milliseconds). */
+  WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  /**
+   * Claim lease: a job stuck in CLAIMED/PROCESSING longer than this is
+   * considered orphaned (worker crash/OOM) and re-claimed on a later poll.
+   * Balance: too low re-runs live jobs; too high delays crash recovery.
+   */
+  WORKER_CLAIM_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  /** Jobs one worker instance processes concurrently. */
+  WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  /** Heartbeat log (with queue-depth breakdown) every N polls. */
+  WORKER_HEARTBEAT_EVERY_N_POLLS: z.coerce.number().int().positive().default(20),
 });
 
 const parsed = envSchema.safeParse(process.env);
