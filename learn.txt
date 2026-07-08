@@ -2,14 +2,16 @@
 
 Commands for Flutter :------------->
 
+    flutter emulators
+
     flutter clean    
         : Above will remove all unneccessory things from the project.
 
-    flutter pub get
-    flutter emulators
-
     flutter pub outdated
+
     flutter pub upgrade --major-versions
+
+    flutter pub get
 
     flutter doctor
 
