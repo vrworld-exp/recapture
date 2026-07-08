@@ -1,16 +1,23 @@
 // lib/presentation/screens/auth/auth_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../domain/auth/auth_input_validators.dart';
+import '../../../domain/entities/country_code.dart';
 import '../../../platform/connectivity_watcher.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
+import '../../widgets/country_code_picker.dart';
 import '../../widgets/offline_retry_modal.dart';
 
 class AuthScreen extends StatefulWidget {
-  const AuthScreen({super.key});
+  const AuthScreen({super.key, this.connectivity});
+
+  /// Injectable connectivity gate for tests; null → the real watcher.
+  final ConnectivityWatcher? connectivity;
 
   @override
   State<AuthScreen> createState() => _AuthScreenState();
@@ -19,11 +26,33 @@ class AuthScreen extends StatefulWidget {
 class _AuthScreenState extends State<AuthScreen> {
   bool _isPhone = true;
 
-  final ConnectivityWatcher _connectivity = ConnectivityWatcher();
+  late final ConnectivityWatcher _connectivity =
+      widget.connectivity ?? ConnectivityWatcher();
 
-  /// Wraps the "Send OTP" network step: if offline, surface the retry modal
-  /// first; only proceed once connectivity is confirmed.
+  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+
+  /// Selected dial code for the phone tab. Defaults to India (+91); changed
+  /// via the flag button → country sheet.
+  CountryCode _country = kDefaultCountryCode;
+
+  /// Inline validation errors, per tab. Set on a Send OTP attempt, cleared as
+  /// soon as the user edits the field again (validate-on-submit).
+  String? _phoneError;
+  String? _emailError;
+
+  @override
+  void dispose() {
+    _phoneController.dispose();
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  /// Wraps the "Send OTP" network step: validate the active tab's input first
+  /// (invalid → inline error, no network), then if offline surface the retry
+  /// modal; only proceed once connectivity is confirmed.
   Future<void> _onSendOtp() async {
+    if (!_validateActiveTab()) return;
     final status = await _connectivity.currentStatus();
     if (!mounted) return;
     if (status == AppConnectivityStatus.offline) {
@@ -37,6 +66,33 @@ class _AuthScreenState extends State<AuthScreen> {
       if (!mounted) return;
     }
     context.goNamed(AppRouteNames.otpVerify);
+  }
+
+  /// Runs the pure validator for the visible tab and installs/clears its
+  /// inline error. Returns true when the input may proceed to the OTP step.
+  bool _validateActiveTab() {
+    if (_isPhone) {
+      final error = AuthInputValidators.phone(
+        _phoneController.text,
+        country: _country,
+      );
+      setState(() => _phoneError = error);
+      return error == null;
+    }
+    final error = AuthInputValidators.email(_emailController.text);
+    setState(() => _emailError = error);
+    return error == null;
+  }
+
+  Future<void> _pickCountry() async {
+    final picked = await showCountryCodePicker(context, selected: _country);
+    if (picked == null || !mounted) return;
+    setState(() {
+      _country = picked;
+      // The old error may not apply under the new country's rules; the next
+      // Send OTP attempt re-validates.
+      _phoneError = null;
+    });
   }
 
   Future<void> _ensureOnline() async {
@@ -88,11 +144,57 @@ class _AuthScreenState extends State<AuthScreen> {
               ],
             ),
             const SizedBox(height: AppSpacing.lg),
-            AppTextField(
-              label: _isPhone ? 'Phone number' : 'Email address',
-              hint: _isPhone ? '+91 98765 43210' : 'you@example.com',
-              keyboardType: _isPhone ? TextInputType.phone : TextInputType.emailAddress,
-            ),
+            if (_isPhone)
+              // Two-part phone input: dial-code selector (flag + code, default
+              // 🇮🇳 +91) + the national number. The button aligns with the
+              // field's input box, so errors render below without moving it.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CountryCodeButton(
+                    country: _country,
+                    onPressed: _pickCountry,
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: AppTextField(
+                      key: const ValueKey('auth_phone_field'),
+                      label: 'Phone number',
+                      hint: '98765 43210',
+                      controller: _phoneController,
+                      errorText: _phoneError,
+                      keyboardType: TextInputType.phone,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                      ],
+                      // E.164 caps the significant digits at 15; the validator
+                      // enforces the tighter per-country rule (10 for +91).
+                      maxLength: 15,
+                      onChanged: (_) {
+                        if (_phoneError != null) {
+                          setState(() => _phoneError = null);
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              )
+            else
+              AppTextField(
+                key: const ValueKey('auth_email_field'),
+                label: 'Email address',
+                hint: 'you@example.com',
+                controller: _emailController,
+                errorText: _emailError,
+                keyboardType: TextInputType.emailAddress,
+                autocorrect: false,
+                enableSuggestions: false,
+                onChanged: (_) {
+                  if (_emailError != null) {
+                    setState(() => _emailError = null);
+                  }
+                },
+              ),
             const SizedBox(height: AppSpacing.xxl),
             AppButton(
               label: 'Send OTP',

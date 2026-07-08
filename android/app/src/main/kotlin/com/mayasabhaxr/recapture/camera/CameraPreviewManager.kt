@@ -76,7 +76,9 @@ class CameraPreviewManager(
     /** Dedicated executor for CameraX surface requests / transformation callbacks. */
     private var cameraExecutor: ExecutorService? = null
 
-    private val lifecycleRegistry = LifecycleRegistry(this).apply {
+    // var, not val: a LifecycleRegistry that reached DESTROYED can never drive
+    // CameraX again, so release() swaps in a fresh one for the next start().
+    private var lifecycleRegistry = LifecycleRegistry(this).apply {
         currentState = Lifecycle.State.INITIALIZED
     }
     override val lifecycle: Lifecycle get() = lifecycleRegistry
@@ -187,12 +189,27 @@ class CameraPreviewManager(
         result.success(null)
     }
 
+    /**
+     * Channel-facing teardown. Releases the camera, surface and executor but
+     * leaves the manager REUSABLE: this instance is engine-scoped (one per app
+     * session in MainActivity) while the Dart CameraPreviewController sends
+     * `dispose` every time a capture screen leaves — a permanent latch here
+     * would kill the camera for the rest of the app session (every later
+     * `start` failing with "Manager disposed.").
+     */
     fun dispose(result: MethodChannel.Result?) {
-        if (disposed) {
-            result?.success(null)
-            return
-        }
+        if (!disposed) release()
+        result?.success(null)
+    }
+
+    /** Permanent teardown at engine destruction — the manager is unusable after. */
+    fun destroy() {
+        if (disposed) return
+        release()
         disposed = true
+    }
+
+    private fun release() {
         bindGeneration++ // invalidate any in-flight provider future
         pendingStart?.let { it.error(ERR_CANCELLED, "Disposed before binding completed.", null) }
         pendingStart = null
@@ -201,13 +218,17 @@ class CameraPreviewManager(
         if (lifecycleRegistry.currentState != Lifecycle.State.INITIALIZED) {
             lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
         }
+        // Fresh registry so the next start() binds against a live lifecycle.
+        lifecycleRegistry = LifecycleRegistry(this).apply {
+            currentState = Lifecycle.State.INITIALIZED
+        }
 
         surfaceProducer?.release()
         surfaceProducer = null
         cameraProvider = null
         cameraExecutor?.shutdown()
         cameraExecutor = null
-        result?.success(null)
+        lastResolution = null
     }
 
     // ── internals ─────────────────────────────────────────────────────────────

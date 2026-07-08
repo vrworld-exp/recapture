@@ -356,7 +356,7 @@ class MainActivity : FlutterActivity() {
             cameraCaptureManager = null
             blurAnalysisManager?.dispose()
             blurAnalysisManager = null
-            cameraPreviewManager?.dispose(null)
+            cameraPreviewManager?.destroy()
             cameraPreviewManager = null
             // Unregister the sensor listeners and quit their HandlerThreads.
             imuRotationManager?.dispose()

@@ -614,6 +614,35 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     return 'init_failed';
   }
 
+  /// Full "start over" for this level: wipes the live pass (coverage, ledger,
+  /// counters, thumbnails, retake target, saved draft) and rebinds the camera
+  /// preview, so the user can recapture from step 0 — offered on the camera
+  /// error surface next to the plain Retry (which keeps progress).
+  Future<void> _restartCapture() async {
+    // Wipe the saved draft first so a later resume can't restore the
+    // discarded pass. Best-effort: unavailable persistence never blocks the
+    // restart.
+    final projectId = _projectId;
+    if (projectId != null) {
+      try {
+        await _sessionStore.clear(projectId, _levelLedgerId);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    ref.read(segmentCoverageProvider.notifier).reset();
+    _ledger.reset();
+    ref.read(ringYawBaselineProvider.notifier).reset();
+    ref.read(retakeSessionProvider.notifier).clear();
+    _retake = null;
+    setState(() {
+      _captureCount = 0;
+      _lastEvaluation = null;
+      _recentThumbnails = const [];
+      _levelCompleteNavigated = false;
+    });
+    await _cameraController.start();
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -1161,6 +1190,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   errorBuilder: (context, s) => _CameraErrorSurface(
                     message: s.errorMessage,
                     onRetry: _cameraController.start,
+                    onRestart: _restartCapture,
                     onBack: () => context.go(AppRoutes.projects),
                   ),
                 ),
@@ -1291,15 +1321,20 @@ class _CameraLoading extends StatelessWidget {
 
 /// Branded camera-error state with retry + back, on Deep Black. Shown when the
 /// native pipeline reports a fatal error (init failed, camera in use, no camera).
+/// [onRestart] (optional) additionally offers a from-zero restart of the level's
+/// capture pass: Retry keeps progress and just rebinds the camera; Start over
+/// clears the pass and rebinds.
 class _CameraErrorSurface extends StatelessWidget {
   const _CameraErrorSurface({
     required this.onRetry,
     required this.onBack,
+    this.onRestart,
     this.message,
   });
 
   final VoidCallback onRetry;
   final VoidCallback onBack;
+  final VoidCallback? onRestart;
   final String? message;
 
   @override
@@ -1341,6 +1376,22 @@ class _CameraErrorSurface extends StatelessWidget {
                   ),
                 ],
               ),
+              if (onRestart != null) ...[
+                const SizedBox(height: AppSpacing.md),
+                TextButton.icon(
+                  key: const ValueKey('camera_error_restart'),
+                  onPressed: onRestart,
+                  icon: const Icon(Icons.refresh,
+                      size: 18, color: AppColors.textSecondary),
+                  label: Text(
+                    'Start over (clears this level)',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyMedium
+                        ?.copyWith(color: AppColors.textSecondary),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
