@@ -2,9 +2,14 @@
 //
 // Verifies the capture screen's shutter is wired to the NATIVE single-capture
 // channel (com.mayasabhaxr.recapture/capture), not a UI-only stub: a tap calls
-// `captureSingle`, and the frame counter advances ONLY when a real frame comes
-// back (a null result — no bound session / busy / non-device test host — must not
-// advance it). The preview channel is mocked so the screen boots in a test host.
+// `captureSingle`, and the bottom-right frame counter (photos taken this session
+// over the live ring N — no more demo "+12/36" offset) advances ONLY when a real
+// frame comes back (a null result — no bound session / busy / non-device test
+// host — must not advance it). The counter is deliberately distinct from the
+// ring badge's filled/N: with inert sensors the segment is unknown, so a real
+// frame advances the photo count while coverage truthfully stays 0 — this test
+// pins exactly that split. The preview channel is mocked so the screen boots in
+// a test host.
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -57,7 +62,9 @@ class _StubConfigNotifier extends ConfigNotifier {
 }
 
 /// Wraps the screen with the providers the TiltMeterOverlay depends on: a stub
-/// config and an inert pitch stream (no platform channels in the test host).
+/// config and inert sensor streams (no platform channels in the test host).
+/// Inert sensors also mean the ring segment stays UNKNOWN and stability never
+/// goes stable — so the auto-capture loop can never fire behind these taps.
 Widget _scoped(Widget child) => ProviderScope(
       overrides: [
         captureConfigProvider.overrideWith(() => _StubConfigNotifier()),
@@ -143,14 +150,19 @@ void main() {
     captureResult = {'id': 'cap_0', 'path': '/tmp/cap_0.jpg', 'timestampNs': 1};
     await pumpScreen(tester);
 
-    // _BottomBar renders "${captureCount + 12}/36" — starts at 12/36.
-    expect(find.text('12/36'), findsOneWidget);
+    // Two 0/10 readouts pre-capture: the bottom-right photo counter AND the ring
+    // badge's filled/N (bundled-default 'mid' band N = 10). Never the demo 12/36.
+    expect(find.text('0/10'), findsNWidgets(2));
+    expect(find.text('12/36'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('capture_shutter')));
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('13/36'), findsOneWidget);
+    // The photo counter advanced; the ring badge stays 0/10 (inert sensors →
+    // unknown segment → a real frame cannot claim coverage).
+    expect(find.text('1/10'), findsOneWidget);
+    expect(find.text('0/10'), findsOneWidget);
     await teardownScreen(tester);
   });
 
@@ -159,15 +171,16 @@ void main() {
     captureResult = null; // no bound session / busy / unsupported
     await pumpScreen(tester);
 
-    expect(find.text('12/36'), findsOneWidget);
+    expect(find.text('0/10'), findsNWidgets(2));
 
     await tester.tap(find.byKey(const ValueKey('capture_shutter')));
     await tester.pump();
     await tester.pump();
 
     expect(captureCalls, contains('captureSingle'));
-    expect(find.text('12/36'), findsOneWidget, reason: 'counter must not advance');
-    expect(find.text('13/36'), findsNothing);
+    expect(find.text('0/10'), findsNWidgets(2),
+        reason: 'counter must not advance');
+    expect(find.text('1/10'), findsNothing);
     await teardownScreen(tester);
   });
 }

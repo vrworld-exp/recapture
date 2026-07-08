@@ -11,11 +11,14 @@ import '../../../application/capture/analytics/capture_analytics.dart';
 import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/capture/analytics/capture_trigger_analytics.dart';
+import '../../../application/capture/auto_capture_controller.dart';
+import '../../../application/capture/capture_lock.dart';
 import '../../../application/capture/current_pitch_provider.dart';
 import '../../../application/capture/ledger/captured_photo_record.dart';
 import '../../../application/capture/ledger/level_capture_ledger.dart';
 import '../../../application/capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../../../application/capture/pitch_band_resolver.dart';
+import '../../../application/capture/placement_status_provider.dart';
 import '../../../application/capture/ring_progress_provider.dart';
 import '../../../application/capture/segment_coverage_provider.dart';
 import '../../../application/capture/session/capture_session_codec.dart';
@@ -39,6 +42,7 @@ import '../../../domain/entities/capture_top_bar_state.dart';
 import '../../../domain/entities/save_exit_decision.dart';
 import '../../../domain/entities/direction_hint.dart';
 import '../../../domain/entities/permission_item.dart';
+import '../../../domain/entities/placement_box.dart';
 import '../../../domain/entities/retake_request.dart';
 import '../../../domain/entities/ring_coverage.dart';
 import '../../../application/capture/retake_session_provider.dart';
@@ -145,8 +149,8 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   late final AnimationController _flashController;
 
   /// Auto-capture mode. Defaults ON (smoother guided experience); corrected from
-  /// the persisted preference on mount. The auto-capture FIRE loop is a separate
-  /// task — this screen only owns/persists the ON/OFF choice.
+  /// the persisted preference on mount. The FIRE loop is
+  /// [_autoCaptureController]; this flag (plus [_autoCaptureSuspended]) gates it.
   AutoCaptureState _autoCapture = const AutoCaptureState(mode: AutoCaptureMode.on);
 
   /// Preference gateway (injectable). Resolved once.
@@ -182,9 +186,32 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   CaptureEvaluation? _lastEvaluation;
 
   /// True while a blocking surface (e.g. the Help sheet) is open: auto-capture is
-  /// suspended so the (separate) fire loop will not arm/shoot behind it. Distinct
-  /// from the persisted ON/OFF preference — this is transient and never saved.
+  /// suspended so the fire loop will not arm/shoot behind it. Distinct from the
+  /// persisted ON/OFF preference — this is transient and never saved.
   bool _autoCaptureSuspended = false;
+
+  /// Single in-flight guard shared by the manual shutter path and the
+  /// auto-capture loop, so the two can never run overlapping captures against
+  /// the one native capture resource.
+  final CaptureLock _captureLock = CaptureLock();
+
+  /// The frame produced by the in-flight auto fire, handed from
+  /// [_autoCaptureFrame] to [_onAutoCaptureFilled] (the controller reports only
+  /// the segment index, not the frame).
+  CapturedFrame? _autoFrame;
+
+  /// The auto-capture FIRE loop: re-evaluates the pure trigger conjunction
+  /// (in band + stable + segment unfilled + cooldown) on every smoothed-pitch
+  /// tick — see the [currentPitchProvider] listener in [initState] — and fires a
+  /// single native capture when it holds. It owns cooldown/in-flight state; the
+  /// screen owns enablement ([_autoCapture], [_autoCaptureSuspended], retake,
+  /// completion, preview running).
+  late final AutoCaptureController _autoCaptureController =
+      AutoCaptureController(
+    capture: _autoCaptureFrame,
+    onFilled: _onAutoCaptureFilled,
+    lock: _captureLock,
+  );
 
   /// Drives the native back-camera preview (CAMERA assumed granted by the P2
   /// gate). Released on dispose; stopped on background and rebound on resume.
@@ -279,6 +306,15 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     _resolveProjectId();
     _loadAutoCapturePref();
     _loadCaptureSettings();
+    // Drive the auto-capture loop from the shared orientation stream: every
+    // smoothed-pitch tick re-evaluates the trigger conjunction. listenManual
+    // (not watch) — a sensor tick must evaluate, never rebuild the screen. The
+    // subscription is closed automatically when this State is disposed.
+    ref.listenManual<AsyncValue<PitchSample>>(currentPitchProvider,
+        (previous, next) {
+      final sample = next.asData?.value;
+      if (sample != null) _onOrientationTick(sample);
+    });
     // Start after the first frame so the engine texture registry is ready.
     // Priming the retake target is deferred here too: writing to a provider in
     // initState would land mid-build (and reading config is cheap to defer one
@@ -614,73 +650,144 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   }
 
   /// The capture itself, handed to the [ShutterButton] as its `onCapture`. The
-  /// button owns the in-flight guard, haptics, and state; this just performs the
-  /// native single still and advances the HUD on a real frame. A null frame (no
+  /// button owns haptics and its own tap guard; this acquires the SHARED
+  /// [_captureLock] (standing down if an auto fire is in flight), performs the
+  /// native single still, and advances the HUD on a real frame. A null frame (no
   /// bound session / busy / non-device test host) is a no-op, not an error.
   Future<void> _performCapture() async {
+    if (!_captureLock.tryAcquire()) return; // auto fire in flight — stand down
+    try {
+      final frame = await _captureChannel.captureSingle();
+      if (!mounted) return;
+      if (frame == null) return;
+
+      // RETAKE mode: a single targeted shot. It must NOT touch the normal frame
+      // counter / thumbnail strip / next-route advance — exactly one segment is
+      // in focus and the ring must never advance past it.
+      if (_retake != null) {
+        _handleRetakeCapture(frame);
+        return;
+      }
+
+      // TODO(capture): replace with the real CaptureEvaluation from the evaluator
+      // (sharpness/exposure/coverage). Until it lands every real frame is treated
+      // as accepted, and the (noisy) accepted toast is suppressed during
+      // auto-capture bursts — the ring map + progress meter already confirm. Once
+      // the evaluator exists, warn/reject must always surface.
+      final evaluation = _autoCapture.isOn
+          ? null
+          : CaptureEvaluation(
+              captureId: frame.id,
+              verdict: CaptureVerdict.accepted,
+            );
+      // Record the accepted shot against the ring's current segment (the single
+      // source of truth the HUD + completion gate read). Gated on a KNOWN live
+      // segment: when sensors are unavailable (no yaw → no segment) the shot
+      // still advances the counter/strip but cannot fill a segment — coverage
+      // never lies.
+      _recordAcceptedCapture(frame);
+      _advanceHudAfterCapture(frame, evaluation: evaluation);
+      // Auto-complete on real ring coverage: the pure gate over the live
+      // SegmentCoverage + accepted ledger decides, and we navigate to the
+      // completion route exactly once.
+      _maybeAutoComplete();
+    } finally {
+      _captureLock.release();
+    }
+  }
+
+  /// One auto-capture evaluation per orientation tick. Reads the live stability,
+  /// ring segment, and fill state, then hands the conjunction to
+  /// [_autoCaptureController] (which self-limits via the cooldown + the shared
+  /// in-flight lock). Disabled — without tearing down trigger state — while
+  /// auto-capture is OFF, a blocking sheet is up, a retake is targeted (a single
+  /// deliberate shot), the level has completed, or the preview is not running.
+  /// Skipped entirely before the ring segment is known (no attributable segment
+  /// → no truthful fill), mirroring the manual path's coverage rule.
+  void _onOrientationTick(PitchSample pitch) {
+    if (!pitch.sensorSupported) return;
+    final seg =
+        ref.read(currentRingSegmentProvider).valueOrNull?.currentSegment;
+    if (seg == null) return;
+    final stability = ref.read(stabilityProvider).asData?.value;
+    final isStable = (stability?.sensorSupported ?? false) &&
+        stability!.stability == Stability.stable;
+    final coverage = ref.read(segmentCoverageProvider);
+    final enabled = _autoCapture.isOn &&
+        !_autoCaptureSuspended &&
+        _retake == null &&
+        !_levelCompleteNavigated &&
+        _cameraController.value.status == CameraPreviewStatus.running;
+    unawaited(_autoCaptureController.evaluate(
+      pitchDegrees: pitch.pitchDegrees,
+      band: _resolvedBand,
+      isStable: isStable,
+      currentSegment: seg,
+      isCurrentFilled: coverage.filled[seg],
+      enabled: enabled,
+    ));
+  }
+
+  /// The controller's CaptureFn: emits `autocapture_triggered` at initiation
+  /// (the auto twin of [_onManualTriggered]) and performs the native single
+  /// still. The frame is stashed for [_onAutoCaptureFilled], which the
+  /// controller invokes with the fire-time segment when the frame fills.
+  Future<CapturedFrame?> _autoCaptureFrame() async {
+    _logAutoTriggered();
     final frame = await _captureChannel.captureSingle();
-    if (!mounted) return;
-    if (frame == null) return;
+    _autoFrame = frame;
+    return frame;
+  }
 
-    // RETAKE mode: a single targeted shot. It must NOT touch the normal frame
-    // counter / thumbnail strip / next-route advance — exactly one segment is in
-    // focus and the ring must never advance past it.
-    if (_retake != null) {
-      _handleRetakeCapture(frame);
-      return;
-    }
-
-    final reduceMotion =
-        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
-    final thumb = CaptureThumbnail(
-      id: frame.id,
-      filePath: frame.path,
-      capturedAt: DateTime.now(),
+  /// Capture-initiation analytics for an auto fire. At fire time the trigger
+  /// conjunction held by definition, so in-band/stable/sensor-supported are all
+  /// true.
+  void _logAutoTriggered() {
+    final session = ref.read(captureLevelSessionProvider);
+    final attempt =
+        ref.read(captureLevelSessionProvider.notifier).nextAttempt();
+    CaptureTriggerAnalytics.auto(
+      level: _captureLevel,
+      projectId: session?.projectId ?? '',
+      sessionId: session?.sessionId ?? '',
+      attemptNumber: attempt,
+      ringIndex:
+          ref.read(currentRingSegmentProvider).valueOrNull?.currentSegment,
+      inBand: true,
+      stable: true,
+      sensorSupported: true,
+      deviceType: _deviceType,
     );
-    // TODO(capture): replace with the real CaptureEvaluation from the evaluator
-    // (sharpness/exposure/coverage). Until it lands every real frame is treated
-    // as accepted, and the (noisy) accepted toast is suppressed during
-    // auto-capture bursts — the ring map + progress meter already confirm. Once
-    // the evaluator exists, warn/reject must always surface.
-    final evaluation = _autoCapture.isOn
-        ? null
-        : CaptureEvaluation(
-            captureId: frame.id,
-            verdict: CaptureVerdict.accepted,
-          );
-    // Record the accepted shot against the ring's current segment (the single
-    // source of truth the HUD + completion gate read). Gated on a KNOWN live
-    // segment: when sensors are unavailable (no yaw → no segment) the shot still
-    // advances the counter/strip but cannot fill a segment — coverage never lies.
-    _recordAcceptedCapture(frame);
-    setState(() {
-      _captureCount++;
-      _lastEvaluation = evaluation;
-      // Newest-first, capped — off-strip images are dropped so this never grows.
-      _recentThumbnails =
-          [thumb, ..._recentThumbnails].take(_maxThumbnails).toList();
-      if (!reduceMotion) _showFlash = true;
-    });
-    if (!reduceMotion) {
-      Future.delayed(const Duration(milliseconds: 200), () {
-        if (mounted) setState(() => _showFlash = false);
-      });
-    }
-    // Auto-complete on real ring coverage (replaces the former demo counter): the
-    // pure gate over the live SegmentCoverage + accepted ledger decides, and we
-    // navigate to the completion route exactly once.
+  }
+
+  /// The controller's FillFn: records the auto-accepted frame against the
+  /// FIRE-TIME [segmentIndex] (snapshotted by the controller, so a mid-capture
+  /// segment change can't misattribute the fill) and advances the HUD. The
+  /// accepted toast stays suppressed in auto mode (`evaluation: null`) — the
+  /// ring map + progress meter already confirm each shot.
+  void _onAutoCaptureFilled(int segmentIndex) {
+    final frame = _autoFrame;
+    _autoFrame = null;
+    if (frame == null || !mounted) return;
+    _recordAcceptedAt(frame, segmentIndex);
+    _advanceHudAfterCapture(frame, evaluation: null);
     _maybeAutoComplete();
   }
 
   /// Fills the live [SegmentCoverage] + appends a ledger record for an accepted
   /// [frame], keyed on the ring's current segment. No-op when the current segment
   /// is unknown (sensors warming up / unavailable) — so coverage stays truthful.
-  /// Quality fields are placeholders until the capture-evaluation task lands; the
-  /// path + segment + sensor timestamp are real (enough for resume + review).
   void _recordAcceptedCapture(CapturedFrame frame) {
     final seg =
         ref.read(currentRingSegmentProvider).valueOrNull?.currentSegment;
     if (seg == null) return;
+    _recordAcceptedAt(frame, seg);
+  }
+
+  /// Fills [seg] in the live coverage + appends the ledger record for [frame].
+  /// Quality fields are placeholders until the capture-evaluation task lands; the
+  /// path + segment + sensor timestamp are real (enough for resume + review).
+  void _recordAcceptedAt(CapturedFrame frame, int seg) {
     ref.read(segmentCoverageProvider.notifier).recordCapture(seg);
     final pitch = ref.read(currentPitchProvider).asData?.value;
     final n = ref.read(segmentCoverageProvider).segmentCount;
@@ -693,6 +800,33 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       pitchDegrees: pitch?.pitchDegrees ?? 0,
       sensorTimestampNs: frame.timestampNs,
     ));
+  }
+
+  /// Advances the capture HUD for an accepted [frame]: increments the counter,
+  /// pushes the thumbnail (newest-first, capped so the strip never grows), sets
+  /// the post-shot toast [evaluation] (null = suppressed), and flashes the
+  /// screen (skipped under reduce-motion). Shared by the manual and auto paths.
+  void _advanceHudAfterCapture(CapturedFrame frame,
+      {CaptureEvaluation? evaluation}) {
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final thumb = CaptureThumbnail(
+      id: frame.id,
+      filePath: frame.path,
+      capturedAt: DateTime.now(),
+    );
+    setState(() {
+      _captureCount++;
+      _lastEvaluation = evaluation;
+      _recentThumbnails =
+          [thumb, ..._recentThumbnails].take(_maxThumbnails).toList();
+      if (!reduceMotion) _showFlash = true;
+    });
+    if (!reduceMotion) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) setState(() => _showFlash = false);
+      });
+    }
   }
 
   /// Evaluates the Level A completion gate against the live coverage + accepted
@@ -997,6 +1131,24 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // and auto-disposes on leave. No-op until the first valid yaw / when sensors
     // are unavailable.
     ref.watch(ringPositionBinderProvider);
+    // Live centre-frame placement status (ML Kit object detection → pure
+    // evaluator). idle (white guide) until the first detection / on a host
+    // without the detector — the guide is advisory and never blocks capture.
+    final placementStatus =
+        ref.watch(placementStatusProvider).valueOrNull ?? PlacementStatus.idle;
+    // Transition-only analytics (the provider already de-dupes per frame).
+    ref.listen<AsyncValue<PlacementStatus>>(placementStatusProvider,
+        (previous, next) {
+      final from = previous?.valueOrNull ?? PlacementStatus.idle;
+      final to = next.valueOrNull ?? PlacementStatus.idle;
+      if (from == to) return;
+      Analytics.logEvent(AnalyticsEvents.placementStatusChanged, {
+        'from': from.name,
+        'to': to.name,
+        'level': _levelCode,
+        'device_type': _deviceType,
+      });
+    });
     return PopScope(
       // Blocked while there is unsaved progress so the system back gesture/button
       // funnels through the same Save & Exit confirmation as the top-bar back.
@@ -1033,9 +1185,14 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   ),
                 ),
                 overlays: [
-                  // Render-only centre-frame guide. Status is idle until a
-                  // later detection task supplies placement quality.
-                  PlacementBoxOverlay(geometry: geometry),
+                  // Centre-frame guide, driven by the live placement status
+                  // (green = centred at a good distance; red = off-centre /
+                  // too close / too far, with matching helper copy). Advisory
+                  // only — it never gates the shutter or auto-capture.
+                  PlacementBoxOverlay(
+                    geometry: geometry,
+                    status: placementStatus,
+                  ),
                   CaptureTopBar(
                     state: CaptureTopBarState(
                       levelLabel: widget.levelLabel,
@@ -1267,6 +1424,33 @@ class _ShutterControl extends ConsumerWidget {
   }
 }
 
+/// Live frame counter (bottom-right of the bottom bar): photos taken this
+/// session over the ring's target segment count. The denominator comes from the
+/// SAME [segmentCoverageProvider] the ring map + progress meter read, so every
+/// HUD readout shares one N. Deliberately DISTINCT from the ring badge's
+/// filled/N: a real frame with an unknown segment (sensors warming up) still
+/// counts as a photo taken here, but never claims coverage. Replaces the
+/// demo-era hardcoded `"${captureCount + 12}/36"` stub, which showed 12/36 with
+/// zero captures.
+class _CaptureCounter extends ConsumerWidget {
+  const _CaptureCounter({required this.captureCount});
+
+  final int captureCount;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final n =
+        ref.watch(segmentCoverageProvider.select((c) => c.segmentCount));
+    return Text(
+      '$captureCount/$n',
+      style: Theme.of(context)
+          .textTheme
+          .labelSmall
+          ?.copyWith(color: Colors.white),
+    );
+  }
+}
+
 /// Renders the [RingCoverageMap] from the live [segmentCoverageProvider] (filled
 /// segments + nearest-missing target), with the retake-forced target overriding
 /// when present. Segment count (N) comes from that provider, seeded off the same
@@ -1322,6 +1506,8 @@ class _BottomBar extends StatelessWidget {
     required this.thumbnails,
   });
 
+  /// Photos captured this session (every real frame, whether or not it could
+  /// fill a segment) — the numerator of the bottom-right counter.
   final int captureCount;
 
   /// The gated shutter control (assembles its own readiness from providers).
@@ -1347,15 +1533,9 @@ class _BottomBar extends StatelessWidget {
               // Recent-capture thumbnail strip (replaces the old static tiles).
               SizedBox(width: 160, child: thumbnails),
               shutter,
-              // Frame counter. The auto-capture ON/OFF state now lives in the
-              // top-right AutoCaptureIndicator pill (single source of truth).
-              Text(
-                '${captureCount + 12}/36',
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
-                    ?.copyWith(color: Colors.white),
-              ),
+              // Live frame counter (the auto-capture ON/OFF state lives in the
+              // top-right AutoCaptureIndicator pill).
+              _CaptureCounter(captureCount: captureCount),
             ],
           ),
         ),

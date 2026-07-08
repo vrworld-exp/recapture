@@ -93,6 +93,11 @@ dependencies {
     // resume when connectivity returns, even if the app process was killed.
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+    // ML Kit on-device object detection (BUNDLED model — no Play Services
+    // download) for the centre-frame placement guide (PlacementAnalysisManager):
+    // STREAM_MODE most-prominent-object bounding box over the shared analyzer.
+    implementation("com.google.mlkit:object-detection:17.0.2")
+
     // JVM unit tests for the pure permission mapping logic (PermissionMapperTest).
     testImplementation("junit:junit:4.13.2")
 }
