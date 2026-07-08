@@ -18,7 +18,6 @@ import '../../../application/capture/ledger/captured_photo_record.dart';
 import '../../../application/capture/ledger/level_capture_ledger.dart';
 import '../../../application/capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../../../application/capture/pitch_band_resolver.dart';
-import '../../../application/capture/placement_status_provider.dart';
 import '../../../application/capture/ring_progress_provider.dart';
 import '../../../application/capture/segment_coverage_provider.dart';
 import '../../../application/capture/session/capture_session_codec.dart';
@@ -42,7 +41,6 @@ import '../../../domain/entities/capture_top_bar_state.dart';
 import '../../../domain/entities/save_exit_decision.dart';
 import '../../../domain/entities/direction_hint.dart';
 import '../../../domain/entities/permission_item.dart';
-import '../../../domain/entities/placement_box.dart';
 import '../../../domain/entities/retake_request.dart';
 import '../../../domain/entities/ring_coverage.dart';
 import '../../../application/capture/retake_session_provider.dart';
@@ -1131,24 +1129,6 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // and auto-disposes on leave. No-op until the first valid yaw / when sensors
     // are unavailable.
     ref.watch(ringPositionBinderProvider);
-    // Live centre-frame placement status (ML Kit object detection → pure
-    // evaluator). idle (white guide) until the first detection / on a host
-    // without the detector — the guide is advisory and never blocks capture.
-    final placementStatus =
-        ref.watch(placementStatusProvider).valueOrNull ?? PlacementStatus.idle;
-    // Transition-only analytics (the provider already de-dupes per frame).
-    ref.listen<AsyncValue<PlacementStatus>>(placementStatusProvider,
-        (previous, next) {
-      final from = previous?.valueOrNull ?? PlacementStatus.idle;
-      final to = next.valueOrNull ?? PlacementStatus.idle;
-      if (from == to) return;
-      Analytics.logEvent(AnalyticsEvents.placementStatusChanged, {
-        'from': from.name,
-        'to': to.name,
-        'level': _levelCode,
-        'device_type': _deviceType,
-      });
-    });
     return PopScope(
       // Blocked while there is unsaved progress so the system back gesture/button
       // funnels through the same Save & Exit confirmation as the top-bar back.
@@ -1185,14 +1165,9 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   ),
                 ),
                 overlays: [
-                  // Centre-frame guide, driven by the live placement status
-                  // (green = centred at a good distance; red = off-centre /
-                  // too close / too far, with matching helper copy). Advisory
-                  // only — it never gates the shutter or auto-capture.
-                  PlacementBoxOverlay(
-                    geometry: geometry,
-                    status: placementStatus,
-                  ),
+                  // Render-only centre-frame guide. Status is idle until a
+                  // later detection task supplies placement quality.
+                  PlacementBoxOverlay(geometry: geometry),
                   CaptureTopBar(
                     state: CaptureTopBarState(
                       levelLabel: widget.levelLabel,

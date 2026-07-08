@@ -202,12 +202,6 @@ abstract final class AnalyticsEvents {
   /// device_type }.
   static const String tiltMeterOutOfBand = 'tilt_meter_out_of_band';
 
-  /// The centre-frame placement guide changed state (idle / good / tooClose /
-  /// tooFar / offCenter). TRANSITION-only — the placement provider de-dupes per
-  /// detector frame, so this can never emit per frame. Props: { from, to,
-  /// level, device_type }.
-  static const String placementStatusChanged = 'placement_status_changed';
-
   /// The device stayed UNSTABLE (the native stability gate held un-calm) for a
   /// sustained period during Level A capture — the "Hold steady" guidance was
   /// shown long enough to matter. Throttled (once per unstable stretch), never

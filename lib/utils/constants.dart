@@ -101,13 +101,6 @@ abstract final class AppConfig {
   /// analyzer's frame pass, so timestampNs/frameIndex match the blur stream.
   static const String channelExposure = 'com.mayasabhaxr.recapture/exposure';
 
-  /// Native object-placement EventChannel — must match
-  /// PlacementAnalysisManager.CHANNEL_NAME on the Kotlin side. Streams the most
-  /// prominent object's NORMALIZED bounding box (ML Kit stream detection, ~10 Hz,
-  /// upright-image space) for the centre-frame placement guide. Detection only —
-  /// the good/offCenter/tooClose/tooFar decision is the Dart placement evaluator.
-  static const String channelPlacement = 'com.mayasabhaxr.recapture/placement';
-
   /// Native capture-storage MethodChannel — must match
   /// CaptureStorage.CHANNEL_NAME on the Kotlin side. App-scoped capture tree
   /// (/recapture/{project}/{job}/images/{level}); Dart uses it for accounting,

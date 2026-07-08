@@ -4,7 +4,6 @@ import com.mayasabhaxr.recapture.camera.BlurAnalysisManager
 import com.mayasabhaxr.recapture.camera.CameraCaptureManager
 import com.mayasabhaxr.recapture.camera.CameraControlsManager
 import com.mayasabhaxr.recapture.camera.CameraPreviewManager
-import com.mayasabhaxr.recapture.camera.PlacementAnalysisManager
 import com.mayasabhaxr.recapture.permissions.PermissionManager
 import com.mayasabhaxr.recapture.sensors.ImuRotationStreamManager
 import com.mayasabhaxr.recapture.sensors.StabilityStreamManager
@@ -28,7 +27,6 @@ class MainActivity : FlutterActivity() {
     private var cameraPreviewManager: CameraPreviewManager? = null
     private var cameraCaptureManager: CameraCaptureManager? = null
     private var blurAnalysisManager: BlurAnalysisManager? = null
-    private var placementAnalysisManager: PlacementAnalysisManager? = null
     private var imuRotationManager: ImuRotationStreamManager? = null
     private var stabilityManager: StabilityStreamManager? = null
 
@@ -97,18 +95,6 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             BlurAnalysisManager.EXPOSURE_CHANNEL_NAME,
         ).setStreamHandler(blurAnalysis.exposureHandler)
-
-        // Object-placement channel (ML Kit stream detection for the centre-frame
-        // guide). Third consumer of the SAME analyzer frames; when subscribed it
-        // takes throttled frames and streams a normalized bounding box — see
-        // PlacementAnalysisManager (deferred proxy close).
-        val placementAnalysis = PlacementAnalysisManager()
-        placementAnalysisManager = placementAnalysis
-        blurAnalysis.placement = placementAnalysis
-        EventChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            PlacementAnalysisManager.CHANNEL_NAME,
-        ).setStreamHandler(placementAnalysis)
 
         // IMU rotation-vector stream (device orientation @ 50–100Hz). Emits
         // camera-clock-aligned timestamps for the later pose/frame-fusion task;
@@ -370,8 +356,6 @@ class MainActivity : FlutterActivity() {
             cameraCaptureManager = null
             blurAnalysisManager?.dispose()
             blurAnalysisManager = null
-            placementAnalysisManager?.dispose()
-            placementAnalysisManager = null
             cameraPreviewManager?.dispose(null)
             cameraPreviewManager = null
             // Unregister the sensor listeners and quit their HandlerThreads.

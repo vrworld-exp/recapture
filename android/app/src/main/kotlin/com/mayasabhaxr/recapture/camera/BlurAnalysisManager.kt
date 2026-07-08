@@ -44,14 +44,6 @@ import java.util.concurrent.Executors
  * Laplacian variance (blur) and the mean (exposure) are computed from that one
  * buffer — no second traversal. Frames are processed when EITHER channel is
  * subscribed; both carry the SAME `timestampNs`/`frameIndex` for frame association.
- *
- * ## Placement detection (third consumer, deferred close)
- * When a [PlacementAnalysisManager] is attached ([placement]) and subscribed, each
- * frame is ALSO offered to it after the luma metrics. Unlike blur/exposure it works
- * from the live `media.Image` asynchronously (ML Kit), so when it TAKES a frame it
- * assumes ownership of closing the proxy — this analyzer must then skip its own
- * `close()`. Its internal throttle bounds how long frames are held, so the
- * blur/exposure cadence is barely affected. See PlacementAnalysisManager.
  */
 class BlurAnalysisManager : EventChannel.StreamHandler {
 
@@ -81,11 +73,6 @@ class BlurAnalysisManager : EventChannel.StreamHandler {
     /** Sink for the parallel exposure channel (the [exposureHandler]'s). */
     @Volatile
     private var exposureSink: EventChannel.EventSink? = null
-
-    /** Optional third frame consumer (object placement). Set once at engine
-     * configuration by MainActivity; it manages its own channel + subscription. */
-    @Volatile
-    var placement: PlacementAnalysisManager? = null
 
     @Volatile
     private var disposed = false
@@ -165,51 +152,36 @@ class BlurAnalysisManager : EventChannel.StreamHandler {
     // ── analyzer (dedicated executor) ─────────────────────────────────────────
 
     private fun analyze(image: ImageProxy) {
-        // TRUE when the placement consumer took the frame — it then owns the
-        // proxy close (in its task-completion listener); closing here too would
-        // release the buffer under ML Kit mid-read.
-        var closeDeferred = false
         try {
             val blurSink = eventSink
             val expSink = exposureSink
-            val placementConsumer = placement?.takeIf { it.isActive }
-            // Nobody listening on ANY channel → drain cheaply (still closed in finally).
-            if (disposed || (blurSink == null && expSink == null && placementConsumer == null)) {
-                return
-            }
+            // Nobody listening on EITHER channel → drain cheaply (still closed in finally).
+            if (disposed || (blurSink == null && expSink == null)) return
+            val plane = image.planes[0]
+            val buffer = plane.buffer
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+
+            // ONE stride-correct downscale to 640px, shared by both metrics — no
+            // second frame pass for exposure.
+            val gray = BlurMetric.downscaleLuma(
+                src = bytes,
+                srcWidth = image.width,
+                srcHeight = image.height,
+                rowStride = plane.rowStride,
+                pixelStride = plane.pixelStride,
+            )
             val ts = image.imageInfo.timestamp
-            // One frame index per analyzed frame, shared so every channel associates
-            // its result with the same frame.
+            // One frame index per analyzed frame, shared so both channels associate
+            // their result with the same frame.
             val idx = frameIndex++
 
-            if (blurSink != null || expSink != null) {
-                val plane = image.planes[0]
-                val buffer = plane.buffer
-                val bytes = ByteArray(buffer.remaining())
-                buffer.get(bytes)
-
-                // ONE stride-correct downscale to 640px, shared by both metrics — no
-                // second frame pass for exposure.
-                val gray = BlurMetric.downscaleLuma(
-                    src = bytes,
-                    srcWidth = image.width,
-                    srcHeight = image.height,
-                    rowStride = plane.rowStride,
-                    pixelStride = plane.pixelStride,
-                )
-                if (blurSink != null) emitBlur(gray, ts, idx)
-                if (expSink != null) emitExposure(gray, ts, idx)
-            }
-
-            // Placement LAST: once it takes the frame the proxy stays open until
-            // its async task completes, so the luma copy above must already be done.
-            if (placementConsumer != null) {
-                closeDeferred = placementConsumer.maybeProcess(image, ts, idx)
-            }
+            if (blurSink != null) emitBlur(gray, ts, idx)
+            if (expSink != null) emitExposure(gray, ts, idx)
         } catch (_: Exception) {
             // A bad frame must never stall the analyzer; skip it (proxy still closed).
         } finally {
-            if (!closeDeferred) image.close()
+            image.close()
         }
     }
 
