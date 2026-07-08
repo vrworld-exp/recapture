@@ -32,6 +32,11 @@ class CountryCodeButton extends StatelessWidget {
           key: const ValueKey('country_code_button'),
           onPressed: onPressed,
           style: OutlinedButton.styleFrom(
+            // The app theme's OutlinedButton minimumSize is full-width
+            // (Size(infinity, 48)) for CTA rows; inside this unbounded Row
+            // that forces an infinite width and crashes layout. Size to
+            // content instead.
+            minimumSize: const Size(0, 56),
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
             side: const BorderSide(color: AppColors.disabled),
             foregroundColor: AppColors.textPrimary,

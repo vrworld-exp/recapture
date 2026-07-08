@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
+import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/platform/connectivity_watcher.dart';
 import 'package:recapture/presentation/screens/auth/auth_screen.dart';
 
@@ -37,7 +38,11 @@ Future<void> _pumpAuth(WidgetTester tester) async {
       ),
     ],
   );
-  await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+  // Pump under the REAL app theme: layout bugs can be theme-induced (e.g. the
+  // theme's full-width OutlinedButton minimumSize inside an unbounded Row).
+  await tester.pumpWidget(
+    MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+  );
   await tester.pumpAndSettle();
 }
 
