@@ -64,7 +64,8 @@ function authFor(otherUserId: string) {
 /** Creates a project + job through the real endpoint; returns jobId + keyPrefix. */
 async function makeJob(
   owner: string = userId,
-  headers: Record<string, string> = auth
+  headers: Record<string, string> = auth,
+  captureVariant?: 'with_bottom' | 'without_bottom'
 ): Promise<{ jobId: string; keyPrefix: string }> {
   const p = await Project.create({
     userId: new Types.ObjectId(owner),
@@ -75,7 +76,12 @@ async function makeJob(
   const res = await request(app)
     .post('/jobs')
     .set(headers)
-    .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 73 });
+    .send({
+      projectId: p.id,
+      objectSize: 'medium',
+      expectedFilesCount: 37,
+      ...(captureVariant ? { captureVariant } : {}),
+    });
   expect(res.status).toBe(201);
   return { jobId: res.body.job.id, keyPrefix: res.body.uploadPlan.keyPrefix };
 }
@@ -319,6 +325,92 @@ describe('POST /jobs/:jobId/uploads/initiate', () => {
   });
 });
 
+describe('variant key containment — LEVEL must be one of the plan’s rings', () => {
+  it("rejects a LOW/... key on a 'without_bottom' job (400, S3 never called)", async () => {
+    const { jobId, keyPrefix } = await makeJob(userId, auth, 'without_bottom');
+    const sendSpy = mockS3Initiate();
+
+    const res = await request(app)
+      .post(`/jobs/${jobId}/uploads/initiate`)
+      .set(auth)
+      .send({ key: `${keyPrefix}images/LOW/low_0001.jpg`, fileSize: TWELVE_MIB, partCount: 3 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_REQUEST');
+    expect(res.body.fields).toHaveProperty('key');
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts every ring of the 'without_bottom' variant (EYE + TOP)", async () => {
+    const { jobId, keyPrefix } = await makeJob(userId, auth, 'without_bottom');
+    mockS3Initiate();
+
+    for (const level of ['EYE', 'TOP']) {
+      const res = await request(app)
+        .post(`/jobs/${jobId}/uploads/initiate`)
+        .set(auth)
+        .send({
+          key: `${keyPrefix}images/${level}/f_0001.jpg`,
+          fileSize: TWELVE_MIB,
+          partCount: 3,
+        });
+      expect(res.status, `level: ${level}`).toBe(201);
+    }
+  });
+
+  it("the manifest key stays accepted on a 'without_bottom' job (not an image key)", async () => {
+    const { jobId, keyPrefix } = await makeJob(userId, auth, 'without_bottom');
+    mockS3Initiate();
+
+    const res = await request(app)
+      .post(`/jobs/${jobId}/uploads/initiate`)
+      .set(auth)
+      .send({ key: `${keyPrefix}capture_manifest.json`, fileSize: 1024 * 1024, partCount: 1 });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("'with_bottom' (and the default) still accepts all three rings, including LOW", async () => {
+    const { jobId, keyPrefix } = await makeJob(); // default variant
+    mockS3Initiate();
+
+    for (const level of CAPTURE_LEVEL_SEGMENTS) {
+      const res = await request(app)
+        .post(`/jobs/${jobId}/uploads/initiate`)
+        .set(auth)
+        .send({
+          key: `${keyPrefix}images/${level}/f_0001.jpg`,
+          fileSize: TWELVE_MIB,
+          partCount: 3,
+        });
+      expect(res.status, `level: ${level}`).toBe(201);
+    }
+  });
+
+  it('an images/ key with an unknown LEVEL segment → 400 on any variant', async () => {
+    const { jobId, keyPrefix } = await makeJob();
+    mockS3Initiate();
+
+    const res = await request(app)
+      .post(`/jobs/${jobId}/uploads/initiate`)
+      .set(auth)
+      .send({ key: `${keyPrefix}images/MID/f_0001.jpg`, fileSize: TWELVE_MIB, partCount: 3 });
+
+    expect(res.status).toBe(400);
+  });
+
+  it('the part-url endpoint applies the same variant containment', async () => {
+    const { jobId, keyPrefix } = await makeJob(userId, auth, 'without_bottom');
+
+    const res = await request(app)
+      .post(`/jobs/${jobId}/uploads/part-url`)
+      .set(auth)
+      .send({ key: `${keyPrefix}images/LOW/low_0001.jpg`, uploadId: 'u', partNumber: 1 });
+
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('canonical key convention — end-to-end agreement with @/utils/s3Keys', () => {
   // The advertised plan, the keys the canonical builders produce, the
   // containment check, and the presigned URLs must all agree — one scheme,
@@ -334,7 +426,7 @@ describe('canonical key convention — end-to-end agreement with @/utils/s3Keys'
     const created = await request(app)
       .post('/jobs')
       .set(auth)
-      .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 73 });
+      .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 37 });
     expect(created.status).toBe(201);
     const scope = { userId, projectId: p.id as string, jobId: created.body.job.id as string };
 

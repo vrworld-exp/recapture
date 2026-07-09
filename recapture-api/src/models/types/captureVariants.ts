@@ -1,0 +1,67 @@
+// src/models/types/captureVariants.ts
+//
+// CANONICAL capture-flow-variant definition — the single source of truth for
+// which rings a capture contains and how many images each ring carries. The
+// client chooses the variant on the Pre-Capture Checklist ("Can you capture
+// the bottom of the object?") and sends its wire id on POST /jobs; every
+// server-side consumer (create-job count cross-check, upload-urls key
+// containment, finalize manifest validation, remote-config defaults) derives
+// ring sets and counts from the helpers here. Re-declaring a ring list or a
+// per-ring count anywhere else is a bug — including hardcoding the 36 total.
+//
+// Ring names are the S3/manifest vocabulary (EYE/TOP/LOW — see utils/s3Keys);
+// the client's band ids (mid/high/low) are a different vocabulary that stays
+// in the remote-config layer. Client levels A/B/C map to EYE/TOP/LOW.
+
+/** Ring names as they appear in S3 keys and manifest entries (uppercase).
+ * Structurally identical to s3Keys' CaptureLevelSegment — declared here too so
+ * this module stays pure (s3Keys binds to env config at import time). */
+export type CaptureRingName = 'EYE' | 'TOP' | 'LOW';
+
+/** Wire ids of the two capture flow variants (client + manifest + API). */
+export const CAPTURE_FLOW_VARIANTS = ['with_bottom', 'without_bottom'] as const;
+export type CaptureFlowVariant = (typeof CAPTURE_FLOW_VARIANTS)[number];
+
+/** The variant assumed when a client does not say (pre-variant clients only
+ * ever produced the full three-ring capture). Same default everywhere:
+ * create-job body, Job documents predating the field, and a manifest without
+ * a `flowVariant` field. */
+export const DEFAULT_CAPTURE_FLOW_VARIANT: CaptureFlowVariant = 'with_bottom';
+
+/**
+ * Per-variant shape. `without_bottom` drops the LOW ring and redistributes
+ * the coverage over the remaining two rings — both variants total 36 images
+ * today (12×3 vs 18×2), but consumers must use expectedImageCount(), never
+ * assume the totals coincide.
+ */
+const VARIANT_DEFS: Record<
+  CaptureFlowVariant,
+  { rings: readonly CaptureRingName[]; perRing: number }
+> = {
+  with_bottom: { rings: ['EYE', 'TOP', 'LOW'], perRing: 12 },
+  without_bottom: { rings: ['EYE', 'TOP'], perRing: 18 },
+};
+
+/** True when `value` is one of the two variant wire ids. */
+export function isCaptureFlowVariant(value: unknown): value is CaptureFlowVariant {
+  return (
+    typeof value === 'string' &&
+    (CAPTURE_FLOW_VARIANTS as readonly string[]).includes(value)
+  );
+}
+
+/** The rings this variant captures, in canonical EYE→TOP→LOW order. */
+export function ringsForVariant(variant: CaptureFlowVariant): readonly CaptureRingName[] {
+  return VARIANT_DEFS[variant].rings;
+}
+
+/** Expected image count on EACH of the variant's rings. */
+export function expectedPerRing(variant: CaptureFlowVariant): number {
+  return VARIANT_DEFS[variant].perRing;
+}
+
+/** Total expected images across all of the variant's rings (excludes the
+ * manifest — callers that count uploaded OBJECTS add 1 for it). */
+export function expectedImageCount(variant: CaptureFlowVariant): number {
+  return ringsForVariant(variant).length * expectedPerRing(variant);
+}

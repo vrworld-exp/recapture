@@ -104,7 +104,9 @@
   (same `Idempotency-Key`, 200) emits **nothing** — one job, one event. Nothing
   fires on validation/authorization failures.
 - **Props:** `user_id_hash` (string), `project_id` (string), `job_id` (string),
-  `object_size` (`small`|`medium`|`large`), `expected_files_count` (int > 0)
+  `object_size` (`small`|`medium`|`large`),
+  `flow_variant` (`with_bottom`|`without_bottom`, optional),
+  `expected_files_count` (int > 0)
 
 ### `job_upload_started`
 - **When:** the FIRST successful `POST /jobs/:jobId/uploads/initiate` for a job
@@ -118,7 +120,9 @@
   S3 object count matches) and performs the one-time transition to `QUEUED` —
   the enqueue itself. An idempotent re-finalize of an already-QUEUED job emits
   **nothing** (one queue entry, one event); verification failures emit nothing.
-- **Props:** `user_id_hash` (string), `job_id` (string), `files_verified` (int > 0)
+- **Props:** `user_id_hash` (string), `job_id` (string),
+  `flow_variant` (`with_bottom`|`without_bottom`, optional),
+  `files_verified` (int > 0)
 
 ### `remote_config_served`
 - **When:** sampled (~1%) on `200` responses from `GET /remote-config` (never on

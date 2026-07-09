@@ -43,8 +43,11 @@ const auth = {
   })}`,
 };
 
-/** Creates a project + job (expected 73 files) and moves it to UPLOADING. */
-async function makeUploadingJob(): Promise<string> {
+/** Creates a project + job (expected 37 files — 36 images + manifest for both
+ * variants) and moves it to UPLOADING. */
+async function makeUploadingJob(
+  captureVariant?: 'with_bottom' | 'without_bottom'
+): Promise<string> {
   const p = await Project.create({
     userId: new Types.ObjectId(userId),
     name: 'Brass Vase',
@@ -54,7 +57,12 @@ async function makeUploadingJob(): Promise<string> {
   const res = await request(app)
     .post('/jobs')
     .set(auth)
-    .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 73 });
+    .send({
+      projectId: p.id,
+      objectSize: 'medium',
+      expectedFilesCount: 37,
+      ...(captureVariant ? { captureVariant } : {}),
+    });
   expect(res.status).toBe(201);
   const jobId = res.body.job.id as string;
   await Job.updateOne({ _id: jobId }, { $set: { state: 'UPLOADING' } });
@@ -62,17 +70,24 @@ async function makeUploadingJob(): Promise<string> {
 }
 
 /**
- * A content-valid capture manifest for a MEDIUM job: 24 photos per ring
- * (the server minimum) across EYE/TOP/LOW = 72 entries, declared consistently.
+ * A content-valid capture manifest: `photosPerRing` on each given ring (the
+ * with_bottom shape by default — 12 × EYE/TOP/LOW = 36 entries), declared
+ * consistently. `flowVariant` is the manifest's optional top-level field;
+ * omitted by default like a pre-variant client would.
  */
-function validManifestBody(photosPerRing = 24): string {
-  const photos = ['EYE', 'TOP', 'LOW'].flatMap((ring) =>
+function validManifestBody(
+  photosPerRing = 12,
+  rings: string[] = ['EYE', 'TOP', 'LOW'],
+  flowVariant?: string
+): string {
+  const photos = rings.flatMap((ring) =>
     Array.from({ length: photosPerRing }, (_, i) => ({
       photoId: `${ring}_${i}`,
       ringName: ring,
     }))
   );
   return JSON.stringify({
+    ...(flowVariant !== undefined ? { flowVariant } : {}),
     summary: { totalPhotos: photos.length, warningsCount: 0, overallComplete: true },
     photos,
   });
@@ -86,7 +101,7 @@ function validManifestBody(photosPerRing = 24): string {
 function mockS3({
   manifestExists = true,
   manifestBody = validManifestBody(),
-  objectCount = 73,
+  objectCount = 37,
   pageSize = 1000,
   listError = false,
 } = {}) {
@@ -124,7 +139,7 @@ function mockS3({
 describe('POST /jobs/:jobId/finalize — happy path', () => {
   it('200: verifies manifest + count, flips to QUEUED (the enqueue), records queuedAt', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 73 });
+    mockS3({ objectCount: 37 });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
@@ -133,30 +148,30 @@ describe('POST /jobs/:jobId/finalize — happy path', () => {
     expect(res.body.status).toBe('success');
     expect(res.body.jobId).toBe(jobId);
     expect(res.body.state).toBe('QUEUED');
-    expect(res.body.filesVerified).toBe(73);
+    expect(res.body.filesVerified).toBe(37);
     expect(Date.parse(res.body.queuedAt)).not.toBeNaN();
     expect(res.body.idempotentReplay).toBeUndefined();
 
     const saved = await Job.findById(jobId).exec();
     expect(saved!.state).toBe('QUEUED');
     expect(saved!.queuedAt).toBeInstanceOf(Date);
-    expect(saved!.upload!.uploadedFilesCount).toBe(73);
+    expect(saved!.upload!.uploadedFilesCount).toBe(37);
 
     const queued = logSpy.mock.calls.filter((c) =>
       String(c[0]).includes('[analytics] job_queued')
     );
     expect(queued).toHaveLength(1);
-    expect(String(queued[0]![1])).toContain('"files_verified":73');
+    expect(String(queued[0]![1])).toContain('"files_verified":37');
   });
 
   it('paginates the S3 listing — a truncated first page never undercounts', async () => {
     const jobId = await makeUploadingJob();
-    const sendSpy = mockS3({ objectCount: 73, pageSize: 30 }); // 3 pages
+    const sendSpy = mockS3({ objectCount: 37, pageSize: 15 }); // 3 pages
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
     expect(res.status).toBe(200);
-    expect(res.body.filesVerified).toBe(73);
+    expect(res.body.filesVerified).toBe(37);
     const listCalls = sendSpy.mock.calls.filter(
       (c) => (c[0] as { constructor: { name: string } }).constructor.name ===
         'ListObjectsV2Command'
@@ -166,12 +181,12 @@ describe('POST /jobs/:jobId/finalize — happy path', () => {
 
   it('a matching reportedFilesCount cross-check passes', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 73 });
+    mockS3({ objectCount: 37 });
 
     const res = await request(app)
       .post(`/jobs/${jobId}/finalize`)
       .set(auth)
-      .send({ reportedFilesCount: 73 });
+      .send({ reportedFilesCount: 37 });
 
     expect(res.status).toBe(200);
   });
@@ -192,20 +207,20 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
 
   it('fewer objects than expected (incomplete upload) → 422 with both counts', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 60 });
+    mockS3({ objectCount: 30 });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
     expect(res.status).toBe(422);
     expect(res.body.reason).toBe('count_mismatch');
-    expect(res.body.expectedFilesCount).toBe(73);
-    expect(res.body.actualFilesCount).toBe(60);
+    expect(res.body.expectedFilesCount).toBe(37);
+    expect(res.body.actualFilesCount).toBe(30);
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
   });
 
   it('MORE objects than expected (stray/duplicates) → 422, never silently queued', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 80 });
+    mockS3({ objectCount: 50 });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
@@ -216,12 +231,12 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
 
   it('reportedFilesCount disagreeing with S3 → 422 (S3 stays the authority)', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 73 });
+    mockS3({ objectCount: 37 });
 
     const res = await request(app)
       .post(`/jobs/${jobId}/finalize`)
       .set(auth)
-      .send({ reportedFilesCount: 72 });
+      .send({ reportedFilesCount: 36 });
 
     expect(res.status).toBe(422);
     expect(res.body.reason).toBe('reported_count_mismatch');
@@ -231,7 +246,7 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
   it('manifest failing ALL content rules → 422 with every finding, in rule order', async () => {
     const jobId = await makeUploadingJob();
     // Declares 10 but has 8 entries; LOW absent entirely; EYE/TOP under the
-    // MEDIUM minimum of 24 photos each.
+    // with_bottom per-ring count of 12.
     const photos = [
       ...Array.from({ length: 5 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
       ...Array.from({ length: 3 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
@@ -256,8 +271,8 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
     expect(res.body.validationErrors[0].detail).toEqual({ declared: 10, actual: 8 });
     expect(res.body.validationErrors[1].detail).toEqual({ missingLevels: ['LOW'] });
     expect(res.body.validationErrors[2].detail.levels).toEqual([
-      { levelId: 'EYE', count: 5, required: 24 },
-      { levelId: 'TOP', count: 3, required: 24 },
+      { levelId: 'EYE', count: 5, required: 12 },
+      { levelId: 'TOP', count: 3, required: 12 },
     ]);
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING'); // untouched
   });
@@ -287,10 +302,131 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
   });
 });
 
+describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
+  it("happy path 'with_bottom': 3×12 manifest declaring its variant → QUEUED", async () => {
+    const jobId = await makeUploadingJob('with_bottom');
+    mockS3({ manifestBody: validManifestBody(12, ['EYE', 'TOP', 'LOW'], 'with_bottom') });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('QUEUED');
+    expect(res.body.filesVerified).toBe(37);
+  });
+
+  it("happy path 'without_bottom': 2×18 manifest + 37 objects → QUEUED; idempotent replay OK", async () => {
+    const jobId = await makeUploadingJob('without_bottom');
+    mockS3({ manifestBody: validManifestBody(18, ['EYE', 'TOP'], 'without_bottom') });
+
+    const first = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+    expect(first.status).toBe(200);
+    expect(first.body.state).toBe('QUEUED');
+    expect(first.body.filesVerified).toBe(37);
+
+    // Replay must not re-verify — drop the S3 mock entirely.
+    vi.restoreAllMocks();
+    const second = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+    expect(second.status).toBe(200);
+    expect(second.body.idempotentReplay).toBe(true);
+    expect(second.body.queuedAt).toBe(first.body.queuedAt);
+  });
+
+  it("a 'without_bottom' manifest WITHOUT a flowVariant field is tolerated (pre-variant clients)", async () => {
+    const jobId = await makeUploadingJob('without_bottom');
+    mockS3({ manifestBody: validManifestBody(18, ['EYE', 'TOP']) }); // no flowVariant
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('QUEUED');
+  });
+
+  it("LOW entries on a 'without_bottom' job → 422 UNEXPECTED_LEVELS, nothing queued", async () => {
+    const jobId = await makeUploadingJob('without_bottom');
+    // EYE/TOP meet their 18-per-ring floor and the count is declared
+    // consistently — the stray LOW ring is the ONLY finding.
+    const photos = [
+      ...Array.from({ length: 18 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
+      ...Array.from({ length: 18 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
+      { photoId: 'L0', ringName: 'LOW' },
+      { photoId: 'L1', ringName: 'LOW' },
+    ];
+    mockS3({
+      manifestBody: JSON.stringify({
+        flowVariant: 'without_bottom',
+        summary: { totalPhotos: photos.length },
+        photos,
+      }),
+    });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe('manifest_invalid');
+    expect(res.body.validationErrors).toHaveLength(1);
+    expect(res.body.validationErrors[0].rule).toBe('UNEXPECTED_LEVELS');
+    expect(res.body.validationErrors[0].detail).toEqual({ unexpectedLevels: ['LOW'] });
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+  });
+
+  it("a variant ring missing entirely (TOP on 'without_bottom') → 422 MISSING_REQUIRED_LEVELS", async () => {
+    const jobId = await makeUploadingJob('without_bottom');
+    mockS3({ manifestBody: validManifestBody(18, ['EYE'], 'without_bottom') });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    const missing = res.body.validationErrors.find(
+      (e: { rule: string }) => e.rule === 'MISSING_REQUIRED_LEVELS'
+    );
+    expect(missing.detail).toEqual({ missingLevels: ['TOP'] });
+  });
+
+  it('manifest flowVariant disagreeing with the job → 422 FLOW_VARIANT_MISMATCH', async () => {
+    const jobId = await makeUploadingJob('without_bottom');
+    // Ring shape satisfies without_bottom — ONLY the declared variant is wrong.
+    mockS3({ manifestBody: validManifestBody(18, ['EYE', 'TOP'], 'with_bottom') });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.validationErrors).toHaveLength(1);
+    expect(res.body.validationErrors[0].rule).toBe('FLOW_VARIANT_MISMATCH');
+    expect(res.body.validationErrors[0].detail).toEqual({
+      declared: 'with_bottom',
+      expected: 'without_bottom',
+    });
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+  });
+
+  it('collect-all: mismatch + unexpected LOW + under-minimum rings reported together, in order', async () => {
+    const jobId = await makeUploadingJob('without_bottom');
+    // A full with_bottom-shaped manifest (3×12, declared) on a without_bottom
+    // job: wrong declared variant, a LOW ring that should not exist, and
+    // EYE/TOP below the 18-per-ring floor — every violated rule in one pass.
+    mockS3({ manifestBody: validManifestBody(12, ['EYE', 'TOP', 'LOW'], 'with_bottom') });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.validationErrors.map((e: { rule: string }) => e.rule)).toEqual([
+      'FLOW_VARIANT_MISMATCH',
+      'UNEXPECTED_LEVELS',
+      'INSUFFICIENT_PHOTOS_PER_LEVEL',
+    ]);
+    const insufficient = res.body.validationErrors[2];
+    expect(insufficient.detail.levels).toEqual([
+      { levelId: 'EYE', count: 12, required: 18 },
+      { levelId: 'TOP', count: 12, required: 18 },
+    ]);
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+  });
+});
+
 describe('POST /jobs/:jobId/finalize — idempotency + state guards', () => {
   it('re-finalizing a QUEUED job replays without re-verifying or re-enqueuing', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 73 });
+    mockS3({ objectCount: 37 });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const first = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
@@ -306,7 +442,7 @@ describe('POST /jobs/:jobId/finalize — idempotency + state guards', () => {
     expect(second.status).toBe(200);
     expect(second.body.idempotentReplay).toBe(true);
     expect(second.body.queuedAt).toBe(first.body.queuedAt); // original enqueue time
-    expect(second.body.filesVerified).toBe(73);
+    expect(second.body.filesVerified).toBe(37);
 
     // No second job_queued across both calls.
     const secondEvents = logSpy2.mock.calls.filter((c) =>
@@ -318,7 +454,7 @@ describe('POST /jobs/:jobId/finalize — idempotency + state guards', () => {
 
   it('concurrent finalizes → both 200, exactly one enqueue/event', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 73 });
+    mockS3({ objectCount: 37 });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const [a, b] = await Promise.all([
@@ -394,8 +530,8 @@ describe('POST /jobs/:jobId/finalize — rejection side-effects: zero enqueue + 
       { mock: { manifestExists: false } }, // manifest_missing
       { mock: { manifestBody: '{not json' } }, // manifest_invalid (unreadable)
       { mock: { manifestBody: validManifestBody(5) } }, // manifest_invalid (content rules)
-      { mock: { objectCount: 80 } }, // count_mismatch (over-count)
-      { mock: {}, body: { reportedFilesCount: 72 } }, // reported_count_mismatch
+      { mock: { objectCount: 50 } }, // count_mismatch (over-count)
+      { mock: {}, body: { reportedFilesCount: 36 } }, // reported_count_mismatch
     ];
     for (const c of cases) {
       const jobId = await makeUploadingJob();
@@ -418,7 +554,7 @@ describe('POST /jobs/:jobId/finalize — rejection side-effects: zero enqueue + 
 
   it('concurrent finalizes on an incomplete bundle → both rejected, zero job_queued', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 60 });
+    mockS3({ objectCount: 30 });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const [a, b] = await Promise.all([

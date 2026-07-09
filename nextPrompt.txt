@@ -11919,7 +11919,7 @@ Flagged because no project context file (AGENTS.md / CLAUDE.md) was provided. Ve
 
 
 
-                                            [[[[[[[[[[[[[[[[[[[         Native AR (Android + iOS)     ]]]]]]]]]]]]]]]]]]]
+                       [[[[[[[[[[[[[[[[[[[         Native AR (Android + iOS)     ]]]]]]]]]]]]]]]]]]]
 
 
 
@@ -11940,6 +11940,206 @@ Generate a coding prompt for this task: Android: ARCore integration via arcore_f
 
 
 ======================================================================================>>>>>>>>>>>>>>>>>>>
+
+
+
+
+# NEW FEATURE: Android ARCore Integration (plugin vs native Kotlin + PlatformView)
+# Product: maya-viewer (Model Preview + AR Placement)
+# Scope: New Feature (Native AR — Android)
+# Priority: High
+# NOTE: Scoped to ANDROID only. iOS (ARKit) is a separate, parallel task behind the same Dart-side
+#       AR interface (see Step 1 and Assumptions).
+
+---
+
+## Task Description
+
+Integrate ARCore on Android so the app can present an AR session in which the user's processed GLB model
+can later be previewed and placed. This task delivers the AR foundation: a Dart-facing AR surface backed by
+either `arcore_flutter_plugin` or a native Kotlin implementation exposed through a `FlutterPlatformView`,
+with ARCore availability/permission handling and a clean lifecycle.
+
+The plugin-vs-native decision is part of this task and must be made on evidence (Step 1), not assumed.
+
+- [ ] Evaluate and DECIDE: `arcore_flutter_plugin` vs native Kotlin + `FlutterPlatformView` (record rationale)
+- [ ] Define a platform-agnostic Dart AR interface so iOS/ARKit can implement the same contract later
+- [ ] Implement the Android AR view: initialize an ARCore session and render the camera/AR surface in Flutter
+- [ ] Handle ARCore availability (device support, Google Play Services for AR install/update) and camera permission
+- [ ] Correctly manage session lifecycle (pause/resume/dispose) with no leaks or crashes on backgrounding
+- [ ] Fail gracefully on unsupported devices (no crash; a clear unsupported state)
+
+## Files to Inspect First
+
+1. The Model Preview / AR Placement feature area (where this screen will live) — confirm the intended entry
+   point and what it receives (the completed job's GLB artifact URL from `GET /jobs/:jobId`).
+2. `pubspec.yaml` and existing platform-channel / plugin usage — determine what AR/3D packages (if any) are
+   already present, and how the project has integrated native code before (existing platform channels,
+   PlatformViews, method channel conventions).
+3. `android/` — the app module's `build.gradle` (minSdk, Kotlin version, AGP), `AndroidManifest.xml` (existing
+   permissions/features), and any existing native Kotlin code and its structure/conventions.
+4. Any existing model-viewing code (the maya-viewer 3D/GLB rendering path) — this AR task must not conflict with
+   or duplicate the non-AR model preview renderer.
+5. The permission-handling pattern already in the app (camera permission from the capture flow) — reuse it rather
+   than introducing a second permission mechanism.
+
+### Tech note (task-specific)
+- ARCore requires: `minSdkVersion` ≥ 24, camera permission, an `<uses-feature>`/AR metadata entry in the manifest,
+  and Google Play Services for AR present on device. Confirm and set these per the chosen approach.
+- If using a `FlutterPlatformView`, register the view factory in the Android plugin/Activity and render the native
+  AR surface (e.g., a `GLSurfaceView`/`SurfaceView`-backed ARCore session) inside it, bridged via a method channel.
+- Do NOT hardcode AR support assumptions — ARCore availability is a RUNTIME check (`ArCoreApk.checkAvailability`),
+  not a compile-time guarantee.
+
+## Implementation Instructions
+
+### Step 1: Evaluate and decide the integration approach (do this FIRST, record the rationale)
+Evaluate both paths against the repo's needs and report the decision with evidence:
+- `arcore_flutter_plugin`: check its current maintenance status, last release, Flutter/AGP/Kotlin compatibility
+  with this project, whether it supports the features needed (session, plane detection, anchor placement, loading
+  a GLB/glTF model from a URL/file), and whether it's compatible with the app's minSdk/Gradle setup.
+  ⚠ Verify maintenance status before adopting — an unmaintained plugin becomes a hard blocker when Flutter/AGP
+  versions move, and may not support current ARCore features.
+- Native Kotlin + `FlutterPlatformView`: more code and maintenance ownership, but full control of the ARCore
+  session, current ARCore SDK access, and no third-party abandonment risk.
+Decide, write the rationale into the code/docs, and implement ONE path. Do not implement both.
+
+### Step 2: Define the platform-agnostic Dart AR interface
+Before touching native code, define the Dart-side abstraction the app talks to (e.g., an `ArSession` /
+`ArViewController` interface) covering: availability check, initialize/start session, pause/resume, dispose,
+and (for later tasks) load/place/anchor a model. Android implements it now; iOS/ARKit implements the same
+interface in its parallel task. This is what keeps the two platforms from diverging.
+
+### Step 3: Android manifest, gradle, and permissions
+Set `minSdkVersion` ≥ 24 if not already; add the ARCore dependency (per the chosen approach); add the camera
+permission and the ARCore `<uses-feature>` / `com.google.ar.core` metadata to the manifest. Decide and document
+whether AR is REQUIRED or OPTIONAL for the app (this changes the manifest entry and Play Store filtering — see
+Assumptions). Reuse the app's existing camera-permission request flow.
+
+### Step 4: Runtime availability + permission gating
+Before starting a session, check ARCore availability at runtime (supported / not supported / needs install or
+update of Google Play Services for AR) and request camera permission via the existing pattern. Route each outcome:
+supported+granted → start session; needs install/update → trigger the ARCore install flow; unsupported or denied →
+show a clear unsupported/permission state (no crash, no blank screen).
+
+### Step 5: Implement the AR view + session
+Implement the chosen path so a Flutter widget hosts the ARCore camera/AR surface:
+- Plugin path: wire the plugin's view widget and session callbacks to the Dart interface.
+- Native path: register a `PlatformViewFactory`, create the native AR view, run the ARCore session on it, and
+  bridge lifecycle + events over a method channel to the Dart interface.
+Keep the surface minimal in this task: a working AR session rendering the camera feed with the session lifecycle
+correct. Model loading/placement is the NEXT task (see Assumptions) unless the chosen plugin makes it trivial.
+
+### Step 6: Lifecycle management
+Wire Flutter/Android lifecycle correctly: pause the ARCore session when the app backgrounds or the view is
+inactive, resume on foreground, and fully release the session/surface on dispose. ARCore sessions must not run
+while backgrounded; failing to pause/resume correctly causes camera-in-use errors and crashes on resume.
+
+## What NOT to Change
+
+- Do NOT implement iOS/ARKit here — this task is Android; iOS implements the same Dart interface separately.
+- Do NOT implement model loading, plane detection UX, or placement/anchoring beyond what's needed to prove the
+  session works — those are follow-on tasks in this phase.
+- Do NOT modify the capture flow's camera usage or its permission mechanism — reuse the existing permission pattern.
+- Do NOT change the non-AR model-preview renderer.
+- Do NOT assume ARCore support at compile time; support is a runtime check.
+- Do NOT adopt an unmaintained plugin without recording the maintenance-risk evidence from Step 1.
+
+## Edge Cases to Handle
+
+- [ ] Device does not support ARCore → clear "AR not supported on this device" state; app does not crash; a
+      non-AR fallback (e.g., the standard 3D preview) remains available.
+- [ ] Google Play Services for AR missing/outdated → trigger the install/update flow; handle the user declining.
+- [ ] Camera permission denied (or permanently denied) → clear permission state with a path to settings; no crash.
+- [ ] App backgrounded with an active AR session → session pauses; resuming does not throw camera-in-use or
+      session-already-resumed errors.
+- [ ] Screen disposed while the session is initializing → initialization completes/cancels safely; no leaked
+      session, surface, or method-channel handler.
+- [ ] Rapid navigate-in/navigate-out of the AR screen → exactly one session at a time; no duplicate views.
+- [ ] Low-end Android device → session starts or degrades gracefully; no OOM from the AR surface.
+- [ ] ARCore session fails to create (transient) → surfaced as a recoverable error state, not a hard crash.
+
+## Constraints
+
+- The plugin-vs-native decision is made in Step 1 with recorded rationale, including the plugin's maintenance
+  status; only ONE path is implemented.
+- All AR access goes through the platform-agnostic Dart interface so iOS/ARKit can implement the same contract.
+- ARCore availability and camera permission are checked at RUNTIME before any session is created.
+- Session lifecycle is strictly managed: pause on background/inactive, resume on foreground, release on dispose;
+  never more than one active session.
+- Unsupported devices degrade gracefully to a non-AR path; AR is never a hard requirement for the app to run
+  (unless the product explicitly declares AR-required — see Assumptions).
+- Reuse the existing camera-permission mechanism; do not add a second one.
+- Mobile-first, low-end Android in scope.
+
+## Acceptance Criteria
+
+- [ ] A written decision (plugin vs native Kotlin + PlatformView) with rationale, including plugin maintenance
+      evidence, exists; only one path is implemented
+- [ ] A platform-agnostic Dart AR interface is defined and Android implements it
+- [ ] An AR session initializes and renders the ARCore camera surface in a Flutter widget on a supported device
+- [ ] ARCore availability is checked at runtime; unsupported devices show a clear state and do not crash
+- [ ] Missing/outdated Google Play Services for AR triggers the install/update flow; declining is handled
+- [ ] Camera permission is requested via the existing pattern; denial shows a clear state, no crash
+- [ ] Backgrounding pauses the session; foregrounding resumes it without camera-in-use/resume errors
+- [ ] Disposing the screen fully releases the session, surface, and channel handlers (no leaks)
+- [ ] Rapid navigation in/out never yields two concurrent sessions
+- [ ] `minSdkVersion` ≥ 24 and the required manifest entries/permissions are present and documented
+- [ ] A non-AR fallback remains available for unsupported devices
+- [ ] No analyzer errors (`flutter analyze` passes clean); Android builds (`./gradlew assembleDebug`) succeed
+- [ ] No runtime exceptions across supported, unsupported, permission-denied, and background/foreground paths
+- [ ] Code reviewed against "What NOT to Change" — iOS, capture flow, and non-AR renderer untouched
+
+## Testing Instructions
+
+1. Build and run on a physical ARCore-supported Android device; confirm the AR session starts and renders the
+   camera surface inside the Flutter view.
+2. Background and foreground the app with the AR screen open; confirm the session pauses/resumes cleanly with no
+   camera-in-use or already-resumed exceptions.
+3. Navigate away from the AR screen mid-session and back repeatedly; confirm one session at a time and no leaks
+   (watch for lingering camera indicator / logcat warnings).
+4. Run on a device (or emulator profile) WITHOUT ARCore support; confirm the unsupported state renders and the app
+   does not crash, and the non-AR preview path still works.
+5. Uninstall/downgrade Google Play Services for AR (or simulate `INSTALL_REQUESTED`); confirm the install flow is
+   triggered and declining is handled gracefully.
+6. Deny camera permission (and permanently deny); confirm the clear permission state and a path to settings.
+7. Test on a low-end Android device; confirm the session starts or degrades gracefully with no OOM.
+8. Run `flutter analyze` and an Android debug build; confirm clean.
+
+## Assumptions
+
+- Assumed this task is ANDROID-ONLY despite the track naming both platforms; iOS/ARKit is a parallel task
+  implementing the same Dart interface. Confirm — if both platforms must land together, this should be split into
+  two prompts sharing the interface defined in Step 2.
+- ⚠ Assumed the plugin-vs-native choice is genuinely open. `arcore_flutter_plugin` has historically had
+  maintenance gaps; its current status, Flutter/AGP/Kotlin compatibility, and feature coverage (GLB loading,
+  anchors) MUST be verified in Step 1 before adoption. If it is unmaintained or incompatible, native Kotlin +
+  PlatformView is the safer path despite more work. Do not adopt it on reputation alone. (Also consider whether an
+  actively-maintained alternative exists that the repo would prefer — check before committing.)
+- Assumed this task delivers the AR SESSION foundation only; loading the GLB, plane detection UX, and
+  placement/anchoring are follow-on tasks in this phase. Confirm the split — if this task must also place the model,
+  scope grows substantially.
+- Assumed the model to preview is the completed job's GLB served via CloudFront (from `GET /jobs/:jobId`); the AR
+  view will consume that URL in the follow-on model-loading task. Confirm the artifact URL form (signed vs public)
+  since a signed, expiring URL affects how/when the native layer fetches the model.
+- Assumed AR is OPTIONAL for the app (unsupported devices fall back to the non-AR 3D preview), so the manifest
+  declares AR as optional rather than required. If AR is required, the manifest entry and Play Store device
+  filtering change — confirm the product decision.
+- Assumed `minSdkVersion` can be raised to ≥ 24 if it is currently lower; if raising it is unacceptable, ARCore is
+  not viable on the current floor — flag before proceeding.
+The decision embedded in the task title is the one thing I'd resolve before any code gets written, and the prompt makes it Step 1 with recorded evidence: arcore_flutter_plugin vs. native Kotlin + PlatformView. These aren't equivalent options. The plugin is faster to stand up but historically has had maintenance gaps, and an abandoned AR plugin becomes a hard blocker the moment your Flutter, AGP, or Kotlin versions move — you inherit a dependency you can't upgrade and can't easily rip out once AR screens are built on it. Native Kotlin costs more upfront but gives you the current ARCore SDK and no third-party abandonment risk. The prompt explicitly forbids adopting the plugin "on reputation alone" and requires checking its current status, compatibility with the project's toolchain, and whether it actually supports what's needed (GLB loading, anchors) before committing.
+The structural move that protects you regardless of that choice is Step 2: define the platform-agnostic Dart AR interface first. The track is "Native AR (Android + iOS)," and ARKit is coming. If Android's implementation details leak into the Dart layer, the iOS task ends up either reshaping the app's AR code or bolting on a parallel API. Defining the contract (availability, start, pause/resume, dispose, later: load/place/anchor) before touching native code means both platforms implement one surface and the app code never branches on platform. It also, incidentally, makes the plugin-vs-native decision reversible — you can swap the Android implementation later without touching app code.
+Three ARCore realities the prompt bakes in because they cause most real crashes. Support is a runtime check, not a build-time guarantee (ArCoreApk.checkAvailability) — plenty of Android devices simply can't run ARCore, and Google Play Services for AR may be missing or outdated and need an install flow. Session lifecycle is unforgiving: an ARCore session must pause when the app backgrounds and resume on foreground, or you get camera-in-use errors and resume crashes — and disposing the screen mid-initialization leaks the session and surface. And minSdkVersion must be ≥ 24; if your floor is lower, that's a blocking constraint to surface immediately rather than discover halfway through.
+Two scope questions worth confirming, both flagged. Whether this task is genuinely Android-only (I scoped it that way — the title says Android, the track names both platforms) or whether iOS/ARKit must land alongside it, in which case it splits into two prompts sharing the Step 2 interface. And whether this delivers only the AR session foundation or must also load and place the GLB — I scoped it as session-only, with model loading, plane detection, and anchoring as follow-on tasks, because bundling them makes this a multi-session task rather than a surgical one.
+One connection back to earlier work worth noting: the model this AR view will eventually load is the GLB served through CloudFront from GET /jobs/:jobId. If that distribution turns out to be private with signed, expiring URLs (the open question from that endpoint's prompt), the native layer's model-fetch has to handle URL expiry and re-signing — which materially affects the follow-on model-loading task. Worth resolving before that task, not during it.
+Want me to scope the iOS/ARKit counterpart next (implementing the same Dart interface), or the model-loading + plane-detection/placement task that sits on top of this session foundation?
+
+
+
+
+
+
+
 
 
 

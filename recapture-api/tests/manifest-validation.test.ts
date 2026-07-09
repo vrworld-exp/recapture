@@ -148,6 +148,80 @@ describe('validateCaptureManifest — collect-all + order', () => {
   });
 });
 
+describe('validateCaptureManifest — capture-variant rules', () => {
+  const withoutBottom: ManifestExpectations = {
+    requiredLevels: ['EYE', 'TOP'],
+    allowedLevels: ['EYE', 'TOP'],
+    minPhotosPerLevel: 3,
+    expectedFlowVariant: 'without_bottom',
+  };
+
+  it('a matching declared flowVariant passes', () => {
+    const result = validateCaptureManifest(
+      { flowVariant: 'without_bottom', ...manifestWith({ EYE: 3, TOP: 3 }) },
+      withoutBottom
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it('an ABSENT flowVariant is tolerated (pre-variant client) — never an error by itself', () => {
+    const result = validateCaptureManifest(manifestWith({ EYE: 3, TOP: 3 }), withoutBottom);
+    expect(result.valid).toBe(true);
+  });
+
+  it('a declared flowVariant differing from the job → FLOW_VARIANT_MISMATCH', () => {
+    const result = validateCaptureManifest(
+      { flowVariant: 'with_bottom', ...manifestWith({ EYE: 3, TOP: 3 }) },
+      withoutBottom
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.rule).toBe('FLOW_VARIANT_MISMATCH');
+    expect(result.errors[0]!.detail).toEqual({
+      declared: 'with_bottom',
+      expected: 'without_bottom',
+    });
+  });
+
+  it('a level outside allowedLevels → UNEXPECTED_LEVELS, excluded from the minimum rule', () => {
+    // LOW has only 1 photo — under the minimum — but it is the UNEXPECTED
+    // finding, not a second insufficient-photos finding.
+    const result = validateCaptureManifest(
+      manifestWith({ EYE: 3, TOP: 3, LOW: 1 }),
+      withoutBottom
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.rule).toBe('UNEXPECTED_LEVELS');
+    expect(result.errors[0]!.detail).toEqual({ unexpectedLevels: ['LOW'] });
+  });
+
+  it('omitted allowedLevels restricts nothing (pre-variant expectations unchanged)', () => {
+    const result = validateCaptureManifest(
+      manifestWith({ EYE: 3, TOP: 3, LOW: 3, XTRA: 3 }),
+      { requiredLevels: ['EYE', 'TOP', 'LOW'], minPhotosPerLevel: 3 }
+    );
+    expect(result.valid).toBe(true); // XTRA passes — no closed set stated
+  });
+
+  it('all five rules collect in one pass, in stable order', () => {
+    // Declares 10 vs 7 entries; wrong variant; TOP missing; LOW unexpected;
+    // EYE under the minimum.
+    const result = validateCaptureManifest(
+      { flowVariant: 'with_bottom', ...manifestWith({ EYE: 2, LOW: 5 }, 10) },
+      withoutBottom
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.map((e) => e.rule)).toEqual([
+      'FILE_COUNT_MISMATCH',
+      'FLOW_VARIANT_MISMATCH',
+      'MISSING_REQUIRED_LEVELS',
+      'UNEXPECTED_LEVELS',
+      'INSUFFICIENT_PHOTOS_PER_LEVEL',
+    ]);
+  });
+});
+
 describe('validateCaptureManifest — unreadable input', () => {
   it.each([
     ['undefined (unparseable JSON upstream)', undefined],

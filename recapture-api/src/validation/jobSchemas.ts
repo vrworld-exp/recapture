@@ -1,13 +1,17 @@
 // src/validation/jobSchemas.ts
 import { z } from 'zod';
 import { OBJECT_SIZE_VALUES } from '@/validation/projectSchemas';
+import {
+  CAPTURE_FLOW_VARIANTS,
+  DEFAULT_CAPTURE_FLOW_VARIANT,
+} from '@/models/types/captureVariants';
 
 /**
  * Absolute upper bound on `expectedFilesCount` — a sanity cap far above any
- * legitimate capture (3 rings × 36 segments plus manifest is well under this),
- * so a garbage/hostile count can never inflate a job record. The size-dependent
- * LOWER bound (a completed capture's minimum photo count) is enforced in the
- * service, where the project's authoritative objectSize is known.
+ * legitimate capture (both flow variants total 36 images plus the manifest),
+ * so a garbage/hostile count can never inflate a job record. The EXACT
+ * variant-derived total is enforced in the service, where the job's
+ * captureVariant is known.
  */
 export const EXPECTED_FILES_MAX = 1_000;
 
@@ -26,6 +30,9 @@ export const createJobSchema = z
   .object({
     projectId: z.string().regex(OBJECT_ID_RE, 'Invalid project id'),
     objectSize: z.enum(OBJECT_SIZE_VALUES),
+    // Optional with a default so pre-variant clients (which never send it)
+    // keep working unchanged as full three-ring captures.
+    captureVariant: z.enum(CAPTURE_FLOW_VARIANTS).default(DEFAULT_CAPTURE_FLOW_VARIANT),
     expectedFilesCount: z.coerce
       .number()
       .int('expectedFilesCount must be an integer')

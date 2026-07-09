@@ -38,6 +38,7 @@ export async function getRemoteConfig(): Promise<RemoteConfigResult> {
       pitchBands: doc.pitchBands,
       thresholds: doc.thresholds,
       segmentCounts: doc.segmentCounts,
+      guided_capture_variant_segments: doc.guided_capture_variant_segments,
     };
 
     const parsed = remoteConfigSchema.safeParse(candidate);

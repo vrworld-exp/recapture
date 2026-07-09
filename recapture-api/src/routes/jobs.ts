@@ -104,9 +104,10 @@ router.post(
           status: 'error',
           code: 'INVALID_REQUEST',
           message:
-            `expectedFilesCount is inconsistent with objectSize — a completed ` +
-            `capture has at least ${result.minimum} files (max ${result.maximum}).`,
-          fields: { expectedFilesCount: `must be ${result.minimum}-${result.maximum}` },
+            `expectedFilesCount is inconsistent with captureVariant — a completed ` +
+            `'${result.captureVariant}' capture has exactly ${result.required} files ` +
+            `(images + manifest).`,
+          fields: { expectedFilesCount: `must be ${result.required}` },
         });
         return;
 
@@ -134,6 +135,7 @@ router.post(
           project_id: result.job.projectId,
           job_id: result.job.id,
           object_size: result.job.objectSize,
+          flow_variant: result.job.captureVariant,
           expected_files_count: result.job.expectedFilesCount,
         });
         res.status(201).json({
@@ -381,6 +383,7 @@ router.post(
           track(AnalyticsEvent.JOB_QUEUED, {
             user_id_hash: hashIdentifier(userId),
             job_id: result.jobId,
+            flow_variant: result.captureVariant,
             files_verified: result.filesVerified,
           });
         }

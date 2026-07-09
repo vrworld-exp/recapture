@@ -5,6 +5,12 @@ import {
   MIN_PHOTOS_PER_RING_BY_SIZE,
   type ObjectSize,
 } from '@/models/types/capture.types';
+import {
+  expectedPerRing,
+  ringsForVariant,
+  type CaptureFlowVariant,
+  type CaptureRingName,
+} from '@/models/types/captureVariants';
 
 /**
  * Wire schema for GET /remote-config — runtime tuning the mobile client/viewer
@@ -15,6 +21,10 @@ import {
  *   (mirrors the EYE/TOP/LOW levels in capture.types).
  * - `thresholds` — minimum accepted photos per ring, keyed by object size.
  * - `segmentCounts` — ring segment count, keyed by object size.
+ * - `guided_capture_variant_segments` — per capture-flow-variant segment
+ *   counts, keyed variant-id → band-id (`mid`/`high`/`low` — the CLIENT's
+ *   vocabulary for the EYE/TOP/LOW rings; the ring names stay in the
+ *   S3/manifest layer and never leak here).
  *
  * `.strict()` keeps the served payload to exactly these keys. Stored configs are
  * validated against this before serving; anything that doesn't conform falls
@@ -36,6 +46,12 @@ export const remoteConfigSchema = z
       .min(1),
     thresholds: z.record(z.string(), z.number()),
     segmentCounts: z.record(z.string(), z.number().int().nonnegative()),
+    guided_capture_variant_segments: z
+      .object({
+        with_bottom: z.record(z.string(), z.number().int().positive()),
+        without_bottom: z.record(z.string(), z.number().int().positive()),
+      })
+      .strict(),
   })
   .strict();
 
@@ -56,6 +72,25 @@ function bySizeApiKey(source: Record<ObjectSize, number>): Record<string, number
   }, {});
 }
 
+// Ring names (the S3/manifest vocabulary) → the client config's band ids —
+// this schema is the ONLY place the two vocabularies meet, and only in this
+// direction (rings never appear on the wire here).
+const BAND_ID_BY_RING: Record<CaptureRingName, string> = {
+  EYE: 'mid',
+  TOP: 'high',
+  LOW: 'low',
+};
+
+/** One variant's band→count block, derived from the canonical variant module
+ * so the served defaults can never drift from the server's own capture rules
+ * (mirrors the client's bundled VariantSegments defaults by construction). */
+function variantSegmentsBlock(variant: CaptureFlowVariant): Record<string, number> {
+  return ringsForVariant(variant).reduce<Record<string, number>>((acc, ring) => {
+    acc[BAND_ID_BY_RING[ring]] = expectedPerRing(variant);
+    return acc;
+  }, {});
+}
+
 /**
  * Baked-in safe config — the single source of truth used both as the runtime
  * fallback (store missing/unreachable/malformed) and as the schema fixture.
@@ -72,4 +107,8 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
   ],
   thresholds: bySizeApiKey(MIN_PHOTOS_PER_RING_BY_SIZE),
   segmentCounts: bySizeApiKey(SEGMENT_COUNT_BY_SIZE),
+  guided_capture_variant_segments: {
+    with_bottom: variantSegmentsBlock('with_bottom'),
+    without_bottom: variantSegmentsBlock('without_bottom'),
+  },
 };

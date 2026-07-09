@@ -17,6 +17,9 @@ const ClientConfigSchema = new Schema(
     pitchBands: { type: Schema.Types.Mixed },
     thresholds: { type: Schema.Types.Mixed },
     segmentCounts: { type: Schema.Types.Mixed },
+    // Per capture-flow-variant segment counts (wire key kept verbatim —
+    // snake_case is the block's client-facing name).
+    guided_capture_variant_segments: { type: Schema.Types.Mixed },
   },
   {
     timestamps: true,

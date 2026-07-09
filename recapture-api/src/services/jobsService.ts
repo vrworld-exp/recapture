@@ -24,14 +24,17 @@
 import { Types } from 'mongoose';
 import { Job, type IJob } from '@/models/Job';
 import { Project } from '@/models/Project';
+import { type ObjectSize } from '@/models/types/capture.types';
 import {
-  MIN_PHOTOS_PER_RING_BY_SIZE,
-  type ObjectSize,
-} from '@/models/types/capture.types';
+  DEFAULT_CAPTURE_FLOW_VARIANT,
+  expectedImageCount,
+  expectedPerRing,
+  ringsForVariant,
+  type CaptureFlowVariant,
+} from '@/models/types/captureVariants';
 import { BUCKET_RAW } from '@/config/s3';
 import { env } from '@/config/env';
 import {
-  EXPECTED_FILES_MAX,
   type CreateJobInput,
   type InitiateUploadInput,
   type PartUrlInput,
@@ -48,7 +51,7 @@ import {
 import { getObjectText, countObjectsUnderPrefix } from '@/services/s3ObjectStore';
 import { updateProjectStatus } from '@/services/projectsService';
 import { buildJobKeyPrefix, buildManifestKey } from '@/utils/s3Keys';
-import { validateCaptureManifest, REQUIRED_CAPTURE_LEVELS } from '@/services/manifestValidationService';
+import { validateCaptureManifest } from '@/services/manifestValidationService';
 import type { ManifestValidationError } from '@/models/types/manifest.types';
 
 // The S3 hard limits live with the S3 helpers; re-exported here because the
@@ -74,6 +77,7 @@ export interface JobDto {
   projectId: string;
   state: IJob['state'];
   objectSize: WireSize;
+  captureVariant: CaptureFlowVariant;
   expectedFilesCount: number;
   createdAt: string;
 }
@@ -91,6 +95,9 @@ export interface UploadPlan {
   manifestKey: string;
   /** Key rule for every other file: keyPrefix + the bundle-relative path. */
   keyTemplate: string;
+  /** The ONLY image LEVEL segments this job's plan covers (the variant's
+   * rings) — an images/{LEVEL}/… key outside this set fails containment. */
+  levels: readonly string[];
   /** ISO timestamp; per-file initiate calls are accepted until this instant. */
   expiresAt: string;
   partSizeMin: number;
@@ -107,7 +114,7 @@ export interface UploadPlan {
 export type CreateJobResult =
   | { outcome: 'PROJECT_NOT_FOUND' }
   | { outcome: 'SIZE_MISMATCH'; projectSize: WireSize }
-  | { outcome: 'COUNT_INCONSISTENT'; minimum: number; maximum: number }
+  | { outcome: 'COUNT_INCONSISTENT'; required: number; captureVariant: CaptureFlowVariant }
   | { outcome: 'IDEMPOTENCY_CONFLICT' }
   | { outcome: 'CREATED'; job: JobDto; uploadPlan: UploadPlan }
   | { outcome: 'REPLAYED'; job: JobDto; uploadPlan: UploadPlan };
@@ -120,10 +127,11 @@ export type CreateJobResult =
  *      unauthorized project;
  *   2. the client's `objectSize` must MATCH the project's stored size (the
  *      project is authoritative; a mismatch is a client bug, not a preference);
- *   3. `expectedFilesCount` is cross-checked against the size's minimum
- *      completed-capture count (3 rings × min photos/ring — the count may
- *      legitimately EXCEED the minimum, so only gross undershoot is rejected;
- *      the absolute ceiling comes from the schema/EXPECTED_FILES_MAX).
+ *   3. `expectedFilesCount` must EQUAL the variant's exact total —
+ *      expectedImageCount(captureVariant) + 1 for the manifest. The variant
+ *      fully determines the capture's shape (every manifest entry is an
+ *      accepted photo and finalize demands an exact S3 count), so any drift
+ *      is a client bug, not headroom.
  *
  * IDEMPOTENCY: when `idempotencyKey` is provided, a repeat create with the same
  * key + same payload returns the ORIGINAL job and its plan (REPLAYED — the
@@ -153,12 +161,11 @@ export async function createJob(
     return { outcome: 'SIZE_MISMATCH', projectSize: MODEL_TO_WIRE[project.objectSize] };
   }
 
-  // Lower bound: a completed capture has at least the per-ring minimum on all
-  // three rings. (Counting is manifest-inclusive on the model; the bound leaves
-  // the ±1 manifest ambiguity below the threshold rather than above it.)
-  const minimum = 3 * MIN_PHOTOS_PER_RING_BY_SIZE[modelSize];
-  if (input.expectedFilesCount < minimum) {
-    return { outcome: 'COUNT_INCONSISTENT', minimum, maximum: EXPECTED_FILES_MAX };
+  // Exact variant total: the flow variant fixes the image count, and the
+  // model's expectedFilesCount is manifest-INCLUSIVE, hence the +1.
+  const required = expectedImageCount(input.captureVariant) + 1;
+  if (input.expectedFilesCount !== required) {
+    return { outcome: 'COUNT_INCONSISTENT', required, captureVariant: input.captureVariant };
   }
 
   // Fast-path replay: an earlier create with this key already exists.
@@ -183,6 +190,7 @@ export async function createJob(
       userId: ownerId,
       state: 'CREATED',
       objectSize: modelSize,
+      captureVariant: input.captureVariant,
       ...(idempotencyKey ? { idempotencyKey } : {}),
       upload: {
         uploadMethod: 'S3_PRESIGNED_MULTIPART',
@@ -234,6 +242,7 @@ function replayOrConflict(existing: IJob, input: CreateJobInput): CreateJobResul
   const samePayload =
     existing.projectId.toHexString() === input.projectId &&
     existing.objectSize === WIRE_TO_MODEL[input.objectSize] &&
+    variantOf(existing) === input.captureVariant &&
     existing.upload?.expectedFilesCount === input.expectedFilesCount;
   if (!samePayload) {
     return { outcome: 'IDEMPOTENCY_CONFLICT' };
@@ -254,11 +263,18 @@ function planFor(job: IJob): UploadPlan {
     keyPrefix: upload.rawPrefix,
     manifestKey: upload.manifestKey,
     keyTemplate: `${upload.rawPrefix}{relativePath}`,
+    levels: ringsForVariant(variantOf(job)),
     expiresAt: planExpiresAt(job).toISOString(),
     partSizeMin: PART_SIZE_MIN,
     maxParts: MAX_PARTS,
     expectedFilesCount: upload.expectedFilesCount,
   };
+}
+
+/** The job's capture flow variant. The schema default backfills documents
+ * predating the field on read; the ?? is a second belt for lean/legacy paths. */
+function variantOf(job: IJob): CaptureFlowVariant {
+  return job.captureVariant ?? DEFAULT_CAPTURE_FLOW_VARIANT;
 }
 
 /** The instant the job's upload plan stops accepting initiate/part-url calls. */
@@ -272,6 +288,7 @@ function toDto(job: IJob): JobDto {
     projectId: job.projectId.toHexString(),
     state: job.state,
     objectSize: MODEL_TO_WIRE[job.objectSize ?? 'MEDIUM'],
+    captureVariant: variantOf(job),
     expectedFilesCount: job.upload?.expectedFilesCount ?? 0,
     createdAt: job.createdAt.toISOString(),
   };
@@ -448,6 +465,7 @@ export type FinalizeJobResult =
       jobId: string;
       filesVerified: number;
       queuedAt: string;
+      captureVariant: CaptureFlowVariant;
       /** True when this call found the job already queued (idempotent replay). */
       alreadyQueued: boolean;
     };
@@ -523,18 +541,23 @@ export async function finalizeJob(
 
   // Verification 3: manifest CONTENT rules (pure, collect-all — every broken
   // rule reported in one pass). Bad JSON is a verification failure like any
-  // other unreadable-manifest finding, never a 500. Thresholds are
-  // SERVER-derived from the job's objectSize — the client-authored manifest
-  // never attests its own minimums.
+  // other unreadable-manifest finding, never a 500. The expected ring set and
+  // per-ring floors are SERVER-derived from the job's captureVariant — the
+  // client-authored manifest never attests its own minimums, and a declared
+  // flowVariant that disagrees with the job is itself a finding.
   let parsedManifest: unknown;
   try {
     parsedManifest = JSON.parse(manifestObject.body);
   } catch {
     parsedManifest = undefined; // → MANIFEST_UNREADABLE from the validator
   }
+  const variant = variantOf(job);
+  const variantRings = [...ringsForVariant(variant)];
   const validation = validateCaptureManifest(parsedManifest, {
-    requiredLevels: [...REQUIRED_CAPTURE_LEVELS],
-    minPhotosPerLevel: MIN_PHOTOS_PER_RING_BY_SIZE[job.objectSize ?? 'MEDIUM'],
+    requiredLevels: variantRings,
+    allowedLevels: variantRings,
+    minPhotosPerLevel: expectedPerRing(variant),
+    expectedFlowVariant: variant,
   });
   if (!validation.valid) {
     return {
@@ -598,6 +621,7 @@ async function queuedResult(job: IJob, alreadyQueued: boolean): Promise<Finalize
     jobId: job.id as string,
     filesVerified: job.upload?.uploadedFilesCount ?? 0,
     queuedAt: (job.queuedAt ?? job.updatedAt).toISOString(),
+    captureVariant: variantOf(job),
     alreadyQueued,
   };
 }
@@ -642,6 +666,19 @@ async function loadUploadableJob(
     remainder.split('/').some((seg) => seg === '..' || seg === '')
   ) {
     return { outcome: 'INVALID_KEY' };
+  }
+
+  // Variant containment: an image key's LEVEL segment must be one of the rings
+  // the job's capture variant plans (e.g. images/LOW/… is rejected on a
+  // without_bottom job — the plan never covered it). Same failure family as
+  // the prefix check: a key outside the advertised plan.
+  const segments = remainder.split('/');
+  if (segments[0] === 'images') {
+    const level = segments[1];
+    const allowed = ringsForVariant(variantOf(job)) as readonly string[];
+    if (level === undefined || !allowed.includes(level)) {
+      return { outcome: 'INVALID_KEY' };
+    }
   }
 
   return { job };

@@ -16,6 +16,11 @@ import {
   DeviceInfo,
   JobError,
 } from './types/job.types';
+import {
+  CAPTURE_FLOW_VARIANTS,
+  DEFAULT_CAPTURE_FLOW_VARIANT,
+  type CaptureFlowVariant,
+} from './types/captureVariants';
 
 // ── Sub-schemas ──────────────────────────────────────────────────────────────
 
@@ -147,6 +152,15 @@ export interface IJob extends Document {
   objectSize?: ObjectSize;
 
   /**
+   * Capture flow variant the session used (with_bottom → EYE/TOP/LOW,
+   * without_bottom → EYE/TOP) — set at job creation from the client's request
+   * (defaulted for pre-variant clients) and consulted by the upload-urls key
+   * containment and finalize's manifest validation. Jobs predating the field
+   * read as the default via the schema default.
+   */
+  captureVariant: CaptureFlowVariant;
+
+  /**
    * Client-supplied idempotency key (`Idempotency-Key` header on POST /jobs),
    * unique per user when present — a retried create resolves to this job
    * instead of inserting a duplicate.
@@ -237,6 +251,12 @@ const JobSchema = new Schema<IJob>(
     objectSize: {
       type: String,
       enum: ['SMALL', 'MEDIUM', 'LARGE'],
+    },
+    captureVariant: {
+      type: String,
+      enum: CAPTURE_FLOW_VARIANTS,
+      required: true,
+      default: DEFAULT_CAPTURE_FLOW_VARIANT,
     },
     idempotencyKey: {
       type: String,

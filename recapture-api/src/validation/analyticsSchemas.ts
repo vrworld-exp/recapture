@@ -9,6 +9,8 @@ import { z } from 'zod';
 // Reuse the SAME enum constants POST /projects validates against — analytics
 // must never declare divergent object_size/mode literals.
 import { OBJECT_SIZE_VALUES, CAPTURE_MODE_VALUES } from '@/validation/projectSchemas';
+// Same rule for the capture flow variant ids (POST /jobs' enum).
+import { CAPTURE_FLOW_VARIANTS } from '@/models/types/captureVariants';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -195,6 +197,9 @@ const jobCreatedProps = z
     project_id: z.string().min(1),
     job_id: z.string().min(1),
     object_size: z.enum(OBJECT_SIZE_VALUES),
+    // Optional so pre-variant emitters/backfills stay valid; enum-locked to
+    // the capture variant wire ids. Not PII.
+    flow_variant: z.enum(CAPTURE_FLOW_VARIANTS).optional(),
     expected_files_count: z.number().int().positive(),
   })
   .strict();
@@ -210,6 +215,7 @@ const jobQueuedProps = z
   .object({
     user_id_hash: z.string().min(1),
     job_id: z.string().min(1),
+    flow_variant: z.enum(CAPTURE_FLOW_VARIANTS).optional(),
     files_verified: z.number().int().positive(),
   })
   .strict();

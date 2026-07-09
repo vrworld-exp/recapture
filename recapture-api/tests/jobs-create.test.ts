@@ -61,9 +61,9 @@ async function makeProject(
 const userId = new Types.ObjectId().toHexString();
 const auth = { Authorization: `Bearer ${tokenFor(userId)}` };
 
-/** A valid MEDIUM body (min for medium = 3 × 24 = 72). */
+/** A valid body (default with_bottom variant: 36 images + manifest = 37). */
 function validBody(projectId: string) {
-  return { projectId, objectSize: 'medium', expectedFilesCount: 73 };
+  return { projectId, objectSize: 'medium', expectedFilesCount: 37 };
 }
 
 describe('POST /jobs — happy path', () => {
@@ -81,7 +81,8 @@ describe('POST /jobs — happy path', () => {
     expect(job.state).toBe('CREATED');
     expect(job.projectId).toBe(projectId);
     expect(job.objectSize).toBe('medium');
-    expect(job.expectedFilesCount).toBe(73);
+    expect(job.captureVariant).toBe('with_bottom'); // default when unsent
+    expect(job.expectedFilesCount).toBe(37);
 
     // Plan: job-scoped key space + echoed S3 hard limits + bounded expiry.
     expect(uploadPlan.uploadMethod).toBe('S3_PRESIGNED_MULTIPART');
@@ -90,6 +91,7 @@ describe('POST /jobs — happy path', () => {
     expect(uploadPlan.keyPrefix).toBe(`dev/${userId}/${projectId}/${job.id}/`);
     expect(uploadPlan.manifestKey).toBe(`${uploadPlan.keyPrefix}capture_manifest.json`);
     expect(uploadPlan.keyTemplate).toBe(`${uploadPlan.keyPrefix}{relativePath}`);
+    expect(uploadPlan.levels).toEqual(['EYE', 'TOP', 'LOW']); // with_bottom rings
     expect(uploadPlan.partSizeMin).toBe(PART_SIZE_MIN);
     expect(uploadPlan.partSizeMin).toBe(5_242_880);
     expect(uploadPlan.maxParts).toBe(MAX_PARTS);
@@ -103,8 +105,9 @@ describe('POST /jobs — happy path', () => {
     expect(saved).not.toBeNull();
     expect(saved!.state).toBe('CREATED');
     expect(saved!.objectSize).toBe('MEDIUM');
+    expect(saved!.captureVariant).toBe('with_bottom');
     expect(saved!.userId.toHexString()).toBe(userId);
-    expect(saved!.upload!.expectedFilesCount).toBe(73);
+    expect(saved!.upload!.expectedFilesCount).toBe(37);
     expect(saved!.upload!.uploadedFilesCount).toBe(0);
     expect(saved!.upload!.rawPrefix).toBe(uploadPlan.keyPrefix);
     expect(saved!.upload!.manifestKey).toBe(uploadPlan.manifestKey);
@@ -114,7 +117,8 @@ describe('POST /jobs — happy path', () => {
       String(c[0]).includes('[analytics] job_created')
     );
     expect(jobCreated).toHaveLength(1);
-    expect(String(jobCreated[0]![1])).toContain('"expected_files_count":73');
+    expect(String(jobCreated[0]![1])).toContain('"expected_files_count":37');
+    expect(String(jobCreated[0]![1])).toContain('"flow_variant":"with_bottom"');
   });
 
   it('response never leaks credentials — only plan data', async () => {
@@ -182,15 +186,40 @@ describe('POST /jobs — validation (400)', () => {
     expect(await Job.countDocuments()).toBe(0);
   });
 
-  it('expectedFilesCount grossly below the size minimum → 400 with the bound', async () => {
+  it.each([
+    ['undershoot', 10],
+    ['off by one (images only, no manifest)', 36],
+    ['overshoot (pre-variant size-based count)', 73],
+  ])(
+    'expectedFilesCount %s → 400 naming the exact variant total',
+    async (_name, count) => {
+      const projectId = await makeProject(userId, 'MEDIUM');
+      const res = await request(app)
+        .post('/jobs')
+        .set(auth)
+        .send({ projectId, objectSize: 'medium', expectedFilesCount: count });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toContain('37'); // with_bottom: 3 rings × 12 + manifest
+      expect(await Job.countDocuments()).toBe(0);
+    }
+  );
+
+  it('the exact total is enforced per variant (36+1 for without_bottom too)', async () => {
     const projectId = await makeProject(userId, 'MEDIUM');
     const res = await request(app)
       .post('/jobs')
       .set(auth)
-      .send({ projectId, objectSize: 'medium', expectedFilesCount: 10 });
+      .send({
+        projectId,
+        objectSize: 'medium',
+        captureVariant: 'without_bottom',
+        expectedFilesCount: 30,
+      });
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain('72'); // 3 rings × 24 min photos (medium)
+    expect(res.body.message).toContain("'without_bottom'");
+    expect(res.body.message).toContain('37'); // 2 rings × 18 + manifest
     expect(await Job.countDocuments()).toBe(0);
   });
 });
@@ -267,7 +296,7 @@ describe('POST /jobs — idempotency', () => {
     expect(jobCreated).toHaveLength(1);
   });
 
-  it('same key + DIFFERENT payload → 409, no second job', async () => {
+  it('same key + DIFFERENT payload (changed captureVariant) → 409, no second job', async () => {
     const projectId = await makeProject(userId);
     const key = 'retry-abc-456';
 
@@ -276,11 +305,13 @@ describe('POST /jobs — idempotency', () => {
       .set(auth)
       .set('Idempotency-Key', key)
       .send(validBody(projectId));
+    // Both variants total 37 files, so the ONLY drift is the variant itself —
+    // it must still conflict like any other body drift under the same key.
     const second = await request(app)
       .post('/jobs')
       .set(auth)
       .set('Idempotency-Key', key)
-      .send({ ...validBody(projectId), expectedFilesCount: 90 });
+      .send({ ...validBody(projectId), captureVariant: 'without_bottom' });
 
     expect(first.status).toBe(201);
     expect(second.status).toBe(409);
@@ -320,5 +351,88 @@ describe('POST /jobs — idempotency', () => {
     expect(second.status).toBe(201);
     expect(second.body.job.id).not.toBe(first.body.job.id);
     expect(await Job.countDocuments()).toBe(2);
+  });
+
+  it('a replay sending the defaulted variant EXPLICITLY still replays (no false conflict)', async () => {
+    const projectId = await makeProject(userId);
+    const key = 'retry-abc-789';
+
+    const first = await request(app)
+      .post('/jobs')
+      .set(auth)
+      .set('Idempotency-Key', key)
+      .send(validBody(projectId)); // captureVariant omitted → with_bottom
+    const second = await request(app)
+      .post('/jobs')
+      .set(auth)
+      .set('Idempotency-Key', key)
+      .send({ ...validBody(projectId), captureVariant: 'with_bottom' });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(200);
+    expect(second.body.idempotentReplay).toBe(true);
+    expect(await Job.countDocuments()).toBe(1);
+  });
+});
+
+describe('POST /jobs — captureVariant', () => {
+  it("201: 'without_bottom' persists on the job and the plan covers only EYE/TOP", async () => {
+    const projectId = await makeProject(userId);
+
+    const res = await request(app)
+      .post('/jobs')
+      .set(auth)
+      .send({ ...validBody(projectId), captureVariant: 'without_bottom' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.job.captureVariant).toBe('without_bottom');
+    expect(res.body.job.expectedFilesCount).toBe(37); // 2 rings × 18 + manifest
+    expect(res.body.uploadPlan.levels).toEqual(['EYE', 'TOP']); // no LOW planned
+
+    const saved = await Job.findById(res.body.job.id).exec();
+    expect(saved!.captureVariant).toBe('without_bottom');
+  });
+
+  it("201: an explicit 'with_bottom' behaves exactly like the default", async () => {
+    const projectId = await makeProject(userId);
+
+    const res = await request(app)
+      .post('/jobs')
+      .set(auth)
+      .send({ ...validBody(projectId), captureVariant: 'with_bottom' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.job.captureVariant).toBe('with_bottom');
+    expect(res.body.uploadPlan.levels).toEqual(['EYE', 'TOP', 'LOW']);
+  });
+
+  it('an unknown variant id → 400, nothing created', async () => {
+    const projectId = await makeProject(userId);
+
+    const res = await request(app)
+      .post('/jobs')
+      .set(auth)
+      .send({ ...validBody(projectId), captureVariant: 'sideways' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_REQUEST');
+    expect(await Job.countDocuments()).toBe(0);
+  });
+
+  it('the created analytics event carries the variant', async () => {
+    const projectId = await makeProject(userId);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const res = await request(app)
+      .post('/jobs')
+      .set(auth)
+      .send({ ...validBody(projectId), captureVariant: 'without_bottom' });
+    expect(res.status).toBe(201);
+
+    const jobCreated = logSpy.mock.calls.filter((c) =>
+      String(c[0]).includes('[analytics] job_created')
+    );
+    expect(jobCreated).toHaveLength(1);
+    expect(String(jobCreated[0]![1])).toContain('"flow_variant":"without_bottom"');
   });
 });

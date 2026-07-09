@@ -61,7 +61,8 @@ export interface StageProgress {
 export interface UploadInfo {
   uploadMethod: 'S3_PRESIGNED_MULTIPART';
 
-  /** Total files expected (all images across 3 levels + manifest.json) */
+  /** Total files expected (all images across the job's capture-variant rings
+   * + manifest.json) */
   expectedFilesCount: number;
 
   /** Files successfully uploaded to S3 so far */
