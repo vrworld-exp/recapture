@@ -109,6 +109,9 @@ void main() {
       expect(m['projectId'], 'proj1');
       expect(m['jobId'], 'job1');
       expect(m['captureSessionId'], 'sess1');
+      // Additive default: a caller that doesn't pass the flow variant emits the
+      // legacy 3-ring id explicitly (never an absent key).
+      expect(m['flowVariant'], 'with_bottom');
       expect(m['startedAt'], '2026-07-02T10:00:00.000Z');
       expect(m['completedAt'], '2026-07-02T10:05:00.000Z');
       expect(m['appVersion'], '1.0.3');
@@ -126,6 +129,18 @@ void main() {
       final summary = m['summary'] as Map<String, dynamic>;
       expect(summary['totalPhotos'], 1);
       expect(summary['overallComplete'], true);
+    });
+
+    test('flowVariant carries the passed variant id', () {
+      final m = buildCaptureManifest(
+        session: _session,
+        device: _device,
+        config: CaptureConfig.bundledDefault,
+        levels: const [_levelA],
+        photos: const [],
+        flowVariantId: 'without_bottom',
+      );
+      expect(m['flowVariant'], 'without_bottom');
     });
 
     test('summary.levels mirror the backend EYE/TOP/LOW LevelSummary shape', () {

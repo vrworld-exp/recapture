@@ -107,6 +107,14 @@ abstract final class AnalyticsEvents {
   /// the item id; fires once per genuine open (the tip surface guards stacking).
   static const String precaptureTipOpened = 'precapture_tip_opened';
 
+  /// The user changed the "can you capture the bottom?" answer on the
+  /// pre-capture checklist — the input that selects the capture FLOW VARIANT
+  /// (with_bottom 3-ring 12-12-12 vs without_bottom 2-ring 18-18). Fires on
+  /// TRANSITION only (never on re-selecting the current value or on rebuilds).
+  /// Props: { flow_variant, device_type }.
+  static const String bottomCaptureOptionSelected =
+      'bottom_capture_option_selected';
+
   // ── Level A (Eye Ring) intro ────────────────────────────────────────────────
   // TODO(analytics): mirror these two names + props in the shared server schema
   // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc

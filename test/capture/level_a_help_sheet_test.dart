@@ -4,7 +4,7 @@
 // title/body, the {n} count resolves from config, open/close + replay analytics
 // fire, the replay action dismisses then calls back, and the close button
 // dismisses. The shared-source guarantee (intro reuses the same list) is covered
-// by the intro test asserting 'cover all 10 positions'.
+// by the intro test asserting 'cover all 12 positions'.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -92,8 +92,11 @@ void main() {
     }
   });
 
-  testWidgets('resolves {n} from config (custom mid band = 16)', (tester) async {
+  testWidgets('resolves {n} from config (variant override mid = 16)', (tester) async {
     final cfg = CaptureConfig.bundledDefault.copyWith(
+      variantSegments: VariantSegments.fromMap(const {
+        'with_bottom': {'mid': 16, 'high': 12, 'low': 12},
+      }),
       pitchBands: const [
         PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 16),
       ],
@@ -102,10 +105,10 @@ void main() {
     expect(find.textContaining('cover all 16 positions'), findsOneWidget);
   });
 
-  testWidgets('falls back to bundled-default N (10) when config is default',
+  testWidgets('falls back to bundled-default N (12) when config is default',
       (tester) async {
     await _openSheet(tester);
-    expect(find.textContaining('cover all 10 positions'), findsOneWidget);
+    expect(find.textContaining('cover all 12 positions'), findsOneWidget);
   });
 
   testWidgets('emits level_a_help_opened on show', (tester) async {

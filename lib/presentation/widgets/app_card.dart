@@ -21,6 +21,7 @@ class AppCard extends StatelessWidget {
     this.padding,
     this.margin,
     this.borderRadius,
+    this.border,
   });
 
   final Widget child;
@@ -41,11 +42,19 @@ class AppCard extends StatelessWidget {
   /// Custom border radius. Defaults to AppRadius.sm on all corners.
   final BorderRadius? borderRadius;
 
+  /// Custom border side (e.g. an accent border for a selected option card).
+  /// Null keeps the default subtle hairline.
+  final BorderSide? border;
+
   @override
   Widget build(BuildContext context) {
     final effectiveRadius = borderRadius ?? BorderRadius.circular(AppRadius.sm);
 
     final effectivePadding = padding ?? const EdgeInsets.all(AppSpacing.lg);
+
+    final effectiveBorder = border == null
+        ? Border.all(color: AppColors.disabled.withValues(alpha: 0.4), width: 0.5)
+        : Border.fromBorderSide(border!);
 
     // Static card — no interaction
     if (onTap == null && onLongPress == null) {
@@ -70,10 +79,7 @@ class AppCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface1,
         borderRadius: effectiveRadius,
-        border: Border.all(
-          color: AppColors.disabled.withValues(alpha: 0.4),
-          width: 0.5,
-        ),
+        border: effectiveBorder,
       ),
       child: ClipRRect(
         borderRadius: effectiveRadius,

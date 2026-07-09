@@ -1,39 +1,49 @@
 // lib/application/capture/progression/level_segment_machines.dart
 //
-// Builds one independent [LevelSegmentMachine] per level (A→B→C) FROM CONFIG —
-// the same source, and the SAME band resolution, as `levelStatesFromConfig`
+// Builds one independent [LevelSegmentMachine] per ACTIVE level of the flow
+// variant — the same source, the SAME band resolution, and the SAME segment
+// resolver ([effectiveSegmentsFor]) as `levelStatesFromConfig`
 // (level_progression_builder.dart), so a level's machine and its progression
 // summary can never disagree on segment count or which band it is.
 //
-// Each level resolves its band via the single [pitchBandIdForLevel] map and takes
-// THAT band's `segments` as its per-level count — so Top/Bottom rings get their
-// own counts (which may differ from the Eye Ring), straight from remote config
-// with no code change. The instances are fully independent; the level progression
+// Each level resolves its band via the single [pitchBandIdForLevel] map and its
+// count via [effectiveSegmentsFor] (variant counts → legacy band counts → 12),
+// so the 12-12-12 / 18-18 variant counts come straight from remote config with
+// no code change. The instances are fully independent; the level progression
 // controller composes them via the machine's uniform interface.
 //
 // Kept OUT of the pure machine (domain/capture/level_segment_machine.dart)
 // because it depends on the CaptureLevel taxonomy + config; the machine stays
 // config-agnostic and pure.
+import '../../../domain/capture/capture_flow_variant.dart';
 import '../../../domain/capture/level_segment_machine.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
 
-/// The independent per-level segment machines in flow order (A→B→C), each sized
-/// and banded from [config]. A level whose band is missing from config falls back
-/// to the first band (never an empty ring), mirroring [levelStatesFromConfig].
+/// The independent per-level segment machines for [variant]'s active levels in
+/// flow order (A→B[→C]), each sized and banded from [config].
 List<LevelSegmentMachine> levelSegmentMachinesFromConfig(
   CaptureConfig config, {
+  required CaptureFlowVariant variant,
   int fillThreshold = 1,
 }) =>
     [
-      for (final level in CaptureLevel.values)
-        levelSegmentMachineFor(level, config, fillThreshold: fillThreshold),
+      for (final level in variant.levels)
+        levelSegmentMachineFor(
+          level,
+          config,
+          variant: variant,
+          fillThreshold: fillThreshold,
+        ),
     ];
 
-/// One independent [LevelSegmentMachine] for [level], banded + sized from [config].
+/// One independent [LevelSegmentMachine] for [level], banded from [config] and
+/// sized via [effectiveSegmentsFor] under [variant]. A level whose band is
+/// missing from config still gets a valid band shell (never an empty ring).
 LevelSegmentMachine levelSegmentMachineFor(
   CaptureLevel level,
   CaptureConfig config, {
+  required CaptureFlowVariant variant,
   int fillThreshold = 1,
 }) {
   final bandId = pitchBandIdForLevel(level);
@@ -47,6 +57,7 @@ LevelSegmentMachine levelSegmentMachineFor(
     levelId: bandId,
     levelCode: level.code,
     band: band,
+    segmentCount: effectiveSegmentsFor(config, variant, bandId),
     fillThreshold: fillThreshold,
   );
 }

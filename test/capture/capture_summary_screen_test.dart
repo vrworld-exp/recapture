@@ -20,10 +20,16 @@ import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/presentation/screens/capture/capture_summary_screen.dart';
 import 'package:recapture/utils/analytics.dart';
 
-/// Bundled default (bands low=12 / mid=10 / high=8, minCoveragePct=80, count=1).
+/// The historical per-level counts (A=10, B=8, C=12) pinned explicitly via a
+/// variant-segments override, so the per-level scenarios below keep their
+/// distinct-N semantics (bundled defaults are now 12-12-12 under with_bottom).
 class _StubConfigNotifier extends ConfigNotifier {
   @override
-  CaptureConfig build() => CaptureConfig.bundledDefault;
+  CaptureConfig build() => CaptureConfig.bundledDefault.copyWith(
+        variantSegments: VariantSegments.fromMap(const {
+          'with_bottom': {'mid': 10, 'high': 8, 'low': 12},
+        }),
+      );
 }
 
 /// Three equal-size bands (10 segments each) — for the deterministic tiebreak.
@@ -38,6 +44,9 @@ class _EqualBandsConfigNotifier extends ConfigNotifier {
         ],
         thresholds: CaptureThresholds(
             minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
+        variantSegments: VariantSegments(perVariant: {
+          'with_bottom': {'mid': 10, 'high': 10, 'low': 10},
+        }),
       );
 }
 
@@ -51,7 +60,8 @@ class _HighFloorConfigNotifier extends ConfigNotifier {
       );
 }
 
-/// 'low' band absent → Level C coverage unavailable (placeholder).
+/// 'low' band absent from pitchBands — the effective count resolver still
+/// yields a real N for Level C (variant defaults), so no placeholder appears.
 class _NoLowBandConfigNotifier extends ConfigNotifier {
   @override
   CaptureConfig build() => const CaptureConfig(
@@ -337,13 +347,18 @@ void main() {
     expect(expanded.first.props['warning_count'], 3);
   });
 
-  testWidgets('missing band → coverage placeholder, no crash', (tester) async {
+  testWidgets('missing band → counts resolve via the variant defaults, no crash',
+      (tester) async {
+    // The 'low' band is absent from the config's pitchBands, but the effective
+    // count resolver falls back to the variant defaults (low=12 with_bottom),
+    // so Level C still shows a REAL coverage instead of a placeholder.
     await pump(
       tester,
       registryWith({'mid': 8, 'high': 7, 'low': 1}),
       config: _NoLowBandConfigNotifier.new,
     );
-    expect(find.text('—'), findsOneWidget); // Level C coverage unavailable
+    expect(find.text('—'), findsNothing);
+    expect(find.text('8%'), findsOneWidget); // low: 1/12 = 8.3 → 8
     expect(find.text('Capture summary'), findsOneWidget);
   });
 

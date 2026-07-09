@@ -16,6 +16,7 @@ import 'package:recapture/data/local/active_session_box.dart';
 import 'package:recapture/data/local/auto_capture_box.dart';
 import 'package:recapture/data/local/capture_settings_box.dart';
 import 'package:recapture/domain/entities/active_session.dart';
+import 'package:recapture/domain/capture/capture_flow_variant.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/capture_settings.dart';
 import 'package:recapture/domain/entities/retake_request.dart';
@@ -113,7 +114,16 @@ void main() {
     final props = started.single.$2;
     expect(props['level'], 'A');
     expect(props['capture_mode'], 'guided'); // auto-capture defaults ON
-    expect(props['target_segments'], CaptureConfig.bundledDefault.eyeRingSegments);
+    // The level's effective count: config × flow variant (default with_bottom)
+    // × Level A's 'mid' band — the same resolver the live flow uses.
+    expect(
+      props['target_segments'],
+      effectiveSegmentsFor(
+        CaptureConfig.bundledDefault,
+        CaptureFlowVariant.withBottom,
+        'mid',
+      ),
+    );
     expect(props['sensor_supported'], false); // sensors inert in the test host
     expect(props['device_type'], 'android');
     expect(props['project_id'], ''); // fake session → no project id, never null

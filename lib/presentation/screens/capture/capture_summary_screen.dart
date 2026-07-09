@@ -32,6 +32,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
+import '../../../application/capture/capture_flow_variant_provider.dart';
 import '../../../application/capture/capture_summary_provider.dart';
 import '../../../application/capture/completion_gate_provider.dart';
 import '../../../application/capture/review_grid_items_provider.dart';
@@ -172,7 +173,7 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
   /// round-trip: the per-level item providers are kept alive by this screen's
   /// watch, so force them — and the aggregate — to recompute.
   void _refreshAfterReview() {
-    for (final level in CaptureLevel.values) {
+    for (final level in ref.read(captureFlowVariantProvider).levels) {
       ref.invalidate(reviewGridItemsProvider(pitchBandIdForLevel(level)));
     }
     ref.invalidate(captureSummaryProvider);

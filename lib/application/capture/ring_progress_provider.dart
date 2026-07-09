@@ -22,7 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/capture/guidance_inputs.dart' show RingDirectionState;
 import '../../domain/capture/ring_progress.dart';
-import '../config/config_notifier.dart';
+import 'capture_flow_variant_provider.dart';
 import 'current_pitch_provider.dart' show sharedOrientationProvider;
 import 'segment_coverage_provider.dart';
 
@@ -95,7 +95,10 @@ class RingYawBaselineNotifier extends Notifier<double?> {
 final currentRingSegmentProvider =
     StreamProvider.autoDispose<RingSegmentSample>((ref) {
   final source = ref.watch(sharedOrientationProvider);
-  final n = ref.watch(captureConfigProvider.select((c) => c.eyeRingSegments));
+  // The ACTIVE ring's effective N (config × variant × band) — the same source
+  // the fill state uses, so yaw→segment and coverage can never disagree (and
+  // Levels B/C bucket against THEIR count, not the Eye Ring's).
+  final n = ref.watch(activeLevelSegmentCountProvider);
   // Read (not watch) the notifier: seeding the baseline must not rebuild this
   // stream, and a ring-begin reset is observed on the next sample, not via rebuild.
   final baseline = ref.read(ringYawBaselineProvider.notifier);

@@ -18,6 +18,7 @@
 // Emission goes through [CaptureAnalytics.log] → the existing `Analytics`
 // dispatcher. PRIVACY: only opaque ids (project_id/session_id), enum values, and
 // counts — never names, emails, phones, file paths, or tokens.
+import '../../../domain/capture/capture_flow_variant.dart';
 import '../../../utils/analytics.dart';
 
 /// The capture level this event belongs to. Serializes to "A"/"B"/"C".
@@ -51,6 +52,23 @@ String pitchBandIdForLevel(CaptureLevel level) => switch (level) {
       CaptureLevel.b => 'high',
       CaptureLevel.c => 'low',
     };
+
+/// The ACTIVE level list for a flow variant — the taxonomy-side view of
+/// [CaptureFlowVariant.bandIds] (the domain type speaks band ids only; the
+/// CaptureLevel enum lives in this layer). This is the SINGLE source every
+/// flow-shaping iteration uses instead of `CaptureLevel.values`: gates, the
+/// progression/machine builders, the summary, and the upload gate all follow
+/// it, so a 2-ring session never demands (or lists) Level C anywhere.
+extension CaptureFlowVariantLevels on CaptureFlowVariant {
+  /// This variant's levels in flow order (A→B[→C]) — always a prefix of
+  /// [CaptureLevel.values], so flow order never changes between variants.
+  List<CaptureLevel> get levels => switch (this) {
+        CaptureFlowVariant.withBottom =>
+          const [CaptureLevel.a, CaptureLevel.b, CaptureLevel.c],
+        CaptureFlowVariant.withoutBottom =>
+          const [CaptureLevel.a, CaptureLevel.b],
+      };
+}
 
 /// A typed capture-level lifecycle event: its dispatcher [name] + its [properties].
 abstract class CaptureLevelEvent {

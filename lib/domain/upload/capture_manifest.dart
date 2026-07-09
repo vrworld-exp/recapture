@@ -298,6 +298,11 @@ Map<String, dynamic> buildCaptureManifest({
   required CaptureConfig config,
   required List<ManifestLevel> levels,
   required List<ManifestPhoto> photos,
+  // The capture FLOW VARIANT id ('with_bottom' 3-ring / 'without_bottom'
+  // 2-ring — CaptureFlowVariant.id). Additive: defaults to the legacy 3-ring
+  // id so pre-variant callers emit an explicit, truthful value. Emitted as
+  // `flowVariant` (this manifest's camelCase convention).
+  String flowVariantId = 'with_bottom',
 }) {
   // Canonical ordering — deterministic regardless of input order.
   final orderedLevels = [...levels]
@@ -360,6 +365,7 @@ Map<String, dynamic> buildCaptureManifest({
     'projectId': session.projectId,
     'jobId': session.jobId,
     'captureSessionId': session.captureSessionId,
+    'flowVariant': flowVariantId,
     if (session.startedAtIso != null) 'startedAt': session.startedAtIso,
     if (session.completedAtIso != null) 'completedAt': session.completedAtIso,
     if (session.appVersion != null) 'appVersion': session.appVersion,

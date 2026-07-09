@@ -6,10 +6,13 @@
 // holds the current snapshot and forwards the model's transforms so the HUD can
 // `watch` it.
 //
-// The ring shape (N) is seeded from `captureConfigProvider.eyeRingSegments` —
-// the SAME source the ring map and tilt meter use — so the fill state and the
-// rendered ring can never disagree on segment count. It re-seeds if remote
-// config changes N (via `reconfigure`, which drops now-meaningless indices).
+// The ring shape (N) is seeded from [activeLevelSegmentCountProvider] — the
+// ACTIVE ring's effective count (config × flow variant × active band, the SAME
+// resolver the progression/machine layers use) — so the fill state and the
+// rendered ring can never disagree on segment count, and Levels B/C size to
+// THEIR ring instead of the Eye Ring's (the old eyeRingSegments-for-all-levels
+// bug). It re-seeds if the effective N changes (via `reconfigure`, which drops
+// now-meaningless indices).
 //
 // Wiring to the live capture flow (calling [recordCapture] on a successful
 // capture in the engine's current segment, and [updatePosition] from the ring
@@ -18,10 +21,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/segment_coverage.dart';
-import '../config/config_notifier.dart';
+import 'capture_flow_variant_provider.dart';
 
-/// The eye-ring segment-fill state for the current Level A session. Watch for
-/// the derived `filled` / `missingSegments` / `currentTarget` / `progress`.
+/// The ACTIVE ring's segment-fill state for the current capture session. Watch
+/// for the derived `filled` / `missingSegments` / `currentTarget` / `progress`.
 final segmentCoverageProvider =
     NotifierProvider<SegmentCoverageNotifier, SegmentCoverage>(
   SegmentCoverageNotifier.new,
@@ -30,13 +33,11 @@ final segmentCoverageProvider =
 class SegmentCoverageNotifier extends Notifier<SegmentCoverage> {
   @override
   SegmentCoverage build() {
-    // Seed N from the eye-ring band and keep it in sync with remote config. A
-    // change in segment count re-inits (old indices no longer map); a no-op
-    // otherwise. fillThreshold stays at the model default (1) — there is no
-    // per-segment fill requirement in CaptureConfig yet.
-    final n = ref.watch(
-      captureConfigProvider.select((c) => c.eyeRingSegments),
-    );
+    // Seed N from the ACTIVE ring (config × variant × band) and keep it in
+    // sync. A change in segment count re-inits (old indices no longer map); a
+    // no-op otherwise. fillThreshold stays at the model default (1) — there is
+    // no per-segment fill requirement in CaptureConfig yet.
+    final n = ref.watch(activeLevelSegmentCountProvider);
     final current = stateOrNull;
     if (current != null && current.segmentCount == n) return current;
     return SegmentCoverage.initial(segmentCount: n);

@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/capture/capture_flow_variant_provider.dart';
 import '../../../application/config/config_notifier.dart';
 import '../../../data/local/level_intro_box.dart';
 import '../../../data/local/storage_providers.dart';
@@ -142,16 +143,6 @@ class _LevelAIntroScreenState extends ConsumerState<LevelAIntroScreen> {
     }
   }
 
-  /// Eye-level ring segment count from config. Prefers the `mid` band (eye
-  /// level); falls back to the median band, then a safe default.
-  int _eyeRingSegments(CaptureConfig config) {
-    final bands = config.pitchBands;
-    if (bands.isEmpty) return 12;
-    final mid = bands.where((b) => b.id == 'mid');
-    if (mid.isNotEmpty) return mid.first.segments;
-    return bands[bands.length ~/ 2].segments;
-  }
-
   @override
   Widget build(BuildContext context) {
     // Hold a plain Deep Black screen until the auto-skip decision resolves — no
@@ -160,7 +151,13 @@ class _LevelAIntroScreenState extends ConsumerState<LevelAIntroScreen> {
       return const Scaffold(backgroundColor: AppColors.bgPrimary);
     }
 
-    final segments = _eyeRingSegments(ref.watch(captureConfigProvider));
+    // The Eye Ring's effective count (config × flow variant) — the same
+    // resolver the flow uses, so the rules copy names the real target.
+    final segments = effectiveSegmentsFor(
+      ref.watch(captureConfigProvider),
+      ref.watch(captureFlowVariantProvider),
+      'mid',
+    );
     // Rules are sourced from the SHARED tip list (also used by the Help sheet),
     // so the copy never drifts between the intro and Help.
     final rules = levelACaptureTips

@@ -7,6 +7,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/progression/level_progression.dart';
 import 'package:recapture/application/capture/progression/level_progression_builder.dart';
+import 'package:recapture/domain/capture/capture_flow_variant.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 
 /// A level state with [n] segments; [complete] fills it to the 80% gate (+accepted).
@@ -118,65 +119,106 @@ void main() {
   });
 
   group('config builder + reconciliation', () {
-    test('builds A→B→C from config bands (not hardcoded)', () {
-      final levels = levelStatesFromConfig(CaptureConfig.bundledDefault);
+    test('with_bottom builds A→B→C at the variant counts (not hardcoded)', () {
+      final levels = levelStatesFromConfig(
+        CaptureConfig.bundledDefault,
+        variant: CaptureFlowVariant.withBottom,
+      );
       expect(levels.map((l) => l.levelCode).toList(), ['A', 'B', 'C']);
       // pitchBandIdForLevel: A=mid, B=high, C=low.
       expect(levels.map((l) => l.levelId).toList(), ['mid', 'high', 'low']);
-      // Segment counts come from the bands (bundled: mid=10, high=8, low=12).
-      expect(levels[0].segmentCount, 10);
-      expect(levels[1].segmentCount, 8);
-      expect(levels[2].segmentCount, 12);
+      // Segment counts come from the variant defaults (12-12-12), which win
+      // over the legacy band counts (10/8/12).
+      expect(levels.map((l) => l.segmentCount).toList(), [12, 12, 12]);
+    });
+
+    test('without_bottom builds A→B only at 18-18 (Level C dropped)', () {
+      final levels = levelStatesFromConfig(
+        CaptureConfig.bundledDefault,
+        variant: CaptureFlowVariant.withoutBottom,
+      );
+      expect(levels.map((l) => l.levelCode).toList(), ['A', 'B']);
+      expect(levels.map((l) => l.levelId).toList(), ['mid', 'high']);
+      expect(levels.map((l) => l.segmentCount).toList(), [18, 18]);
     });
 
     test('reconcile carries progress, adopts new segment count, clamps frontier',
         () {
-      // Persisted: at B (index 1), A complete with old counts.
+      // Persisted: at B (index 1), A complete with the old counts.
       final persisted = LevelProgression.of([
-        _level('mid', 'A', n: 10, complete: true),
-        _level('high', 'B', n: 8),
+        _level('mid', 'A', n: 12, complete: true),
+        _level('high', 'B', n: 12),
         _level('low', 'C', n: 12),
       ], currentLevelIndex: 1);
 
-      // New config shrinks 'mid' to 5 segments.
-      final newConfig = CaptureConfig.bundledDefault.copyWith(pitchBands: const [
-        PitchBand(id: 'low', minDegrees: 0, maxDegrees: 30, segments: 12),
-        PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 5),
-        PitchBand(id: 'high', minDegrees: 60, maxDegrees: 90, segments: 8),
-      ]);
+      // A remote override SHRINKS with_bottom 'mid' to 5 segments.
+      final newConfig = CaptureConfig.bundledDefault.copyWith(
+        variantSegments: VariantSegments.fromMap(const {
+          'with_bottom': {'mid': 5, 'high': 12, 'low': 12},
+        }),
+      );
 
-      final r = reconcileWithConfig(persisted, newConfig);
+      final r = reconcileWithConfig(
+        persisted,
+        newConfig,
+        variant: CaptureFlowVariant.withBottom,
+      );
       expect(r.currentLevel.levelId, 'high'); // frontier kept by id
       final a = r.stateForId('mid')!;
       expect(a.segmentCount, 5); // new shape
-      expect(a.filledCount, 5); // 10 carried-over filled clamped to 5
-      expect(a.acceptedCount, 10); // accepted carried over
+      expect(a.filledCount, 5); // 12 carried-over filled clamped to 5
+      expect(a.acceptedCount, 12); // accepted carried over
+    });
+
+    test('reconcile onto without_bottom drops Level C and resizes A/B', () {
+      // Persisted 3-ring session with progress on every ring.
+      final persisted = LevelProgression.of([
+        _level('mid', 'A', n: 12, complete: true),
+        _level('high', 'B', n: 12),
+        _level('low', 'C', n: 12),
+      ], currentLevelIndex: 1);
+
+      final r = reconcileWithConfig(
+        persisted,
+        CaptureConfig.bundledDefault,
+        variant: CaptureFlowVariant.withoutBottom,
+      );
+      // C simply disappears; A/B carry progress at the 18-segment shape.
+      expect(r.levels.map((l) => l.levelId).toList(), ['mid', 'high']);
+      expect(r.levels.map((l) => l.segmentCount).toList(), [18, 18]);
+      expect(r.currentLevel.levelId, 'high'); // frontier kept by id
+      expect(r.stateForId('mid')!.acceptedCount, 12); // progress carried
+      expect(r.stateForId('low'), isNull);
     });
 
     test('reconcile carries fired milestones still satisfied by coverage', () {
-      // Persisted Level B: full (8/8) coverage, all milestones fired.
+      // Persisted Level B: full (12/12) coverage, all milestones fired.
       final persisted = LevelProgression.of([
         _level('mid', 'A', complete: true),
         const LevelProgressState(
             levelId: 'high',
             levelCode: 'B',
-            segmentCount: 8,
-            filledCount: 8,
-            acceptedCount: 8,
+            segmentCount: 12,
+            filledCount: 12,
+            acceptedCount: 12,
             firedMilestones: {25, 50, 75, 100}),
         _level('low', 'C', n: 12),
       ], currentLevelIndex: 1);
 
-      // New config GROWS 'high' to 16 segments → 8/16 = 50%, so only 25 & 50 are
-      // still satisfied; 75 & 100 become eligible to fire again.
-      final newConfig = CaptureConfig.bundledDefault.copyWith(pitchBands: const [
-        PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 10),
-        PitchBand(id: 'high', minDegrees: 60, maxDegrees: 90, segments: 16),
-        PitchBand(id: 'low', minDegrees: 0, maxDegrees: 30, segments: 12),
-      ]);
+      // A remote override GROWS with_bottom 'high' to 24 segments → 12/24 = 50%,
+      // so only 25 & 50 are still satisfied; 75 & 100 become eligible again.
+      final newConfig = CaptureConfig.bundledDefault.copyWith(
+        variantSegments: VariantSegments.fromMap(const {
+          'with_bottom': {'mid': 12, 'high': 24, 'low': 12},
+        }),
+      );
 
-      final b = reconcileWithConfig(persisted, newConfig).stateForId('high')!;
-      expect(b.segmentCount, 16);
+      final b = reconcileWithConfig(
+        persisted,
+        newConfig,
+        variant: CaptureFlowVariant.withBottom,
+      ).stateForId('high')!;
+      expect(b.segmentCount, 24);
       expect(b.firedMilestones, {25, 50});
     });
   });

@@ -19,6 +19,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
@@ -28,6 +29,8 @@ import 'package:recapture/domain/entities/permission_flow_state.dart';
 import 'package:recapture/domain/entities/permission_item.dart';
 import 'package:recapture/platform/permissions_service.dart';
 import 'package:recapture/presentation/screens/capture/permissions_screen.dart';
+import 'package:recapture/data/local/active_session_box.dart';
+import 'package:recapture/domain/entities/active_session.dart';
 import 'package:recapture/presentation/screens/capture/pre_capture_screen.dart';
 
 // ── Mock seam: the permission facade ─────────────────────────────────────────
@@ -98,6 +101,13 @@ const _granted = AppPermissionStatus.granted;
 const _denied = AppPermissionStatus.denied;
 const _permDenied = AppPermissionStatus.permanentlyDenied;
 
+/// No-Hive [ActiveSessionBox]: the test host has no initialized Hive, and a
+/// real box open poisons the test zone with Hive's internal unlistened future.
+class _FakeSessionBox extends ActiveSessionBox {
+  @override
+  Future<ActiveSession?> read() async => null;
+}
+
 const _captureMarker = 'LEVEL_A_INTRO'; // the stubbed capture destination
 
 void main() {
@@ -117,7 +127,7 @@ void main() {
         GoRoute(
           path: AppRoutes.preCapture,
           name: AppRouteNames.preCapture,
-          builder: (_, __) => const PreCaptureScreen(),
+          builder: (_, __) => PreCaptureScreen(sessionBox: _FakeSessionBox()),
         ),
         GoRoute(
           path: AppRoutes.permissions,
@@ -148,7 +158,10 @@ void main() {
     final built = buildRouter(service);
     addTearDown(built.router.dispose);
     await tester.pumpWidget(
-      MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
+      ProviderScope(
+        child:
+            MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
+      ),
     );
     await tester.pumpAndSettle();
     return (service: service, spy: built.spy);
@@ -344,7 +357,10 @@ void main() {
       final built = buildRouter(service, initialLocation: AppRoutes.preCapture);
       addTearDown(built.router.dispose);
       await tester.pumpWidget(
-        MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
+        ProviderScope(
+        child:
+            MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
+      ),
       );
       await tester.pumpAndSettle();
       return (service: service, spy: built.spy);
@@ -417,7 +433,10 @@ void main() {
     );
     addTearDown(built.router.dispose);
     await tester.pumpWidget(
-      MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
+      ProviderScope(
+        child:
+            MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
+      ),
     );
     await tester.pumpAndSettle();
 

@@ -2,8 +2,8 @@
 //
 // The reactive wiring around the pure [SummaryGate] — the ONE evaluator every
 // consumer (router gate + Summary screen) reads, so "guided capture is done"
-// lives in exactly one place. It iterates the configured level list
-// (CaptureLevel.values — never a hardcoded 3), reads each level's LIVE accepted
+// lives in exactly one place. It iterates the flow variant's ACTIVE level list
+// (captureFlowVariantProvider.levels — never a hardcoded 3), reads each level's LIVE accepted
 // frame count from the same ledger source the review grids use
 // (reviewGridItemsProvider), and applies the config-driven per-level thresholds
 // (CaptureConfig.completionThresholds). autoDispose so it recomputes against
@@ -19,15 +19,17 @@ import '../../domain/capture/completion_gate.dart';
 import '../../utils/analytics.dart';
 import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
+import 'capture_flow_variant_provider.dart';
 import 'review_grid_items_provider.dart';
 
 /// The live final completion gate. Watch it for `isUnlocked` / per-level status;
-/// it reflects the current ledger + config every time it is read.
+/// it reflects the current ledger + config + flow variant every time it is read
+/// (a 2-ring session unlocks after Level B — Level C is never demanded).
 final completionGateProvider = Provider.autoDispose<SummaryGate>((ref) {
   final thresholds =
       ref.watch(captureConfigProvider.select((c) => c.completionThresholds));
   return evaluateSummaryGate([
-    for (final level in CaptureLevel.values)
+    for (final level in ref.watch(captureFlowVariantProvider).levels)
       LevelCompletionStatus(
         levelCode: level.code,
         // Live accepted frames — the SAME source the review grids + summary read.

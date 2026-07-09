@@ -14,9 +14,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/current_pitch_provider.dart'
     show orientationSourceProvider;
+import 'package:recapture/application/capture/capture_flow_variant_provider.dart';
 import 'package:recapture/application/capture/ring_progress_provider.dart';
 import 'package:recapture/application/capture/segment_coverage_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
+import 'package:recapture/domain/capture/capture_flow_variant.dart';
 import 'package:recapture/domain/capture/guidance_inputs.dart'
     show RingDirectionState;
 import 'package:recapture/domain/capture/ring_progress.dart';
@@ -149,7 +151,9 @@ void main() {
         orientationSourceProvider.overrideWithValue(source.stream),
         captureConfigProvider.overrideWith(_StubConfigNotifier.new),
       ]);
-      n = container.read(captureConfigProvider).eyeRingSegments;
+      // The provider now sizes from the ACTIVE ring (config × variant × band)
+      // — the same N source the fill state uses.
+      n = container.read(activeLevelSegmentCountProvider);
       segSize = 360.0 / n;
       // Keep the autoDispose stream provider alive for the test.
       subs.add(container.listen(currentRingSegmentProvider, (_, __) {}));
@@ -283,6 +287,34 @@ void main() {
         container.read(currentRingSegmentProvider).valueOrNull?.currentSegment,
         0,
       );
+    });
+
+    test('regression (§eyeRingSegments-for-all-levels bug): N follows the '
+        'ACTIVE band + variant — an 18-segment Top Ring buckets by 18', () async {
+      // A without_bottom session capturing Level B (band "high") → N = 18.
+      container
+          .read(captureFlowVariantProvider.notifier)
+          .restore(CaptureFlowVariant.withoutBottom);
+      container.read(activeCaptureBandIdProvider.notifier).set('high');
+      expect(container.read(activeLevelSegmentCountProvider), 18);
+      // Let the stream provider rebuild + re-subscribe (broadcast events sent
+      // during the swap would be lost) before feeding the baseline sample.
+      await pumpEventQueue();
+
+      source.add(_yaw(0)); // baseline this ring at 0°
+      await pumpEventQueue();
+      // 30° into an 18-segment ring (20°/segment) is segment 1 — under the old
+      // Eye-Ring-pinned N (12 → 30°/segment) this same turn would read 1 too,
+      // so probe 50°: 18-seg → segment 2; 12-seg would say segment 1.
+      source.add(_yaw(50));
+      await pumpEventQueue();
+      expect(
+        container.read(currentRingSegmentProvider).valueOrNull?.currentSegment,
+        2,
+        reason: 'yaw→segment must bucket by THIS ring\'s N (18), not the Eye Ring\'s',
+      );
+      // …and the fill state sized itself to the same N (single source).
+      expect(container.read(segmentCoverageProvider).segmentCount, 18);
     });
   });
 

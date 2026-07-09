@@ -16,6 +16,7 @@ import 'package:hive/hive.dart';
 
 import '../../../data/local/box_names.dart';
 import '../../../data/local/hive_init.dart';
+import '../../../domain/capture/capture_flow_variant.dart';
 import '../../../domain/capture/coverage_milestones.dart';
 import 'level_progression.dart';
 
@@ -172,9 +173,32 @@ class LevelProgressionStore {
     }
   }
 
-  /// Removes the snapshot for [projectId]. No-op if absent.
+  /// Removes the snapshot for [projectId] (and its flow variant). No-op if absent.
   Future<void> clear(String projectId) async {
     final box = await _open();
     await box.delete(projectId);
+    await box.delete(_variantKey(projectId));
+  }
+
+  // ── flow variant ───────────────────────────────────────────────────────────
+  // The capture FLOW VARIANT for a project is project-scoped sequencing state,
+  // so it lives in this box as a sibling key — ONE durable location (never
+  // duplicated into the per-level session blobs, which could then disagree).
+
+  /// The box key holding [projectId]'s flow-variant id.
+  static String _variantKey(String projectId) => '$projectId::flow_variant';
+
+  /// Persists the chosen flow [variant] for [projectId].
+  Future<void> saveVariant(String projectId, CaptureFlowVariant variant) async {
+    final box = await _open();
+    await box.put(_variantKey(projectId), variant.id);
+  }
+
+  /// The persisted flow variant for [projectId]. Absent or unknown (every
+  /// pre-variant project) → [CaptureFlowVariant.withBottom], the legacy 3-ring
+  /// behavior. Never throws.
+  Future<CaptureFlowVariant> loadVariant(String projectId) async {
+    final box = await _open();
+    return CaptureFlowVariant.fromId(box.get(_variantKey(projectId)));
   }
 }

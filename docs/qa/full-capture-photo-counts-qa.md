@@ -1,91 +1,57 @@
-# Full 3-Level Capture — Per-Object-Size Photo Counts QA
+# Full Capture — Per-Flow-Variant Photo Counts QA
 
-Verifies that a full three-level (A→B→C) Guided Capture produces the expected
-number of photos, per level and in total, and that the object-size → frame-target
-derivation matches the documented targets for every supported size class.
+Verifies that a full Guided Capture produces the expected number of photos, per
+level and in total, for **both capture flow variants** (the "can you capture the
+bottom?" answer on the Pre-Capture Checklist):
+
+| Variant (wire id) | Rings | Per-ring segments | Total photos |
+|---|---|---|---|
+| `with_bottom` | A (Eye/`mid`) → B (Top/`high`) → C (Bottom/`low`) | 12 / 12 / 12 | **36** |
+| `without_bottom` | A (Eye/`mid`) → B (Top/`high`) | 18 / 18 | **36** |
 
 Automated coverage:
 
 - `test/capture/full_capture_photo_counts_test.dart` — the per-level / total
-  targets a full capture must hit (driven through the real `LevelSegmentMachine`
-  simulation seam, no camera/sensors), plus the object-size → Level A density
-  matrix and the size-scaling guard.
+  targets a full capture must hit for each variant (driven through the real
+  `LevelSegmentMachine` simulation seam, no camera/sensors), the active-level
+  lists (2-ring is a prefix of 3-ring), the 36-photo budget shared by both
+  variants, and the remote-config override / malformed-input fallback behaviour.
+- `test/capture/capture_flow_variant_test.dart` — the `effectiveSegmentsFor`
+  precedence chain and `VariantSegments` parsing/sanitizing.
 
-## Convention reconciliation (read first)
+## Where the counts come from
 
-The task brief assumes **object size drives the per-level (A/B/C) targets for all
-three levels**, and that **larger objects need more photos**. This codebase does
-**not** work that way. The tests encode the production contract, not the brief:
+Counts resolve through the single `effectiveSegmentsFor(config, variant, bandId)`
+resolver (`capture_config.dart`), with precedence:
 
-### 1. Per-level A/B/C targets come from band config, not object size
+1. remote-config `guided_capture_variant_segments` override
+   (variant id → band id → count),
+2. the bundled variant defaults (the table above),
+3. the band's legacy `PitchBand.segments` (only for bands unknown to the
+   variant map — old cached configs),
+4. a final floor of 12.
 
-Each level resolves to a `PitchBand` via the single level→band map
-`pitchBandIdForLevel` (`capture_level_events.dart`):
+Every flow layer — the progression builder (`levelStatesFromConfig`), the
+per-level machines (`levelSegmentMachinesFromConfig`), the live HUD providers
+(`activeLevelSegmentCountProvider` → fill state + yaw→segment bucketing), and
+the Capture Summary — goes through this one resolver, so no two layers can
+disagree on N.
 
-| Level | Band   | Bundled `segments` (target photos) |
-|-------|--------|------------------------------------|
-| A     | `mid`  | 10                                 |
-| B     | `high` | 8                                  |
-| C     | `low`  | 12                                 |
-| **Total** |    | **30**                             |
-
-These counts are read from `CaptureConfig.bundledDefault.pitchBands`
-(remote-config-overridable) and are **independent of object size**. The factory
-`levelSegmentMachinesFromConfig` sizes each level's machine from exactly that
-band's `segments`, and `CaptureConfig.totalSegments` is their sum. A full orbit of
-every ring fills `segmentCount` segments (`fillThreshold` = 1), so a complete
-A→B→C capture produces **30** photos on the bundled config — asserted via a full
-simulated capture, not a hardcoded total.
-
-### 2. The only size-dependent count is the Level A Eye-Ring density — and it is INVERTED
-
-`eyeRingSegmentCount(size)` (`object_size_segments.dart`) is the one place object
-size maps to a count:
-
-| Object size | Eye-Ring segments (Level A) |
-|-------------|-----------------------------|
-| Small       | 36                          |
-| Medium      | 30                          |
-| Large       | 24                          |
-
-The documented **product rule is the opposite of the brief**: *smaller* objects
-get *more* segments (finer angular coverage at a closer orbit), larger fewer. So
-the scaling guard asserts the counts are **non-increasing as size grows**
-(small ≥ medium ≥ large), and a regression that flips it to "bigger ⇒ more" fails.
-
-Null / unset size → the documented **Medium** default (30); validation never
-throws (`eyeRingSegmentCount(null)` returns normally).
-
-### Important: the size→density derivation is NOT wired into the live flow
-
-`eyeRingSegmentCount` is the design source of truth for size→Level-A density, but
-the live capture screen currently sizes its ring from `CaptureConfig.eyeRingSegments`
-(the `mid` band = 10), **not** from object size — the Project model has no size
-field wired through yet (deferred). Therefore the per-size **matrix** in the test
-(Level A = `eyeRingSegmentCount(size)`, B/C = fixed band counts, total = their sum:
-small 56 / medium 50 / large 44) represents the **design intent**, not the photo
-count the running app produces today. The test documents this explicitly so the
-numbers are not mistaken for current live behaviour.
-
-## Meta-checks (teeth — verified, then reverted)
-
-- Changed the `high` band `segments` 8 → 9 in `capture_config.dart` → the Level B
-  case, the total/sum case, the full-capture simulation, and the per-size rows
-  (which assert the `+8+12` band contribution) **failed** (7 failures). ✓
-- Inverted `kDefaultEyeRingSegments` (small 24 / large 36) in
-  `object_size_segments.dart` → the per-size literal rows, the smallest/largest
-  edge case, the NON-INCREASING scaling guard, and the per-size-total guard
-  **failed** (5 failures). ✓
-
-Both production edits were reverted; `git diff` of `capture_config.dart` and
-`object_size_segments.dart` is empty. No production code changed.
+> **History:** the earlier object-size → segments derivation
+> (`object_size_segments.dart`, Small 36 / Medium 30 / Large 24, never wired)
+> was **removed** on 2026-07-09 when variant-based counts replaced it as the
+> single source of segment counts. The legacy bundled band counts
+> (`mid`=10 / `high`=8 / `low`=12) remain in `pitchBands` only as the deep
+> fallback for unknown bands.
 
 ## Manual / future QA
 
-- [ ] **When object size is wired into the live capture screen:** confirm a Small
-      project's Level A actually targets 36 positions, Medium 30, Large 24, and
-      that the ring map / completion gate reflect that count. Until then, the live
-      Level A ring uses the `mid` band count (10) regardless of object size.
-- [ ] Confirm a remote-config change to any band's `segments` flows through to the
-      per-level target (no app release) and that completion re-evaluates against
+- [ ] Device run, checklist answered **Yes**: Level A/B/C ring maps each show 12
+      positions; a full session ends at 36 accepted photos; `capture_session_complete`
+      fires after C.
+- [ ] Device run, checklist answered **No**: A/B show 18 positions; Level B
+      completion routes to the Capture Summary; Level C routes are unreachable;
+      the session ends at 36 accepted photos with `levels_total: 2`.
+- [ ] Confirm a remote `guided_capture_variant_segments` change flows through to
+      the per-level target (no app release) and completion re-evaluates against
       the new count (`reconcileWithConfig`).

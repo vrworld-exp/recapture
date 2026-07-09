@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
+import '../../application/capture/capture_flow_variant_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
+import '../../domain/capture/capture_flow_variant.dart';
 import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
 import '../../domain/entities/retake_request.dart';
@@ -249,27 +251,47 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBComplete,
         name: AppRouteNames.levelBComplete,
-        builder: (_, __) => const LevelCompleteScreen(
-          levelLabel: 'B',
-          levelName: 'Top Ring',
-          photosAccepted: 32,
-          coveragePercent: 87,
-          warningsCount: 1,
-          nextRoute: AppRoutes.levelCIntro,
-          nextLabel: 'Start Level C',
-          reviewRoute: AppRoutes.levelBReview,
-        ),
+        // FLOW-VARIANT FORK: with_bottom continues to Level C; without_bottom
+        // is a 2-ring flow, so Level B is the FINAL ring — its CTA goes to the
+        // Capture Summary (which the summary gate still guards) and its copy
+        // must not promise a next ring. Built per-navigation so the live
+        // variant decides; a null ref (standalone test router) keeps the
+        // legacy 3-ring wiring.
+        builder: (_, __) {
+          final variant = ref == null
+              ? CaptureFlowVariant.withBottom
+              : ref.read(captureFlowVariantProvider);
+          final nextRoute = levelBCompleteNextRoute(variant);
+          return LevelCompleteScreen(
+            levelLabel: 'B',
+            levelName: 'Top Ring',
+            photosAccepted: 32,
+            coveragePercent: 87,
+            warningsCount: 1,
+            nextRoute: nextRoute,
+            nextLabel: nextRoute == AppRoutes.captureSummary
+                ? 'Continue'
+                : 'Start Level C',
+            reviewRoute: AppRoutes.levelBReview,
+          );
+        },
       ),
       // Level C — dedicated Low Ring intro (lower-phone/tilt-up rule), reusing
       // the SAME shared LevelIntroScaffold as Level B (config-driven).
+      // Every Level C route is UNREACHABLE in the without_bottom variant: the
+      // guard bounces to the Capture Summary, whose own gate redirect then
+      // routes an incomplete session to the first incomplete level's review —
+      // so a stale link/deep-link can never open a ring the flow doesn't have.
       GoRoute(
         path: AppRoutes.levelCIntro,
         name: AppRouteNames.levelCIntro,
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         builder: (_, __) => const LevelCIntroScreen(),
       ),
       GoRoute(
         path: AppRoutes.levelCCapture,
         name: AppRouteNames.levelCCapture,
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         // Reuses the shared capture screen (6A/6B), driven by Level C's label +
         // tuned low-ring instruction copy. Analytics `level` is derived from
         // levelLabel ('C'), so the capture funnel is tagged level=C automatically.
@@ -288,6 +310,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCReview,
         name: AppRouteNames.levelCReview,
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'C',
           levelName: 'Low Ring',
@@ -297,6 +320,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCComplete,
         name: AppRouteNames.levelCComplete,
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         builder: (_, __) => const LevelCompleteScreen(
           levelLabel: 'C',
           levelName: 'Low Ring',
@@ -356,6 +380,31 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
     ],
   );
 }
+
+/// The pure no-Level-C decision for a flow [variant]: without_bottom has no
+/// Bottom Ring, so every Level C route bounces to the Capture Summary (whose
+/// own gate redirect sends an incomplete session on to the first incomplete
+/// level's review). with_bottom → null (allow). Side-effect-free — directly
+/// unit-testable, mirroring [summaryGateRedirectTarget].
+String? levelCRedirectForVariant(CaptureFlowVariant variant) =>
+    variant == CaptureFlowVariant.withoutBottom
+        ? AppRoutes.captureSummary
+        : null;
+
+/// The pure Level-B-complete fork for a flow [variant]: with_bottom continues
+/// to the Level C intro; without_bottom ends guided capture at B and continues
+/// to the Capture Summary.
+String levelBCompleteNextRoute(CaptureFlowVariant variant) =>
+    variant == CaptureFlowVariant.withoutBottom
+        ? AppRoutes.captureSummary
+        : AppRoutes.levelCIntro;
+
+/// Router adapter over [levelCRedirectForVariant]. A null [ref] (router built
+/// without provider access, e.g. a focused test) never blocks — same policy as
+/// the summary gate.
+String? _levelCGuardRedirect(Ref? ref) => ref == null
+    ? null
+    : levelCRedirectForVariant(ref.read(captureFlowVariantProvider));
 
 /// Enforces the final completion gate at the Summary entry. Returns null (allow)
 /// when the gate is unlocked — emitting the once-per-transition unlock milestone —

@@ -1,8 +1,9 @@
 // lib/application/capture/capture_summary_provider.dart
 //
 // Aggregates the per-level capture results for the terminal Capture Summary
-// (Screen 8 / 6C-Complete). It iterates the level config (CaptureLevel.values —
-// NEVER a hardcoded 3-tuple) and reads each level's REAL captured frames from the
+// (Screen 8 / 6C-Complete). It iterates the flow variant's ACTIVE levels
+// (captureFlowVariantProvider.levels — NEVER a hardcoded 3-tuple, so a 2-ring
+// session shows no Level C row) and reads each level's REAL captured frames from the
 // ledger via [reviewGridItemsProvider] — the SAME source the review grids render —
 // so counts, the representative thumbnail, coverage, and the warnings raised all
 // come from actual capture data, not placeholders. READ-ONLY: it derives display
@@ -11,9 +12,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/capture/level_completion.dart';
+import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/capture_evaluation.dart';
 import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
+import 'capture_flow_variant_provider.dart';
 import 'ledger/level_capture_ledger_registry_provider.dart';
 import 'ledger/warned_photo_record.dart';
 import 'review_grid_items_provider.dart';
@@ -149,20 +152,12 @@ bool allLevelsComplete(List<LevelCaptureSummary> summaries) =>
 final captureSummaryProvider =
     Provider.autoDispose<List<LevelCaptureSummary>>((ref) {
   final config = ref.watch(captureConfigProvider);
+  final variant = ref.watch(captureFlowVariantProvider);
   final registry = ref.watch(levelCaptureLedgerRegistryProvider);
   final thresholds = config.completionThresholds;
 
-  // Segment count (N) for a band id, or null when the band is absent — coverage
-  // is then unavailable rather than a divide-by-zero.
-  int? segmentsForBand(String bandId) {
-    for (final b in config.pitchBands) {
-      if (b.id == bandId && b.segments > 0) return b.segments;
-    }
-    return null;
-  }
-
   return [
-    for (final level in CaptureLevel.values)
+    for (final level in variant.levels)
       () {
         final bandId = pitchBandIdForLevel(level);
         final items =
@@ -172,21 +167,21 @@ final captureSummaryProvider =
         final warned =
             items.where((i) => i.verdict == CaptureVerdict.warn).length;
 
-        final segCount = segmentsForBand(bandId);
-        final filled = segCount == null
-            ? 0
-            : items
-                .map((i) => i.ringIndex)
-                .whereType<int>()
-                .where((s) => s >= 0 && s < segCount)
-                .toSet()
-                .length;
+        // The SAME effective-N resolver the builders/machines use (always >= 1),
+        // so the summary can never disagree with the flow on segment count.
+        final segCount = effectiveSegmentsFor(config, variant, bandId);
+        final filled = items
+            .map((i) => i.ringIndex)
+            .whereType<int>()
+            .where((s) => s >= 0 && s < segCount)
+            .toSet()
+            .length;
         final minRequired = thresholds.minAcceptedFramesFor(level.code);
         // The SAME validator the gate uses (coverage AND count) — evaluated from
         // the live ledger; carries the shortfall that ranks Fix Issues.
         final completion = evaluateLevelA(
           filledCount: filled,
-          segmentCount: segCount ?? 0,
+          segmentCount: segCount,
           acceptedCount: items.length,
           minAcceptedCount: minRequired,
           minCoveragePct: config.thresholds.minCoveragePct,
@@ -198,9 +193,7 @@ final captureSummaryProvider =
           frameCount: items.length,
           warnedCount: warned,
           minRequired: minRequired,
-          coveragePct: segCount == null
-              ? null
-              : (completion.coverageRatio * 100).round().clamp(0, 100),
+          coveragePct: (completion.coverageRatio * 100).round().clamp(0, 100),
           completion: completion,
           warnings: [
             for (final w in ledger.warned)

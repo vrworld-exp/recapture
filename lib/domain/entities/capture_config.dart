@@ -4,6 +4,8 @@
 // pipeline depends on, sourced (in precedence) from sanitized remote →
 // sanitized cache → these bundled defaults. Always a valid, non-empty config.
 
+import '../capture/capture_flow_variant.dart';
+
 /// One pitch band (a vertical slice of the capture sphere) and how many capture
 /// positions to take around it.
 class PitchBand {
@@ -213,6 +215,132 @@ class UploadMinShots {
       );
 }
 
+/// Per-VARIANT ring segment counts, keyed variant id → (band id → positive
+/// count) — wire key `guided_capture_variant_segments`:
+///
+/// ```json
+/// {
+///   "with_bottom":    { "mid": 12, "high": 12, "low": 12 },
+///   "without_bottom": { "mid": 18, "high": 18 }
+/// }
+/// ```
+///
+/// Pure, immutable, config-driven (defaultable + remote-overridable), following
+/// the [CompletionThresholds]/[UploadMinShots] pattern. Lookups fall back
+/// PER-ENTRY to [bundledDefault]'s numbers, so a partial remote map can never
+/// strand a variant on the legacy per-band counts. The effective count a flow
+/// consumer uses comes from [effectiveSegmentsFor] — the ONE resolver both the
+/// progression builder and the segment machines share.
+class VariantSegments {
+  /// [perVariant] is keyed by variant id ('with_bottom'/'without_bottom') →
+  /// (band id → count). Use [VariantSegments.fromMap] for untrusted (remote)
+  /// input — it validates.
+  const VariantSegments({
+    Map<String, Map<String, int>> perVariant = const {},
+  }) : _perVariant = perVariant;
+
+  final Map<String, Map<String, int>> _perVariant;
+
+  /// The product defaults: 12-12-12 with bottom, 18-18 without (36 total both).
+  static const VariantSegments bundledDefault = VariantSegments(perVariant: {
+    'with_bottom': {'mid': 12, 'high': 12, 'low': 12},
+    'without_bottom': {'mid': 18, 'high': 18},
+  });
+
+  /// The configured count for ([variantId], [bandId]): the stored override when
+  /// present and valid, else [bundledDefault]'s entry, else null (an unknown
+  /// variant/band pair — the caller falls back to the legacy band count).
+  int? segmentsFor(String variantId, String bandId) {
+    final v = _perVariant[variantId]?[bandId];
+    if (v != null && v >= 1) return v;
+    final d = bundledDefault._perVariant[variantId]?[bandId];
+    return (d != null && d >= 1) ? d : null;
+  }
+
+  /// Parses the remote-config block (variant id → band id → int). Only
+  /// positive-integer entries survive; non-positive / ill-typed entries are
+  /// dropped so that pair falls back to the bundled default. A non-map input
+  /// yields all-defaults. Never throws.
+  factory VariantSegments.fromMap(Object? raw) {
+    if (raw is! Map) return bundledDefault;
+    final parsed = <String, Map<String, int>>{};
+    raw.forEach((variantId, bands) {
+      if (variantId is! String || bands is! Map) return;
+      final perBand = <String, int>{};
+      bands.forEach((bandId, count) {
+        if (bandId is! String) return;
+        if (count is num && count.toInt() >= 1) perBand[bandId] = count.toInt();
+      });
+      if (perBand.isNotEmpty) parsed[variantId] = perBand;
+    });
+    return VariantSegments(perVariant: parsed);
+  }
+
+  /// Round-trips back to the wire shape [fromMap] consumes (only stored
+  /// overrides — the bundled fallback stays implicit).
+  Map<String, dynamic> toMap() => {
+        for (final e in _perVariant.entries) e.key: Map<String, int>.of(e.value),
+      };
+
+  /// Rebuilds with every stored count passed through [transform] (the
+  /// sanitizer's clamp hook). Entries the transform maps below 1 are dropped.
+  VariantSegments mapCounts(int Function(int count) transform) {
+    final out = <String, Map<String, int>>{};
+    _perVariant.forEach((variantId, bands) {
+      final perBand = <String, int>{};
+      bands.forEach((bandId, count) {
+        final t = transform(count);
+        if (t >= 1) perBand[bandId] = t;
+      });
+      if (perBand.isNotEmpty) out[variantId] = perBand;
+    });
+    return VariantSegments(perVariant: out);
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! VariantSegments) return false;
+    if (_perVariant.length != other._perVariant.length) return false;
+    for (final e in _perVariant.entries) {
+      final o = other._perVariant[e.key];
+      if (o == null || o.length != e.value.length) return false;
+      for (final b in e.value.entries) {
+        if (o[b.key] != b.value) return false;
+      }
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hashAllUnordered(
+        _perVariant.entries.map((e) => Object.hash(
+              e.key,
+              Object.hashAllUnordered(
+                  e.value.entries.map((b) => Object.hash(b.key, b.value))),
+            )),
+      );
+}
+
+/// The effective ring segment count for [bandId] under [variant] — the SINGLE
+/// resolver every flow consumer (progression builder, segment machines, live
+/// HUD providers) goes through, so no two layers can disagree on N.
+///
+/// Precedence: variant override / bundled variant default
+/// ([VariantSegments.segmentsFor]) → the band's legacy [PitchBand.segments]
+/// (old cached configs) → 12. Always `>= 1`.
+int effectiveSegmentsFor(
+  CaptureConfig config,
+  CaptureFlowVariant variant,
+  String bandId,
+) {
+  final v = config.variantSegments.segmentsFor(variant.id, bandId);
+  if (v != null) return v;
+  for (final b in config.pitchBands) {
+    if (b.id == bandId && b.segments >= 1) return b.segments;
+  }
+  return 12;
+}
+
 /// App-wide capture configuration. Server-tunable without an app release.
 class CaptureConfig {
   const CaptureConfig({
@@ -221,6 +349,7 @@ class CaptureConfig {
     required this.thresholds,
     this.completionThresholds = CompletionThresholds.bundledDefault,
     this.uploadMinShots = UploadMinShots.bundledDefault,
+    this.variantSegments = VariantSegments.bundledDefault,
   });
 
   final int version;
@@ -232,6 +361,10 @@ class CaptureConfig {
 
   /// Per-level absolute-minimum accepted shots required to upload (hard gate).
   final UploadMinShots uploadMinShots;
+
+  /// Per-flow-variant ring segment counts (12-12-12 / 18-18 by default) —
+  /// resolved through [effectiveSegmentsFor], never read raw by flow consumers.
+  final VariantSegments variantSegments;
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
@@ -287,6 +420,8 @@ class CaptureConfig {
           m['guided_capture_completion_thresholds']),
       uploadMinShots:
           UploadMinShots.fromMap(m['guided_capture_min_accepted_shots']),
+      variantSegments:
+          VariantSegments.fromMap(m['guided_capture_variant_segments']),
     );
   }
 
@@ -296,6 +431,7 @@ class CaptureConfig {
         'thresholds': thresholds.toMap(),
         'guided_capture_completion_thresholds': completionThresholds.toMap(),
         'guided_capture_min_accepted_shots': uploadMinShots.toMap(),
+        'guided_capture_variant_segments': variantSegments.toMap(),
       };
 
   CaptureConfig copyWith({
@@ -304,6 +440,7 @@ class CaptureConfig {
     CaptureThresholds? thresholds,
     CompletionThresholds? completionThresholds,
     UploadMinShots? uploadMinShots,
+    VariantSegments? variantSegments,
   }) =>
       CaptureConfig(
         version: version ?? this.version,
@@ -311,5 +448,6 @@ class CaptureConfig {
         thresholds: thresholds ?? this.thresholds,
         completionThresholds: completionThresholds ?? this.completionThresholds,
         uploadMinShots: uploadMinShots ?? this.uploadMinShots,
+        variantSegments: variantSegments ?? this.variantSegments,
       );
 }

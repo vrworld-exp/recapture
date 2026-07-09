@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
+import '../../application/capture/capture_flow_variant_provider.dart';
 import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../utils/analytics.dart';
@@ -55,15 +56,6 @@ class LevelAHelpSheet extends ConsumerWidget {
   final List<CaptureTip> tips;
   final VoidCallback? onReplayIntro;
 
-  /// Eye-level ring segment count from config (prefers the `mid` band).
-  static int _eyeRingSegments(CaptureConfig config) {
-    final bands = config.pitchBands;
-    if (bands.isEmpty) return kFallbackRingSegments;
-    final mid = bands.where((b) => b.id == 'mid');
-    if (mid.isNotEmpty) return mid.first.segments;
-    return bands[bands.length ~/ 2].segments;
-  }
-
   void _logAction(String action) {
     Analytics.logEvent(AnalyticsEvents.levelAHelpAction, {'action': action});
   }
@@ -71,7 +63,13 @@ class LevelAHelpSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final segments = _eyeRingSegments(ref.watch(captureConfigProvider));
+    // The Eye Ring's effective count (config × flow variant) — the same
+    // resolver the flow uses, so the tip copy always names the real target.
+    final segments = effectiveSegmentsFor(
+      ref.watch(captureConfigProvider),
+      ref.watch(captureFlowVariantProvider),
+      'mid',
+    );
     // Cap at 70% of the screen so long content / large font scales scroll
     // internally instead of overflowing.
     final maxHeight = MediaQuery.sizeOf(context).height * 0.7;

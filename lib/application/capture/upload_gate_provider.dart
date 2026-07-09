@@ -1,8 +1,9 @@
 // lib/application/capture/upload_gate_provider.dart
 //
 // The reactive wiring around the pure [UploadGate] — the ONE hard-upload-floor
-// evaluator the Summary/upload control reads. It iterates the configured level
-// list (CaptureLevel.values — never a hardcoded 3), reads each level's LIVE
+// evaluator the Summary/upload control reads. It iterates the flow variant's
+// ACTIVE level list (captureFlowVariantProvider.levels — never a hardcoded 3,
+// so a 2-ring session is never blocked on a missing Level C), reads each level's LIVE
 // accepted-shot count from the SAME ledger source the review grids + completion
 // gate use (reviewGridItemsProvider — no duplicated counting), and applies the
 // config-driven per-level absolute minimums (CaptureConfig.uploadMinShots).
@@ -19,6 +20,7 @@ import '../../domain/capture/upload_gate.dart';
 import '../../utils/analytics.dart';
 import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
+import 'capture_flow_variant_provider.dart';
 import 'review_grid_items_provider.dart';
 
 /// The live hard upload gate. Watch it for `eligible` / `shortLevels`; it reflects
@@ -28,7 +30,7 @@ final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
   final minShots =
       ref.watch(captureConfigProvider.select((c) => c.uploadMinShots));
   return evaluateUploadGate([
-    for (final level in CaptureLevel.values)
+    for (final level in ref.watch(captureFlowVariantProvider).levels)
       UploadLevelStatus(
         levelCode: level.code,
         // Live accepted shots — the SAME source the review grids + completion

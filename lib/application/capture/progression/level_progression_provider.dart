@@ -12,7 +12,9 @@
 // separate task, per the progression task's own scope.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../domain/capture/capture_flow_variant.dart';
 import '../../config/config_notifier.dart';
+import '../capture_flow_variant_provider.dart';
 import 'level_progression.dart';
 import 'level_progression_builder.dart';
 import 'level_progression_store.dart';
@@ -50,20 +52,40 @@ class LevelProgressionController extends Notifier<LevelProgression?> {
   }
 
   /// Begins a FRESH progression for [projectId] (frontier at the first level),
-  /// built from the current config, and persists it.
+  /// built from the current config + the live flow variant (the checklist's
+  /// selection), and persists both.
   Future<void> start(String projectId) async {
     _projectId = projectId;
-    state = initialProgressionFromConfig(ref.read(captureConfigProvider));
+    final variant = ref.read(captureFlowVariantProvider);
+    state = initialProgressionFromConfig(
+      ref.read(captureConfigProvider),
+      variant: variant,
+    );
+    try {
+      await _store.saveVariant(projectId, variant);
+    } catch (_) {
+      // Best-effort — same durability policy as _persist.
+    }
     await _persist();
   }
 
   /// Restores [projectId]'s progression from the store, reconciled against the
-  /// CURRENT config (segment counts/thresholds win; the user's per-level progress
-  /// + frontier carry over). Missing/corrupt persisted state → a fresh start (no
-  /// crash). Returns the restored/started progression.
+  /// CURRENT config + the project's PERSISTED flow variant (segment counts/
+  /// thresholds/level set win; the user's per-level progress + frontier carry
+  /// over). The persisted variant — NOT whatever the checklist currently shows
+  /// — is also restored into [captureFlowVariantProvider] so the whole flow
+  /// resumes under the variant it was captured with. Missing/corrupt persisted
+  /// state → a fresh start (no crash). Returns the restored/started progression.
   Future<LevelProgression> resume(String projectId) async {
     _projectId = projectId;
     final config = ref.read(captureConfigProvider);
+    CaptureFlowVariant variant;
+    try {
+      variant = await _store.loadVariant(projectId);
+    } catch (_) {
+      variant = CaptureFlowVariant.withBottom;
+    }
+    ref.read(captureFlowVariantProvider.notifier).restore(variant);
     LevelProgression? persisted;
     try {
       persisted = await _store.load(projectId);
@@ -71,8 +93,8 @@ class LevelProgressionController extends Notifier<LevelProgression?> {
       persisted = null;
     }
     final restored = persisted == null
-        ? initialProgressionFromConfig(config)
-        : reconcileWithConfig(persisted, config);
+        ? initialProgressionFromConfig(config, variant: variant)
+        : reconcileWithConfig(persisted, config, variant: variant);
     state = restored;
     // Re-persist the reconciled snapshot so the stored shape matches live config.
     await _persist();

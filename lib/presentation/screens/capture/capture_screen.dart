@@ -12,6 +12,7 @@ import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/capture/analytics/capture_trigger_analytics.dart';
 import '../../../application/capture/auto_capture_controller.dart';
+import '../../../application/capture/capture_flow_variant_provider.dart';
 import '../../../application/capture/capture_lock.dart';
 import '../../../application/capture/current_pitch_provider.dart';
 import '../../../application/capture/ledger/captured_photo_record.dart';
@@ -260,6 +261,37 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// [_levelLedgerId] for read-clarity at the HUD call sites).
   String get _levelBandId => _levelLedgerId;
 
+  /// THIS level's effective ring segment count — config × flow variant × this
+  /// level's band, through the single [effectiveSegmentsFor] resolver (the same
+  /// N the progression/machine layers and the live HUD providers use). Computed
+  /// directly (not via the active-band provider) so it is correct even before
+  /// [_activateLevelRing] stamps the active band.
+  int _levelSegmentCount() => effectiveSegmentsFor(
+        ref.read(captureConfigProvider),
+        ref.read(captureFlowVariantProvider),
+        _levelBandId,
+      );
+
+  /// Whether a saved draft was restored into the live coverage (guards
+  /// [_activateLevelRing]'s fresh-ring reset against clobbering a resume that
+  /// completed first — the two race on entry and either order must win the same).
+  bool _resumedFromDraft = false;
+
+  /// Ring-entry activation of the level-agnostic HUD state: stamps THIS level's
+  /// band as the active ring (sizing the live yaw→segment + fill-state providers
+  /// to this ring's N — previously they were pinned to the Eye Ring's count for
+  /// every level) and, on a fresh guided entry, reshapes + clears the coverage
+  /// so a prior level's fills can never leak into this ring. A RETAKE re-entry
+  /// keeps the in-progress ring untouched; a completed resume keeps its
+  /// restored coverage.
+  void _activateLevelRing() {
+    ref.read(activeCaptureBandIdProvider.notifier).set(_levelBandId);
+    if (widget.retakeRequest != null || _resumedFromDraft) return;
+    final coverage = ref.read(segmentCoverageProvider.notifier);
+    coverage.reconfigure(segmentCount: _levelSegmentCount());
+    coverage.reset();
+  }
+
   /// This level's EFFECTIVE pitch band, resolved ONCE at level entry (initState)
   /// via [resolvedPitchBandProvider] (override → remote/cache → bundled default)
   /// and held STABLE for the whole capture pass — a mid-pass remote/override
@@ -319,6 +351,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // frame).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _activateLevelRing();
       _resetRingYawBaseline();
       _primeRetake();
       _logCaptureStartedIfNeeded();
@@ -342,6 +375,18 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     } catch (_) {
       _projectId = null;
     }
+    // Restore the project's persisted flow variant BEFORE the draft resume —
+    // the draft's segment-count validation (and this ring's N) depend on it.
+    // Best-effort: an unavailable store leaves the live default (with_bottom).
+    final projectId = _projectId;
+    if (projectId != null) {
+      try {
+        await ref
+            .read(captureFlowVariantProvider.notifier)
+            .loadFor(projectId);
+      } catch (_) {/* keep the in-memory variant */}
+      if (!mounted) return;
+    }
     // Once the project context is known, restore any saved draft for this level.
     await _tryResume();
   }
@@ -358,8 +403,9 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     try {
       final snap = await _sessionStore.load(projectId, _levelLedgerId);
       if (snap == null || !mounted) return;
-      final n = ref.read(captureConfigProvider).eyeRingSegments;
+      final n = _levelSegmentCount();
       if (snap.segmentCount != n) return; // ring density changed → fresh start
+      _resumedFromDraft = true;
       final coverage = CaptureSessionCodec.restoreCoverage(snap);
       ref.read(segmentCoverageProvider.notifier).restore(coverage);
       CaptureSessionCodec.restoreLedger(snap, _ledger);
@@ -394,7 +440,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// starts with normal next-uncaptured targeting (no crash, no retake mode).
   void _primeRetake() {
     final request = widget.retakeRequest;
-    final segments = ref.read(captureConfigProvider).eyeRingSegments;
+    final segments = _levelSegmentCount();
     final notifier = ref.read(retakeSessionProvider.notifier);
 
     if (request == null || !request.isValidFor(segments)) {
@@ -444,7 +490,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       projectId: session.projectId,
       sessionId: session.sessionId,
       captureMode: _autoCapture.isOn ? 'guided' : 'manual',
-      targetSegments: ref.read(captureConfigProvider).eyeRingSegments,
+      targetSegments: _levelSegmentCount(),
       sensorSupported: _sensorSupportedNow(),
       deviceType: _deviceType,
     ));

@@ -1,14 +1,17 @@
 // lib/application/capture/progression/level_progression_builder.dart
 //
-// Builds the ordered level sequence (A→B→C) for the progression core FROM CONFIG —
-// never a hardcoded 3-tuple. It iterates the level taxonomy (CaptureLevel.values,
-// the repo's level set — there is no separate PitchLevel enum) and resolves each
-// level's band + segment count from [CaptureConfig.pitchBands] via the single
-// level→band map [pitchBandIdForLevel]. Retuning a band's segment count or
-// thresholds server-side flows straight through here with no code change.
+// Builds the ordered level sequence for the progression core FROM CONFIG + the
+// FLOW VARIANT — never a hardcoded 3-tuple. It iterates the variant's ACTIVE
+// levels (CaptureFlowVariant.levels: A→B→C with bottom, A→B without) and
+// resolves each level's band via the single level→band map [pitchBandIdForLevel]
+// and its segment count via the single [effectiveSegmentsFor] resolver
+// (variant counts → legacy band counts → 12). Retuning a variant's counts
+// server-side (guided_capture_variant_segments) flows straight through here
+// with no code change.
 //
 // Kept OUT of the pure core (level_progression.dart) because it depends on the
 // CaptureLevel taxonomy + config; the core stays config-agnostic and pure.
+import '../../../domain/capture/capture_flow_variant.dart';
 import '../../../domain/capture/coverage_milestones.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
@@ -18,28 +21,22 @@ import 'level_progression.dart';
 /// config yet — same explicit input the completion gate documents).
 const int kDefaultMinAcceptedPerLevel = 1;
 
-/// One [LevelProgressState] per [CaptureLevel] in flow order, sized from [config].
-/// A level whose band is missing from config falls back to the first band's
-/// segment count (never 0 → the gate stays meaningful).
+/// One [LevelProgressState] per ACTIVE level of [variant] in flow order, sized
+/// from [config] via [effectiveSegmentsFor] (which is always `>= 1`, so the
+/// gate stays meaningful even on degenerate config).
 List<LevelProgressState> levelStatesFromConfig(
   CaptureConfig config, {
+  required CaptureFlowVariant variant,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
 }) {
   return [
-    for (final level in CaptureLevel.values)
+    for (final level in variant.levels)
       () {
         final bandId = pitchBandIdForLevel(level);
-        final band = config.pitchBands.firstWhere(
-          (b) => b.id == bandId,
-          orElse: () => config.pitchBands.isNotEmpty
-              ? config.pitchBands.first
-              : PitchBand(
-                  id: bandId, minDegrees: 0, maxDegrees: 90, segments: 12),
-        );
         return LevelProgressState(
           levelId: bandId,
           levelCode: level.code,
-          segmentCount: band.segments,
+          segmentCount: effectiveSegmentsFor(config, variant, bandId),
           minAcceptedCount: minAcceptedCount,
           minCoveragePct: config.thresholds.minCoveragePct,
         );
@@ -47,30 +44,42 @@ List<LevelProgressState> levelStatesFromConfig(
   ];
 }
 
-/// A fresh progression (frontier at the first level) built from [config].
+/// A fresh progression (frontier at the first level) built from [config] for
+/// [variant].
 LevelProgression initialProgressionFromConfig(
   CaptureConfig config, {
+  required CaptureFlowVariant variant,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
 }) =>
     LevelProgression.of(
-      levelStatesFromConfig(config, minAcceptedCount: minAcceptedCount),
+      levelStatesFromConfig(
+        config,
+        variant: variant,
+        minAcceptedCount: minAcceptedCount,
+      ),
     );
 
-/// Reconciles a [persisted] progression with the CURRENT [config] (config may have
-/// changed between sessions): the level SHAPE (order, segment count, thresholds)
-/// comes from fresh config; the user's PROGRESS (filled/accepted counts) carries
-/// over by levelId where it still exists; the frontier is clamped into range.
+/// Reconciles a [persisted] progression with the CURRENT [config] + [variant]
+/// (either may have changed between sessions): the level SHAPE (order, which
+/// levels exist, segment count, thresholds) comes from fresh config+variant;
+/// the user's PROGRESS (filled/accepted counts) carries over by levelId where
+/// the level still exists; the frontier is clamped into range.
 ///
-/// So a remote-config change that, say, grew a level's segment count re-evaluates
-/// that level's completeness against the new target while keeping the frames the
-/// user already captured. A level dropped from config simply disappears; a new one
-/// starts empty.
+/// So a remote-config change that grew a level's segment count re-evaluates
+/// that level's completeness against the new target while keeping the frames
+/// the user already captured — and a variant switched to `withoutBottom` simply
+/// drops the Bottom Ring level (its persisted progress disappears with it).
 LevelProgression reconcileWithConfig(
   LevelProgression persisted,
   CaptureConfig config, {
+  required CaptureFlowVariant variant,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
 }) {
-  final fresh = levelStatesFromConfig(config, minAcceptedCount: minAcceptedCount);
+  final fresh = levelStatesFromConfig(
+    config,
+    variant: variant,
+    minAcceptedCount: minAcceptedCount,
+  );
   final merged = [
     for (final f in fresh)
       () {

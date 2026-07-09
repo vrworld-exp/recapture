@@ -10,6 +10,8 @@ import 'capture_config.dart';
 ///   - clamps band degrees into [0, 90] and segments into [1, 64]
 ///   - clamps thresholds: minSharpness [0, 1], minCoveragePct [0, 100],
 ///     maxTiltDeltaDeg [1, 45]
+///   - clamps per-variant segment counts into [1, 64] (same range as bands;
+///     entries VariantSegments.fromMap already dropped stay dropped)
 ///   - if no valid bands remain, uses [CaptureConfig.bundledDefault] bands
 CaptureConfig sanitizeCaptureConfig(CaptureConfig cfg) {
   final bands = <PitchBand>[];
@@ -35,5 +37,10 @@ CaptureConfig sanitizeCaptureConfig(CaptureConfig cfg) {
     maxTiltDeltaDeg: t.maxTiltDeltaDeg.clamp(1.0, 45.0).toDouble(),
   );
 
-  return cfg.copyWith(pitchBands: safeBands, thresholds: safeThresholds);
+  return cfg.copyWith(
+    pitchBands: safeBands,
+    thresholds: safeThresholds,
+    variantSegments:
+        cfg.variantSegments.mapCounts((c) => c.clamp(1, 64).toInt()),
+  );
 }

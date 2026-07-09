@@ -15,6 +15,7 @@ import 'package:recapture/application/capture/progression/level_progression_prov
 import 'package:recapture/application/capture/progression/level_progression_store.dart';
 import 'package:recapture/application/capture/segment_coverage_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
+import 'package:recapture/domain/capture/capture_flow_variant.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/segment_coverage.dart';
 import 'package:recapture/utils/analytics.dart';
@@ -22,6 +23,7 @@ import 'package:recapture/utils/analytics.dart';
 /// In-memory [LevelProgressionStore] — overrides the IO methods, no Hive.
 class _FakeStore extends LevelProgressionStore {
   final Map<String, LevelProgression> saved = {};
+  final Map<String, CaptureFlowVariant> variants = {};
   bool throwOnLoad = false;
 
   @override
@@ -36,7 +38,19 @@ class _FakeStore extends LevelProgressionStore {
   }
 
   @override
-  Future<void> clear(String projectId) async => saved.remove(projectId);
+  Future<void> clear(String projectId) async {
+    saved.remove(projectId);
+    variants.remove(projectId);
+  }
+
+  @override
+  Future<void> saveVariant(String projectId, CaptureFlowVariant variant) async {
+    variants[projectId] = variant;
+  }
+
+  @override
+  Future<CaptureFlowVariant> loadVariant(String projectId) async =>
+      variants[projectId] ?? CaptureFlowVariant.withBottom;
 }
 
 class _StubConfig extends ConfigNotifier {
@@ -76,8 +90,8 @@ void main() {
     expect(await ctrl.advance(), isFalse);
     expect(c.read(levelProgressionControllerProvider)!.currentLevelIndex, 0);
 
-    // Complete A (mid: 10 segments) → advance succeeds, persists.
-    await ctrl.recordLevelProgress('mid', filledCount: 10, acceptedCount: 10);
+    // Complete A (mid: 12 segments under with_bottom) → advance succeeds, persists.
+    await ctrl.recordLevelProgress('mid', filledCount: 12, acceptedCount: 12);
     expect(await ctrl.advance(), isTrue);
     expect(c.read(levelProgressionControllerProvider)!.currentLevel.levelCode, 'B');
     expect(store.saved['p1']!.currentLevelIndex, 1);
@@ -89,10 +103,10 @@ void main() {
     final ctrl = c.read(levelProgressionControllerProvider.notifier);
     await ctrl.start('p1');
 
-    // Complete all three, advancing to C.
-    await ctrl.recordLevelProgress('mid', filledCount: 10, acceptedCount: 10);
+    // Complete all three (12 segments each under with_bottom), advancing to C.
+    await ctrl.recordLevelProgress('mid', filledCount: 12, acceptedCount: 12);
     await ctrl.advance();
-    await ctrl.recordLevelProgress('high', filledCount: 8, acceptedCount: 8);
+    await ctrl.recordLevelProgress('high', filledCount: 12, acceptedCount: 12);
     await ctrl.advance();
     await ctrl.recordLevelProgress('low', filledCount: 12, acceptedCount: 12);
     expect(ctrl.overallComplete, isTrue);

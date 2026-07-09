@@ -118,6 +118,7 @@ class CaptureManifestAssembler {
     required CaptureConfig config,
     required LevelProgression progression,
     required LevelCaptureLedgerRegistry registry,
+    String flowVariantId = 'with_bottom',
   }) async {
     final levels = <ManifestLevel>[];
     final photos = <ManifestPhoto>[];
@@ -175,6 +176,7 @@ class CaptureManifestAssembler {
       config: config,
       levels: levels,
       photos: photos,
+      flowVariantId: flowVariantId,
     );
   }
 
@@ -186,6 +188,7 @@ class CaptureManifestAssembler {
     required CaptureConfig config,
     required LevelProgression progression,
     required LevelCaptureLedgerRegistry registry,
+    String flowVariantId = 'with_bottom',
   }) async {
     final writer = _writer;
     if (writer == null) {
@@ -197,6 +200,7 @@ class CaptureManifestAssembler {
       config: config,
       progression: progression,
       registry: registry,
+      flowVariantId: flowVariantId,
     );
     final json = jsonEncode(manifest);
     await writer.write(

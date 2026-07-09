@@ -13,14 +13,24 @@
 // screen or the tip interaction.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/data/local/active_session_box.dart';
+import 'package:recapture/domain/entities/active_session.dart';
 import 'package:recapture/domain/entities/checklist_item.dart';
 import 'package:recapture/presentation/screens/capture/pre_capture_screen.dart';
 import 'package:recapture/presentation/widgets/checklist_tooltip_sheet.dart';
 import 'package:recapture/utils/analytics.dart';
 
-const _items = <ChecklistItem>[
+/// No-Hive [ActiveSessionBox]: the test host has no initialized Hive, and a
+/// real box open poisons the test zone with Hive's internal unlistened future.
+class _FakeSessionBox extends ActiveSessionBox {
+  @override
+  Future<ActiveSession?> read() async => null;
+}
+
+final _items = <ChecklistItem>[
   ChecklistItem(
     id: 'x',
     icon: Icons.star,
@@ -61,9 +71,12 @@ void main() {
     WidgetTester tester, {
     TargetPlatform platform = TargetPlatform.android,
   }) async {
-    await tester.pumpWidget(MaterialApp(
-      theme: AppTheme.dark.copyWith(platform: platform),
-      home: const PreCaptureScreen(items: _items),
+    // ProviderScope: the screen reads the flow-variant provider (Riverpod).
+    await tester.pumpWidget(ProviderScope(
+      child: MaterialApp(
+        theme: AppTheme.dark.copyWith(platform: platform),
+        home: PreCaptureScreen(items: _items, sessionBox: _FakeSessionBox()),
+      ),
     ));
     await tester.pumpAndSettle();
   }
@@ -83,9 +96,11 @@ void main() {
       await tester.tap(find.byType(Checkbox).first);
       await tester.pumpAndSettle();
       // …and a forced re-pump (e.g. rotation) of the same State.
-      await tester.pumpWidget(MaterialApp(
-        theme: AppTheme.dark,
-        home: const PreCaptureScreen(items: _items),
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: PreCaptureScreen(items: _items, sessionBox: _FakeSessionBox()),
+        ),
       ));
       await tester.pumpAndSettle();
 
@@ -99,9 +114,11 @@ void main() {
       expect(only(AnalyticsEvents.precaptureChecklistStarted), hasLength(1));
 
       // Leave (dispose the State) then return (a fresh State → new entry).
-      await tester.pumpWidget(MaterialApp(
-        theme: AppTheme.dark,
-        home: const Scaffold(body: Text('ELSEWHERE')),
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const Scaffold(body: Text('ELSEWHERE')),
+        ),
       ));
       await tester.pumpAndSettle();
       await pumpScreen(tester);

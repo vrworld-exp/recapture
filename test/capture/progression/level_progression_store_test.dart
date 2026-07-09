@@ -9,6 +9,7 @@ import 'package:hive/hive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/progression/level_progression.dart';
 import 'package:recapture/application/capture/progression/level_progression_store.dart';
+import 'package:recapture/domain/capture/capture_flow_variant.dart';
 import 'package:recapture/data/local/box_names.dart';
 
 LevelProgression _sample() => LevelProgression.of([
@@ -125,5 +126,49 @@ void main() {
     await store.save('p1', _sample());
     expect(await store.load('p2'), isNull);
     expect(await store.load('p1'), isNotNull);
+  });
+
+  group('flow variant persistence', () {
+    test('saveVariant → loadVariant round-trips both ids', () async {
+      final store = LevelProgressionStore();
+      await store.saveVariant('p1', CaptureFlowVariant.withoutBottom);
+      expect(await store.loadVariant('p1'), CaptureFlowVariant.withoutBottom);
+
+      await store.saveVariant('p1', CaptureFlowVariant.withBottom);
+      expect(await store.loadVariant('p1'), CaptureFlowVariant.withBottom);
+    });
+
+    test('absent variant (pre-variant project) → with_bottom, never throws',
+        () async {
+      final store = LevelProgressionStore();
+      expect(await store.loadVariant('legacy'), CaptureFlowVariant.withBottom);
+    });
+
+    test('unknown persisted id → tolerant with_bottom fallback', () async {
+      final box = await Hive.openBox<String>(BoxNames.captureProgression);
+      await box.put('p1::flow_variant', 'three_and_a_half_rings');
+      final store = LevelProgressionStore();
+      expect(await store.loadVariant('p1'), CaptureFlowVariant.withBottom);
+    });
+
+    test('variant key does not corrupt the progression blob space', () async {
+      final store = LevelProgressionStore();
+      await store.saveVariant('p1', CaptureFlowVariant.withoutBottom);
+      // No progression saved under 'p1' → load stays null (the sibling
+      // variant key never masquerades as a progression snapshot).
+      expect(await store.load('p1'), isNull);
+      await store.save('p1', _sample());
+      expect(await store.load('p1'), isNotNull);
+      expect(await store.loadVariant('p1'), CaptureFlowVariant.withoutBottom);
+    });
+
+    test('clear removes the variant along with the snapshot', () async {
+      final store = LevelProgressionStore();
+      await store.save('p1', _sample());
+      await store.saveVariant('p1', CaptureFlowVariant.withoutBottom);
+      await store.clear('p1');
+      expect(await store.load('p1'), isNull);
+      expect(await store.loadVariant('p1'), CaptureFlowVariant.withBottom);
+    });
   });
 }

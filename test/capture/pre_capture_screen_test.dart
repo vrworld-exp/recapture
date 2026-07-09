@@ -12,10 +12,13 @@
 // IconData — so the "missing asset" case has no failure mode to exercise.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/data/local/active_session_box.dart';
+import 'package:recapture/domain/entities/active_session.dart';
 import 'package:recapture/domain/entities/checklist_item.dart';
 import 'package:recapture/presentation/screens/capture/pre_capture_screen.dart';
 import 'package:recapture/presentation/widgets/checklist_item_tile.dart';
@@ -40,14 +43,24 @@ const _items = <ChecklistItem>[
   ),
 ];
 
+/// No-Hive [ActiveSessionBox]: the test host has no initialized Hive, and a
+/// real box open poisons the test zone with Hive's internal unlistened future.
+class _FakeSessionBox extends ActiveSessionBox {
+  @override
+  Future<ActiveSession?> read() async => null;
+}
+
 /// Pumps the screen on its own (no router) — fine for everything except the
 /// Start-navigation tests.
 Future<void> _pumpPlain(WidgetTester tester, {List<ChecklistItem>? items}) async {
-  await tester.pumpWidget(MaterialApp(
-    theme: AppTheme.dark,
-    home: items == null
-        ? const PreCaptureScreen()
-        : PreCaptureScreen(items: items),
+  // ProviderScope: the screen reads the flow-variant provider (Riverpod).
+  await tester.pumpWidget(ProviderScope(
+    child: MaterialApp(
+      theme: AppTheme.dark,
+      home: items == null
+          ? PreCaptureScreen(sessionBox: _FakeSessionBox())
+          : PreCaptureScreen(items: items, sessionBox: _FakeSessionBox()),
+    ),
   ));
   await tester.pumpAndSettle();
 }
@@ -71,7 +84,7 @@ Future<_PushSpy> _pumpRouter(WidgetTester tester) async {
       GoRoute(
         path: AppRoutes.preCapture,
         name: AppRouteNames.preCapture,
-        builder: (_, __) => const PreCaptureScreen(),
+        builder: (_, __) => PreCaptureScreen(sessionBox: _FakeSessionBox()),
       ),
       GoRoute(
         path: AppRoutes.permissions,
@@ -81,7 +94,9 @@ Future<_PushSpy> _pumpRouter(WidgetTester tester) async {
     ],
   );
   addTearDown(router.dispose);
-  await tester.pumpWidget(MaterialApp.router(theme: AppTheme.dark, routerConfig: router));
+  await tester.pumpWidget(ProviderScope(
+    child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+  ));
   await tester.pumpAndSettle();
   return spy;
 }
@@ -215,11 +230,13 @@ void main() {
     });
 
     testWidgets('no overflow under a large text scale', (tester) async {
-      await tester.pumpWidget(MaterialApp(
-        theme: AppTheme.dark,
-        home: const MediaQuery(
-          data: MediaQueryData(textScaler: TextScaler.linear(2.0)),
-          child: PreCaptureScreen(),
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: MediaQuery(
+            data: const MediaQueryData(textScaler: TextScaler.linear(2.0)),
+            child: PreCaptureScreen(sessionBox: _FakeSessionBox()),
+          ),
         ),
       ));
       await tester.pumpAndSettle();
