@@ -50,46 +50,12 @@ class RemoteProjectsRepository implements ProjectsRepository {
   Future<List<Project>> list() async {
     // TODO(api): final res = await dio.get('/projects');
     //            return (res.data as List).map((e) => Project.fromMap(e)).toList();
+    // The demo-era hardcoded seed projects were removed on purpose: a fresh
+    // login lands on the real empty state ("Nothing captured yet") instead of
+    // fake "previously captured" cards. Real projects render once the Dio call
+    // above lands; the delay keeps the loading skeleton behavior observable.
     await Future<void>.delayed(const Duration(milliseconds: 600));
-    final now = DateTime.now();
-    return [
-      Project(
-        id: 'p1',
-        name: 'Wooden Statue',
-        status: ProjectStatus.completed,
-        updatedAt: now.subtract(const Duration(hours: 2)),
-      ),
-      Project(
-        id: 'p2',
-        name: 'Leather Chair',
-        status: ProjectStatus.draft,
-        updatedAt: now.subtract(const Duration(minutes: 20)),
-      ),
-      Project(
-        id: 'p3',
-        name: 'Coffee Mug',
-        status: ProjectStatus.failed,
-        updatedAt: now.subtract(const Duration(days: 1)),
-      ),
-      Project(
-        id: 'p4',
-        name: 'Ceramic Vase With An Extremely Long Name That Must Truncate Cleanly',
-        status: ProjectStatus.processing,
-        updatedAt: now.subtract(const Duration(minutes: 5)),
-      ),
-      Project(
-        id: 'p5',
-        name: 'Bronze Figurine',
-        status: ProjectStatus.capturing,
-        updatedAt: now.subtract(const Duration(minutes: 1)),
-      ),
-      Project(
-        id: 'p6',
-        name: 'Marble Bust',
-        status: ProjectStatus.uploading,
-        updatedAt: now.subtract(const Duration(seconds: 30)),
-      ),
-    ];
+    return const <Project>[];
   }
 
   @override
