@@ -9,7 +9,10 @@ import {
 import {
   JobState,
   StageProgress,
+  StageTimestamps,
+  StageWindow,
   ProcessingStage,
+  ExecutableStage,
   UploadInfo,
   ArtifactsInfo,
   ArtifactCdnUrls,
@@ -60,6 +63,23 @@ const StageProgressSchema = new Schema<StageProgress>(
       required: true,
     },
     percent: { type: Number, required: true, min: 0, max: 100, default: 0 },
+  },
+  { _id: false }
+);
+
+const StageWindowSchema = new Schema<StageWindow>(
+  {
+    startedAt: { type: Date },
+    completedAt: { type: Date },
+  },
+  { _id: false }
+);
+
+const StageTimestampsSchema = new Schema<StageTimestamps>(
+  {
+    PROCESSING: { type: StageWindowSchema },
+    TEXTURING: { type: StageWindowSchema },
+    OPTIMIZING: { type: StageWindowSchema },
   },
   { _id: false }
 );
@@ -125,6 +145,7 @@ const JobErrorSchema = new Schema<JobError>(
   {
     code: { type: String, required: true },
     message: { type: String, required: true },
+    stage: { type: String, enum: ['PROCESSING', 'TEXTURING', 'OPTIMIZING'] },
     details: { type: String },
   },
   { _id: false }
@@ -209,6 +230,17 @@ export interface IJob extends Document {
   /** Live progress within the current processing stage (P7 worker updates this) */
   stageProgress?: StageProgress;
 
+  /** Start/end instants of each executable stage's most recent run. */
+  stageTimestamps?: StageTimestamps;
+
+  /**
+   * Engine-adapter output of each COMPLETED stage, persisted atomically with
+   * the transition into the next stage — the retry/resume path feeds these
+   * back to the engine as priorOutputs so a job re-entered at TEXTURING or
+   * OPTIMIZING doesn't redo reconstruction.
+   */
+  stageOutputs?: Record<string, Record<string, unknown>>;
+
   /** Summary extracted from the manifest after upload finalization */
   captureSummary?: CaptureSummary;
 
@@ -292,6 +324,8 @@ const JobSchema = new Schema<IJob>(
     completedAt: { type: Date, default: null },
     result: { type: Schema.Types.Mixed, default: null },
     stageProgress: { type: StageProgressSchema },
+    stageTimestamps: { type: StageTimestampsSchema },
+    stageOutputs: { type: Schema.Types.Mixed },
     captureSummary: { type: CaptureSummarySchema },
     queuedAt: { type: Date },
     upload: { type: UploadInfoSchema },
@@ -337,7 +371,10 @@ export const Job = model<IJob>('Job', JobSchema);
 export type {
   JobState,
   StageProgress,
+  StageTimestamps,
+  StageWindow,
   ProcessingStage,
+  ExecutableStage,
   UploadInfo,
   ArtifactsInfo,
   ArtifactCdnUrls,

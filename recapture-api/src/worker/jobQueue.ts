@@ -11,6 +11,7 @@
 // and sleep. Never split it into find + update.
 import { Types } from 'mongoose';
 import { Job } from '@/models/Job';
+import type { ExecutableStage } from '@/models/types/job.types';
 import { DEFAULT_JOB_TYPE, type WorkerJob } from '@/worker/workerTypes';
 
 // Retry backoff: 1min, 2min, 4min, … doubling per attempt, capped at 30min.
@@ -48,7 +49,10 @@ export async function claimNextJob(
           $or: [{ nextRetryAt: null }, { nextRetryAt: { $lte: now } }],
         },
         {
-          state: { $in: ['CLAIMED', 'PROCESSING'] },
+          // Every state a live pipeline run can sit in — a worker can die
+          // mid-TEXTURING/OPTIMIZING just as it can mid-PROCESSING. The
+          // re-claimer resumes from the job's durable stageProgress pointer.
+          state: { $in: ['CLAIMED', 'PROCESSING', 'TEXTURING', 'OPTIMIZING'] },
           claimedAt: { $lte: staleThreshold },
         },
       ],
@@ -65,25 +69,63 @@ export async function claimNextJob(
     .exec();
 }
 
-export async function markProcessing(jobId: Types.ObjectId): Promise<void> {
-  await Job.findByIdAndUpdate(jobId, {
-    $set: { state: 'PROCESSING', startedAt: new Date() },
-  }).exec();
+/**
+ * CLAIMED → PROCESSING for a claim this worker still holds. Returns false —
+ * and the caller must stop touching the job — when the fence lost: the job
+ * was canceled, or its lease was stolen, between the claim and this write.
+ */
+export async function markProcessing(jobId: Types.ObjectId, claimedBy: string): Promise<boolean> {
+  const res = await Job.updateOne(
+    { _id: jobId, claimedBy, state: 'CLAIMED' },
+    { $set: { state: 'PROCESSING', startedAt: new Date() } }
+  ).exec();
+  return res.matchedCount > 0;
 }
 
+/**
+ * The terminal COMPLETED flip — one atomic write closing the pipeline:
+ * state, completedAt, result, and the stageProgress pointer's COMPLETED/100
+ * stamp. Fenced on claimedBy + non-terminal state, so it can never resurrect
+ * a job that was CANCELED (or stolen and finished by another worker) while
+ * the processor was returning. A lost fence is a silent no-op (the fence
+ * winner's outcome stands); returns whether the write landed.
+ */
 export async function markCompleted(
   jobId: Types.ObjectId,
-  result: Record<string, unknown>
-): Promise<void> {
-  await Job.findByIdAndUpdate(jobId, {
-    $set: {
-      state: 'COMPLETED',
-      completedAt: new Date(),
-      result,
-      lastError: null,
-      nextRetryAt: null,
+  result: Record<string, unknown>,
+  claimedBy: string
+): Promise<boolean> {
+  const res = await Job.updateOne(
+    {
+      _id: jobId,
+      claimedBy,
+      state: { $nin: ['CANCELED', 'COMPLETED', 'FAILED'] },
     },
-  }).exec();
+    {
+      $set: {
+        state: 'COMPLETED',
+        completedAt: new Date(),
+        result,
+        stageProgress: { stage: 'COMPLETED', percent: 100 },
+        lastError: null,
+        nextRetryAt: null,
+      },
+    }
+  ).exec();
+  return res.matchedCount > 0;
+}
+
+/** Everything markFailed records beyond the error itself. */
+export interface MarkFailedOptions {
+  /** NEW attempts total (caller passes previous + 1). */
+  attempts: number;
+  maxAttempts: number;
+  /** Fence: only the claim holder may fail the job (skip to bypass in tools). */
+  claimedBy?: string;
+  errorCode?: string;
+  errorDetails?: string;
+  /** Pipeline stage the failure escaped from, when known. */
+  failedStage?: ExecutableStage;
 }
 
 /**
@@ -91,33 +133,57 @@ export async function markCompleted(
  * previous + 1; an explicit $set, not $inc, so a retried write is idempotent).
  * Below maxAttempts the job re-enters the queue with an exponential-backoff
  * `nextRetryAt`; exhausted, it goes terminally FAILED and — per the Job
- * model's documented contract — the structured `error` sub-doc is populated
- * for the client's Processing Failed surface.
+ * model's documented contract — the structured `error` sub-doc (code,
+ * message, the pipeline stage it died in) is populated for the client's
+ * Processing Failed surface.
+ *
+ * RETRY POLICY = resume-from-failed-stage: this deliberately does NOT touch
+ * stageProgress/stageOutputs, so a re-queued job re-enters the pipeline at
+ * the stage that failed with earlier stages' outputs intact (bounded by
+ * maxAttempts). Fenced on claimedBy + non-terminal state like markCompleted;
+ * a lost fence no-ops (returns false).
  */
 export async function markFailed(
   jobId: Types.ObjectId,
   error: Error,
-  attempts: number,
-  maxAttempts: number,
-  errorCode: string = PROCESSING_FAILED_CODE
-): Promise<void> {
+  opts: MarkFailedOptions
+): Promise<boolean> {
+  const { attempts, maxAttempts, claimedBy, errorDetails, failedStage } = opts;
+  const errorCode = opts.errorCode ?? PROCESSING_FAILED_CODE;
   const exhausted = attempts >= maxAttempts;
   const retryDelayMs = Math.min(
     RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1),
     RETRY_MAX_DELAY_MS
   );
 
-  await Job.findByIdAndUpdate(jobId, {
-    $set: {
-      state: exhausted ? 'FAILED' : 'QUEUED',
-      attempts,
-      lastError: error.message,
-      claimedAt: null,
-      claimedBy: null,
-      nextRetryAt: exhausted ? null : new Date(Date.now() + retryDelayMs),
-      ...(exhausted ? { error: { code: errorCode, message: error.message } } : {}),
+  const res = await Job.updateOne(
+    {
+      _id: jobId,
+      ...(claimedBy !== undefined ? { claimedBy } : {}),
+      state: { $nin: ['CANCELED', 'COMPLETED', 'FAILED'] },
     },
-  }).exec();
+    {
+      $set: {
+        state: exhausted ? 'FAILED' : 'QUEUED',
+        attempts,
+        lastError: error.message,
+        claimedAt: null,
+        claimedBy: null,
+        nextRetryAt: exhausted ? null : new Date(Date.now() + retryDelayMs),
+        ...(exhausted
+          ? {
+              error: {
+                code: errorCode,
+                message: error.message,
+                ...(failedStage ? { stage: failedStage } : {}),
+                ...(errorDetails ? { details: errorDetails } : {}),
+              },
+            }
+          : {}),
+      },
+    }
+  ).exec();
+  return res.matchedCount > 0;
 }
 
 /** Job counts by state — heartbeat/ops visibility (backpressure shows here). */

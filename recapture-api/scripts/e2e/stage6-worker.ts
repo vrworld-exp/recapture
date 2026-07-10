@@ -91,7 +91,7 @@ async function main(): Promise<void> {
   }
 
   if (claimed) {
-    await markProcessing(claimed._id);
+    await markProcessing(claimed._id, WORKER_ID);
     const mid = await Job.findById(claimed._id).exec();
     check('markProcessing → PROCESSING + startedAt', mid?.state === 'PROCESSING' && !!mid?.startedAt);
 
@@ -99,14 +99,13 @@ async function main(): Promise<void> {
     check('processor registry resolves CAPTURE_PROCESSING', !!processor);
     try {
       const result = await processor(claimed);
-      await markCompleted(claimed._id, result);
+      await markCompleted(claimed._id, result, WORKER_ID);
     } catch (err) {
-      await markFailed(
-        claimed._id,
-        err as Error,
-        (claimed.attempts ?? 0) + 1,
-        claimed.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
-      );
+      await markFailed(claimed._id, err as Error, {
+        attempts: (claimed.attempts ?? 0) + 1,
+        maxAttempts: claimed.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
+        claimedBy: WORKER_ID,
+      });
     }
     const done = await Job.findById(claimed._id).exec();
     check(
@@ -141,11 +140,15 @@ async function main(): Promise<void> {
   const fclaim1 = await claimNextJob(WORKER_ID, CLAIM_TIMEOUT_MS);
   check('failing job claimed', fclaim1?._id.toString() === failing.id, fclaim1?._id.toString());
   if (fclaim1) {
-    await markProcessing(fclaim1._id);
+    await markProcessing(fclaim1._id, WORKER_ID);
     try {
       await getProcessor(jobTypeOf(fclaim1))!(fclaim1);
     } catch (err) {
-      await markFailed(fclaim1._id, err as Error, (fclaim1.attempts ?? 0) + 1, fclaim1.maxAttempts ?? 3);
+      await markFailed(fclaim1._id, err as Error, {
+        attempts: (fclaim1.attempts ?? 0) + 1,
+        maxAttempts: fclaim1.maxAttempts ?? 3,
+        claimedBy: WORKER_ID,
+      });
     }
   }
   const afterFail1 = await Job.findById(failing.id).exec();
@@ -165,11 +168,15 @@ async function main(): Promise<void> {
   const fclaim2 = await claimNextJob(WORKER_ID, CLAIM_TIMEOUT_MS);
   check('claimable again once retry window opens', fclaim2?._id.toString() === failing.id);
   if (fclaim2) {
-    await markProcessing(fclaim2._id);
+    await markProcessing(fclaim2._id, WORKER_ID);
     try {
       await getProcessor(jobTypeOf(fclaim2))!(fclaim2);
     } catch (err) {
-      await markFailed(fclaim2._id, err as Error, (fclaim2.attempts ?? 0) + 1, fclaim2.maxAttempts ?? 3);
+      await markFailed(fclaim2._id, err as Error, {
+        attempts: (fclaim2.attempts ?? 0) + 1,
+        maxAttempts: fclaim2.maxAttempts ?? 3,
+        claimedBy: WORKER_ID,
+      });
     }
   }
   const afterFail2 = await Job.findById(failing.id).exec();
@@ -201,7 +208,7 @@ async function main(): Promise<void> {
   );
   if (reclaimed) {
     // Park it COMPLETED so it can't interfere with later claims; cleanup deletes it.
-    await markCompleted(reclaimed._id, { e2e: 'orphan-reclaim-proven' });
+    await markCompleted(reclaimed._id, { e2e: 'orphan-reclaim-proven' }, WORKER_ID);
   }
 
   const depthEnd = await getQueueDepth();

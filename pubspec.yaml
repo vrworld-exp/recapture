@@ -68,6 +68,7 @@ flutter:
     - assets/fonts/
 
 flutter_launcher_icons:
+
   android: true
   ios: true
   image_path: "assets/icon/recapture_icon.png"

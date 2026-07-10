@@ -9,6 +9,9 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "worker": "tsx src/worker/index.ts",
+    "worker:dev": "tsx watch src/worker/index.ts",
+    "worker:start": "node dist/worker/index.js",
     "build": "tsc --project tsconfig.json && tsc-alias -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",

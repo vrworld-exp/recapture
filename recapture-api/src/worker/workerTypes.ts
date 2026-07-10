@@ -10,8 +10,14 @@
 // deliberately queue-agnostic so a future BullMQ swap only replaces
 // jobQueue.ts + worker.ts.
 import type { Types } from 'mongoose';
-import type { JobState, UploadInfo } from '@/models/types/job.types';
+import type {
+  ExecutableStage,
+  JobState,
+  StageProgress,
+  UploadInfo,
+} from '@/models/types/job.types';
 import type { CaptureSummary, ObjectSize } from '@/models/types/capture.types';
+import type { CaptureFlowVariant } from '@/models/types/captureVariants';
 
 /** jobType every upload-pipeline job carries (the schema default). */
 export const DEFAULT_JOB_TYPE = 'CAPTURE_PROCESSING';
@@ -40,8 +46,13 @@ export interface WorkerJob {
   claimedBy?: string | null;
   nextRetryAt?: Date | null;
   objectSize?: ObjectSize;
+  captureVariant?: CaptureFlowVariant;
   upload?: UploadInfo;
   captureSummary?: CaptureSummary;
+  /** Durable pipeline stage pointer — the resume/retry entry point. */
+  stageProgress?: StageProgress;
+  /** Persisted engine outputs of already-completed stages (resume inputs). */
+  stageOutputs?: Record<string, Record<string, unknown>>;
   queuedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -49,10 +60,76 @@ export interface WorkerJob {
 
 /**
  * One job type's processing function. Receives the claimed (lean) job and
- * returns a JSON-safe result persisted on the job's `result` field. A throw
- * (or rejection) routes the job through the retry/backoff path.
+ * returns a JSON-safe result persisted on the job's `result` field. A plain
+ * throw (or rejection) routes the job through the retry/backoff path; a
+ * NonRetryableJobError fails it terminally on the spot.
  */
 export type JobProcessor = (job: WorkerJob) => Promise<Record<string, unknown>>;
+
+/**
+ * A processor-raised failure that retrying can NEVER fix — e.g. the bundle's
+ * manifest is gone from S3, or its content breaks a validation rule. The
+ * worker loop routes this straight to terminal FAILED (the codebase's
+ * dead-letter equivalent: `error` sub-doc populated for the client's
+ * Processing Failed surface), skipping the retry/backoff path entirely.
+ *
+ * `code` must be a stable JobError code (see models/types/job.types.ts —
+ * e.g. MANIFEST_MISSING, MANIFEST_INVALID, FILE_COUNT_MISMATCH); `details`
+ * is optional admin-only diagnostics (rule findings, never PII).
+ */
+export class NonRetryableJobError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly details?: string
+  ) {
+    super(message);
+    this.name = 'NonRetryableJobError';
+  }
+}
+
+/**
+ * Raised by a fenced pipeline write when the job's state turned CANCELED
+ * under the running stage. Cancellation is TERMINAL and externally owned
+ * (the cancel endpoint flips the state; the pipeline only observes it): the
+ * worker loop stops the pipeline and writes NOTHING more to the job — no
+ * markCompleted, no markFailed, no attempt consumed.
+ */
+export class JobCanceledError extends Error {
+  constructor(public readonly jobId: string) {
+    super(`Job ${jobId} was canceled — pipeline stopped`);
+    this.name = 'JobCanceledError';
+  }
+}
+
+/**
+ * Raised by a fenced pipeline write when `claimedBy` no longer names this
+ * worker — the lease expired mid-stage and another instance re-claimed the
+ * job. The loser must go silent immediately (no state writes: the new owner's
+ * transitions are now authoritative); the stage's idempotency contract makes
+ * the overlap harmless.
+ */
+export class ClaimLostError extends Error {
+  constructor(
+    public readonly jobId: string,
+    public readonly claimedBy: string
+  ) {
+    super(`Job ${jobId} is no longer claimed by ${claimedBy} — another worker took it over`);
+    this.name = 'ClaimLostError';
+  }
+}
+
+/**
+ * The stage a pipeline error escaped from, when it carries one. The pipeline
+ * tags every stage failure (via `Object.assign`) instead of wrapping, so
+ * NonRetryableJobError keeps its class for the terminal-vs-retry routing.
+ */
+export function failedStageOf(err: unknown): ExecutableStage | undefined {
+  const stage = (err as { failedStage?: unknown })?.failedStage;
+  return stage === 'PROCESSING' || stage === 'TEXTURING' || stage === 'OPTIMIZING'
+    ? stage
+    : undefined;
+}
 
 export interface WorkerConfig {
   /** How often to poll for claimable jobs (ms). */

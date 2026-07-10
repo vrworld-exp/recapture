@@ -44,8 +44,21 @@ export type ProcessingStage =
   | 'COMPLETED';
 
 /**
+ * The stages that RUN engine work (QUEUED and COMPLETED are rest states).
+ * PROCESSING = reconstruction, TEXTURING = texturing, OPTIMIZING = optimization
+ * — each delegated to the reconstruction-engine adapter (src/worker/engine/).
+ */
+export type ExecutableStage = 'PROCESSING' | 'TEXTURING' | 'OPTIMIZING';
+
+/**
  * Live progress within the current processing stage.
  * Updated by the processing worker (P7) as it advances.
+ *
+ * `stage` is the pipeline's DURABLE stage pointer — unlike the Job's `state`
+ * (which the queue mechanics bounce through CLAIMED/PROCESSING on every
+ * claim), stageProgress survives claim/re-claim/re-queue untouched, so a
+ * resumed or retried job re-enters exactly the stage that was running when it
+ * crashed or failed.
  */
 export interface StageProgress {
   stage: ProcessingStage;
@@ -53,6 +66,18 @@ export interface StageProgress {
   /** Progress within the current stage, 0-100 */
   percent: number;
 }
+
+/** Start/end instants of one executable stage's most recent run. */
+export interface StageWindow {
+  startedAt?: Date;
+  completedAt?: Date;
+}
+
+/**
+ * Per-stage timing, written atomically with each stage transition.
+ * A stage that was re-run (crash resume / retry) keeps the LATEST window.
+ */
+export type StageTimestamps = Partial<Record<ExecutableStage, StageWindow>>;
 
 /**
  * Upload tracking metadata for a job's raw capture bundle.
@@ -144,6 +169,9 @@ export interface JobError {
 
   /** Human-readable message shown to the user (via app's Processing Failed screen) */
   message: string;
+
+  /** Pipeline stage the failure happened in (when it happened inside one). */
+  stage?: ExecutableStage;
 
   /** Optional technical details — stack trace, worker logs excerpt (admin-only) */
   details?: string;
