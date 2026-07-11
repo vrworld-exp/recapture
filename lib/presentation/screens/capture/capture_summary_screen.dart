@@ -38,6 +38,7 @@ import '../../../application/capture/completion_gate_provider.dart';
 import '../../../application/capture/review_grid_items_provider.dart';
 import '../../../application/capture/upload_gate_provider.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
+import '../../../application/upload/upload_flow.dart';
 import '../../../domain/capture/capture_cancel.dart';
 import '../../../domain/capture/level_completion.dart';
 import '../../../domain/capture/upload_gate.dart';
@@ -242,6 +243,10 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
       'phase': 'upload',
       'device_type': _deviceType,
     });
+    // Start the REAL upload flow (pack → project/job → transfer → finalize).
+    // Fire-and-forget: start() installs the progress surface synchronously and
+    // never throws — errors flow through the progress stream to Screen 9/9F.
+    ref.read(uploadFlowProvider.notifier).start();
     if (!mounted) return;
     context.go(AppRoutes.uploading);
   }

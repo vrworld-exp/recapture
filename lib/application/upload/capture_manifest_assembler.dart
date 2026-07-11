@@ -72,7 +72,8 @@ String captureSidecarStoragePath(
   String levelSegment,
   String fileName,
 ) =>
-    captureImageStoragePath(projectId, jobId, levelSegment, _toSidecarName(fileName));
+    captureImageStoragePath(
+        projectId, jobId, levelSegment, _toSidecarName(fileName));
 
 /// The absolute on-disk sidecar path for an accepted frame — the JPEG path with its
 /// extension swapped to `.json` (the pairing the storage/EXIF tasks derive:
@@ -80,7 +81,8 @@ String captureSidecarStoragePath(
 String sidecarPathForFrame(String absoluteFramePath) {
   final slash = absoluteFramePath.lastIndexOf(RegExp(r'[/\\]'));
   final dir = slash < 0 ? '' : absoluteFramePath.substring(0, slash + 1);
-  final name = slash < 0 ? absoluteFramePath : absoluteFramePath.substring(slash + 1);
+  final name =
+      slash < 0 ? absoluteFramePath : absoluteFramePath.substring(slash + 1);
   return '$dir${_toSidecarName(name)}';
 }
 
@@ -143,7 +145,8 @@ class CaptureManifestAssembler {
 
       for (final rec in ledger.accepted) {
         final fileName = fileNameOf(rec.framePath);
-        final metadata = await _readMetadata(sidecarPathForFrame(rec.framePath));
+        final metadata =
+            await _readMetadata(sidecarPathForFrame(rec.framePath));
         // photoId prefers the sidecar's canonical frameId; falls back to the file
         // base name so an entry is never id-less when the sidecar is missing.
         final photoId = (metadata != null && metadata.frameId.isNotEmpty)

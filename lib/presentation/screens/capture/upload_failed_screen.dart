@@ -22,6 +22,7 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
+import '../../../application/upload/upload_flow.dart';
 import '../../../domain/upload/upload_failure.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
@@ -77,6 +78,10 @@ class _UploadFailedScreenState extends ConsumerState<UploadFailedScreen> {
       'error_category': _category.wireName,
       'device_type': _deviceType,
     });
+    // A failed flow is terminal — start() replaces it with a fresh run over
+    // the SAME captures (installed synchronously, so the uploading screen
+    // binds to the new flow, not the failed one's last snapshot).
+    ref.read(uploadFlowProvider.notifier).start();
     context.go(AppRoutes.uploading);
   }
 

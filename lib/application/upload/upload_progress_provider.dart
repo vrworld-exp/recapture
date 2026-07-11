@@ -4,15 +4,16 @@
 // [uploadProgressProvider] and renders each [UploadProgress] snapshot — it never
 // performs the upload.
 //
-// The real upload pipeline is a SEPARATE phase task. Until it lands,
-// [uploadProgressSourceProvider] resolves to a no-op source that emits a single
-// safe initial snapshot — so the screen renders the determinate-but-empty
-// pre-total state WITHOUT faking progress (no timers, no animation). The pipeline
-// task overrides [uploadProgressSourceProvider] with a real source; widget tests
-// override it with a controllable stream. The screen code does not change.
+// The real pipeline is wired: while an upload flow is ACTIVE (uploadFlowProvider
+// holds a live [UploadFlowProgress]), this seam delegates to it; when idle it
+// falls back to the no-op source that emits one safe initial snapshot — so the
+// screen renders the determinate-but-empty pre-total state WITHOUT faking
+// progress. Widget tests keep overriding [uploadProgressSourceProvider] with a
+// controllable stream. The screen code does not change.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/upload_progress.dart';
+import 'upload_flow.dart';
 
 /// The progress feed contract. Implementations push [UploadProgress] snapshots as
 /// bytes/files transfer and the status changes. Pure interface — no UI, no IO here.
@@ -20,9 +21,9 @@ abstract class UploadProgressSource {
   Stream<UploadProgress> watch();
 }
 
-/// Default source: the upload pipeline does not exist yet, so emit one safe
-/// initial snapshot (idle, zero/unknown totals). Replaced by the real pipeline
-/// (and by tests) via [uploadProgressSourceProvider]. Emits NO fake progress.
+/// Idle-state source (no upload flow running): one safe initial snapshot
+/// (idle, zero/unknown totals). Also the override point for widget tests.
+/// Emits NO fake progress.
 class NoUploadProgressSource implements UploadProgressSource {
   const NoUploadProgressSource();
 
@@ -32,10 +33,12 @@ class NoUploadProgressSource implements UploadProgressSource {
       );
 }
 
-/// The active progress source. Override this to wire the real upload pipeline (or
-/// a fake in tests); the screen always reads through [uploadProgressProvider].
-final uploadProgressSourceProvider =
-    Provider<UploadProgressSource>((ref) => const NoUploadProgressSource());
+/// The active progress source: the LIVE upload flow's feed when one exists,
+/// else the idle no-op. Tests override this directly (unchanged); the screen
+/// always reads through [uploadProgressProvider].
+final uploadProgressSourceProvider = Provider<UploadProgressSource>(
+  (ref) => ref.watch(uploadFlowProvider) ?? const NoUploadProgressSource(),
+);
 
 /// The live upload progress the screen observes. `autoDispose` so the subscription
 /// is dropped when the screen leaves and re-established (resuming from the source's

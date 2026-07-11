@@ -238,7 +238,9 @@ class OfflineUploadQueue {
   /// for it to continue.
   Future<void> resumeUserPaused(String jobId) async {
     final current = _byId[jobId];
-    if (_disposed || current == null || current.state != UploadJobState.userPaused) {
+    if (_disposed ||
+        current == null ||
+        current.state != UploadJobState.userPaused) {
       return;
     }
     await _commit(current.copyWith(state: UploadJobState.offlineQueued));
@@ -313,7 +315,8 @@ class OfflineUploadQueue {
 
     // Re-read: the job may have been cancelled or user-paused DURING the run.
     final current = _byId[entry.jobId];
-    if (current == null) return true; // cancelled underneath us — nothing to record
+    if (current == null)
+      return true; // cancelled underneath us — nothing to record
 
     switch (outcome.status) {
       case ResilientUploadStatus.succeeded:
@@ -402,7 +405,9 @@ class OfflineUploadQueue {
   Future<void> _persist(UploadQueueEntry entry) async {
     try {
       await _store.put(entry);
-    } catch (_) {/* persistence is best-effort; never break the in-memory queue */}
+    } catch (_) {
+      /* persistence is best-effort; never break the in-memory queue */
+    }
   }
 
   void _emitSnapshot() {

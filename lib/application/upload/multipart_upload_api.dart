@@ -17,11 +17,11 @@
 // "spinning up an unconfigured client" for API calls — it is the correct, required
 // separation for direct-to-S3 transfers.
 //
-// ENDPOINTS ARE PLACEHOLDERS pending backend confirmation (recapture-api has no
-// upload routes yet): the paths/payloads in [DioMultipartUploadApi] implement the
-// assumed presigned-multipart contract and MUST be reconciled when the backend
-// lands. The engine itself depends only on the interfaces, so confirming the
-// contract is a change to this one adapter, not the manager.
+// The REAL backend adapter is [JobsMultipartUploadApi]
+// (jobs_multipart_upload_api.dart) — the recapture-api per-file presigned
+// multipart endpoints under `/jobs/:jobId/uploads/*`. The engine depends only
+// on the interfaces here, so contract changes touch that one adapter, not the
+// manager.
 import 'dart:async';
 
 import 'dart:io';
@@ -72,7 +72,8 @@ class CompletedPart {
   final int partNumber;
   final String etag;
 
-  Map<String, dynamic> toJson() => {'part_number': partNumber, 'etag': etag};
+  /// Wire shape of the backend's `uploads/complete` contract (camelCase).
+  Map<String, dynamic> toJson() => {'partNumber': partNumber, 'etag': etag};
 }
 
 /// The backend broker for the presigned multipart lifecycle.
@@ -173,83 +174,5 @@ class DioS3PartClient implements S3PartClient {
       throw StateError('S3 part PUT returned no ETag header');
     }
     return normalizeETag(raw);
-  }
-}
-
-/// Dio-backed broker against the ASSUMED presigned-multipart endpoints. PLACEHOLDER
-/// paths — reconcile with the backend when upload routes land (the engine depends
-/// only on [MultipartUploadApi], so only this adapter changes).
-class DioMultipartUploadApi implements MultipartUploadApi {
-  const DioMultipartUploadApi(this._dio, {this.basePath = '/uploads'});
-
-  final Dio _dio;
-  final String basePath;
-
-  @override
-  Future<InitiatedUpload> initiate({
-    required String sessionId,
-    required String fileKey,
-    required int fileSize,
-    required int partCount,
-  }) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '$basePath/initiate',
-      data: {
-        'session_id': sessionId,
-        'key': fileKey,
-        'file_size': fileSize,
-        'part_count': partCount,
-      },
-    );
-    final data = res.data ?? const {};
-    final rawParts = (data['part_urls'] as List?) ?? const [];
-    return InitiatedUpload(
-      uploadId: data['upload_id'] as String,
-      key: (data['key'] as String?) ?? fileKey,
-      parts: [
-        for (final p in rawParts.whereType<Map>())
-          PresignedPart(
-            partNumber: (p['part_number'] as num).toInt(),
-            url: p['url'] as String,
-          ),
-      ],
-    );
-  }
-
-  @override
-  Future<String?> refreshPartUrl({
-    required String uploadId,
-    required String key,
-    required int partNumber,
-  }) async {
-    final res = await _dio.post<Map<String, dynamic>>(
-      '$basePath/part-url',
-      data: {'upload_id': uploadId, 'key': key, 'part_number': partNumber},
-    );
-    return res.data?['url'] as String?;
-  }
-
-  @override
-  Future<void> complete({
-    required String uploadId,
-    required String key,
-    required List<CompletedPart> parts,
-  }) async {
-    await _dio.post<void>(
-      '$basePath/complete',
-      data: {
-        'upload_id': uploadId,
-        'key': key,
-        'parts': [for (final p in parts) p.toJson()],
-      },
-    );
-  }
-
-  @override
-  Future<void> abort({required String uploadId, required String key}) async {
-    await _dio.post<void>(
-      '$basePath/abort',
-      data: {'upload_id': uploadId, 'key': key},
-    );
   }
 }

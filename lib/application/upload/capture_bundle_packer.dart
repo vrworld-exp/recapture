@@ -43,7 +43,11 @@ import '../../utils/analytics.dart';
 import '../capture/ledger/level_capture_ledger_registry.dart';
 import '../capture/progression/level_progression.dart';
 import 'capture_manifest_assembler.dart'
-    show CaptureSidecarReader, FileCaptureSidecarReader, fileNameOf, sidecarPathForFrame;
+    show
+        CaptureSidecarReader,
+        FileCaptureSidecarReader,
+        fileNameOf,
+        sidecarPathForFrame;
 
 /// Cooperative cancellation for a pack. The packer checks [isCancelled] between
 /// files and before each heavy stage, aborts promptly, and cleans up staging.
@@ -312,7 +316,8 @@ class CaptureBundlePacker {
 
   void _checkCancel(BundleCancelToken? token, String stage) {
     if (token != null && token.isCancelled) {
-      throw BundlePackException(BundlePackFailureReason.cancelled, stage: stage);
+      throw BundlePackException(BundlePackFailureReason.cancelled,
+          stage: stage);
     }
   }
 
@@ -346,7 +351,8 @@ class CaptureBundlePacker {
       throw BundlePackException(
         BundlePackFailureReason.integrityMismatch,
         stage: 'verify',
-        detail: 'file set mismatch (${actual.length} on disk, ${expected.length} listed)',
+        detail:
+            'file set mismatch (${actual.length} on disk, ${expected.length} listed)',
       );
     }
   }
@@ -370,7 +376,9 @@ class CaptureBundlePacker {
 
   static BundlePackFailureReason _classifyCopyError(Object e) {
     final s = e.toString().toLowerCase();
-    if (s.contains('space') || s.contains('enospc') || s.contains('disk full')) {
+    if (s.contains('space') ||
+        s.contains('enospc') ||
+        s.contains('disk full')) {
       return BundlePackFailureReason.insufficientStorage;
     }
     return BundlePackFailureReason.unknown;

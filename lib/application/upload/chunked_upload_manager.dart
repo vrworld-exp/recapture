@@ -311,7 +311,8 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
           uploadId: init.uploadId,
           key: init.key,
           parts: [
-            for (final n in ordered) CompletedPart(partNumber: n, etag: etags[n]!),
+            for (final n in ordered)
+              CompletedPart(partNumber: n, etag: etags[n]!),
           ],
         );
         await _store?.markFileComplete(session.sessionId, file.key);
@@ -327,7 +328,8 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
         // idempotent). Guarded so a dead uploadId can't loop.
         if (_isUploadInvalid(e) && !reInitiated && !_cancelled) {
           reInitiated = true;
-          _confirmedBytes = baseBytes; // undo this file's seeded/confirmed bytes
+          _confirmedBytes =
+              baseBytes; // undo this file's seeded/confirmed bytes
           _inFlight.clear();
           _emit();
           await _store?.clearFile(session.sessionId, file.key);
@@ -357,7 +359,10 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
   ) async {
     final etags = <int, String>{};
     final queue = Queue<UploadPartPlan>.of(
-      [for (final p in parts) if (!skip.contains(p.partNumber)) p],
+      [
+        for (final p in parts)
+          if (!skip.contains(p.partNumber)) p
+      ],
     );
     Object? firstError;
 
@@ -421,7 +426,9 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
   ) async {
     final resolved = init.urlForPart(part.partNumber) ??
         await _api.refreshPartUrl(
-            uploadId: init.uploadId, key: init.key, partNumber: part.partNumber);
+            uploadId: init.uploadId,
+            key: init.key,
+            partNumber: part.partNumber);
     if (resolved == null) {
       throw StateError('no presigned URL for part ${part.partNumber}');
     }
@@ -442,14 +449,17 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
         );
         return etag;
       } catch (e) {
-        if (_cancelled || (e is DioException && CancelToken.isCancel(e))) rethrow;
+        if (_cancelled || (e is DioException && CancelToken.isCancel(e)))
+          rethrow;
         // Reset this part's in-flight contribution so a retry can't double-count.
         _inFlight[part.partNumber] = 0;
 
         final expired = _isExpired(e);
         if (expired) {
           final fresh = await _api.refreshPartUrl(
-              uploadId: init.uploadId, key: init.key, partNumber: part.partNumber);
+              uploadId: init.uploadId,
+              key: init.key,
+              partNumber: part.partNumber);
           if (fresh != null) url = fresh;
         }
         final transient = expired || _isTransient(e);

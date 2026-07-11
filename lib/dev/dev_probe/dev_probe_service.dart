@@ -27,12 +27,13 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../data/remote/dev_otp_handshake.dart';
 import 'bundle_disk_store.dart';
 import 'dev_probe_models.dart';
 import 'dummy_bundle.dart';
 
-/// Fixed dev identity for the probe's own OTP handshake.
-const String kProbePhone = '+911111111111';
+/// Fixed dev identity for the probe's own OTP handshake (the shared service's).
+const String kProbePhone = kDevOtpPhone;
 
 /// GET /health with a short timeout, measuring wall latency. Never throws —
 /// unreachable/timeout comes back as an error-state [HealthCheckResult].
@@ -74,17 +75,6 @@ class HealthProbeService {
   }
 }
 
-/// In-memory auth session for the probe (never secure storage, never the
-/// app's auth state).
-class _ProbeSession {
-  _ProbeSession({required this.accessToken, required this.refreshToken});
-
-  final String accessToken;
-  // Kept for completeness; the probe re-handshakes rather than refreshing.
-  // ignore: unused_field
-  final String refreshToken;
-}
-
 /// Signals a step failure with a display-ready detail message; aborts the
 /// pipeline at the failing step.
 class _StepFailure implements Exception {
@@ -101,7 +91,9 @@ class UploadSmokeService {
     required this.s3,
     this.store,
     String Function()? uuid,
-  }) : _uuid = uuid ?? _randomUuidV4;
+    DevOtpHandshake? handshake,
+  })  : _uuid = uuid ?? _randomUuidV4,
+        _handshake = handshake;
 
   /// Dio bound to the API base URL. The probe's OWN instance — never the
   /// app-wide client (its AuthInterceptor is wired to the stubbed auth state).
@@ -117,12 +109,15 @@ class UploadSmokeService {
 
   final String Function() _uuid;
 
-  /// Tokens survive across runs within one app session (avoids the send-otp
-  /// rate window). Memory only, by design.
-  static _ProbeSession? _session;
+  /// The shared dev OTP handshake (its session cache is static — tokens
+  /// survive across runs within one app session, avoiding the send-otp rate
+  /// window; memory only, by design). Lazily bound to [api] when not injected.
+  DevOtpHandshake? _handshake;
+
+  DevOtpHandshake get _auth => _handshake ??= DevOtpHandshake(api: api);
 
   @visibleForTesting
-  static void resetCachedSession() => _session = null;
+  static void resetCachedSession() => DevOtpHandshake.resetCachedSession();
 
   static const _stepAuth = 'auth';
   static const _stepProject = 'project';
@@ -182,10 +177,15 @@ class UploadSmokeService {
     try {
       // 1) Auth — reuse the cached in-memory session when present.
       await runStep(_stepAuth, (s) async {
-        if (_session != null) {
+        if (_auth.hasCachedSession) {
           return 'Reused cached session from an earlier run.';
         }
-        return _handshake();
+        try {
+          await _auth.session();
+        } on DevOtpHandshakeException catch (e) {
+          throw _StepFailure(e.detail);
+        }
+        return 'Handshake complete — session cached for this app session.';
       });
 
       // 2) Create project.
@@ -232,7 +232,8 @@ class UploadSmokeService {
       late DummyBundle bundle;
       WrittenBundle? written;
       await runStep(_stepBundle, (s) async {
-        bundle = buildDummyBundle(keyPrefix: keyPrefix, manifestKey: manifestKey);
+        bundle =
+            buildDummyBundle(keyPrefix: keyPrefix, manifestKey: manifestKey);
         run.totalBytes = bundle.totalBytes;
         if (store == null) {
           return '${bundle.files.length} files, ${bundle.totalBytes} bytes '
@@ -329,59 +330,35 @@ class UploadSmokeService {
 
   // ── Auth plumbing ──────────────────────────────────────────────────────────
 
-  /// send-otp → devCode → verify-otp; caches the session. Returns the display
-  /// detail for the auth step.
-  Future<String> _handshake() async {
-    final send = await api.post<Object?>(
-      '/auth/send-otp',
-      data: {'channel': 'sms', 'phone': kProbePhone},
-    );
-    final sendBody = _asJsonMap(send.data);
-    final devCode = sendBody['devCode'];
-    if (devCode is! String || devCode.isEmpty) {
-      throw _StepFailure(
-          'send-otp succeeded but carried no devCode — the backend is '
-          'running with NODE_ENV=production (the dev echo is gated off). '
-          'Point the probe at a dev backend.\n${prettyJson(sendBody)}');
-    }
-
-    final verify = await api.post<Object?>(
-      '/auth/verify-otp',
-      data: {'channel': 'sms', 'phone': kProbePhone, 'code': devCode},
-    );
-    final verifyBody = _asJsonMap(verify.data);
-    _session = _ProbeSession(
-      accessToken: verifyBody['accessToken'] as String,
-      refreshToken: verifyBody['refreshToken'] as String,
-    );
-    return 'Handshake complete — session cached for this app session.';
-  }
-
-  /// POST with the probe's Bearer token. On a 401 (expired cached session),
-  /// redoes the handshake ONCE and retries. Non-2xx responses become
-  /// [_StepFailure]s carrying the envelope verbatim.
+  /// POST with the probe's Bearer token (via the shared [DevOtpHandshake]). On
+  /// a 401 (expired cached session), redoes the handshake ONCE and retries.
+  /// Non-2xx responses become [_StepFailure]s carrying the envelope verbatim.
+  /// A handshake failure (no devCode) surfaces its display detail.
   Future<Map<String, dynamic>> _authedPost(
     String path,
     Map<String, Object?> body, {
     Map<String, String>? headers,
     bool retryOn401 = true,
   }) async {
-    if (_session == null) {
-      await _handshake();
+    final DevOtpSession session;
+    try {
+      session = await _auth.session();
+    } on DevOtpHandshakeException catch (e) {
+      throw _StepFailure(e.detail);
     }
     final res = await api.post<Object?>(
       path,
       data: body,
       options: Options(
         headers: {
-          'Authorization': 'Bearer ${_session!.accessToken}',
+          'Authorization': 'Bearer ${session.accessToken}',
           ...?headers,
         },
         validateStatus: (_) => true,
       ),
     );
     if (res.statusCode == 401 && retryOn401) {
-      _session = null;
+      _auth.invalidate();
       return _authedPost(path, body, headers: headers, retryOn401: false);
     }
     if (res.statusCode == null || res.statusCode! >= 300) {
@@ -446,8 +423,7 @@ String _randomUuidV4() {
   }
   bytes[6] = (bytes[6] & 0x0F) | 0x40; // version 4
   bytes[8] = (bytes[8] & 0x3F) | 0x80; // variant 10
-  final hex =
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
       '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
 }

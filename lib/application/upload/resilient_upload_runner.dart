@@ -225,7 +225,8 @@ class ResilientUploadRunner {
     }
   }
 
-  void _emit(String name, UploadSessionSpec session, Map<String, Object?> props) {
+  void _emit(
+      String name, UploadSessionSpec session, Map<String, Object?> props) {
     _analytics(name, {
       'session_id': session.sessionId,
       ...props,
