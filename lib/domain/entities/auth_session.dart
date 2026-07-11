@@ -112,10 +112,11 @@ class AuthSession {
     }
 
     // Prefer an explicit absolute expiry; otherwise derive from expiresIn
-    // seconds; finally fall back to the JWT `exp` claim if present.
+    // seconds (recapture-api names it accessTokenExpiresIn); finally fall
+    // back to the JWT `exp` claim if present.
     final DateTime expiry;
     final explicit = json['accessTokenExpiry'];
-    final expiresIn = json['expiresIn'];
+    final expiresIn = json['expiresIn'] ?? json['accessTokenExpiresIn'];
     if (explicit is String && DateTime.tryParse(explicit) != null) {
       expiry = DateTime.parse(explicit).toUtc();
     } else if (expiresIn is num) {

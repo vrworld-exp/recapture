@@ -4,8 +4,9 @@ Commands for Flutter :------------->
 
     flutter emulators
 
-    flutter clean    
         : Above will remove all unneccessory things from the project.
+        
+    flutter clean    
 
     flutter pub outdated
 

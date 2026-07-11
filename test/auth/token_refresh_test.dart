@@ -145,8 +145,16 @@ class FakeAuthRepository implements AuthRepository {
   AuthSession? Function(String refreshToken)? onRefresh;
 
   @override
+  Future<OtpSendResult> sendOtp({
+    required String channel,
+    required String identifier,
+  }) async =>
+      const OtpSendResult();
+
+  @override
   Future<AuthSession?> verifyOtp({
-    required String destination,
+    required String channel,
+    required String identifier,
     required String code,
   }) async =>
       _session();

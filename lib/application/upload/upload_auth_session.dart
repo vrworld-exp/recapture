@@ -1,19 +1,21 @@
 // lib/application/upload/upload_auth_session.dart
 //
-// The BACKEND-SESSION seam for the upload flow. The app's AuthRepository is
-// still stubbed (its tokens would 401 against the live backend), so the flow
-// obtains a real Bearer session through this small interface instead of the
-// app-wide Dio/auth state. Wiring real login is a separate task; when it
-// lands, only [uploadAuthSessionProvider] changes — the flow and the adapter
-// keep reading through the seam.
+// The BACKEND-SESSION seam for the upload flow: a small interface supplying a
+// valid Bearer token, so the flow/adapter never depend on where the session
+// comes from.
 //
-// DEV IMPLEMENTATION: reuses the dev-probe OTP handshake (the shared
-// [DevOtpHandshake] — send-otp devCode echo → verify-otp, in-memory cache).
-// It requires a backend running NODE_ENV=development; against production the
-// handshake fails and the failure surfaces on Screen 9F as an auth error.
+// PRODUCTION IMPLEMENTATION ([AppAuthUploadSession]): the app's REAL logged-in
+// session via [AuthNotifier] — proactive refresh through ensureFreshToken, and
+// a forced rotate on 401 recovery. Requires a real login (the devCode/OTP
+// flow); a master-OTP stub session's tokens are rejected by the backend and
+// surface on Screen 9F as an auth failure.
+//
+// [DevOtpUploadAuthSession] (the probe's send-otp devCode → verify-otp
+// handshake) is kept for dev tooling/tests that must not touch app auth state.
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../auth/auth_notifier.dart';
 import '../../data/remote/dev_otp_handshake.dart';
 import '../../utils/constants.dart';
 
@@ -35,18 +37,40 @@ class DevOtpUploadAuthSession implements UploadAuthSession {
       (await _handshake.session(forceRefresh: forceRefresh)).accessToken;
 }
 
-/// The active backend session for uploads. DEV: the probe's OTP handshake on
-/// its OWN bare Dio (never the app-wide client — its AuthInterceptor is wired
-/// to the stubbed auth state). Swap this provider when real login lands.
-final uploadAuthSessionProvider = Provider<UploadAuthSession>((ref) {
-  return DevOtpUploadAuthSession(DevOtpHandshake(
-    api: Dio(BaseOptions(
-      baseUrl: AppConfig.apiBaseUrl,
-      connectTimeout: AppConfig.connectTimeout,
-      receiveTimeout: AppConfig.receiveTimeout,
-    )),
-  ));
-});
+/// PRODUCTION [UploadAuthSession]: the app's real logged-in session.
+class AppAuthUploadSession implements UploadAuthSession {
+  const AppAuthUploadSession(this._ref);
+
+  final Ref _ref;
+
+  @override
+  Future<String> accessToken({bool forceRefresh = false}) async {
+    final auth = _ref.read(authProvider.notifier);
+    if (forceRefresh) {
+      // 401 recovery: rotate now (single-flight inside the notifier). A failed
+      // rotate means the session is gone — the thrown error surfaces through
+      // the upload flow as an auth failure (Screen 9F), never a silent hang.
+      final ok = await auth.refresh();
+      final token = ok ? auth.accessTokenOrNull : null;
+      if (token == null) {
+        throw StateError('session expired — sign in again to upload');
+      }
+      return token;
+    }
+    final token = await auth.ensureFreshToken();
+    if (token == null) {
+      throw StateError('not signed in — log in before uploading');
+    }
+    return token;
+  }
+}
+
+/// The active backend session for uploads: the app's real login session.
+/// (A master-OTP stub session cannot upload — its tokens 401 server-side and
+/// the flow reports an auth failure. Use the devCode login when testing.)
+final uploadAuthSessionProvider = Provider<UploadAuthSession>(
+  (ref) => AppAuthUploadSession(ref),
+);
 
 /// Builds the AUTHED Dio the upload flow's backend calls go through: attaches
 /// the seam's Bearer token per request and, on a 401, refreshes the session

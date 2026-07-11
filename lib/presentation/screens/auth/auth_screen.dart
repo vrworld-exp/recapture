@@ -1,10 +1,14 @@
 // lib/presentation/screens/auth/auth_screen.dart
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/auth/otp_request.dart';
+import '../../../data/repositories/auth_repository.dart';
 import '../../../domain/auth/auth_input_validators.dart';
 import '../../../domain/entities/country_code.dart';
 import '../../../platform/connectivity_watcher.dart';
@@ -13,17 +17,17 @@ import '../../widgets/app_text_field.dart';
 import '../../widgets/country_code_picker.dart';
 import '../../widgets/offline_retry_modal.dart';
 
-class AuthScreen extends StatefulWidget {
+class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key, this.connectivity});
 
   /// Injectable connectivity gate for tests; null → the real watcher.
   final ConnectivityWatcher? connectivity;
 
   @override
-  State<AuthScreen> createState() => _AuthScreenState();
+  ConsumerState<AuthScreen> createState() => _AuthScreenState();
 }
 
-class _AuthScreenState extends State<AuthScreen> {
+class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _isPhone = true;
 
   late final ConnectivityWatcher _connectivity =
@@ -41,6 +45,9 @@ class _AuthScreenState extends State<AuthScreen> {
   String? _phoneError;
   String? _emailError;
 
+  /// Double-tap guard around the send-otp network step.
+  bool _sending = false;
+
   @override
   void dispose() {
     _phoneController.dispose();
@@ -48,24 +55,93 @@ class _AuthScreenState extends State<AuthScreen> {
     super.dispose();
   }
 
-  /// Wraps the "Send OTP" network step: validate the active tab's input first
-  /// (invalid → inline error, no network), then if offline surface the retry
-  /// modal; only proceed once connectivity is confirmed.
+  /// The normalized identifier for the active tab: E.164 phone (dial code +
+  /// national digits) or trimmed, lowercased email — matching the backend's
+  /// own normalization so send and verify always address the same record.
+  String get _identifier => _isPhone
+      ? '${_country.dialCode}${_phoneController.text.trim()}'
+      : _emailController.text.trim().toLowerCase();
+
+  String get _channel => _isPhone ? 'sms' : 'email';
+
+  /// Wraps the "Send OTP" step: validate the active tab's input first
+  /// (invalid → inline error, no network), confirm connectivity (offline →
+  /// retry modal), then dispatch the real send-otp. Only a successful
+  /// dispatch installs the OTP request and navigates to the OTP screen.
   Future<void> _onSendOtp() async {
-    if (!_validateActiveTab()) return;
-    final status = await _connectivity.currentStatus();
-    if (!mounted) return;
-    if (status == AppConnectivityStatus.offline) {
-      // Modal is non-dismissible, so this returns only after a successful
-      // retry (device back online).
-      await showOfflineRetryModal(
-        context,
-        source: OfflineSource.auth,
-        onRetry: _ensureOnline,
-      );
+    if (_sending || !_validateActiveTab()) return;
+    _sending = true;
+    try {
+      final status = await _connectivity.currentStatus();
       if (!mounted) return;
+      if (status == AppConnectivityStatus.offline) {
+        // Modal is non-dismissible, so this returns only after a successful
+        // retry (device back online).
+        await showOfflineRetryModal(
+          context,
+          source: OfflineSource.auth,
+          onRetry: _ensureOnline,
+        );
+        if (!mounted) return;
+      }
+
+      final OtpSendResult result;
+      try {
+        result = await ref.read(authRepositoryProvider).sendOtp(
+              channel: _channel,
+              identifier: _identifier,
+            );
+      } on OtpRateLimitedException catch (e) {
+        _setActiveTabError(
+          'Too many attempts — try again in ${e.retryAfterSeconds ?? 60}s.',
+        );
+        return;
+      } on DioException {
+        // Transport/server failure → the shared retry modal; it closes only
+        // after a retry that resolves (dispatch succeeded).
+        if (!mounted) return;
+        OtpSendResult? retried;
+        await showOfflineRetryModal(
+          context,
+          source: OfflineSource.auth,
+          onRetry: () async {
+            retried = await ref.read(authRepositoryProvider).sendOtp(
+                  channel: _channel,
+                  identifier: _identifier,
+                );
+          },
+        );
+        if (retried == null || !mounted) return;
+        _installAndGo(retried!);
+        return;
+      }
+      if (!mounted) return;
+      _installAndGo(result);
+    } finally {
+      _sending = false;
     }
+  }
+
+  /// Publishes the dispatched request (destination + dev echo) for the OTP
+  /// screen, then navigates.
+  void _installAndGo(OtpSendResult result) {
+    ref.read(otpRequestProvider.notifier).set(OtpRequest(
+          channel: _channel,
+          identifier: _identifier,
+          devCode: result.devCode,
+        ));
     context.goNamed(AppRouteNames.otpVerify);
+  }
+
+  void _setActiveTabError(String message) {
+    if (!mounted) return;
+    setState(() {
+      if (_isPhone) {
+        _phoneError = message;
+      } else {
+        _emailError = message;
+      }
+    });
   }
 
   /// Runs the pure validator for the visible tab and installs/clears its

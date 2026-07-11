@@ -6,10 +6,12 @@
 // clears the error, the country sheet swaps the dial code (and its rules),
 // and valid input proceeds to the OTP route.
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/data/repositories/auth_repository.dart';
 import 'package:recapture/platform/connectivity_watcher.dart';
 import 'package:recapture/presentation/screens/auth/auth_screen.dart';
 
@@ -18,6 +20,21 @@ class _FakeConnectivity extends ConnectivityWatcher {
   @override
   Future<AppConnectivityStatus> currentStatus() async =>
       AppConnectivityStatus.online;
+}
+
+/// Network-free repository: send-otp always succeeds (no devCode), so valid
+/// input proceeds to the OTP route without Dio/dotenv.
+class _FakeAuthRepository extends AuthRepository {
+  int sendCalls = 0;
+
+  @override
+  Future<OtpSendResult> sendOtp({
+    required String channel,
+    required String identifier,
+  }) async {
+    sendCalls++;
+    return const OtpSendResult();
+  }
 }
 
 const _otpMarker = 'OTP SCREEN STUB';
@@ -41,7 +58,12 @@ Future<void> _pumpAuth(WidgetTester tester) async {
   // Pump under the REAL app theme: layout bugs can be theme-induced (e.g. the
   // theme's full-width OutlinedButton minimumSize inside an unbounded Row).
   await tester.pumpWidget(
-    MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+    ProviderScope(
+      overrides: [
+        authRepositoryProvider.overrideWithValue(_FakeAuthRepository()),
+      ],
+      child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+    ),
   );
   await tester.pumpAndSettle();
 }

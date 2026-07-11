@@ -32,6 +32,7 @@ class OtpVerificationScreen extends StatefulWidget {
     required this.destination,
     required this.onVerify,
     required this.onResend,
+    this.devCode,
     super.key,
   });
 
@@ -43,6 +44,12 @@ class OtpVerificationScreen extends StatefulWidget {
 
   /// Re-sends the code. Throws on network error.
   final Future<void> Function() onResend;
+
+  /// DEV ONLY: the OTP echoed by a development backend (no SMS/email provider
+  /// is wired). When non-null (and never in release builds) a labelled chip
+  /// renders below the resend row — tapping it fills the boxes and verifies.
+  /// Null against a production backend → the chip does not exist.
+  final String? devCode;
 
   @override
   State<OtpVerificationScreen> createState() => _OtpVerificationScreenState();
@@ -192,6 +199,20 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
     });
   }
 
+  // ── Dev autofill (devCode chip) ──────────────────────────────────────────────
+
+  /// Fills the boxes with the dev-echoed code and verifies. Programmatic
+  /// controller writes don't fire TextField.onChanged, so verification is
+  /// invoked explicitly (with its own in-flight guard).
+  void _fillDevCode() {
+    final code = widget.devCode;
+    if (code == null || _verifyInFlight) return;
+    _controller.text = code;
+    _prevLength = code.length;
+    setState(() => _error = null);
+    _handleVerify('dev_fill');
+  }
+
   // ── Resend ───────────────────────────────────────────────────────────────────
 
   Future<void> _handleResend() async {
@@ -264,6 +285,13 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
             ],
             const SizedBox(height: AppSpacing.lg),
             _buildResend(),
+            if (!kReleaseMode && widget.devCode != null) ...[
+              const SizedBox(height: AppSpacing.lg),
+              _DevCodeChip(
+                code: widget.devCode!,
+                onTap: _verifying ? null : _fillDevCode,
+              ),
+            ],
             const SizedBox(height: AppSpacing.huge),
             AppButton(
               label: 'Verify',
@@ -357,6 +385,79 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
       child: const Text('Resend code'),
+    );
+  }
+}
+
+/// DEV-ONLY helper chip: shows the backend's echoed OTP with an unmissable
+/// "FOR DEV ONLY" label; tapping fills the boxes and verifies. Rendered only
+/// when a devCode exists (development backend) and never in release builds —
+/// production users can never see it.
+class _DevCodeChip extends StatelessWidget {
+  const _DevCodeChip({required this.code, required this.onTap});
+
+  final String code;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: const Key('dev_otp_chip'),
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            color: AppColors.surface1,
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+            border: Border.all(color: AppColors.warning),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xs,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.warning,
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
+                ),
+                child: Text(
+                  'FOR DEV ONLY',
+                  style: textTheme.labelSmall?.copyWith(
+                    color: Colors.black,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                'OTP: $code',
+                key: const Key('dev_otp_chip_code'),
+                style: textTheme.bodyMedium?.copyWith(
+                  color: AppColors.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                'Tap to fill',
+                style: textTheme.bodySmall
+                    ?.copyWith(color: AppColors.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
