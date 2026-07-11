@@ -77,7 +77,7 @@ flutter_launcher_icons:
 
   android: true
   ios: true
-  image_path: "assets/icon/recapture_icon.png"
+  image_path: "assets/icons/icon.png"
   web:
     generate: true
-    image_path: "assets/icon/recapture_icon.png"
+    image_path: "assets/icons/icon.png"
