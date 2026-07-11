@@ -1,5 +1,5 @@
 
-✅✅✅✅✅✅✅✅✅✅✅/2 
+✅✅✅✅✅✅✅✅✅✅✅
 
 # Task: 0–180° Camera-Tilt Bands per Capture Level (BOTTOM=up, EYE=straight, TOP=down)
 
