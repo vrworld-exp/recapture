@@ -50,14 +50,15 @@ void main() {
         stability: Stability.unstable,
       ));
       expect(out.instruction.id, 'tilt');
-      expect(out.instruction.message, 'Tilt down');
+      // aboveBand = tilt value too high = aimed too far down → tilt up.
+      expect(out.instruction.message, 'Tilt up');
       expect(out.instruction.severity, InstructionSeverity.warning);
       expect(out.direction.visible, isFalse);
     });
 
-    test('belowBand → Tilt up', () {
+    test('belowBand → Tilt down (aimed too far up on the 0–180 scale)', () {
       expect(resolveGuidance(inputs(tilt: TiltState.belowBand)).instruction.message,
-          'Tilt up');
+          'Tilt down');
     });
 
     test('in-band + unstable → STABILITY (arrow hidden), even off-position', () {

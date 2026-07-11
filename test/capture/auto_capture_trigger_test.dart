@@ -25,7 +25,7 @@ void main() {
     bool wasInBand = false,
   }) =>
       shouldCapture(
-        currentPitch: pitch,
+        currentTilt: pitch,
         pitchBand: band,
         isStable: stable,
         isCurrentFilled: filled,

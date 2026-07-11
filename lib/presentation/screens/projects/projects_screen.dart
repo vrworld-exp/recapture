@@ -7,9 +7,11 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/projects/projects_notifier.dart';
+import '../../../dev/dev_probe/dev_tools_section.dart';
 import '../../../domain/entities/project.dart';
 import '../../../domain/entities/project_status.dart';
 import '../../../utils/analytics.dart';
+import '../../../utils/app_env.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/offline_retry_modal.dart';
@@ -225,7 +227,16 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
         backgroundColor: AppColors.mirageRed,
         child: const Icon(Icons.add, color: Colors.white),
       ),
-      body: _buildBody(projectsAsync),
+      // The Dev Tools section is compile-time gated: in prod flavors the
+      // const condition folds away and the section never exists in the tree.
+      body: kAppEnvironment.isProduction
+          ? _buildBody(projectsAsync)
+          : Column(
+              children: [
+                const DevToolsSection(),
+                Expanded(child: _buildBody(projectsAsync)),
+              ],
+            ),
     );
   }
 

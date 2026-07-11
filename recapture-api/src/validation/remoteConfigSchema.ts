@@ -17,8 +17,12 @@ import {
  * fetches so behaviour can change without an app release. Kept deliberately
  * small (low-end Android consumes this) and free of any internal/store fields.
  *
- * - `pitchBands` — camera-pitch ranges (degrees) for the guided capture rings
- *   (mirrors the EYE/TOP/LOW levels in capture.types).
+ * - `pitchBands` — camera-TILT ranges for the guided capture rings on the
+ *   0–180° scale (0 = camera at the sky, 90 = horizon, 180 = at the ground),
+ *   keyed by the client's band ids (`low`/`mid`/`high` ↔ the LOW/EYE/TOP rings
+ *   in capture.types). The wire shape (`id`/`minDegrees`/`maxDegrees`/
+ *   `segments`, min inclusive, max exclusive) is EXACTLY what the client's
+ *   `CaptureConfig.fromMap` parses — one shape on both sides, no mapping layer.
  * - `thresholds` — minimum accepted photos per ring, keyed by object size.
  * - `segmentCounts` — ring segment count, keyed by object size.
  * - `guided_capture_variant_segments` — per capture-flow-variant segment
@@ -37,9 +41,10 @@ export const remoteConfigSchema = z
       .array(
         z
           .object({
-            min: z.number(),
-            max: z.number(),
-            label: z.string().min(1),
+            id: z.string().min(1),
+            minDegrees: z.number().min(0).max(180),
+            maxDegrees: z.number().min(0).max(180),
+            segments: z.number().int().positive(),
           })
           .strict()
       )
@@ -98,12 +103,17 @@ function variantSegmentsBlock(variant: CaptureFlowVariant): Record<string, numbe
  * defaults can never silently diverge from the server's own capture rules.
  */
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
-  version: 1,
-  // EYE/TOP/LOW guided-capture rings, expressed as camera-pitch degree bands.
+  // Version 2: the 0–180° camera-tilt band scale (bumped so client ETag/304
+  // caches roll over to the new payload).
+  version: 2,
+  // LOW/EYE/TOP guided-capture rings as camera-tilt bands tiling [0, 180]:
+  // BOTTOM ring `low` (tilt up) / EYE ring `mid` (hold straight) / TOP ring
+  // `high` (tilt down). Mirrors the client's bundled defaults; legacy per-band
+  // `segments` retained (real counts come from guided_capture_variant_segments).
   pitchBands: [
-    { min: -20, max: 20, label: 'EYE' },
-    { min: 20, max: 60, label: 'TOP' },
-    { min: -60, max: -20, label: 'LOW' },
+    { id: 'low', minDegrees: 0, maxDegrees: 60, segments: 12 },
+    { id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10 },
+    { id: 'high', minDegrees: 120, maxDegrees: 180, segments: 8 },
   ],
   thresholds: bySizeApiKey(MIN_PHOTOS_PER_RING_BY_SIZE),
   segmentCounts: bySizeApiKey(SEGMENT_COUNT_BY_SIZE),

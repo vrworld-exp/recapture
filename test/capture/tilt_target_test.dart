@@ -41,12 +41,12 @@ void main() {
       expect(tiltStateFor(45, target), TiltState.inBand);
     });
 
-    test('above the band → aboveBand (tilt down)', () {
+    test('above the band → aboveBand (aimed too far down → tilt up)', () {
       expect(tiltStateFor(70, target), TiltState.aboveBand);
       expect(tiltStateFor(60, target), TiltState.aboveBand); // max exclusive
     });
 
-    test('below the band → belowBand (tilt up)', () {
+    test('below the band → belowBand (aimed too far up → tilt down)', () {
       expect(tiltStateFor(10, target), TiltState.belowBand);
       expect(tiltStateFor(29.999, target), TiltState.belowBand);
     });

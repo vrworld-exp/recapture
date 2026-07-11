@@ -7,8 +7,9 @@
 // (the original feature brief assumed those; see the grounded analytics layer doc).
 //
 // Sources of each field at the capture-attempt instant:
-//   - pitchBandId / pitchDegrees  → CapturePitchGuide.activeBand(config, pitchDeg)
-//                                    over SmoothedOrientation.pitchDegrees (DEGREES).
+//   - pitchBandId / pitchDegrees  → CapturePitchGuide.activeBand(config, tilt)
+//                                    over SmoothedOrientation.cameraTiltDegrees
+//                                    (the 0–180° camera-tilt scale, DEGREES).
 //   - stabilityScore / gyroMag / linAccelMag / sensorTimestampNs
 //                                  → the most recent StabilityScoreEvent
 //                                    (lib/platform/stability_channel.dart).
@@ -35,7 +36,9 @@ class CaptureEventProperties {
   /// are server-tunable, so this is the band id, NOT a fixed enum name.
   final String? pitchBandId;
 
-  /// Device pitch in DEGREES at the attempt (`SmoothedOrientation.pitchDegrees`).
+  /// Camera tilt in DEGREES at the attempt, on the 0–180° scale
+  /// (`SmoothedOrientation.cameraTiltDegrees`). Prop name kept verbatim —
+  /// event shapes are unchanged.
   final double pitchDegrees;
 
   /// Continuous stillness score in [0, 1] from the most recent

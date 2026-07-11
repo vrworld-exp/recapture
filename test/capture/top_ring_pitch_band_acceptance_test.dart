@@ -10,14 +10,16 @@
 // mis-tuned (flipped sign, recentered on level, or an edge moved), the relevant
 // assertion here FAILS and surfaces it; this file does NOT "fix" the band.
 //
-// CONFIRMED SIGN CONVENTION (read from the source of truth, NOT the brief's
-// external "down = negative" mental model): in this codebase the Top Ring is the
-// HIGH POSITIVE band. `pitchBandIdForLevel(CaptureLevel.b) == 'high'`, and the
-// bundled `high` band is [60, 90) — the upper slice of the [0, 90] capture range
-// the bands tile. So the "above the subject" Top Ring pass is encoded as a high
-// positive pitch band, reached by raising pitch toward 60–90 (the indicator's
-// "Tilt up" guidance). The acceptance assertions below are written so that
-// flipping this to a negative band, or recentering it on level (0°), fails.
+// CONFIRMED SCALE CONVENTION (read from the source of truth, NOT the brief's
+// external "down = negative" mental model): degrees are the 0–180° CAMERA TILT
+// (0 = camera at the sky, 90 = horizon, 180 = at the ground). The Top Ring is
+// the HIGH band: `pitchBandIdForLevel(CaptureLevel.b) == 'high'`, and the
+// bundled `high` band is [120, 180) — the top slice of the 0–180 scale the
+// bands tile. So the "above the subject" Top Ring pass is encoded as a high
+// tilt band, reached by tilting the phone DOWN toward the object (the
+// indicator's "Tilt down" guidance while below the band). The acceptance
+// assertions below are written so that flipping this to a negative band, or
+// recentering it on the horizon (90°), fails.
 //
 // Band membership contract (capture_pitch_guide.dart): minDegrees INCLUSIVE,
 // maxDegrees EXCLUSIVE; NaN/Infinity → false (no throw).
@@ -30,7 +32,7 @@ import 'package:recapture/domain/entities/capture_pitch_guide.dart';
 void main() {
   // The Top Ring band, resolved through the REAL production path: the single
   // level→band-id map + the band resolver over the live config. Reading from the
-  // source of truth (not a hardcoded [60,90) duplicate) means the boundary tests
+  // source of truth (not a hardcoded [120,180) duplicate) means the boundary tests
   // track an INTENTIONAL config change and fail on an UNINTENTIONAL one.
   const config = CaptureConfig.bundledDefault;
   final topRingBandId = pitchBandIdForLevel(CaptureLevel.b);
@@ -58,11 +60,11 @@ void main() {
       expect(topRing.minDegrees, greaterThanOrEqualTo(0),
           reason: 'a flip to a negative band must fail here');
       expect(topRing.maxDegrees, greaterThan(topRing.minDegrees));
-      // The accepted orientation is the UPPER part of the [0,90] capture range —
-      // not level and not the low ring. Recentering on 0° would drop this.
+      // The accepted orientation is the UPPER part of the 0–180 tilt scale —
+      // not the horizon and not the low ring. Recentering on 90° would drop this.
       final center = (topRing.minDegrees + topRing.maxDegrees) / 2;
-      expect(center, greaterThan(45),
-          reason: 'Top Ring must center on the high (upward-pitch) orientation');
+      expect(center, greaterThan(90),
+          reason: 'Top Ring must center on the high (aimed-down) orientation');
     });
   });
 
@@ -72,9 +74,9 @@ void main() {
     // a deliberate retune), this asserts the exact edges so an UNINTENDED nudge —
     // even by 1° — fails here. A deliberate retune updates these two numbers on
     // purpose; that conscious edit is the point of the tripwire.
-    test('high band is exactly [60, 90)', () {
-      expect(topRing.minDegrees, 60);
-      expect(topRing.maxDegrees, 90);
+    test('high band is exactly [120, 180)', () {
+      expect(topRing.minDegrees, 120);
+      expect(topRing.maxDegrees, 180);
     });
   });
 
@@ -84,11 +86,11 @@ void main() {
       expect(accepted(center), isTrue);
     });
 
-    test('a fixed representative Top-Ring pitch (75°) is accepted', () {
-      // Hardcoded on purpose: this is the sign/region anchor. If the band is
-      // flipped negative or recentered on level, 75° stops being accepted and
+    test('a fixed representative Top-Ring tilt (150°) is accepted', () {
+      // Hardcoded on purpose: this is the region anchor. If the band is flipped
+      // negative or recentered on the horizon, 150° stops being accepted and
       // THIS fails — independent of the (then-moved) derived edges.
-      expect(accepted(75), isTrue);
+      expect(accepted(150), isTrue);
     });
   });
 
@@ -111,20 +113,20 @@ void main() {
   });
 
   group('Top Ring band — out-of-band poses are rejected (sign guard)', () {
-    test('level pose (0°) is rejected for the Top Ring', () {
-      expect(accepted(0), isFalse);
+    test('horizon pose (90°) is rejected for the Top Ring', () {
+      expect(accepted(90), isFalse);
     });
 
     test('upward/opposite-sign pose (mirror of the band) is rejected', () {
       // The mirror of the nominal center across 0°. With the band on the high
-      // positive side this is clearly out; if someone flips the band's sign, the
-      // mirror would become accepted and this fails (paired with the 75° accept).
+      // end this is clearly out; if someone flips the band's sign, the mirror
+      // would become accepted and this fails (paired with the 150° accept).
       final center = (topRing.minDegrees + topRing.maxDegrees) / 2;
       expect(accepted(-center), isFalse);
-      expect(accepted(-75), isFalse);
+      expect(accepted(-150), isFalse);
     });
 
-    test('a pitch well below the band (Eye/level region) is rejected', () {
+    test('a tilt well below the band (Eye/horizon region) is rejected', () {
       expect(accepted(topRing.minDegrees - 30), isFalse);
     });
   });
@@ -139,10 +141,11 @@ void main() {
       expect(accepted(double.negativeInfinity), isFalse);
     });
 
-    test('out-of-range magnitudes (beyond ±90/±180) → not accepted, no throw', () {
+    test('out-of-range magnitudes (beyond the 0–180 scale) → not accepted, '
+        'no throw', () {
       expect(accepted(999), isFalse);
       expect(accepted(-999), isFalse);
-      expect(accepted(180), isFalse);
+      expect(accepted(180), isFalse); // max exclusive
     });
 
     // NOTE: the production seam (CapturePitchGuide.isInBand) takes a non-nullable
@@ -163,7 +166,7 @@ void main() {
 
     test('the same downward-tilt pose accepted by Top Ring is NOT a lower-ring pose',
         () {
-      const topPose = 75.0;
+      const topPose = 150.0;
       expect(CapturePitchGuide.isInBand(topRing, topPose), isTrue);
       expect(CapturePitchGuide.isInBand(lowerRing, topPose), isFalse);
     });

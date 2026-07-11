@@ -96,10 +96,10 @@ void main() {
     test('same-id content change commits immediately (no dwell, no thrash)', () {
       final d = GuidanceDwell(now: now);
       expect(d.tick(inputs(tilt: TiltState.belowBand)).instruction.message,
-          'Tilt up');
+          'Tilt down');
       // same id 'tilt', different text → immediate
       expect(d.tick(inputs(tilt: TiltState.aboveBand)).instruction.message,
-          'Tilt down');
+          'Tilt up');
     });
 
     test('complete preempts immediately', () {

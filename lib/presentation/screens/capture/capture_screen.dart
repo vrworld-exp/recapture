@@ -14,7 +14,7 @@ import '../../../application/capture/analytics/capture_trigger_analytics.dart';
 import '../../../application/capture/auto_capture_controller.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
 import '../../../application/capture/capture_lock.dart';
-import '../../../application/capture/current_pitch_provider.dart';
+import '../../../application/capture/current_tilt_provider.dart';
 import '../../../application/capture/ledger/captured_photo_record.dart';
 import '../../../application/capture/ledger/level_capture_ledger.dart';
 import '../../../application/capture/ledger/level_capture_ledger_registry_provider.dart';
@@ -200,8 +200,8 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   CapturedFrame? _autoFrame;
 
   /// The auto-capture FIRE loop: re-evaluates the pure trigger conjunction
-  /// (in band + stable + segment unfilled + cooldown) on every smoothed-pitch
-  /// tick — see the [currentPitchProvider] listener in [initState] — and fires a
+  /// (in band + stable + segment unfilled + cooldown) on every smoothed-tilt
+  /// tick — see the [currentTiltProvider] listener in [initState] — and fires a
   /// single native capture when it holds. It owns cooldown/in-flight state; the
   /// screen owns enablement ([_autoCapture], [_autoCaptureSuspended], retake,
   /// completion, preview running).
@@ -337,10 +337,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     _loadAutoCapturePref();
     _loadCaptureSettings();
     // Drive the auto-capture loop from the shared orientation stream: every
-    // smoothed-pitch tick re-evaluates the trigger conjunction. listenManual
+    // smoothed-tilt tick re-evaluates the trigger conjunction. listenManual
     // (not watch) — a sensor tick must evaluate, never rebuild the screen. The
     // subscription is closed automatically when this State is disposed.
-    ref.listenManual<AsyncValue<PitchSample>>(currentPitchProvider,
+    ref.listenManual<AsyncValue<TiltSample>>(currentTiltProvider,
         (previous, next) {
       final sample = next.asData?.value;
       if (sample != null) _onOrientationTick(sample);
@@ -499,9 +499,9 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// Best-effort read of whether BOTH IMU-derived signals are usable right now
   /// (mirrors the shutter's gate). False while sensors are warming up.
   bool _sensorSupportedNow() {
-    final pitch = ref.read(currentPitchProvider).asData?.value;
+    final tilt = ref.read(currentTiltProvider).asData?.value;
     final stability = ref.read(stabilityProvider).asData?.value;
-    return (pitch?.sensorSupported ?? false) &&
+    return (tilt?.sensorSupported ?? false) &&
         (stability?.sensorSupported ?? false);
   }
 
@@ -777,8 +777,8 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// deliberate shot), the level has completed, or the preview is not running.
   /// Skipped entirely before the ring segment is known (no attributable segment
   /// → no truthful fill), mirroring the manual path's coverage rule.
-  void _onOrientationTick(PitchSample pitch) {
-    if (!pitch.sensorSupported) return;
+  void _onOrientationTick(TiltSample tilt) {
+    if (!tilt.sensorSupported) return;
     final seg =
         ref.read(currentRingSegmentProvider).valueOrNull?.currentSegment;
     if (seg == null) return;
@@ -792,7 +792,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         !_levelCompleteNavigated &&
         _cameraController.value.status == CameraPreviewStatus.running;
     unawaited(_autoCaptureController.evaluate(
-      pitchDegrees: pitch.pitchDegrees,
+      tiltDegrees: tilt.tiltDegrees,
       band: _resolvedBand,
       isStable: isStable,
       currentSegment: seg,
@@ -862,7 +862,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// path + segment + sensor timestamp are real (enough for resume + review).
   void _recordAcceptedAt(CapturedFrame frame, int seg) {
     ref.read(segmentCoverageProvider.notifier).recordCapture(seg);
-    final pitch = ref.read(currentPitchProvider).asData?.value;
+    final tilt = ref.read(currentTiltProvider).asData?.value;
     final n = ref.read(segmentCoverageProvider).segmentCount;
     _ledger.recordAccepted(CapturedPhotoRecord(
       segmentIndex: seg,
@@ -870,7 +870,9 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       blurScore: 100, // placeholder (accept band) — evaluator not yet wired
       meanLuminance: 128, // placeholder (mid) — evaluator not yet wired
       yawDegrees: seg * (360.0 / n),
-      pitchDegrees: pitch?.pitchDegrees ?? 0,
+      // The record's pitchDegrees field now carries the 0–180° camera tilt
+      // (the value the capture was gated on).
+      pitchDegrees: tilt?.tiltDegrees ?? 0,
       sensorTimestampNs: frame.timestampNs,
     ));
   }
@@ -947,14 +949,14 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // and `filled` stays correct (idempotent re-fill of an already-filled segment).
     ref.read(segmentCoverageProvider.notifier).recordCapture(request.ringIndex);
     final n = ref.read(segmentCoverageProvider).segmentCount;
-    final pitch = ref.read(currentPitchProvider).asData?.value;
+    final tilt = ref.read(currentTiltProvider).asData?.value;
     _ledger.recordAccepted(CapturedPhotoRecord(
       segmentIndex: request.ringIndex,
       framePath: frame.path,
       blurScore: 100, // placeholder — evaluator not yet wired
       meanLuminance: 128, // placeholder — evaluator not yet wired
       yawDegrees: request.ringIndex * (360.0 / n),
-      pitchDegrees: pitch?.pitchDegrees ?? 0,
+      pitchDegrees: tilt?.tiltDegrees ?? 0,
       sensorTimestampNs: frame.timestampNs,
     ));
 
@@ -1472,10 +1474,10 @@ class _ShutterControl extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final pitch = ref.watch(currentPitchProvider).asData?.value;
+    final tilt = ref.watch(currentTiltProvider).asData?.value;
     final stability = ref.watch(stabilityProvider).asData?.value;
 
-    final pitchSupported = pitch?.sensorSupported ?? false;
+    final tiltSupported = tilt?.sensorSupported ?? false;
     final stabilitySupported = stability?.sensorSupported ?? false;
 
     return ShutterButton(
@@ -1484,11 +1486,11 @@ class _ShutterControl extends ConsumerWidget {
         mode: CaptureMode.guided,
         // Reuse the SHARED pitch-band gate (min inclusive, max exclusive) — the
         // same membership the auto-capture trigger's isInPitchBand uses.
-        inBand: pitchSupported &&
-            CapturePitchGuide.isInBand(band, pitch!.pitchDegrees),
+        inBand: tiltSupported &&
+            CapturePitchGuide.isInBand(band, tilt!.tiltDegrees),
         stable: stabilitySupported && stability!.stability == Stability.stable,
         // Both sensors must be usable to gate; otherwise fail open.
-        sensorSupported: pitchSupported && stabilitySupported,
+        sensorSupported: tiltSupported && stabilitySupported,
       ),
       onCapture: onCapture,
       onTriggered: onTriggered,

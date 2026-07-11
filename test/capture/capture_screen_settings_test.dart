@@ -12,7 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
-import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/current_tilt_provider.dart';
 import 'package:recapture/application/capture/stability_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';

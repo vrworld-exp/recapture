@@ -9,12 +9,12 @@
 // ── CONVENTION RECONCILIATION (read this) ──────────────────────────────────────
 // The brief frames Low Ring as an "upward tilt" pass and references a negative
 // band (−30…−10). This codebase does NOT use a negative band: Level C resolves to
-// `pitchBandIdForLevel(CaptureLevel.c) == 'low'`, and the bundled `low` band is the
-// POSITIVE [0, 30) slice — the LOWEST band of the [0, 90] capture range. The Level
-// C product copy is "Lower the phone, tilt slightly up", i.e. the accepted posture
-// is a LOW positive pitch (0–30°), reached by a slight upward tilt from level.
-// These tests encode that production convention and the direction-lock below fails
-// if the band's sign is ever inverted to negative — the intended guardrail.
+// `pitchBandIdForLevel(CaptureLevel.c) == 'low'`, and the bundled `low` band is
+// [0, 60) on the 0–180° CAMERA-TILT scale (0 = camera at the sky, 90 = horizon,
+// 180 = at the ground) — the lowest slice, reached by tilting the phone UP. The
+// Level C product copy is "Lower the phone, tilt slightly up". These tests encode
+// that production convention and the direction-lock below fails if the band is
+// ever inverted to negative — the intended guardrail.
 //
 // Band membership contract (capture_pitch_guide.dart): minDegrees INCLUSIVE,
 // maxDegrees EXCLUSIVE; NaN/Infinity → false (no throw). The brief's "inclusive
@@ -27,7 +27,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/analytics/capture_level_events.dart';
-import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/current_tilt_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/domain/capture/pitch_band_resolution.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
@@ -43,17 +43,26 @@ class _StubConfig extends ConfigNotifier {
   CaptureConfig build() => _config;
 }
 
-SmoothedOrientation _at(double deg) {
-  final rad = deg * math.pi / 180.0;
+/// A SmoothedOrientation whose `cameraTiltDegrees` equals [tiltDeg]: a rotation
+/// of (180° − tilt) about device X (see camera_tilt_test.dart).
+SmoothedOrientation _at(double tiltDeg) {
+  final theta = (180.0 - tiltDeg) * math.pi / 180.0;
   return SmoothedOrientation(
-    yaw: 0, pitch: rad, roll: 0, qx: 0, qy: 0, qz: 0, qw: 1, timestampNs: 0,
+    yaw: 0,
+    pitch: 0,
+    roll: 0,
+    qx: math.sin(theta / 2),
+    qy: 0,
+    qz: 0,
+    qw: math.cos(theta / 2),
+    timestampNs: 0,
   );
 }
 
 void main() {
   // The Low Ring band, resolved through the REAL production path: the single
   // level→band-id map + the band resolver over the live config. Reading from the
-  // source of truth (not a hardcoded [0,30) duplicate) means the boundary tests
+  // source of truth (not a hardcoded [0,60) duplicate) means the boundary tests
   // track an INTENTIONAL retune and fail on an UNINTENTIONAL one.
   const config = CaptureConfig.bundledDefault;
   final lowRingBandId = pitchBandIdForLevel(CaptureLevel.c);
@@ -72,11 +81,11 @@ void main() {
       expect(lowRing.id, 'low');
     });
 
-    test('tuning tripwire: low band is exactly [0, 30)', () {
+    test('tuning tripwire: low band is exactly [0, 60)', () {
       // Explicit pin of the CURRENT tuning: an UNINTENDED edge nudge (even 1°)
       // fails here. A deliberate retune updates these two numbers on purpose.
       expect(lowRing.minDegrees, 0);
-      expect(lowRing.maxDegrees, 30);
+      expect(lowRing.maxDegrees, 60);
     });
 
     test('band is a valid positive slice in the LOWER region (sign-flip guard)', () {
@@ -84,7 +93,7 @@ void main() {
       expect(lowRing.minDegrees, greaterThanOrEqualTo(0),
           reason: 'a flip to a negative band must fail here');
       final center = (lowRing.minDegrees + lowRing.maxDegrees) / 2;
-      expect(center, lessThan(45),
+      expect(center, lessThan(90),
           reason: 'Low Ring is the lower slice, not the high/Top Ring band');
     });
   });
@@ -95,11 +104,11 @@ void main() {
       expect(accepted(center), isTrue);
     });
 
-    test('a fixed representative Low-Ring pitch (15°) is accepted', () {
+    test('a fixed representative Low-Ring tilt (30°) is accepted', () {
       // Hardcoded on purpose: the sign/region anchor. If the band is inverted to
-      // negative or pushed up, 15° stops being accepted and THIS fails —
+      // negative or pushed up, 30° stops being accepted and THIS fails —
       // independent of the (then-moved) derived edges.
-      expect(accepted(15), isTrue);
+      expect(accepted(30), isTrue);
     });
   });
 
@@ -128,11 +137,11 @@ void main() {
       // this fails (paired with the 15° accept) — the upward-tilt direction lock.
       final center = (lowRing.minDegrees + lowRing.maxDegrees) / 2;
       expect(accepted(-center), isFalse);
-      expect(accepted(-15), isFalse);
+      expect(accepted(-30), isFalse);
     });
 
     test('a high-tilt (Top Ring) pose is rejected for the Low Ring', () {
-      expect(accepted(75), isFalse);
+      expect(accepted(150), isFalse);
     });
 
     test('a pitch just above the band region is rejected', () {
@@ -150,7 +159,8 @@ void main() {
       expect(accepted(double.negativeInfinity), isFalse);
     });
 
-    test('out-of-range magnitudes (beyond ±90/±180) → not accepted, no throw', () {
+    test('out-of-range magnitudes (beyond the 0–180 scale) → not accepted, '
+        'no throw', () {
       expect(accepted(999), isFalse);
       expect(accepted(-999), isFalse);
       expect(accepted(180), isFalse);
@@ -167,10 +177,10 @@ void main() {
     });
 
     test('a Low-Ring pose is NOT a Top-Ring pose and vice-versa', () {
-      expect(CapturePitchGuide.isInBand(lowRing, 15), isTrue);
-      expect(CapturePitchGuide.isInBand(topRing, 15), isFalse);
-      expect(CapturePitchGuide.isInBand(topRing, 75), isTrue);
-      expect(accepted(75), isFalse);
+      expect(CapturePitchGuide.isInBand(lowRing, 30), isTrue);
+      expect(CapturePitchGuide.isInBand(topRing, 30), isFalse);
+      expect(CapturePitchGuide.isInBand(topRing, 150), isTrue);
+      expect(accepted(150), isFalse);
     });
   });
 
@@ -224,17 +234,17 @@ void main() {
       Analytics.testSink = (n, p) => events.add((name: n, props: p));
       addTearDown(() => Analytics.testSink = null);
 
-      // 50° is above the Low Ring [0,30) → sustained out-of-band → one emission.
+      // 90° is above the Low Ring [0,60) → sustained out-of-band → one emission.
       await pumpOverlay(tester,
-          outCooldown: const Duration(seconds: 3), pitches: [50]);
+          outCooldown: const Duration(seconds: 3), pitches: [90]);
 
       final out =
           events.where((e) => e.name == AnalyticsEvents.tiltMeterOutOfBand);
       expect(out, hasLength(1));
       expect(out.first.props['target_band_id'], 'low');
       expect(out.first.props['level'], 'C');
-      expect(out.first.props['direction'], 'above'); // above [0,30)
-      expect(out.first.props['pitch'], 50.0);
+      expect(out.first.props['direction'], 'above'); // above [0,60)
+      expect(out.first.props['pitch'], closeTo(90.0, 0.001));
     });
 
     testWidgets('is DEBOUNCED — oscillation near the edge does not emit per tick',
@@ -247,7 +257,7 @@ void main() {
       await pumpOverlay(
         tester,
         outCooldown: const Duration(seconds: 3),
-        pitches: [50, 51, 52, 50, 53],
+        pitches: [90, 91, 92, 90, 93],
       );
 
       final out =
@@ -261,9 +271,9 @@ void main() {
       Analytics.testSink = (n, p) => events.add((name: n, props: p));
       addTearDown(() => Analytics.testSink = null);
 
-      // 15° is inside [0,30) → in-band → no guidance event.
+      // 30° is inside [0,60) → in-band → no guidance event.
       await pumpOverlay(tester,
-          outCooldown: Duration.zero, pitches: [15, 15, 15]);
+          outCooldown: Duration.zero, pitches: [30, 30, 30]);
 
       expect(
         events.where((e) => e.name == AnalyticsEvents.tiltMeterOutOfBand),

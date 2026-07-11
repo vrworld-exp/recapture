@@ -42,8 +42,10 @@ GuidanceOutput resolveGuidance(GuidanceInputs i) {
 
   // 1) TILT (highest) — only trustworthy when sensors work.
   if (i.sensorSupported && i.tilt != TiltState.inBand) {
-    // aboveBand = aimed too high → tilt down; belowBand → tilt up.
-    final message = i.tilt == TiltState.aboveBand ? 'Tilt down' : 'Tilt up';
+    // 0–180° camera-tilt scale (0 = sky, 180 = ground): aboveBand = tilt value
+    // too high = aimed too far DOWN → tilt up; belowBand = aimed too far up →
+    // tilt down.
+    final message = i.tilt == TiltState.aboveBand ? 'Tilt up' : 'Tilt down';
     return _banner('tilt', message, InstructionSeverity.warning);
   }
 

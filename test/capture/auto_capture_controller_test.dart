@@ -41,7 +41,7 @@ void main() {
       // (and the cooldown) → no repeat.
       var isFilled = false;
       Future<AutoCaptureOutcome> tick() => c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 45,
             band: band,
             isStable: true,
             currentSegment: 0,
@@ -72,7 +72,7 @@ void main() {
       );
       expect(
         await c.evaluate(
-            pitchDegrees: 80,
+            tiltDegrees: 80,
             band: band,
             isStable: true,
             currentSegment: 0,
@@ -81,7 +81,7 @@ void main() {
       );
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 45,
             band: band,
             isStable: false,
             currentSegment: 0,
@@ -109,7 +109,7 @@ void main() {
       // Fire #1 — do not await; the in-flight flag is set synchronously up to
       // the capture await.
       final firing = c.evaluate(
-        pitchDegrees: 45,
+        tiltDegrees: 45,
         band: band,
         isStable: true,
         currentSegment: 0,
@@ -119,7 +119,7 @@ void main() {
 
       // A tick while in-flight does nothing.
       final blocked = await c.evaluate(
-        pitchDegrees: 45,
+        tiltDegrees: 45,
         band: band,
         isStable: true,
         currentSegment: 0,
@@ -145,7 +145,7 @@ void main() {
         now: now,
       );
       final r = await c.evaluate(
-          pitchDegrees: 45,
+          tiltDegrees: 45,
           band: band,
           isStable: true,
           currentSegment: 2,
@@ -169,7 +169,7 @@ void main() {
       );
 
       final r1 = await c.evaluate(
-          pitchDegrees: 45,
+          tiltDegrees: 45,
           band: band,
           isStable: true,
           currentSegment: 0,
@@ -182,7 +182,7 @@ void main() {
       clock = clock.add(const Duration(milliseconds: 300));
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 45,
             band: band,
             isStable: true,
             currentSegment: 0,
@@ -194,7 +194,7 @@ void main() {
       // After cooldown → retries (still unfilled).
       clock = clock.add(const Duration(milliseconds: 250)); // 550ms total
       final r2 = await c.evaluate(
-          pitchDegrees: 45,
+          tiltDegrees: 45,
           band: band,
           isStable: true,
           currentSegment: 0,
@@ -213,7 +213,7 @@ void main() {
       );
       expect(
         await warnFills.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 45,
             band: band,
             isStable: true,
             currentSegment: 1,
@@ -232,7 +232,7 @@ void main() {
       );
       expect(
         await warnDrops.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 45,
             band: band,
             isStable: true,
             currentSegment: 1,
@@ -250,7 +250,7 @@ void main() {
         now: now,
       );
       final r = await c.evaluate(
-          pitchDegrees: 45,
+          tiltDegrees: 45,
           band: band,
           isStable: true,
           currentSegment: 0,
@@ -277,7 +277,7 @@ void main() {
 
       // Fill segment 0 at t0.
       await c.evaluate(
-          pitchDegrees: 45,
+          tiltDegrees: 45,
           band: band,
           isStable: true,
           currentSegment: 0,
@@ -288,7 +288,7 @@ void main() {
       clock = clock.add(const Duration(milliseconds: 300));
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 45,
             band: band,
             isStable: true,
             currentSegment: 1,
@@ -301,7 +301,7 @@ void main() {
       clock = clock.add(const Duration(milliseconds: 250));
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 45,
             band: band,
             isStable: true,
             currentSegment: 1,
@@ -327,7 +327,7 @@ void main() {
         clock = clock.add(const Duration(seconds: 1));
         expect(
           await c.evaluate(
-              pitchDegrees: 45,
+              tiltDegrees: 45,
               band: band,
               isStable: true,
               currentSegment: i,
@@ -351,7 +351,7 @@ void main() {
         now: now,
       );
       final r = await c.evaluate(
-        pitchDegrees: 45,
+        tiltDegrees: 45,
         band: band,
         isStable: true,
         currentSegment: 0,
@@ -370,7 +370,7 @@ void main() {
         now: now,
       );
       await c.evaluate(
-          pitchDegrees: 45,
+          tiltDegrees: 45,
           band: band,
           isStable: true,
           currentSegment: 0,

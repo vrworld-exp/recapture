@@ -8,7 +8,11 @@
 // Presigning is LOCAL SigV4 signing — no network call — so generating a
 // hundred part URLs in parallel is cheap. Only `initiateMultipartUpload`
 // actually talks to S3.
-import { CreateMultipartUploadCommand, UploadPartCommand } from '@aws-sdk/client-s3';
+import {
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3Client } from '@/config/s3';
 
@@ -46,6 +50,34 @@ export async function initiateMultipartUpload(bucket: string, key: string): Prom
     throw new Error(`S3 returned no UploadId for key: ${key}`);
   }
   return result.UploadId;
+}
+
+/**
+ * Completes a multipart upload for [key] from the client-collected part ETags
+ * and returns the composite object ETag. A stale/foreign uploadId or a wrong
+ * ETag surfaces as S3's own error (the caller lets it propagate — same policy
+ * as part-url: S3, not this service, is the uploadId authority).
+ */
+export async function completeMultipartUpload(
+  bucket: string,
+  key: string,
+  uploadId: string,
+  parts: Array<{ partNumber: number; etag: string }>
+): Promise<string> {
+  const result = await s3Client.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: bucket,
+      Key: key,
+      UploadId: uploadId,
+      MultipartUpload: {
+        Parts: parts.map((p) => ({ PartNumber: p.partNumber, ETag: p.etag })),
+      },
+    })
+  );
+  if (!result.ETag) {
+    throw new Error(`S3 returned no ETag completing key: ${key}`);
+  }
+  return result.ETag;
 }
 
 /**

@@ -8,14 +8,17 @@
 // [TiltTarget.fromBand]); it is NEVER hardcoded at the call site. Membership
 // follows the SAME convention the rest of the capture pipeline uses for pitch
 // bands — `minDegrees` inclusive, `maxDegrees` exclusive — so the needle and the
-// highlighted band zone share one coordinate frame (the smoothed device pitch in
-// degrees, `SmoothedOrientation.pitchDegrees`). See [CapturePitchGuide].
+// highlighted band zone share one coordinate frame: the smoothed CAMERA TILT in
+// degrees on the 0–180° scale (`SmoothedOrientation.cameraTiltDegrees`, 0 =
+// camera at the sky, 90 = horizon, 180 = at the ground). See [CapturePitchGuide].
 import 'capture_config.dart';
 
-/// Where the current device pitch sits relative to the target band.
+/// Where the current camera tilt sits relative to the target band.
 ///
-/// [aboveBand] means the pitch is higher than the band (device aimed too far up)
-/// → the user should *tilt down*. [belowBand] is the mirror → *tilt up*.
+/// On the 0–180° camera-tilt scale (0 = camera at the sky, 180 = at the
+/// ground), [aboveBand] means the tilt value is higher than the band — the
+/// camera is aimed too far DOWN → the user should *tilt up*. [belowBand] is
+/// the mirror (aimed too far up) → *tilt down*.
 enum TiltState { inBand, aboveBand, belowBand }
 
 /// The target pitch zone for a capture level, in degrees, with the originating
@@ -55,8 +58,9 @@ class TiltTarget {
 /// the out-of-band "tilt up / tilt down" excursions, scaled to the band's own
 /// span. This is what makes the indicator *tuned* per band and *adaptive*: the
 /// zone re-centres and re-scales to whatever band the level configures — Eye Ring
-/// ('mid' [30,60) → [0,90]), Top Ring ('high' [60,90) → [30,120]), Bottom Ring
-/// (e.g. [-60,-30) → [-90,0]) — with no hardcoded bounds.
+/// ('mid' [60,120) → [0,180]), Top Ring ('high' [120,180) → [60,240]), Bottom
+/// Ring ('low' [0,60) → [-60,120]) — with no hardcoded bounds (the needle
+/// clamps to the gauge ends).
 ///
 /// The margin is ~one band span on each side (so an out-of-band excursion is
 /// always visible), floored at [minMargin] so a very narrow band still gets

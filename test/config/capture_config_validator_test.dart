@@ -30,14 +30,23 @@ void main() {
       expect(out.pitchBands.map((b) => b.id), ['ok']);
     });
 
-    test('clamps out-of-range degrees and segments', () {
+    test('clamps out-of-range degrees and segments (0–180° tilt scale)', () {
       final out = sanitizeCaptureConfig(_cfg(const [
-        PitchBand(id: 'a', minDegrees: -10, maxDegrees: 120, segments: 999),
+        PitchBand(id: 'a', minDegrees: -10, maxDegrees: 210, segments: 999),
       ]));
       final band = out.pitchBands.single;
       expect(band.minDegrees, 0);
-      expect(band.maxDegrees, 90);
+      expect(band.maxDegrees, 180);
       expect(band.segments, 64);
+    });
+
+    test('preserves a wide upper-scale band (e.g. up to 179°) untouched', () {
+      final out = sanitizeCaptureConfig(_cfg(const [
+        PitchBand(id: 'high', minDegrees: 120, maxDegrees: 179, segments: 8),
+      ]));
+      final band = out.pitchBands.single;
+      expect(band.minDegrees, 120);
+      expect(band.maxDegrees, 179);
     });
 
     test('falls back to bundled bands when nothing valid remains', () {

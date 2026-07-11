@@ -52,14 +52,17 @@ class RemoteConfigRepository implements ConfigRepository {
   @override
   Future<CaptureConfig> fetchRemote() async {
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    // Stubbed remote payload (version 1) — distinct from bundled (version 0) so
-    // the remote-applied path is observable end-to-end.
+    // Stubbed remote payload (version 3) — distinct from bundled (version 2) so
+    // the remote-applied path is observable end-to-end. Bands are on the 0–180°
+    // camera-tilt scale, matching the backend's served shape
+    // (recapture-api remoteConfigSchema.ts — same `minDegrees`/`maxDegrees`
+    // keys, no wire mapping needed).
     return CaptureConfig.fromMap(const {
-      'version': 1,
+      'version': 3,
       'pitchBands': [
-        {'id': 'low', 'minDegrees': 0, 'maxDegrees': 30, 'segments': 14},
-        {'id': 'mid', 'minDegrees': 30, 'maxDegrees': 60, 'segments': 12},
-        {'id': 'high', 'minDegrees': 60, 'maxDegrees': 90, 'segments': 10},
+        {'id': 'low', 'minDegrees': 0, 'maxDegrees': 60, 'segments': 14},
+        {'id': 'mid', 'minDegrees': 60, 'maxDegrees': 120, 'segments': 12},
+        {'id': 'high', 'minDegrees': 120, 'maxDegrees': 180, 'segments': 10},
       ],
       'thresholds': {
         'minSharpness': 0.5,

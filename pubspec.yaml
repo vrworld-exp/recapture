@@ -38,6 +38,9 @@ dependencies:
   # Connectivity
   connectivity_plus: ^7.1.1
 
+  # App-scoped directories (dev-probe test bundles on disk)
+  path_provider: ^2.1.4
+
   # Hashing (per-file MD5 checksums for the upload manifest — streaming digest)
   crypto: ^3.0.3
 
@@ -49,6 +52,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+  # App launcher icon generation
+  flutter_launcher_icons: ^0.14.3
 
   # Code generation
   build_runner: ^2.4.9
@@ -72,3 +78,6 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/icon/recapture_icon.png"
+  web:
+    generate: true
+    image_path: "assets/icon/recapture_icon.png"

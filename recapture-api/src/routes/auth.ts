@@ -33,6 +33,9 @@ router.post(
         status: 'success',
         message: 'If the account exists, an OTP has been sent.',
         expiresInSeconds: result.expiresInSeconds,
+        // Present only when the service's non-production gate exposed it
+        // (dev tooling handshake — the providers are stubs).
+        ...(result.devCode !== undefined ? { devCode: result.devCode } : {}),
       });
       return;
     }

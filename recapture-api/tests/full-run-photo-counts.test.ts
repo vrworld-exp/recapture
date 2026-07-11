@@ -38,10 +38,11 @@ import { DEFAULT_REMOTE_CONFIG } from '@/validation/remoteConfigSchema';
 
 // ── Ring count: derived from the served config, not hardcoded ─────────────────
 // The guided-capture protocol has three rings (EYE/TOP/LOW). The authoritative
-// runtime mirror is the default remote config's pitch bands; assert that shape so
-// a change to the ring set is caught here rather than silently skewing the totals.
-const RING_LABELS = DEFAULT_REMOTE_CONFIG.pitchBands.map((b) => b.label).sort();
-const RING_COUNT = RING_LABELS.length;
+// runtime mirror is the default remote config's pitch bands (served on the wire
+// as the CLIENT's band ids: EYE=mid, TOP=high, LOW=low); assert that shape so a
+// change to the ring set is caught here rather than silently skewing the totals.
+const BAND_IDS = DEFAULT_REMOTE_CONFIG.pitchBands.map((b) => b.id).sort();
+const RING_COUNT = BAND_IDS.length;
 
 // ── The spec's expected per-size full-run totals (the documented MINIMUMS) ────
 const EXPECTED_MIN_TOTAL: Record<ObjectSize, number> = {
@@ -62,9 +63,9 @@ const minTotal = (size: ObjectSize) => RING_COUNT * MIN_PHOTOS_PER_RING_BY_SIZE[
 const capacityTotal = (size: ObjectSize) => RING_COUNT * SEGMENT_COUNT_BY_SIZE[size];
 
 describe('full-run photo counts — protocol shape', () => {
-  it('the capture protocol has exactly 3 rings (EYE/TOP/LOW)', () => {
+  it('the capture protocol has exactly 3 rings (EYE/TOP/LOW ↔ mid/high/low)', () => {
     expect(RING_COUNT).toBe(3);
-    expect(RING_LABELS).toEqual(['EYE', 'LOW', 'TOP']); // sorted
+    expect(BAND_IDS).toEqual(['high', 'low', 'mid']); // sorted band ids
   });
 });
 
@@ -90,7 +91,7 @@ describe('full-run photo counts — per-size totals (≈ 90 / 72 / 54)', () => {
       // the expected total and this catches the inconsistency. Three identical
       // rings ⇒ sum is 3 × the per-ring count.
       const perRing = MIN_PHOTOS_PER_RING_BY_SIZE[size];
-      const summed = RING_LABELS.reduce((acc) => acc + perRing, 0);
+      const summed = BAND_IDS.reduce((acc) => acc + perRing, 0);
       expect(summed).toBe(EXPECTED_MIN_TOTAL[size]);
     });
 

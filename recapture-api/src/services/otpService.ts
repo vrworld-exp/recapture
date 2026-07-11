@@ -7,9 +7,11 @@ import { sendSms } from '@/providers/sms';
 import { sendEmail } from '@/providers/email';
 import type { SendOtpInput } from '@/validation/authSchemas';
 
-/** Outcome of a send attempt. The route maps each variant to an HTTP response. */
+/** Outcome of a send attempt. The route maps each variant to an HTTP response.
+ * `devCode` (non-production ONLY) echoes the plaintext OTP so dev tooling can
+ * complete the handshake against the stubbed SMS/email providers. */
 export type SendOtpResult =
-  | { ok: true; expiresInSeconds: number }
+  | { ok: true; expiresInSeconds: number; devCode?: string }
   | { ok: false; kind: 'rate_limited'; retryAfter: number }
   | { ok: false; kind: 'dispatch_failed' };
 
@@ -166,5 +168,11 @@ export async function sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
     identifier_hash: identifierHash,
     success: true,
   });
+  // THE dev-code gate — the only place the plaintext code may leave this
+  // service. Production builds never carry the field at all; it goes to the
+  // response body only, never to logs/analytics.
+  if (env.NODE_ENV !== 'production') {
+    return { ok: true, expiresInSeconds: env.OTP_TTL_SECONDS, devCode: code };
+  }
   return { ok: true, expiresInSeconds: env.OTP_TTL_SECONDS };
 }

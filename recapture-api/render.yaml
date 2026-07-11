@@ -7,8 +7,11 @@ services:
     buildCommand: npm install && npm run build
     startCommand: node dist/index.js
     envVars:
+      # This blueprint deploys the DEV instance (recapture-apis-dev). NODE_ENV
+      # must stay non-production here: it gates the send-otp devCode echo the
+      # dev probe depends on, and maps S3 keys to the dev/ prefix.
       - key: NODE_ENV
-        value: production
+        value: development
       - key: PORT
         value: 3000
       - key: MONGODB_URI
@@ -17,8 +20,10 @@ services:
         sync: false
       - key: JWT_EXPIRES_IN
         value: 7d
+      # Buckets live in us-east-1 (verified via scripts/aws-smoke-test.ts);
+      # ap-south-1 here makes every presigned URL fail with a region error.
       - key: AWS_REGION
-        value: ap-south-1
+        value: us-east-1
       - key: AWS_ACCESS_KEY_ID
         sync: false
       - key: AWS_SECRET_ACCESS_KEY

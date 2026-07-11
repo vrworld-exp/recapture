@@ -8,12 +8,13 @@
 // evaluates without ever firing. This is the regression net for the bug where
 // the AUTO pill toggled a preference that no fire loop consumed.
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/current_tilt_provider.dart';
 import 'package:recapture/application/capture/stability_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';
@@ -58,23 +59,26 @@ class _StubConfigNotifier extends ConfigNotifier {
   CaptureConfig build() => CaptureConfig.bundledDefault;
 }
 
-/// A smoothed-orientation sample with [pitchDeg]/[yawDeg] given in DEGREES
-/// (SmoothedOrientation stores radians; pitchDegrees/yawDegrees derive back).
+/// A smoothed-orientation sample whose camera TILT equals [tiltDeg] (0–180°
+/// scale; encoded as a (180° − tilt) rotation about device X — see
+/// camera_tilt_test.dart) with [yawDeg] in DEGREES.
 SmoothedOrientation _orientation({
-  required double pitchDeg,
+  required double tiltDeg,
   double yawDeg = 0,
   int timestampNs = 0,
-}) =>
-    SmoothedOrientation(
-      yaw: yawDeg * (3.141592653589793 / 180.0),
-      pitch: pitchDeg * (3.141592653589793 / 180.0),
-      roll: 0,
-      qx: 0,
-      qy: 0,
-      qz: 0,
-      qw: 1,
-      timestampNs: timestampNs,
-    );
+}) {
+  final theta = (180.0 - tiltDeg) * (3.141592653589793 / 180.0);
+  return SmoothedOrientation(
+    yaw: yawDeg * (3.141592653589793 / 180.0),
+    pitch: 0,
+    roll: 0,
+    qx: math.sin(theta / 2),
+    qy: 0,
+    qz: 0,
+    qw: math.cos(theta / 2),
+    timestampNs: timestampNs,
+  );
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -162,7 +166,7 @@ void main() {
     ));
     await tester.pump();
     for (var i = 0; i < 4; i++) {
-      orientation.add(_orientation(pitchDeg: 45, timestampNs: i));
+      orientation.add(_orientation(tiltDeg: 90, timestampNs: i));
       await tester.pump();
       await tester.pump(); // stream → provider → tick → fire resolves
     }
@@ -195,7 +199,7 @@ void main() {
 
     // Cooldown passes but the segment stays filled → still no re-fire.
     await tester.pump(const Duration(milliseconds: 600));
-    orientation.add(_orientation(pitchDeg: 45, timestampNs: 99));
+    orientation.add(_orientation(tiltDeg: 90, timestampNs: 99));
     await tester.pump();
     await tester.pump();
     expect(captureCalls, 1);
@@ -225,8 +229,8 @@ void main() {
     ));
     await tester.pump();
     for (var i = 0; i < 4; i++) {
-      // Below the 'mid' band's 30° floor — the user still needs to tilt up.
-      orientation.add(_orientation(pitchDeg: 10, timestampNs: i));
+      // Below the 'mid' band's 60° floor — the user still needs to tilt down.
+      orientation.add(_orientation(tiltDeg: 10, timestampNs: i));
       await tester.pump();
       await tester.pump();
     }

@@ -38,8 +38,16 @@ router.use(requireAuth);
 router.get(
   '/',
   asyncHandler(async (req, res) => {
+
+
+    console.log('Incoming request query:', req.query); // Log the incoming query for debugging
+
     const parsed = listProjectsQuerySchema.safeParse(req.query);
+
+    console.log('Parsed query:', parsed); // Log the parsed query for debugging
+
     if (!parsed.success) {
+      console.log('Invalid query parameters:', parsed.error.issues); // Log validation errors
       res.status(400).json({
         status: 'error',
         code: 'INVALID_REQUEST',
@@ -139,8 +147,15 @@ router.get(
 router.post(
   '/',
   asyncHandler(async (req, res) => {
+
+    console.log('Incoming request body:', req.body); // Log the incoming request body for debugging
+
     const parsed = createProjectSchema.safeParse(req.body);
     if (!parsed.success) {
+
+
+      console.log('Invalid request body:', parsed.error.issues); // Log validation errors
+
       const issue = parsed.error.issues[0];
       const field = issue?.path.join('.') || 'body';
       res.status(400).json({

@@ -8,12 +8,14 @@ import {
   jobIdParamsSchema,
   initiateUploadSchema,
   partUrlSchema,
+  completeUploadSchema,
   finalizeJobSchema,
 } from '@/validation/jobSchemas';
 import {
   createJob,
   initiateFileUpload,
   refreshUploadPartUrl,
+  completeFileUpload,
   finalizeJob,
   type UploadGuardFailure,
 } from '@/services/jobsService';
@@ -298,6 +300,51 @@ router.post(
     }
 
     res.status(200).json({ status: 'success', url: result.url });
+  })
+);
+
+/**
+ * POST /jobs/:jobId/uploads/complete — commit ONE file's multipart upload
+ * (S3 CompleteMultipartUpload) from the client-collected part ETags. The
+ * client cannot do this itself: no presigned complete URL exists and the SDK
+ * call needs credentials. Same guards as initiate; no per-file state is
+ * persisted. An S3 failure (including a stale/foreign uploadId) surfaces as
+ * 500 via the error handler — same policy as part-url, never pre-validated.
+ */
+router.post(
+  '/:jobId/uploads/complete',
+  asyncHandler(async (req, res) => {
+    const params = jobIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid job id',
+      });
+      return;
+    }
+    const body = completeUploadSchema.safeParse(req.body);
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      const field = issue?.path.join('.') || 'body';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const result = await completeFileUpload(userId, params.data.jobId, body.data);
+
+    if (result.outcome !== 'COMPLETED') {
+      sendUploadGuardFailure(res, result);
+      return;
+    }
+
+    res.status(200).json({ status: 'success', key: result.key, etag: result.etag });
   })
 );
 

@@ -38,7 +38,9 @@ class CapturedPhotoRecord {
   /// Device yaw in DEGREES at capture (SmoothedOrientation.yawDegrees).
   final double yawDegrees;
 
-  /// Device pitch in DEGREES at capture (SmoothedOrientation.pitchDegrees).
+  /// Camera tilt in DEGREES at capture on the 0–180° scale
+  /// (SmoothedOrientation.cameraTiltDegrees — the value the capture was gated
+  /// on). Field name kept for codec/manifest wire compatibility.
   final double pitchDegrees;
 
   /// Camera-aligned sensor timestamp in NANOSECONDS of the captured frame.

@@ -24,9 +24,14 @@ void main() {
     });
     test('rejects out-of-range and NaN/Infinity', () {
       expect(isValidPitchBand(_band('x', -5, 30)), isFalse); // below 0
-      expect(isValidPitchBand(_band('x', 60, 100)), isFalse); // above 90
+      expect(isValidPitchBand(_band('x', 120, 200)), isFalse); // above 180
       expect(isValidPitchBand(_band('x', double.nan, 30)), isFalse);
       expect(isValidPitchBand(_band('x', 0, double.infinity)), isFalse);
+    });
+
+    test('accepts the full 0–180° camera-tilt scale (old ≤90 rule is gone)', () {
+      expect(isValidPitchBand(_band('high', 120, 180)), isTrue);
+      expect(isValidPitchBand(_band('x', 60, 100)), isTrue);
     });
   });
 
@@ -53,16 +58,16 @@ void main() {
       expect(r.maxDegrees, 90);
     });
 
-    test('Level C default resolves to exactly the bundled low band [0,30)', () {
+    test('Level C default resolves to exactly the bundled low band [0,60)', () {
       // No remote band for 'low', no override → bundled default.
       final r = resolvePitchBand(
         bandId: 'low',
-        config: _config([_band('high', 60, 90)]), // partial: only high
+        config: _config([_band('high', 120, 180)]), // partial: only high
       );
       final bundledLow = CaptureConfig.bundledDefault.pitchBands
           .firstWhere((b) => b.id == 'low');
       expect(r.minDegrees, bundledLow.minDegrees); // 0
-      expect(r.maxDegrees, bundledLow.maxDegrees); // 30
+      expect(r.maxDegrees, bundledLow.maxDegrees); // 60
     });
   });
 

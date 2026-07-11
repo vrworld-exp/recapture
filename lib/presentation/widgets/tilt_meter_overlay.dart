@@ -7,22 +7,24 @@ import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
-import '../../application/capture/current_pitch_provider.dart';
+import '../../application/capture/current_tilt_provider.dart';
 import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/tilt_target.dart';
 import '../../utils/analytics.dart';
 
-/// Level A (Eye Ring) tilt meter: a vertical gauge over the camera preview that
-/// shows the device's smoothed current pitch (a needle) against the target pitch
-/// band (a highlighted zone), so the user holds the phone at the correct
-/// vertical angle while ringing the object.
+/// Guided-capture tilt meter: a vertical gauge over the camera preview that
+/// shows the device's smoothed current camera tilt (a needle) against the
+/// target pitch band (a highlighted zone), so the user holds the phone at the
+/// correct vertical angle while ringing the object.
 ///
-/// Pitch comes from [currentPitchProvider] (smoothed; SmoothedOrientation
-/// convention) and the target band from [captureConfigProvider] — the SAME
-/// coordinate frame, so the needle and band line up. Pitch-vs-band drives a
-/// hysteresis state machine ([tiltStateWithHysteresis]) into `inBand` /
-/// `aboveBand` ("tilt down") / `belowBand` ("tilt up"), with a directional hint.
+/// Tilt comes from [currentTiltProvider] (smoothed; the 0–180° camera-tilt
+/// scale — 0 = camera at the sky, 90 = horizon, 180 = at the ground) and the
+/// target band from [captureConfigProvider] — the SAME coordinate frame, so the
+/// needle and band line up. Tilt-vs-band drives a hysteresis state machine
+/// ([tiltStateWithHysteresis]) into `inBand` / `aboveBand` (tilt value too
+/// high = aimed too far down → "Tilt up") / `belowBand` (aimed too far up →
+/// "Tilt down"), with a directional hint.
 ///
 /// Guidance-only and hit-test transparent ([IgnorePointer]): it triggers NO
 /// captures and never gates the flow. Degrades gracefully when the sensor is
@@ -62,8 +64,8 @@ class TiltMeterOverlay extends ConsumerStatefulWidget {
   /// Displayable gauge range (degrees), clamped — the needle never overflows it.
   /// When null (the default), the range is DERIVED from the resolved band via
   /// [tiltGaugeRangeForBand] so the gauge auto-tunes to whatever band the level
-  /// configures (the +30–+60 Eye Ring, the steeper Top Ring, a negative Bottom
-  /// Ring). Provide both to pin a fixed range.
+  /// configures (Eye Ring [60,120), Top Ring [120,180), Bottom Ring [0,60) on
+  /// the 0–180° camera-tilt scale). Provide both to pin a fixed range.
   final double? gaugeMinDeg;
   final double? gaugeMaxDeg;
 
@@ -81,7 +83,7 @@ class TiltMeterOverlay extends ConsumerStatefulWidget {
 }
 
 class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
-  double? _pitch; // last smoothed pitch (null until first valid sample)
+  double? _tilt; // last smoothed camera tilt (null until first valid sample)
   bool _supported = true; // assume supported until told otherwise
   TiltState? _state; // last hysteresis state (drives colour + hint)
 
@@ -100,10 +102,11 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
     if (config.pitchBands.isNotEmpty) {
       return TiltTarget.fromBand(config.pitchBands.first);
     }
-    return const TiltTarget(minDegrees: 30, maxDegrees: 60, bandId: 'mid');
+    // Last-resort floor: the bundled `mid` band on the 0–180° camera-tilt scale.
+    return const TiltTarget(minDegrees: 60, maxDegrees: 120, bandId: 'mid');
   }
 
-  void _onSample(PitchSample sample) {
+  void _onSample(TiltSample sample) {
     if (!sample.sensorSupported) {
       if (_supported || _state != null) {
         setState(() {
@@ -116,23 +119,23 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
     final target = _resolveTarget(ref.read(captureConfigProvider));
     final next = tiltStateWithHysteresis(
       _state,
-      sample.pitchDegrees,
+      sample.tiltDegrees,
       target,
       marginDegrees: widget.hysteresisDeg,
     );
-    // Pass the CURRENT sample pitch: _pitch is not updated until the setState
+    // Pass the CURRENT sample tilt: _tilt is not updated until the setState
     // below, so reading the field here would log the previous sample's value.
-    _maybeEmitOutOfBand(next, target, sample.pitchDegrees);
-    if (!_supported || _state != next || _pitch != sample.pitchDegrees) {
+    _maybeEmitOutOfBand(next, target, sample.tiltDegrees);
+    if (!_supported || _state != next || _tilt != sample.tiltDegrees) {
       setState(() {
         _supported = true;
         _state = next;
-        _pitch = sample.pitchDegrees;
+        _tilt = sample.tiltDegrees;
       });
     }
   }
 
-  void _maybeEmitOutOfBand(TiltState state, TiltTarget target, double pitch) {
+  void _maybeEmitOutOfBand(TiltState state, TiltTarget target, double tilt) {
     final now = DateTime.now();
     if (state == TiltState.inBand) {
       _outSince = null;
@@ -150,12 +153,16 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
       // same level-parameterized funnel as the capture events.
       final session = ref.read(captureLevelSessionProvider);
       Analytics.logEvent(AnalyticsEvents.tiltMeterOutOfBand, {
-        // `direction` keeps its established above/below vocabulary (the gauge
-        // hint maps above→"Tilt down", below→"Tilt up").
+        // `direction` keeps its established above/below vocabulary — the
+        // factual band relation on the tilt scale (the gauge hint maps
+        // above→"Tilt up", below→"Tilt down" now that higher tilt = aimed
+        // further down).
         'direction': state == TiltState.aboveBand ? 'above' : 'below',
         'target_band_id': target.bandId,
         'level': widget.level ?? session?.level.code,
-        'pitch': pitch,
+        // Key kept verbatim (event shape unchanged); the value is now the
+        // 0–180° camera tilt.
+        'pitch': tilt,
         'session_id': session?.sessionId ?? '',
         'project_id': session?.projectId ?? '',
         'device_type':
@@ -168,7 +175,7 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
   Widget build(BuildContext context) {
     // Fold each new sample into local hysteresis/analytics state (kept out of
     // build so the decision is stateful and not recomputed per rebuild).
-    ref.listen<AsyncValue<PitchSample>>(currentPitchProvider, (_, next) {
+    ref.listen<AsyncValue<TiltSample>>(currentTiltProvider, (_, next) {
       final s = next.asData?.value;
       if (s != null) _onSample(s);
     });
@@ -189,7 +196,7 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
         child: _supported
             ? _TiltGauge(
                 target: target,
-                pitch: _pitch,
+                tilt: _tilt,
                 state: _state,
                 gaugeMinDeg: range.min,
                 gaugeMaxDeg: range.max,
@@ -233,7 +240,7 @@ class _TiltFallback extends StatelessWidget {
 class _TiltGauge extends StatelessWidget {
   const _TiltGauge({
     required this.target,
-    required this.pitch,
+    required this.tilt,
     required this.state,
     required this.gaugeMinDeg,
     required this.gaugeMaxDeg,
@@ -241,7 +248,7 @@ class _TiltGauge extends StatelessWidget {
   });
 
   final TiltTarget target;
-  final double? pitch;
+  final double? tilt;
   final TiltState? state;
   final double gaugeMinDeg;
   final double gaugeMaxDeg;
@@ -259,14 +266,16 @@ class _TiltGauge extends StatelessWidget {
             icon: null,
             color: AppColors.success
           ),
+        // 0–180° tilt scale: above the band = tilt value too high = camera
+        // aimed too far DOWN → tilt up (and vice versa).
         TiltState.aboveBand => (
-            text: 'Tilt down',
-            icon: Icons.keyboard_arrow_down,
+            text: 'Tilt up',
+            icon: Icons.keyboard_arrow_up,
             color: AppColors.mirageRed
           ),
         TiltState.belowBand => (
-            text: 'Tilt up',
-            icon: Icons.keyboard_arrow_up,
+            text: 'Tilt down',
+            icon: Icons.keyboard_arrow_down,
             color: AppColors.mirageRed
           ),
         null => (
@@ -280,10 +289,10 @@ class _TiltGauge extends StatelessWidget {
   Widget build(BuildContext context) {
     final hint = _hint;
     // Clamp the needle to the displayable range, so an extreme/out-of-range
-    // pitch parks at the gauge end instead of overflowing or going NaN.
-    final hasNeedle = pitch != null;
-    final clampedPitch =
-        hasNeedle ? pitch!.clamp(gaugeMinDeg, gaugeMaxDeg).toDouble() : null;
+    // tilt parks at the gauge end instead of overflowing or going NaN.
+    final hasNeedle = tilt != null;
+    final clampedTilt =
+        hasNeedle ? tilt!.clamp(gaugeMinDeg, gaugeMaxDeg).toDouble() : null;
     final inBandGlow = state == TiltState.inBand && !reduceMotion;
 
     return Column(
@@ -306,19 +315,19 @@ class _TiltGauge extends StatelessWidget {
             // motion is instant (and the glow below is disabled).
             child: TweenAnimationBuilder<double>(
               tween: Tween(
-                begin: clampedPitch ?? target.center,
-                end: clampedPitch ?? target.center,
+                begin: clampedTilt ?? target.center,
+                end: clampedTilt ?? target.center,
               ),
               duration: reduceMotion
                   ? Duration.zero
                   : const Duration(milliseconds: 120),
-              builder: (context, animatedPitch, _) => CustomPaint(
+              builder: (context, animatedTilt, _) => CustomPaint(
                 painter: _TiltGaugePainter(
                   gaugeMinDeg: gaugeMinDeg,
                   gaugeMaxDeg: gaugeMaxDeg,
                   bandMinDeg: target.minDegrees,
                   bandMaxDeg: target.maxDegrees,
-                  needlePitch: hasNeedle ? animatedPitch : null,
+                  needleTilt: hasNeedle ? animatedTilt : null,
                   needleColor: _needleColor,
                   glow: inBandGlow,
                 ),
@@ -364,7 +373,7 @@ class _TiltGaugePainter extends CustomPainter {
     required this.gaugeMaxDeg,
     required this.bandMinDeg,
     required this.bandMaxDeg,
-    required this.needlePitch,
+    required this.needleTilt,
     required this.needleColor,
     required this.glow,
   });
@@ -373,16 +382,18 @@ class _TiltGaugePainter extends CustomPainter {
   final double gaugeMaxDeg;
   final double bandMinDeg;
   final double bandMaxDeg;
-  final double? needlePitch; // null → no needle (loading)
+  final double? needleTilt; // null → no needle (loading)
   final Color needleColor;
   final bool glow;
 
-  /// Maps a pitch to a y on the track: gaugeMax at the top, gaugeMin at the
-  /// bottom (higher pitch = needle higher = "tilt down" to lower it). Clamped.
-  double _yFor(double pitch, double height) {
+  /// Maps a tilt to a y on the track: gaugeMin at the top, gaugeMax at the
+  /// bottom — so tilting the phone UP (toward the sky, lower tilt value) moves
+  /// the needle UP, matching the physical motion and the "Tilt up"/"Tilt down"
+  /// hints. Clamped.
+  double _yFor(double tilt, double height) {
     final span = (gaugeMaxDeg - gaugeMinDeg);
     if (span == 0) return height; // degenerate config → park at bottom
-    final frac = ((gaugeMaxDeg - pitch) / span).clamp(0.0, 1.0);
+    final frac = ((tilt - gaugeMinDeg) / span).clamp(0.0, 1.0);
     return frac * height;
   }
 
@@ -397,8 +408,9 @@ class _TiltGaugePainter extends CustomPainter {
     canvas.drawRRect(trackRRect, Paint()..color = AppColors.surface1);
 
     // Target band zone (the goal): success fill + a thin royal-gold border.
-    final bandTop = _yFor(bandMaxDeg, size.height);
-    final bandBottom = _yFor(bandMinDeg, size.height);
+    // With gaugeMin at the top, the band's MIN degree is its top edge.
+    final bandTop = _yFor(bandMinDeg, size.height);
+    final bandBottom = _yFor(bandMaxDeg, size.height);
     final bandRect = Rect.fromLTRB(0, bandTop, size.width, bandBottom);
     canvas.save();
     canvas.clipRRect(trackRRect);
@@ -418,9 +430,9 @@ class _TiltGaugePainter extends CustomPainter {
         ..color = AppColors.royalGold.withValues(alpha: 0.9),
     );
 
-    if (needlePitch == null) return; // loading → band only, no needle
+    if (needleTilt == null) return; // loading → band only, no needle
 
-    final y = _yFor(needlePitch!, size.height);
+    final y = _yFor(needleTilt!, size.height);
 
     // Soft glow behind the needle when in-band (decorative — off for reduce
     // motion via [glow] == false).
@@ -455,7 +467,7 @@ class _TiltGaugePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _TiltGaugePainter old) =>
-      old.needlePitch != needlePitch ||
+      old.needleTilt != needleTilt ||
       old.needleColor != needleColor ||
       old.glow != glow ||
       old.bandMinDeg != bandMinDeg ||

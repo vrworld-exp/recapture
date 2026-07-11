@@ -201,7 +201,7 @@ void main() {
 
   group('shared lock with auto-capture', () {
     const band =
-        PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 10);
+        PitchBand(id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10);
 
     test('a manual capture in flight blocks an auto fire', () async {
       final lock = CaptureLock();
@@ -229,7 +229,7 @@ void main() {
 
       // Auto tick with all conditions satisfied → blocked by the shared lock.
       final autoOutcome = await auto.evaluate(
-        pitchDegrees: 45,
+        tiltDegrees: 90,
         band: band,
         isStable: true,
         currentSegment: 1,

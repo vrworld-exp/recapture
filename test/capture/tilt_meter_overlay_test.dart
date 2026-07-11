@@ -1,17 +1,19 @@
 // test/capture/tilt_meter_overlay_test.dart
 //
-// Widget tests for the Level A tilt meter: it renders the "Tilt" gauge, shows
-// the correct directional hint for in/above/below-band pitch (not inverted),
-// throttle-emits `tilt_meter_out_of_band`, and degrades to a non-blocking
-// fallback when the sensor is unsupported. Config resolves to the bundled
-// default (mid band = [30,60)); the native pitch stream is injected.
+// Widget tests for the Level A tilt meter on the 0–180° camera-tilt scale
+// (0 = camera at the sky, 180 = at the ground): it renders the "Tilt" gauge,
+// shows the correct directional hint for in/above/below-band tilt (above =
+// aimed too far down → "Tilt up"; below → "Tilt down"), throttle-emits
+// `tilt_meter_out_of_band`, and degrades to a non-blocking fallback when the
+// sensor is unsupported. Config resolves to the bundled default (mid band =
+// [60,120)); the native orientation stream is injected.
 import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/current_tilt_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/platform/imu_rotation_channel.dart';
@@ -24,16 +26,18 @@ class _StubConfigNotifier extends ConfigNotifier {
   CaptureConfig build() => CaptureConfig.bundledDefault;
 }
 
-SmoothedOrientation _at(double deg) {
-  final rad = deg * math.pi / 180.0;
+/// A SmoothedOrientation whose `cameraTiltDegrees` equals [tiltDeg]: a
+/// rotation of (180° − tilt) about device X (see camera_tilt_test.dart).
+SmoothedOrientation _at(double tiltDeg) {
+  final theta = (180.0 - tiltDeg) * math.pi / 180.0;
   return SmoothedOrientation(
     yaw: 0,
-    pitch: rad,
+    pitch: 0,
     roll: 0,
-    qx: 0,
+    qx: math.sin(theta / 2),
     qy: 0,
     qz: 0,
-    qw: 1,
+    qw: math.cos(theta / 2),
     timestampNs: 0,
   );
 }
@@ -92,42 +96,43 @@ void main() {
     expect(find.text('Tilt'), findsOneWidget);
   });
 
-  testWidgets('in-band pitch shows "Hold steady"', (tester) async {
+  testWidgets('in-band tilt shows "Hold steady"', (tester) async {
     final source = StreamController<SmoothedOrientation>.broadcast();
     addTearDown(source.close);
     await _pumpMeter(tester, source.stream);
 
-    source.add(_at(45)); // mid band [30,60)
+    source.add(_at(90)); // mid band [60,120)
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Hold steady'), findsOneWidget);
   });
 
-  testWidgets('above-band pitch shows "Tilt down" (not inverted)',
+  testWidgets('above-band tilt (aimed too far down) shows "Tilt up" '
+      '(not inverted)', (tester) async {
+    final source = StreamController<SmoothedOrientation>.broadcast();
+    addTearDown(source.close);
+    await _pumpMeter(tester, source.stream);
+
+    source.add(_at(140)); // above 120
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('Tilt up'), findsOneWidget);
+    expect(find.text('Tilt down'), findsNothing);
+  });
+
+  testWidgets('below-band tilt (aimed too far up) shows "Tilt down"',
       (tester) async {
     final source = StreamController<SmoothedOrientation>.broadcast();
     addTearDown(source.close);
     await _pumpMeter(tester, source.stream);
 
-    source.add(_at(80)); // above 60
+    source.add(_at(30)); // below 60
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('Tilt down'), findsOneWidget);
-    expect(find.text('Tilt up'), findsNothing);
-  });
-
-  testWidgets('below-band pitch shows "Tilt up"', (tester) async {
-    final source = StreamController<SmoothedOrientation>.broadcast();
-    addTearDown(source.close);
-    await _pumpMeter(tester, source.stream);
-
-    source.add(_at(10)); // below 30
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-
-    expect(find.text('Tilt up'), findsOneWidget);
   });
 
   testWidgets('unsupported sensor shows a non-blocking fallback',
@@ -157,7 +162,7 @@ void main() {
       outCooldown: Duration.zero,
     );
 
-    source.add(_at(80)); // above the band
+    source.add(_at(140)); // above the band
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -168,7 +173,7 @@ void main() {
     expect(outEvents.first.props['target_band_id'], 'mid');
   });
 
-  testWidgets('out-of-band event carries the level + current pitch (Level C)',
+  testWidgets('out-of-band event carries the level + current tilt (Level C)',
       (tester) async {
     final source = StreamController<SmoothedOrientation>.broadcast();
     addTearDown(source.close);
@@ -180,7 +185,7 @@ void main() {
       outCooldown: Duration.zero,
     );
 
-    source.add(_at(10)); // below the mid band [30,60) → "below"
+    source.add(_at(30)); // below the mid band [60,120) → "below"
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
@@ -188,8 +193,8 @@ void main() {
         .firstWhere((e) => e.name == AnalyticsEvents.tiltMeterOutOfBand);
     expect(out.props['level'], 'C');
     expect(out.props['direction'], 'below');
-    // The CURRENT sample pitch is logged (smoothed seeds to the first sample).
-    expect(out.props['pitch'], closeTo(10, 0.001));
+    // The CURRENT sample tilt is logged (smoothed seeds to the first sample).
+    expect(out.props['pitch'], closeTo(30, 0.001));
     // No analytics session was started in this isolated test → empty ids.
     expect(out.props['session_id'], '');
   });
@@ -200,7 +205,7 @@ void main() {
     addTearDown(source.close);
     await _pumpMeter(tester, source.stream, reduceMotion: true);
 
-    source.add(_at(45));
+    source.add(_at(90));
     await tester.pump(); // deliver stream sample → AsyncValue
     await tester.pump(); // rebuild after ref.listen setState
     expect(find.text('Hold steady'), findsOneWidget);

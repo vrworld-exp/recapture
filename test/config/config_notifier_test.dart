@@ -62,7 +62,8 @@ Future<ProviderContainer> _booted(FakeConfigRepository repo) async {
 void main() {
   test('build() returns bundled default synchronously', () {
     final c = _container(FakeConfigRepository(remote: _config(version: 1)));
-    expect(c.read(captureConfigProvider).version, 0); // bundled, before bootstrap
+    expect(c.read(captureConfigProvider).version,
+        CaptureConfig.bundledDefault.version); // bundled, before bootstrap
   });
 
   test('no cache + remote success → remote applied and cached', () async {
@@ -85,7 +86,8 @@ void main() {
   test('no cache + remote failure → stays on bundled default', () async {
     final repo = FakeConfigRepository(remoteError: Exception('offline'));
     final c = await _booted(repo);
-    expect(c.read(captureConfigProvider).version, 0);
+    expect(c.read(captureConfigProvider).version,
+        CaptureConfig.bundledDefault.version);
     expect(repo.written, isNull);
   });
 
@@ -94,7 +96,8 @@ void main() {
       remoteError: const ConfigParseException('bad payload'),
     );
     final c = await _booted(repo);
-    expect(c.read(captureConfigProvider).version, 0); // bundled fallback
+    expect(c.read(captureConfigProvider).version,
+        CaptureConfig.bundledDefault.version); // bundled fallback
     expect(repo.fetchCalls, 1);
   });
 
@@ -116,7 +119,7 @@ void main() {
     final cfg = c.read(captureConfigProvider);
     final band = cfg.pitchBands.single;
     expect(band.minDegrees, 0);
-    expect(band.maxDegrees, 90);
+    expect(band.maxDegrees, 180);
     expect(band.segments, 64);
     expect(cfg.thresholds.minSharpness, 1);
     expect(cfg.thresholds.minCoveragePct, 100);

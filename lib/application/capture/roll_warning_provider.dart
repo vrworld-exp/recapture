@@ -2,7 +2,7 @@
 //
 // The roll-constraint advisory state for the Guided Capture HUD (Levels B & C).
 // It derives device ROLL from the EXISTING shared smoothed-orientation stream
-// (`sharedOrientationProvider` — the SAME source the pitch meter and ring
+// (`sharedOrientationProvider` — the SAME source the tilt meter and ring
 // segment consume) and applies the pure hysteretic [RollConstraint] rule. NO new
 // sensor/orientation subscription is added; this is one more listener on the
 // already-shared broadcast stream.
@@ -16,7 +16,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/capture/roll_constraint.dart';
-import 'current_pitch_provider.dart' show sharedOrientationProvider;
+import 'current_tilt_provider.dart' show sharedOrientationProvider;
 
 /// A roll advisory reading for the overlay. [active] is the hysteretic warning
 /// flag; [rollDegrees] is the latest SIGNED roll (for the rising-edge analytics);

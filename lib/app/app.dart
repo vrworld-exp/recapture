@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../application/config/config_notifier.dart';
 import '../application/offline/offline_queue_notifier.dart';
+import '../application/warmup/backend_warmup.dart';
 import 'routes/app_router.dart';
 import 'theme/app_colors.dart';
 import 'theme/app_theme.dart';
@@ -30,6 +31,11 @@ class ReCapture extends ConsumerWidget {
     // logout (to clear). Read, not watch — the shell must not rebuild on queue
     // changes; consumers watch offlineQueueProvider directly.
     ref.read(offlineQueueProvider);
+
+    // Eager-init the backend warm-up: fire-and-forget GET /health now and on
+    // every foreground resume, so the Render instance is awake before the
+    // user's first real request. Read, not watch — nothing to rebuild on.
+    ref.read(backendWarmupProvider);
 
     // Force dark status bar icons + transparent status bar globally.
     SystemChrome.setSystemUIOverlayStyle(

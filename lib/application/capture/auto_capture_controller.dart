@@ -92,7 +92,7 @@ class AutoCaptureController {
   /// has fired yet.
   DateTime? get lastCaptureAt => _lastCaptureAt;
 
-  /// Whether the pitch was in band on the last [evaluate] (the hysteresis latch).
+  /// Whether the tilt was in band on the last [evaluate] (the hysteresis latch).
   bool get wasInBand => _wasInBand;
 
   /// Evaluates the conjunction for the current frame and, if it holds, fires a
@@ -104,7 +104,7 @@ class AutoCaptureController {
   /// open, screen backgrounded) without tearing down state — a disabled tick is
   /// a no-op that still refreshes the [wasInBand] latch.
   Future<AutoCaptureOutcome> evaluate({
-    required double pitchDegrees,
+    required double tiltDegrees,
     required PitchBand band,
     required bool isStable,
     required int currentSegment,
@@ -115,7 +115,7 @@ class AutoCaptureController {
     // so it reflects the band the user is actually in regardless of firing.
     final inBand = isPitchInBand(
       band,
-      pitchDegrees,
+      tiltDegrees,
       hysteresisDeg: config.pitchEdgeHysteresisDeg,
       wasInBand: _wasInBand,
     );
@@ -126,7 +126,7 @@ class AutoCaptureController {
     }
 
     final fire = shouldCapture(
-      currentPitch: pitchDegrees,
+      currentTilt: tiltDegrees,
       pitchBand: band,
       isStable: isStable,
       isCurrentFilled: isCurrentFilled,

@@ -8,9 +8,10 @@
 // the AutoCaptureController; this file is the testable heart it wraps.
 //
 // THE CONJUNCTION (all must hold):
-//   1. inBand        — smoothed device pitch is within the Level A pitch band
-//                      (CapturePitchGuide.isInBand: min inclusive, max exclusive,
-//                      DEGREES; a [-90,90] RANGE check — pitch does NOT wrap).
+//   1. inBand        — the smoothed 0–180° camera tilt is within the level's
+//                      pitch band (CapturePitchGuide.isInBand: min inclusive,
+//                      max exclusive, DEGREES; a [0,180] RANGE check — tilt
+//                      does NOT wrap).
 //   2. isStable      — the NATIVE stability gate's debounced `stable` flag (it
 //                      already encodes the gyro/accel fusion + 250 ms dwell — we
 //                      consume it, we do NOT re-time 250 ms here).
@@ -45,10 +46,10 @@ class AutoCaptureConfig {
   /// Minimum time since the last capture before another may fire. Default 500 ms.
   final Duration minInterval;
 
-  /// Optional band-edge dead-band (degrees). When > 0, a pitch already inside the
+  /// Optional band-edge dead-band (degrees). When > 0, a tilt already inside the
   /// band stays "in band" until it drifts more than this past an edge — absorbs
-  /// residual jitter so a borderline pitch doesn't flicker the trigger. 0 = off
-  /// (strict [PitchBand] membership). Given pitch is already smoothed this is
+  /// residual jitter so a borderline tilt doesn't flicker the trigger. 0 = off
+  /// (strict [PitchBand] membership). Given the tilt is already smoothed this is
   /// usually unnecessary; kept for tuning.
   final double pitchEdgeHysteresisDeg;
 
@@ -66,22 +67,23 @@ class AutoCaptureConfig {
       };
 }
 
-/// Band membership with optional edge hysteresis. With [hysteresisDeg] <= 0 this
-/// is exactly [CapturePitchGuide.isInBand] (min inclusive, max exclusive). With
-/// hysteresis > 0 AND [wasInBand], the band widens by [hysteresisDeg] on both
-/// edges (Schmitt) so a small dither past an edge holds; entry is always strict.
-/// A NaN/Infinity pitch is never in band (IEEE-754 comparisons), as in the base.
+/// Band membership with optional edge hysteresis, over the 0–180° camera tilt.
+/// With [hysteresisDeg] <= 0 this is exactly [CapturePitchGuide.isInBand] (min
+/// inclusive, max exclusive). With hysteresis > 0 AND [wasInBand], the band
+/// widens by [hysteresisDeg] on both edges (Schmitt) so a small dither past an
+/// edge holds; entry is always strict. A NaN/Infinity tilt is never in band
+/// (IEEE-754 comparisons), as in the base.
 bool isPitchInBand(
   PitchBand band,
-  double pitchDegrees, {
+  double tiltDegrees, {
   double hysteresisDeg = 0,
   bool wasInBand = false,
 }) {
   if (hysteresisDeg <= 0 || !wasInBand) {
-    return CapturePitchGuide.isInBand(band, pitchDegrees);
+    return CapturePitchGuide.isInBand(band, tiltDegrees);
   }
-  return pitchDegrees >= band.minDegrees - hysteresisDeg &&
-      pitchDegrees < band.maxDegrees + hysteresisDeg;
+  return tiltDegrees >= band.minDegrees - hysteresisDeg &&
+      tiltDegrees < band.maxDegrees + hysteresisDeg;
 }
 
 /// The pure auto-capture decision: the full conjunction (plus the in-flight
@@ -90,7 +92,7 @@ bool isPitchInBand(
 /// single-shot behaviour (not re-firing every frame) is enforced by the
 /// controller via [isCapturing] + the cooldown + the segment becoming filled.
 bool shouldCapture({
-  required double currentPitch,
+  required double currentTilt,
   required PitchBand pitchBand,
   required bool isStable,
   required bool isCurrentFilled,
@@ -104,7 +106,7 @@ bool shouldCapture({
   if (isCapturing) return false; // in-flight guard, checked first (cheap)
   final inBand = isPitchInBand(
     pitchBand,
-    currentPitch,
+    currentTilt,
     hysteresisDeg: bandHysteresisDeg,
     wasInBand: wasInBand,
   );

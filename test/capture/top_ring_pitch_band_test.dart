@@ -1,16 +1,19 @@
 // test/capture/top_ring_pitch_band_test.dart
 //
-// Top Ring (+ generalized) pitch-band enforcement + tuned tilt indicator.
+// Top Ring (+ generalized) pitch-band enforcement + tuned tilt indicator, on
+// the 0–180° camera-tilt scale (0 = camera at the sky, 90 = horizon, 180 = at
+// the ground; higher tilt = phone aimed further DOWN).
 //
 // Covers the wiring this feature adds on top of the already-parameterized gate
 // (shouldCapture/isPitchInBand) and indicator (TiltMeterOverlay):
 //   1. pitchBandIdForLevel — the SINGLE level→band-id source (A=mid, B=high=Top
 //      Ring, C=low=Bottom Ring); the degrees live in config, not here.
-//   2. tiltGaugeRangeForBand — the gauge auto-tunes/adapts to ANY band (Top Ring,
-//      Eye Ring, a negative Bottom Ring), framing it with head/foot room.
+//   2. tiltGaugeRangeForBand — the gauge auto-tunes/adapts to ANY band, framing
+//      it with head/foot room.
 //   3. TiltMeterOverlay(levelBandId:) — the indicator's below/in/above guidance
-//      tracks the LEVEL's band, not a hardcoded one (tuned for Top Ring [60,90),
-//      and a negative band proves the generalization).
+//      tracks the LEVEL's band, not a hardcoded one (tuned for Top Ring
+//      [120,180), and a custom band proves the generalization). Below the band
+//      (aimed too far up) → "Tilt down"; above it → "Tilt up".
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -18,7 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/analytics/capture_level_events.dart';
-import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/current_tilt_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/tilt_target.dart';
@@ -34,10 +37,19 @@ class _StubConfig extends ConfigNotifier {
   CaptureConfig build() => _config;
 }
 
-SmoothedOrientation _at(double deg) {
-  final rad = deg * math.pi / 180.0;
+/// A SmoothedOrientation whose `cameraTiltDegrees` equals [tiltDeg]: a rotation
+/// of (180° − tilt) about device X (see camera_tilt_test.dart).
+SmoothedOrientation _atTilt(double tiltDeg) {
+  final theta = (180.0 - tiltDeg) * math.pi / 180.0;
   return SmoothedOrientation(
-    yaw: 0, pitch: rad, roll: 0, qx: 0, qy: 0, qz: 0, qw: 1, timestampNs: 0,
+    yaw: 0,
+    pitch: 0,
+    roll: 0,
+    qx: math.sin(theta / 2),
+    qy: 0,
+    qz: 0,
+    qw: math.cos(theta / 2),
+    timestampNs: 0,
   );
 }
 
@@ -54,22 +66,23 @@ void main() {
     TiltTarget band(double min, double max) =>
         TiltTarget(minDegrees: min, maxDegrees: max, bandId: 'b');
 
-    test('Top Ring [60,90) frames to [30,120] (one span head/foot room)', () {
-      final r = tiltGaugeRangeForBand(band(60, 90));
-      expect(r.min, 30);
-      expect(r.max, 120);
+    test('Top Ring [120,180) frames to [60,240] (one span head/foot room)', () {
+      final r = tiltGaugeRangeForBand(band(120, 180));
+      expect(r.min, 60);
+      expect(r.max, 240);
     });
 
-    test('Eye Ring [30,60) frames to [0,90]', () {
-      final r = tiltGaugeRangeForBand(band(30, 60));
+    test('Eye Ring [60,120) frames to [0,180]', () {
+      final r = tiltGaugeRangeForBand(band(60, 120));
       expect(r.min, 0);
-      expect(r.max, 90);
+      expect(r.max, 180);
     });
 
-    test('a negative Bottom-Ring-style band [-60,-30) frames to [-90,0]', () {
-      final r = tiltGaugeRangeForBand(band(-60, -30));
-      expect(r.min, -90);
-      expect(r.max, 0);
+    test('Bottom Ring [0,60) frames to [-60,120] (needle clamps at the ends)',
+        () {
+      final r = tiltGaugeRangeForBand(band(0, 60));
+      expect(r.min, -60);
+      expect(r.max, 120);
     });
 
     test('a very narrow band still gets the minMargin floor', () {
@@ -81,13 +94,13 @@ void main() {
   });
 
   group('TiltMeterOverlay tunes its guidance to the level band', () {
-    // Pumps a FRESH overlay and feeds a single pitch sample. A fresh mount seeds
-    // the pitch EMA directly to that value (no smoothing lag), so the asserted
-    // state is exactly the one [pitch] maps to under the band.
-    Future<void> pumpPitch(
+    // Pumps a FRESH overlay and feeds a single tilt sample. A fresh mount seeds
+    // the tilt EMA directly to that value (no smoothing lag), so the asserted
+    // state is exactly the one [tilt] maps to under the band.
+    Future<void> pumpTilt(
       WidgetTester tester, {
       required String bandId,
-      required double pitch,
+      required double tilt,
       CaptureConfig config = CaptureConfig.bundledDefault,
     }) async {
       final source = StreamController<SmoothedOrientation>.broadcast();
@@ -106,61 +119,64 @@ void main() {
         ),
       );
       await tester.pump();
-      source.add(_at(pitch));
+      source.add(_atTilt(tilt));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
     }
 
-    testWidgets('Top Ring (high [60,90)): 50 → tilt up', (tester) async {
-      await pumpPitch(tester, bandId: 'high', pitch: 50); // below 60
-      expect(find.text('Tilt up'), findsOneWidget);
-    });
-
-    testWidgets('Top Ring (high [60,90)): 75 → ready', (tester) async {
-      await pumpPitch(tester, bandId: 'high', pitch: 75); // inside [60,90)
-      expect(find.text('Hold steady'), findsOneWidget);
-    });
-
-    testWidgets('Top Ring (high [60,90)): 95 → tilt down', (tester) async {
-      await pumpPitch(tester, bandId: 'high', pitch: 95); // above 90
+    testWidgets('Top Ring (high [120,180)): 100 → tilt down (aim at the top)',
+        (tester) async {
+      await pumpTilt(tester, bandId: 'high', tilt: 100); // below 120
       expect(find.text('Tilt down'), findsOneWidget);
     });
 
-    testWidgets('50° is in-band for Eye Ring but out for Top Ring (band drives it)',
+    testWidgets('Top Ring (high [120,180)): 150 → ready', (tester) async {
+      await pumpTilt(tester, bandId: 'high', tilt: 150); // inside [120,180)
+      expect(find.text('Hold steady'), findsOneWidget);
+    });
+
+    testWidgets('Eye Ring (mid [60,120)): 130 → tilt up (aimed too far down)',
         (tester) async {
-      // Same pitch, different level band → different guidance. Proves the
+      await pumpTilt(tester, bandId: 'mid', tilt: 130); // above 120
+      expect(find.text('Tilt up'), findsOneWidget);
+    });
+
+    testWidgets(
+        '100° is in-band for Eye Ring but out for Top Ring (band drives it)',
+        (tester) async {
+      // Same tilt, different level band → different guidance. Proves the
       // indicator reads the LEVEL band, not a hardcoded one.
-      await pumpPitch(tester, bandId: 'mid', pitch: 50);
+      await pumpTilt(tester, bandId: 'mid', tilt: 100);
       expect(find.text('Hold steady'), findsOneWidget,
-          reason: '50° is inside the Eye Ring [30,60)');
+          reason: '100° is inside the Eye Ring [60,120)');
     });
 
-    testWidgets('generalizes to a negative Bottom-Ring band [-60,-30): -10 → tilt down',
+    testWidgets('generalizes to a custom server-style band [20,50): 70 → tilt up',
         (tester) async {
       const config = CaptureConfig(
         version: 1,
         pitchBands: [
-          PitchBand(id: 'bottom', minDegrees: -60, maxDegrees: -30, segments: 8),
+          PitchBand(id: 'shelf', minDegrees: 20, maxDegrees: 50, segments: 8),
         ],
         thresholds: CaptureThresholds(
-          minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
+            minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
       );
-      await pumpPitch(tester, bandId: 'bottom', pitch: -10, config: config);
-      expect(find.text('Tilt down'), findsOneWidget); // above -30 → tilt down
+      await pumpTilt(tester, bandId: 'shelf', tilt: 70, config: config);
+      expect(find.text('Tilt up'), findsOneWidget); // above 50 → tilt up
     });
 
-    testWidgets('generalizes to a negative Bottom-Ring band [-60,-30): -45 → ready',
+    testWidgets('generalizes to a custom server-style band [20,50): 35 → ready',
         (tester) async {
       const config = CaptureConfig(
         version: 1,
         pitchBands: [
-          PitchBand(id: 'bottom', minDegrees: -60, maxDegrees: -30, segments: 8),
+          PitchBand(id: 'shelf', minDegrees: 20, maxDegrees: 50, segments: 8),
         ],
         thresholds: CaptureThresholds(
-          minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
+            minSharpness: 0.45, minCoveragePct: 80, maxTiltDeltaDeg: 12),
       );
-      await pumpPitch(tester, bandId: 'bottom', pitch: -45, config: config);
-      expect(find.text('Hold steady'), findsOneWidget); // inside [-60,-30)
+      await pumpTilt(tester, bandId: 'shelf', tilt: 35, config: config);
+      expect(find.text('Hold steady'), findsOneWidget); // inside [20,50)
     });
 
     testWidgets('out-of-band analytics carries the Top Ring band id',
@@ -174,7 +190,8 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            captureConfigProvider.overrideWith(() => _StubConfig(CaptureConfig.bundledDefault)),
+            captureConfigProvider
+                .overrideWith(() => _StubConfig(CaptureConfig.bundledDefault)),
             orientationSourceProvider.overrideWithValue(source.stream),
           ],
           child: const MaterialApp(
@@ -194,7 +211,7 @@ void main() {
       );
       await tester.pump();
 
-      source.add(_at(40)); // below the Top Ring band
+      source.add(_atTilt(100)); // below the Top Ring band [120,180)
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 

@@ -33,7 +33,7 @@
 // ── CONVENTION RECONCILIATION (same as the sibling Low-Ring tests) ─────────────
 // The brief frames Low Ring as an "upward tilt / NEGATIVE band". This codebase does
 // NOT use a negative band: Level C resolves to `pitchBandIdForLevel(CaptureLevel.c)
-// == 'low'`, the POSITIVE [0, 30) slice — the lowest of the [0, 90] range, reached
+// == 'low'`, the [0, 60) slice — the lowest of the 0–180° camera-tilt scale, reached
 // by a slight upward tilt from level (copy: "Lower the phone, tilt slightly up").
 // The assertions encode that production convention; the sabotage group fails if the
 // band is ever mis-wired to the horizontal (Level A) band.
@@ -60,15 +60,15 @@ void main() {
   // tests track an INTENTIONAL retune and fail on an UNINTENTIONAL one.
   final lowRing = resolvePitchBand(
       bandId: pitchBandIdForLevel(CaptureLevel.c), config: config);
-  // Level A's band (Eye Ring 'mid' [30,60)) is the "horizontal" posture that would
+  // Level A's band (Eye Ring 'mid' [60,120)) is the "horizontal" posture that would
   // cut the base off — the wrong band for the Low Ring.
   final eyeRing = resolvePitchBand(
       bandId: pitchBandIdForLevel(CaptureLevel.a), config: config);
 
-  // The base-capturing angle (well inside the Low Ring [0,30)) and a horizontal /
-  // Level-A angle (inside [30,60), outside Low Ring) that clips the base.
-  const baseAnglePitch = 15.0; // slight-up posture → base in frame
-  const horizontalPitch = 45.0; // Eye-Ring/horizontal → base cut off
+  // The base-capturing angle (well inside the Low Ring [0,60)) and a horizontal /
+  // Level-A angle (inside [60,120), outside Low Ring) that clips the base.
+  const baseAnglePitch = 30.0; // slight-up posture (low band centre) → base in frame
+  const horizontalPitch = 90.0; // Eye-Ring/horizontal → base cut off
   const eps = 0.01;
 
   // The base-cutoff framing reminder copy — the Level-C-specific coaching under test.
@@ -80,7 +80,7 @@ void main() {
   // (the geometric safeguard). No sensors, no camera, no timers — `now`/`lastCapture`
   // are plain values, deterministic and repeatable.
   bool fires(PitchBand band, double pitch) => shouldCapture(
-        currentPitch: pitch,
+        currentTilt: pitch,
         pitchBand: band,
         isStable: true,
         isCurrentFilled: false,
@@ -116,7 +116,7 @@ void main() {
     });
 
     test('horizontal / Level-A angle (would cut off the base) → NO capture', () {
-      // 45° is a valid Eye-Ring posture but OUT of the Low Ring band: the base
+      // 90° is a valid Eye-Ring posture but OUT of the Low Ring band: the base
       // would be clipped, so the auto-capture decision must refuse to fire.
       expect(fires(lowRing, horizontalPitch), isFalse);
     });
@@ -239,7 +239,7 @@ void main() {
 
     test('fires inside the retuned window, refuses outside it', () {
       expect(fires(retuned, 10), isTrue); // inside [0,20)
-      expect(fires(retuned, 25), isFalse); // was in old [0,30), now out → refused
+      expect(fires(retuned, 25), isFalse); // was in the full low band, now out → refused
     });
   });
 

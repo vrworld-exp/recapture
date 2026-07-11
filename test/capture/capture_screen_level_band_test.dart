@@ -3,7 +3,7 @@
 // Proves the capture screen wires THIS level's pitch band (pitchBandIdForLevel)
 // into the tilt indicator: the SAME smoothed pitch yields different guidance per
 // level because each level targets a different band. 40° is inside Level A's Eye
-// Ring [30,60) ("Hold steady") but below Level B's Top Ring [60,90) ("Tilt up").
+// Ring [60,120) ("Hold steady") but below Level B's Top Ring [120,180) ("Tilt down").
 // The shutter gate shares the same _levelBandId, so this also exercises the
 // per-level enforcement wiring (the pure gate itself is covered exhaustively by
 // auto_capture_pitch_band_test.dart).
@@ -14,7 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/current_tilt_provider.dart';
 import 'package:recapture/application/capture/stability_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';
@@ -57,10 +57,19 @@ class _StubConfigNotifier extends ConfigNotifier {
   CaptureConfig build() => CaptureConfig.bundledDefault;
 }
 
-SmoothedOrientation _at(double deg) {
-  final rad = deg * math.pi / 180.0;
+/// A SmoothedOrientation whose `cameraTiltDegrees` equals [tiltDeg]: a rotation
+/// of (180° − tilt) about device X (see camera_tilt_test.dart).
+SmoothedOrientation _at(double tiltDeg) {
+  final theta = (180.0 - tiltDeg) * math.pi / 180.0;
   return SmoothedOrientation(
-    yaw: 0, pitch: rad, roll: 0, qx: 0, qy: 0, qz: 0, qw: 1, timestampNs: 0,
+    yaw: 0,
+    pitch: 0,
+    roll: 0,
+    qx: math.sin(theta / 2),
+    qy: 0,
+    qz: 0,
+    qw: math.cos(theta / 2),
+    timestampNs: 0,
   );
 }
 
@@ -85,7 +94,7 @@ void main() {
     messenger.setMockMethodCallHandler(captureChannel, null);
   });
 
-  Future<void> pumpAt40(
+  Future<void> pumpMeter(
     WidgetTester tester, {
     required String levelLabel,
     required Stream<SmoothedOrientation> source,
@@ -113,19 +122,19 @@ void main() {
     await tester.pump(); // post-frame start()
   }
 
-  testWidgets('Level B targets the Top Ring band: 40° reads "Tilt up"',
+  testWidgets('Level B targets the Top Ring band: 100° reads "Tilt down"',
       (tester) async {
     final source = StreamController<SmoothedOrientation>.broadcast();
     addTearDown(source.close);
-    await pumpAt40(tester, levelLabel: 'B', source: source.stream);
+    await pumpMeter(tester, levelLabel: 'B', source: source.stream);
 
-    source.add(_at(40)); // below Top Ring [60,90)
+    source.add(_at(100)); // below Top Ring [120,180) → aim further down
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
     // Scope to the tilt meter (the HUD has other "Hold steady" copy elsewhere).
     final meter = find.byType(TiltMeterOverlay);
-    expect(find.descendant(of: meter, matching: find.text('Tilt up')),
+    expect(find.descendant(of: meter, matching: find.text('Tilt down')),
         findsOneWidget);
     expect(find.descendant(of: meter, matching: find.text('Hold steady')),
         findsNothing);
@@ -134,20 +143,21 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('Level A targets the Eye Ring band: the same 40° reads "Hold steady"',
+  testWidgets(
+      'Level A targets the Eye Ring band: the same 100° reads "Hold steady"',
       (tester) async {
     final source = StreamController<SmoothedOrientation>.broadcast();
     addTearDown(source.close);
-    await pumpAt40(tester, levelLabel: 'A', source: source.stream);
+    await pumpMeter(tester, levelLabel: 'A', source: source.stream);
 
-    source.add(_at(40)); // inside Eye Ring [30,60)
+    source.add(_at(100)); // inside Eye Ring [60,120)
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
     final meter = find.byType(TiltMeterOverlay);
     expect(find.descendant(of: meter, matching: find.text('Hold steady')),
         findsOneWidget);
-    expect(find.descendant(of: meter, matching: find.text('Tilt up')),
+    expect(find.descendant(of: meter, matching: find.text('Tilt down')),
         findsNothing);
 
     await tester.pump(const Duration(milliseconds: 300));

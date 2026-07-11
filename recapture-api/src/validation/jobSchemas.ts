@@ -108,6 +108,33 @@ export const partUrlSchema = z
 export type PartUrlInput = z.infer<typeof partUrlSchema>;
 
 /**
+ * POST /jobs/:jobId/uploads/complete body — commit ONE file's multipart upload
+ * server-side (no presigned complete exists; the SDK call needs credentials).
+ * `parts` carries the client-collected part ETags in the shape S3 expects
+ * back, bounded by S3's own part-count ceiling. The uploadId is NOT
+ * pre-validated — a stale/foreign id is S3's error to raise (part-url policy).
+ */
+export const completeUploadSchema = z
+  .object({
+    key: z.string().min(1).max(1024),
+    uploadId: z.string().min(1).max(1024),
+    parts: z
+      .array(
+        z
+          .object({
+            partNumber: z.coerce.number().int().min(1).max(PART_COUNT_MAX),
+            etag: z.string().min(1).max(256),
+          })
+          .strict()
+      )
+      .min(1, 'parts must not be empty')
+      .max(PART_COUNT_MAX),
+  })
+  .strict();
+
+export type CompleteUploadInput = z.infer<typeof completeUploadSchema>;
+
+/**
  * POST /jobs/:jobId/finalize body. Usually empty; `reportedFilesCount` is an
  * OPTIONAL client cross-check — S3 stays the verification authority either
  * way. `.strict()` rejects unknown fields.

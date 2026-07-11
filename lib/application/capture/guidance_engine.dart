@@ -24,7 +24,7 @@ import '../../domain/entities/capture_readiness.dart' show CaptureMode;
 import '../../domain/entities/tilt_target.dart';
 import '../../utils/analytics.dart';
 import '../config/config_notifier.dart';
-import 'current_pitch_provider.dart';
+import 'current_tilt_provider.dart';
 import 'ring_progress_provider.dart' show ringDirectionStateProvider;
 import 'stability_provider.dart';
 
@@ -135,22 +135,22 @@ final guidanceEngineProvider = Provider<GuidanceEngine>((ref) => GuidanceEngine(
 /// `guidanceProvider.instruction`, the arrow watches `.direction`. Recomputes on
 /// every upstream signal change (each recompute is one engine tick).
 final guidanceProvider = Provider<GuidanceOutput>((ref) {
-  final pitch = ref.watch(currentPitchProvider).valueOrNull;
+  final tiltSample = ref.watch(currentTiltProvider).valueOrNull;
   final stabilitySample = ref.watch(stabilityProvider).valueOrNull;
   final config = ref.watch(captureConfigProvider);
   final ring = ref.watch(ringDirectionStateProvider);
   final mode = ref.watch(captureModeProvider);
 
-  final pitchSupported = pitch?.sensorSupported ?? false;
+  final tiltSupported = tiltSample?.sensorSupported ?? false;
   final stabilitySupported = stabilitySample?.sensorSupported ?? false;
   // Trust the sensor branches only when BOTH IMU-derived signals are usable;
   // otherwise the resolver skips tilt/stability (fail-through), never stranding
   // the user on an impossible cue.
-  final sensorSupported = pitchSupported && stabilitySupported;
+  final sensorSupported = tiltSupported && stabilitySupported;
 
   final target = _eyeRingTarget(config);
-  final tilt = (pitch != null && pitchSupported)
-      ? tiltStateFor(pitch.pitchDegrees, target)
+  final tilt = (tiltSample != null && tiltSupported)
+      ? tiltStateFor(tiltSample.tiltDegrees, target)
       : TiltState.inBand; // moot when !sensorSupported (tilt branch skipped)
   final stability = stabilitySample?.stability ?? Stability.unknown;
 
@@ -173,7 +173,8 @@ TiltTarget _eyeRingTarget(CaptureConfig config) {
   if (config.pitchBands.isNotEmpty) {
     return TiltTarget.fromBand(config.pitchBands.first);
   }
-  return const TiltTarget(minDegrees: 30, maxDegrees: 60, bandId: 'mid');
+  // Last-resort floor: the bundled `mid` band on the 0–180° camera-tilt scale.
+  return const TiltTarget(minDegrees: 60, maxDegrees: 120, bandId: 'mid');
 }
 
 String get _deviceType => switch (defaultTargetPlatform) {

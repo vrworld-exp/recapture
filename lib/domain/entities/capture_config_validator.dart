@@ -7,7 +7,8 @@ import 'capture_config.dart';
 
 /// Sanitizes a parsed config:
 ///   - drops bands with `segments <= 0` or (after clamping) `maxDegrees <= minDegrees`
-///   - clamps band degrees into [0, 90] and segments into [1, 64]
+///   - clamps band degrees into [0, 180] (the 0–180° camera-tilt scale) and
+///     segments into [1, 64]
 ///   - clamps thresholds: minSharpness [0, 1], minCoveragePct [0, 100],
 ///     maxTiltDeltaDeg [1, 45]
 ///   - clamps per-variant segment counts into [1, 64] (same range as bands;
@@ -17,8 +18,8 @@ CaptureConfig sanitizeCaptureConfig(CaptureConfig cfg) {
   final bands = <PitchBand>[];
   for (final b in cfg.pitchBands) {
     if (b.segments <= 0) continue; // drop degenerate band count
-    final min = b.minDegrees.clamp(0.0, 90.0).toDouble();
-    final max = b.maxDegrees.clamp(0.0, 90.0).toDouble();
+    final min = b.minDegrees.clamp(0.0, 180.0).toDouble();
+    final max = b.maxDegrees.clamp(0.0, 180.0).toDouble();
     if (max <= min) continue; // drop inverted/zero-width band after clamping
     bands.add(b.copyWith(
       minDegrees: min,

@@ -12,7 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/analytics/capture_level_events.dart';
 import 'package:recapture/application/capture/analytics/capture_level_session.dart';
-import 'package:recapture/application/capture/current_pitch_provider.dart';
+import 'package:recapture/application/capture/current_tilt_provider.dart';
 import 'package:recapture/platform/imu_rotation_channel.dart';
 import 'package:recapture/presentation/widgets/roll_warning_overlay.dart';
 import 'package:recapture/utils/analytics.dart';

@@ -6,7 +6,7 @@
 // `ringDirectionStateProvider` that guidance_engine.dart previously defined.
 //
 // SINGLE SENSOR SUBSCRIPTION: it reuses [orientationSourceProvider] (the same
-// native stream `currentPitchProvider` consumes) — no second IMU subscription.
+// native stream `currentTiltProvider` consumes) — no second IMU subscription.
 //
 // FAIL-OPEN: before the first valid yaw, or when the sensor is unavailable, the
 // state is [RingDirectionState.pending] (the engine falls through to the capture
@@ -23,7 +23,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/capture/guidance_inputs.dart' show RingDirectionState;
 import '../../domain/capture/ring_progress.dart';
 import 'capture_flow_variant_provider.dart';
-import 'current_pitch_provider.dart' show sharedOrientationProvider;
+import 'current_tilt_provider.dart' show sharedOrientationProvider;
 import 'segment_coverage_provider.dart';
 
 /// A live yaw→segment sample. [currentSegment] is null before the first valid yaw
@@ -137,7 +137,7 @@ final currentRingSegmentProvider =
 /// arrow. Combines the live segment ([currentRingSegmentProvider]) with the live
 /// fill state ([segmentCoverageProvider]). Pending/unsupported → fail-open
 /// [RingDirectionState.pending]. (Plain provider — kept alive by its watchers, the
-/// same way `currentPitchProvider` is, so the sensor stays subscribed during capture.)
+/// same way `currentTiltProvider` is, so the sensor stays subscribed during capture.)
 final ringDirectionStateProvider = Provider<RingDirectionState>((ref) {
   final seg = ref.watch(currentRingSegmentProvider).valueOrNull?.currentSegment;
   final coverage = ref.watch(segmentCoverageProvider);

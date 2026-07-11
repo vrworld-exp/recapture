@@ -15,6 +15,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../domain/capture/camera_tilt.dart' as camera_tilt;
 import '../utils/constants.dart';
 
 /// One device-orientation sample from the rotation-vector sensor.
@@ -116,6 +117,7 @@ class SmoothedOrientation {
     required this.qz,
     required this.qw,
     required this.timestampNs,
+    this.hasQuaternion = true,
   });
 
   /// Yaw/pitch/roll in **radians**, matching Android's
@@ -130,6 +132,12 @@ class SmoothedOrientation {
   final double qz;
   final double qw;
 
+  /// Whether the native event actually carried a quaternion. [fromEvent]
+  /// defaults an ABSENT `q` to the identity (0,0,0,1) — a valid pose (flat,
+  /// screen up) — so this flag is the only way to tell "missing" from "flat";
+  /// [cameraTiltDegrees] returns NaN when it is false.
+  final bool hasQuaternion;
+
   /// UNCHANGED from the source sample (CLOCK_MONOTONIC; downstream join key).
   final int timestampNs;
 
@@ -138,6 +146,15 @@ class SmoothedOrientation {
   double get yawDegrees => yaw * _radToDeg;
   double get pitchDegrees => pitch * _radToDeg;
   double get rollDegrees => roll * _radToDeg;
+
+  /// The camera-tilt angle on the 0–180° scale (0 = camera at the sky, 90 =
+  /// level with the horizon, ~180 = at the ground) — the ONE scalar the guided
+  /// capture's band logic consumes. Derived from the smoothed quaternion (see
+  /// `lib/domain/capture/camera_tilt.dart`); NaN when the event carried no
+  /// quaternion or a degenerate one.
+  double get cameraTiltDegrees => hasQuaternion
+      ? camera_tilt.cameraTiltDegrees(qx: qx, qy: qy, qz: qz, qw: qw)
+      : double.nan;
 
   /// Parses a native smoothed-orientation map; null for a malformed shape.
   static SmoothedOrientation? fromEvent(Object? event) {
@@ -157,6 +174,7 @@ class SmoothedOrientation {
       qy: qAt(1),
       qz: qAt(2),
       qw: hasQ ? qAt(3) : 1.0,
+      hasQuaternion: hasQ,
       timestampNs: (event['timestampNs'] as num?)?.toInt() ?? 0,
     );
   }

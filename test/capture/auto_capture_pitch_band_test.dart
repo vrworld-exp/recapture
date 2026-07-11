@@ -22,8 +22,8 @@ import 'package:recapture/domain/capture/auto_capture_trigger.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/platform/method_channels.dart' show CapturedFrame;
 
-// Level A 'mid' band: [30, 60) degrees — min inclusive, max exclusive.
-const _band = PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 10);
+// Level A 'mid' band: [60, 120) degrees — min inclusive, max exclusive.
+const _band = PitchBand(id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10);
 final _t0 = DateTime(2024, 1, 1, 12, 0, 0);
 
 /// `shouldCapture` with EVERY other condition held satisfied — only [pitch]
@@ -34,7 +34,7 @@ bool decide(
   bool wasInBand = false,
 }) =>
     shouldCapture(
-      currentPitch: pitch,
+      currentTilt: pitch,
       pitchBand: _band,
       isStable: true, // held true
       isCurrentFilled: false, // held true (unfilled)
@@ -55,40 +55,40 @@ void main() {
     });
 
     test('above band.max → no fire', () {
-      expect(decide(60.001), isFalse);
-      expect(decide(75), isFalse);
+      expect(decide(120.001), isFalse);
+      expect(decide(150), isFalse);
       expect(decide(120), isFalse);
     });
 
     test('inside band → fires (POSITIVE CONTROL: all else true)', () {
-      expect(decide(45), isTrue);
-      expect(decide(31), isTrue);
-      expect(decide(59), isTrue);
+      expect(decide(90), isTrue);
+      expect(decide(61), isTrue);
+      expect(decide(119), isTrue);
     });
 
     test('band edges: min inclusive, max exclusive', () {
-      expect(decide(30), isTrue, reason: 'min inclusive');
-      expect(decide(60), isFalse, reason: 'max exclusive');
-      expect(decide(59.999), isTrue);
+      expect(decide(60), isTrue, reason: 'min inclusive');
+      expect(decide(120), isFalse, reason: 'max exclusive');
+      expect(decide(119.999), isTrue);
     });
 
     test('flipping ONLY pitch out↔in toggles the decision (attributable)', () {
       // Same all-else-true inputs; the single varied term decides the outcome.
-      expect(decide(45), isTrue);
-      expect(decide(80), isFalse, reason: 'only pitch changed');
-      expect(decide(45), isTrue);
+      expect(decide(90), isTrue);
+      expect(decide(150), isFalse, reason: 'only pitch changed');
+      expect(decide(90), isTrue);
     });
 
     test('hysteresis: a small dither past the edge while latched does not flip '
         'out (no flicker); a real excursion does', () {
-      // Strict (no hysteresis): 62 is out.
-      expect(decide(62), isFalse);
-      // Latched inside with a 5° dead-band: 62 holds in-band (no flicker-out)...
-      expect(decide(62, hysteresis: 5, wasInBand: true), isTrue);
+      // Strict (no hysteresis): 122 is out.
+      expect(decide(122), isFalse);
+      // Latched inside with a 5° dead-band: 122 holds in-band (no flicker-out)...
+      expect(decide(122, hysteresis: 5, wasInBand: true), isTrue);
       // ...but a genuine excursion past the dead-band is out.
-      expect(decide(66, hysteresis: 5, wasInBand: true), isFalse);
+      expect(decide(126, hysteresis: 5, wasInBand: true), isFalse);
       // Entry is always strict — the dead-band only widens once already inside.
-      expect(decide(62, hysteresis: 5, wasInBand: false), isFalse);
+      expect(decide(122, hysteresis: 5, wasInBand: false), isFalse);
     });
   });
 
@@ -122,10 +122,10 @@ void main() {
 
       // 1) A run of OUT-OF-BAND stable ticks, unfilled segment, cooldown ok —
       //    below-min and above-max. Nothing must fire.
-      for (final pitch in [10.0, 20.0, 28.0, 62.0, 75.0, 89.0]) {
+      for (final pitch in [10.0, 30.0, 55.0, 122.0, 150.0, 179.0]) {
         clock = clock.add(const Duration(seconds: 1)); // cooldown never the blocker
         final r = await c.evaluate(
-          pitchDegrees: pitch,
+          tiltDegrees: pitch,
           band: _band,
           isStable: true,
           currentSegment: 0,
@@ -139,7 +139,7 @@ void main() {
       //    Proves the trigger CAN fire, so the zero above was due to the band.
       clock = clock.add(const Duration(seconds: 1));
       final inBand = await c.evaluate(
-        pitchDegrees: 45,
+        tiltDegrees: 90,
         band: _band,
         isStable: true,
         currentSegment: 0,
@@ -151,10 +151,10 @@ void main() {
 
       // 3) Leave the band again (fresh UNFILLED segment, cooldown elapsed, stable)
       //    → the only blocker is the band → no further fires.
-      for (final pitch in [80.0, 15.0]) {
+      for (final pitch in [150.0, 15.0]) {
         clock = clock.add(const Duration(seconds: 1));
         final r = await c.evaluate(
-          pitchDegrees: pitch,
+          tiltDegrees: pitch,
           band: _band,
           isStable: true,
           currentSegment: 1, // unfilled
@@ -171,7 +171,7 @@ void main() {
       // Out → no fire.
       expect(
         await c.evaluate(
-            pitchDegrees: 10,
+            tiltDegrees: 10,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -182,7 +182,7 @@ void main() {
       // Enter band → fires once.
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 90,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -194,7 +194,7 @@ void main() {
       clock = clock.add(const Duration(seconds: 1));
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 90,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -205,7 +205,7 @@ void main() {
       // Leave the band → still nothing.
       expect(
         await c.evaluate(
-            pitchDegrees: 80,
+            tiltDegrees: 150,
             band: _band,
             isStable: true,
             currentSegment: 1,
@@ -222,7 +222,7 @@ void main() {
       // Fire at t0 on segment 0.
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 90,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -234,7 +234,7 @@ void main() {
       clock = clock.add(const Duration(milliseconds: 300));
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 90,
             band: _band,
             isStable: true,
             currentSegment: 1,
@@ -249,7 +249,7 @@ void main() {
       final c = build();
       expect(
         await c.evaluate(
-            pitchDegrees: 80,
+            tiltDegrees: 150,
             band: _band,
             isStable: false,
             currentSegment: 0,
@@ -258,7 +258,7 @@ void main() {
       );
       expect(
         await c.evaluate(
-            pitchDegrees: 80,
+            tiltDegrees: 150,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -268,12 +268,12 @@ void main() {
       expect(captures, 0);
     });
 
-    test('band edges through the controller: 30 fires (min incl), 60 does not '
+    test('band edges through the controller: 60 fires (min incl), 120 does not '
         '(max excl)', () async {
       final atMin = build();
       expect(
         await atMin.evaluate(
-            pitchDegrees: 30,
+            tiltDegrees: 60,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -287,7 +287,7 @@ void main() {
       final atMax = build();
       expect(
         await atMax.evaluate(
-            pitchDegrees: 60,
+            tiltDegrees: 120,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -304,7 +304,7 @@ void main() {
       // Enter the band → fires, latching wasInBand=true.
       expect(
         await c.evaluate(
-            pitchDegrees: 45,
+            tiltDegrees: 90,
             band: _band,
             isStable: true,
             currentSegment: 0,
@@ -313,12 +313,12 @@ void main() {
       );
       expect(c.wasInBand, isTrue);
 
-      // Dither to 62 (past max 60 but within the 5° dead-band) on a fresh segment
+      // Dither to 122 (past max 120 but within the 5° dead-band) on a fresh segment
       // after cooldown → still treated as in band → fires (no flicker-out).
       clock = clock.add(const Duration(seconds: 1));
       expect(
         await c.evaluate(
-            pitchDegrees: 62,
+            tiltDegrees: 122,
             band: _band,
             isStable: true,
             currentSegment: 1,
@@ -326,11 +326,11 @@ void main() {
         AutoCaptureOutcome.filled,
       );
 
-      // A genuine excursion past the dead-band (66) → out of band → no fire.
+      // A genuine excursion past the dead-band (126) → out of band → no fire.
       clock = clock.add(const Duration(seconds: 1));
       expect(
         await c.evaluate(
-            pitchDegrees: 66,
+            tiltDegrees: 126,
             band: _band,
             isStable: true,
             currentSegment: 2,

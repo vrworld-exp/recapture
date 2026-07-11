@@ -38,6 +38,7 @@ import {
   type CreateJobInput,
   type InitiateUploadInput,
   type PartUrlInput,
+  type CompleteUploadInput,
 } from '@/validation/jobSchemas';
 import {
   PART_SIZE_MIN,
@@ -45,6 +46,7 @@ import {
   MAX_PART_SIZE,
   PRESIGN_EXPIRES_SECONDS,
   initiateMultipartUpload,
+  completeMultipartUpload,
   presignPartUrl,
   presignPartUrls,
 } from '@/services/s3MultipartService';
@@ -344,6 +346,10 @@ export type InitiateUploadResult =
 
 export type PartUrlResult = UploadGuardFailure | { outcome: 'SIGNED'; url: string };
 
+export type CompleteUploadResult =
+  | UploadGuardFailure
+  | { outcome: 'COMPLETED'; key: string; etag: string };
+
 /**
  * Initiates one file's S3 multipart upload and presigns ALL its part URLs (in
  * parallel — signing is local).
@@ -422,6 +428,32 @@ export async function refreshUploadPartUrl(
     input.partNumber
   );
   return { outcome: 'SIGNED', url };
+}
+
+/**
+ * Completes ONE file's multipart upload server-side (the client cannot — no
+ * presigned complete exists and the SDK call needs credentials). Same guard
+ * family as initiate via loadUploadableJob; deliberately persists NO per-file
+ * state (the stateless per-file design — S3 is the authority). A stale or
+ * foreign uploadId surfaces as S3's error → 500 via the error handler, same
+ * policy as part-url: never pre-validated here.
+ */
+export async function completeFileUpload(
+  userId: string,
+  jobId: string,
+  input: CompleteUploadInput
+): Promise<CompleteUploadResult> {
+  const guarded = await loadUploadableJob(userId, jobId, input.key);
+  if ('outcome' in guarded) return guarded;
+  const { job } = guarded;
+
+  const etag = await completeMultipartUpload(
+    job.upload!.rawBucket,
+    input.key,
+    input.uploadId,
+    input.parts
+  );
+  return { outcome: 'COMPLETED', key: input.key, etag };
 }
 
 // ── Finalize: verify manifest + counts, enqueue, set QUEUED ───────────────────

@@ -2,6 +2,7 @@
 
 
 
+
 <<<<<<<<<<<<<<<<<<<<<------------------- [[[[[[[[[[[[[[[[[[[ AWS ]]]]]]]]]]]]]]]]]]] ------------------------------->>>>>>>>
 
 
@@ -279,5 +280,51 @@ Multiple devices → a user can have multiple active refresh tokens simultaneous
 Mobile app side (Flutter)
 AuthNotifier (from the P1 Flutter prompts, not yet generated) stores both tokens in Hive (boxSession). Dio interceptor: on 401 response, call /auth/refresh with the stored refresh token, update both tokens, retry the original request. If refresh also fails → clear session, route to AuthScreen.
 
+
 When you're ready to turn this into a coding prompt — likely as part of P1 (Auth + Projects), since /auth/verify-otp, /auth/refresh, and /auth/logout are all P1 endpoints — just say so and I'll generate it with the full route handlers, the RefreshToken Mongoose model, and the rotation logic written out.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Uplaod Btn response ----------------------------------------------------->>>>>>>>>>>>>>>>>
+
+
+
+
+✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅
+
+
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (401ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (613ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (588ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (390ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (430ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (368ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (575ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (877ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (399ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (362ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (547ms)
+[analytics] job_queued {"user_id_hash":"731a23325b2d7a1027377b659adf075e","job_id":"6a5118f8119fa27578c7c989","flow_variant":"with_bottom","files_verified":37}
+POST /jobs/6a5118f8119fa27578c7c989/finalize → 200 (985ms)
+
+
+
+
+
+
+
+
+
+
+
 

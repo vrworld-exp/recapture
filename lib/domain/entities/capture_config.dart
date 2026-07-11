@@ -8,6 +8,11 @@ import '../capture/capture_flow_variant.dart';
 
 /// One pitch band (a vertical slice of the capture sphere) and how many capture
 /// positions to take around it.
+///
+/// Degrees are on the 0–180° CAMERA-TILT scale (the angle between the back
+/// camera's aim and world-up: 0 = at the sky, 90 = horizon, 180 = at the
+/// ground — see `lib/domain/capture/camera_tilt.dart`). `minDegrees` is
+/// inclusive, `maxDegrees` exclusive.
 class PitchBand {
   const PitchBand({
     required this.id,
@@ -24,7 +29,7 @@ class PitchBand {
   factory PitchBand.fromMap(Map<String, dynamic> m) => PitchBand(
         id: m['id'] is String ? m['id'] as String : 'band',
         minDegrees: m['minDegrees'] is num ? (m['minDegrees'] as num).toDouble() : 0,
-        maxDegrees: m['maxDegrees'] is num ? (m['maxDegrees'] as num).toDouble() : 90,
+        maxDegrees: m['maxDegrees'] is num ? (m['maxDegrees'] as num).toDouble() : 180,
         segments: m['segments'] is num ? (m['segments'] as num).toInt() : 12,
       );
 
@@ -368,12 +373,16 @@ class CaptureConfig {
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
+  // Bands tile the full 0–180° camera-tilt scale: BOTTOM ring (C, `low`, tilt
+  // up) / EYE ring (A, `mid`, hold straight) / TOP ring (B, `high`, tilt
+  // down). Legacy per-band `segments` retained — real counts come from
+  // `guided_capture_variant_segments` via [effectiveSegmentsFor].
   static const CaptureConfig bundledDefault = CaptureConfig(
-    version: 0,
+    version: 2,
     pitchBands: [
-      PitchBand(id: 'low', minDegrees: 0, maxDegrees: 30, segments: 12),
-      PitchBand(id: 'mid', minDegrees: 30, maxDegrees: 60, segments: 10),
-      PitchBand(id: 'high', minDegrees: 60, maxDegrees: 90, segments: 8),
+      PitchBand(id: 'low', minDegrees: 0, maxDegrees: 60, segments: 12),
+      PitchBand(id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10),
+      PitchBand(id: 'high', minDegrees: 120, maxDegrees: 180, segments: 8),
     ],
     thresholds: CaptureThresholds(
       minSharpness: 0.45,

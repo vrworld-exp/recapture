@@ -12,12 +12,13 @@
 // override + resolver use the same key.
 import '../entities/capture_config.dart';
 
-/// Sane physical pitch range (degrees) a band must lie within — the repo's
-/// existing convention: bands tile [0, 90] (see `sanitizeCaptureConfig`; Level C
-/// Bottom Ring is the positive `low` [0,30) band, kept positive by product
-/// decision, NOT a negative band). Override/remote/default all validate against it.
+/// Sane physical range (degrees) a band must lie within — the 0–180°
+/// CAMERA-TILT scale (angle between the back camera's aim and world-up; see
+/// `camera_tilt.dart`): bands tile [0, 180] (see `sanitizeCaptureConfig`) —
+/// BOTTOM ring `low` [0,60), EYE ring `mid` [60,120), TOP ring `high`
+/// [120,180). Override/remote/default all validate against it.
 const double kPitchBandMinDegrees = 0;
-const double kPitchBandMaxDegrees = 90;
+const double kPitchBandMaxDegrees = 180;
 
 /// True iff [band] is usable: finite bounds, `min < max`, and within
 /// [kPitchBandMinDegrees, kPitchBandMaxDegrees]. The SAME rule applied to every
