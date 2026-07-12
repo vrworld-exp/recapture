@@ -43,10 +43,12 @@ const auth = {
   })}`,
 };
 
-/** Creates a project + job (expected 37 files — 36 images + manifest for both
- * variants) and moves it to UPLOADING. */
+/** Creates a project + job (default: the full 37 files — 36 images + manifest
+ * for both variants; pass a partial count for coverage-floor cases) and moves
+ * it to UPLOADING. */
 async function makeUploadingJob(
-  captureVariant?: 'with_bottom' | 'without_bottom'
+  captureVariant?: 'with_bottom' | 'without_bottom',
+  expectedFilesCount = 37
 ): Promise<string> {
   const p = await Project.create({
     userId: new Types.ObjectId(userId),
@@ -60,7 +62,7 @@ async function makeUploadingJob(
     .send({
       projectId: p.id,
       objectSize: 'medium',
-      expectedFilesCount: 37,
+      expectedFilesCount,
       ...(captureVariant ? { captureVariant } : {}),
     });
   expect(res.status).toBe(201);
@@ -246,7 +248,7 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
   it('manifest failing ALL content rules → 422 with every finding, in rule order', async () => {
     const jobId = await makeUploadingJob();
     // Declares 10 but has 8 entries; LOW absent entirely; EYE/TOP under the
-    // with_bottom per-ring count of 12.
+    // with_bottom coverage floor of 10 (80% of the 12-per-ring total).
     const photos = [
       ...Array.from({ length: 5 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
       ...Array.from({ length: 3 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
@@ -271,8 +273,8 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
     expect(res.body.validationErrors[0].detail).toEqual({ declared: 10, actual: 8 });
     expect(res.body.validationErrors[1].detail).toEqual({ missingLevels: ['LOW'] });
     expect(res.body.validationErrors[2].detail.levels).toEqual([
-      { levelId: 'EYE', count: 5, required: 12 },
-      { levelId: 'TOP', count: 3, required: 12 },
+      { levelId: 'EYE', count: 5, required: 10 },
+      { levelId: 'TOP', count: 3, required: 10 },
     ]);
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING'); // untouched
   });
@@ -403,7 +405,8 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
     const jobId = await makeUploadingJob('without_bottom');
     // A full with_bottom-shaped manifest (3×12, declared) on a without_bottom
     // job: wrong declared variant, a LOW ring that should not exist, and
-    // EYE/TOP below the 18-per-ring floor — every violated rule in one pass.
+    // EYE/TOP below the 15-per-ring coverage floor (80% of 18) — every
+    // violated rule in one pass.
     mockS3({ manifestBody: validManifestBody(12, ['EYE', 'TOP', 'LOW'], 'with_bottom') });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
@@ -416,8 +419,107 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
     ]);
     const insufficient = res.body.validationErrors[2];
     expect(insufficient.detail.levels).toEqual([
-      { levelId: 'EYE', count: 12, required: 18 },
-      { levelId: 'TOP', count: 12, required: 18 },
+      { levelId: 'EYE', count: 12, required: 15 },
+      { levelId: 'TOP', count: 12, required: 15 },
+    ]);
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+  });
+
+  it("happy path PARTIAL 'without_bottom': 16+16 manifest + 33 objects → QUEUED end-to-end", async () => {
+    // The real-device case behind the coverage-floor range: both rings
+    // finished at 16/18 (≥ the 80% floor of 15), 32 images + manifest = 33.
+    const jobId = await makeUploadingJob('without_bottom', 33);
+    mockS3({
+      manifestBody: validManifestBody(16, ['EYE', 'TOP'], 'without_bottom'),
+      objectCount: 33, // S3 matches the STORED expectedFilesCount exactly
+    });
+
+    const res = await request(app)
+      .post(`/jobs/${jobId}/finalize`)
+      .set(auth)
+      .send({ reportedFilesCount: 33 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('QUEUED');
+    expect(res.body.filesVerified).toBe(33);
+    const saved = await Job.findById(jobId).exec();
+    expect(saved!.state).toBe('QUEUED');
+    expect(saved!.upload!.uploadedFilesCount).toBe(33);
+  });
+
+  it('a partial job still demands the EXACT stored count from S3 (32 ≠ 33 → 422)', async () => {
+    const jobId = await makeUploadingJob('without_bottom', 33);
+    mockS3({
+      manifestBody: validManifestBody(16, ['EYE', 'TOP'], 'without_bottom'),
+      objectCount: 32, // one object short of what the client declared
+    });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe('count_mismatch');
+    expect(res.body.expectedFilesCount).toBe(33);
+    expect(res.body.actualFilesCount).toBe(32);
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+  });
+
+  it("a ring below the coverage floor (14/18) → 422 INSUFFICIENT_PHOTOS_PER_LEVEL", async () => {
+    // 14 + 17 images + manifest = 32 files — the TOTAL is inside the create
+    // range (31–37), but the EYE ring sits below the 15-per-ring coverage
+    // floor. Manifest declared consistently + S3 count matching, so only the
+    // per-ring floor rule fires.
+    const jobId = await makeUploadingJob('without_bottom', 32);
+    const photos = [
+      ...Array.from({ length: 14 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
+      ...Array.from({ length: 17 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
+    ];
+    mockS3({
+      manifestBody: JSON.stringify({
+        flowVariant: 'without_bottom',
+        summary: { totalPhotos: photos.length },
+        photos,
+      }),
+      objectCount: 32,
+    });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe('manifest_invalid');
+    expect(res.body.validationErrors).toHaveLength(1);
+    expect(res.body.validationErrors[0].rule).toBe('INSUFFICIENT_PHOTOS_PER_LEVEL');
+    expect(res.body.validationErrors[0].detail.levels).toEqual([
+      { levelId: 'EYE', count: 14, required: 15 },
+    ]);
+    expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
+  });
+
+  it("a ring above the variant's per-ring total (19/18) → 422 EXCESS_PHOTOS_PER_LEVEL", async () => {
+    // 19 + 15 images + manifest = 35 files — in the create range, but the EYE
+    // ring exceeds the 18-per-ring ceiling. The exact-total check no longer
+    // catches this, so the explicit per-ring ceiling rule must.
+    const jobId = await makeUploadingJob('without_bottom', 35);
+    const photos = [
+      ...Array.from({ length: 19 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
+      ...Array.from({ length: 15 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
+    ];
+    mockS3({
+      manifestBody: JSON.stringify({
+        flowVariant: 'without_bottom',
+        summary: { totalPhotos: photos.length },
+        photos,
+      }),
+      objectCount: 35,
+    });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.reason).toBe('manifest_invalid');
+    expect(res.body.validationErrors).toHaveLength(1);
+    expect(res.body.validationErrors[0].rule).toBe('EXCESS_PHOTOS_PER_LEVEL');
+    expect(res.body.validationErrors[0].detail.levels).toEqual([
+      { levelId: 'EYE', count: 19, allowed: 18 },
     ]);
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
   });

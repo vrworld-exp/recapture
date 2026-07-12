@@ -35,6 +35,21 @@ import '../entities/segment_coverage.dart';
 /// .minCoveragePct` and `CaptureProgress.completeAtPct`.
 const double kDefaultMinCoveragePct = 80;
 
+/// The filled-segment floor [minCoveragePct] demands of a ring of
+/// [segmentCount] segments = `ceil(pct/100 * segmentCount)` — the ONE ceil
+/// every coverage consumer (this gate's guidance, the upload gate's floor)
+/// shares, so no two layers can disagree on "how many segments is 80%".
+/// Same guards as [evaluateLevelA]: a pct outside `(0, 100]` (or non-finite)
+/// falls back to [kDefaultMinCoveragePct]; a non-positive [segmentCount] → 0.
+int requiredSegmentsFor(double minCoveragePct, int segmentCount) {
+  if (segmentCount <= 0) return 0;
+  final pct =
+      (minCoveragePct.isFinite && minCoveragePct > 0 && minCoveragePct <= 100)
+          ? minCoveragePct
+          : kDefaultMinCoveragePct;
+  return (pct / 100.0 * segmentCount).ceil();
+}
+
 /// Structured completion result — both criteria reported independently plus the
 /// per-criterion shortfall, so the UI can guide ("X more segments", "Y more
 /// photos"). Immutable value type.
@@ -157,8 +172,7 @@ LevelCompletion evaluateLevelA({
   final coverageRatio = hasSegments ? filled / segmentCount : 0.0;
 
   // Guidance-only required count (equivalent to the gate at the boundary).
-  final requiredSegments =
-      hasSegments ? (pct / 100.0 * segmentCount).ceil() : 0;
+  final requiredSegments = requiredSegmentsFor(pct, segmentCount);
   final segmentsShort = math.max(0, requiredSegments - filled);
 
   final countMet = accepted >= minCount;

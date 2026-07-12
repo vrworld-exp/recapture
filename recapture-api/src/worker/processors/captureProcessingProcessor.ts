@@ -17,6 +17,7 @@
 import {
   DEFAULT_CAPTURE_FLOW_VARIANT,
   expectedPerRing,
+  minimumPerRing,
   ringsForVariant,
 } from '@/models/types/captureVariants';
 import { validateCaptureManifest } from '@/services/manifestValidationService';
@@ -67,12 +68,15 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
   } catch {
     parsedManifest = undefined; // → MANIFEST_UNREADABLE from the validator
   }
+  // Same bounds as finalize: the coverage floor below (a ring completed at
+  // MIN_RING_COVERAGE_PCT is a valid capture), the full per-ring count above.
   const variant = job.captureVariant ?? DEFAULT_CAPTURE_FLOW_VARIANT;
   const variantRings = [...ringsForVariant(variant)];
   const validation = validateCaptureManifest(parsedManifest, {
     requiredLevels: variantRings,
     allowedLevels: variantRings,
-    minPhotosPerLevel: expectedPerRing(variant),
+    minPhotosPerLevel: minimumPerRing(variant),
+    maxPhotosPerLevel: expectedPerRing(variant),
     expectedFlowVariant: variant,
   });
   if (!validation.valid) {

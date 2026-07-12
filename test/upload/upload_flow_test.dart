@@ -386,6 +386,47 @@ void main() {
         contains('jobId=job-1'));
   });
 
+  test(
+      'partial without_bottom bundle (16+16): createJob gets the REAL count '
+      '(33) and finalize reports it', () async {
+    // The coverage-floor case: both rings finished at 16/18 segments (>= the
+    // 80% floor of 15) — the bundle carries 32 images, and the flow must
+    // declare exactly bundle.totalImages + 1, never the full variant total.
+    const partialBundle = CaptureBundle(
+      path: '/ws/bundles/cap-session-1',
+      manifestPath: '/ws/bundles/cap-session-1/capture_manifest.json',
+      totalImages: 32,
+      totalBytes: 3200,
+      perLevelCounts: {'EYE': 16, 'TOP': 16},
+    );
+    final h = _Harness(
+      pack: ({
+        required UploadFlowContext context,
+        required ManifestSession session,
+        required ManifestDevice device,
+        BundleCancelToken? cancelToken,
+      }) async =>
+          partialBundle,
+    );
+
+    final done = h.orchestrator.run();
+    await h.engine.started.future;
+    await _flush();
+    h.engine.outcome.complete(const ResilientUploadOutcome(
+      status: ResilientUploadStatus.succeeded,
+      attemptsUsed: 1,
+    ));
+    await done;
+    await _flush();
+    await h.log.dispose();
+
+    expect(h.backend.jobArgs!['expectedFilesCount'], 33);
+    // 32 images + the manifest ride the spec; finalize reports the same 33.
+    expect(h.engine.spec!.files, hasLength(33));
+    expect(h.backend.finalizedWith, 33);
+    expect(h.log.snapshots.last.status, UploadStatus.completed);
+  });
+
   test('finalize failure → failed status + stream error, never completed',
       () async {
     final failure = Exception('422 VERIFICATION_FAILED');

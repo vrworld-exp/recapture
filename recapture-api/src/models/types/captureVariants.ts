@@ -65,3 +65,28 @@ export function expectedPerRing(variant: CaptureFlowVariant): number {
 export function expectedImageCount(variant: CaptureFlowVariant): number {
   return ringsForVariant(variant).length * expectedPerRing(variant);
 }
+
+/**
+ * Minimum ring coverage (PERCENT) at which the client lets a ring count as
+ * complete — mirrors the mobile client's bundled `minCoveragePct` default
+ * (lib/domain/entities/capture_config.dart). A ring finished at 80% coverage
+ * is a legitimate, uploadable capture, so every server-side count check
+ * accepts [minimumPerRing, expectedPerRing] per ring rather than demanding
+ * the exact total. MUST NOT exceed the client's value: a higher server floor
+ * would make client-complete captures un-uploadable (the COUNT_INCONSISTENT
+ * rejection this floor exists to prevent).
+ */
+export const MIN_RING_COVERAGE_PCT = 80;
+
+/** Minimum image count on EACH of the variant's rings —
+ * ceil(expectedPerRing × MIN_RING_COVERAGE_PCT / 100)
+ * (→ 15 for without_bottom's 18, 10 for with_bottom's 12). */
+export function minimumPerRing(variant: CaptureFlowVariant): number {
+  return Math.ceil((expectedPerRing(variant) * MIN_RING_COVERAGE_PCT) / 100);
+}
+
+/** Minimum total images across all of the variant's rings (excludes the
+ * manifest — same +1 convention as expectedImageCount). */
+export function minimumImageCount(variant: CaptureFlowVariant): number {
+  return ringsForVariant(variant).length * minimumPerRing(variant);
+}

@@ -5,10 +5,14 @@
 // ACTIVE level list (captureFlowVariantProvider.levels — never a hardcoded 3,
 // so a 2-ring session is never blocked on a missing Level C), reads each level's LIVE
 // accepted-shot count from the SAME ledger source the review grids + completion
-// gate use (reviewGridItemsProvider — no duplicated counting), and applies the
-// config-driven per-level absolute minimums (CaptureConfig.uploadMinShots).
-// autoDispose so it recomputes against current data on each read/watch — the
-// control enables/disables reactively as accepted shots change.
+// gate use (reviewGridItemsProvider — no duplicated counting), and applies BOTH
+// per-level floors: the config-driven absolute shot minimum
+// (CaptureConfig.uploadMinShots) AND the ring-coverage completion floor
+// (minCoveragePct of the variant's segment count — the same floor the backend's
+// POST /jobs count range enforces, so a bundle the server would 400 can never
+// leave the Summary screen). autoDispose so it recomputes against current data
+// on each read/watch — the control enables/disables reactively as accepted
+// shots change.
 //
 // READ-ONLY over capture/review data; the gate mutates nothing. The blocked /
 // passed analytics live in [UploadGateAnalyticsNotifier], which dedups the passed
@@ -16,7 +20,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/capture/level_completion.dart';
 import '../../domain/capture/upload_gate.dart';
+import '../../domain/entities/capture_config.dart';
 import '../../utils/analytics.dart';
 import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
@@ -27,18 +33,34 @@ import 'review_grid_items_provider.dart';
 /// the current ledger + config every time it is read. Fail-safe: with no levels it
 /// reports NOT eligible (upload disabled), never enabling on unknown state.
 final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
-  final minShots =
-      ref.watch(captureConfigProvider.select((c) => c.uploadMinShots));
+  final config = ref.watch(captureConfigProvider);
+  final variant = ref.watch(captureFlowVariantProvider);
   return evaluateUploadGate([
-    for (final level in ref.watch(captureFlowVariantProvider).levels)
-      UploadLevelStatus(
-        levelCode: level.code,
+    for (final level in variant.levels)
+      () {
+        final bandId = pitchBandIdForLevel(level);
         // Live accepted shots — the SAME source the review grids + completion
         // gate read (no duplicated shot-counting).
-        accepted:
-            ref.watch(reviewGridItemsProvider(pitchBandIdForLevel(level))).length,
-        required: minShots.minShotsFor(level.code),
-      ),
+        final items = ref.watch(reviewGridItemsProvider(bandId));
+        final segments = effectiveSegmentsFor(config, variant, bandId);
+        // Distinct in-range segments among the accepted shots — the ledger
+        // analogue of SegmentCoverage.filledCount (same rule as the upload
+        // flow's progressionFromLedger snapshot).
+        final filled = items
+            .map((i) => i.ringIndex)
+            .whereType<int>()
+            .where((i) => i >= 0 && i < segments)
+            .toSet()
+            .length;
+        return UploadLevelStatus(
+          levelCode: level.code,
+          accepted: items.length,
+          required: config.uploadMinShots.minShotsFor(level.code),
+          filled: filled,
+          requiredFilled:
+              requiredSegmentsFor(config.thresholds.minCoveragePct, segments),
+        );
+      }(),
   ]);
 });
 

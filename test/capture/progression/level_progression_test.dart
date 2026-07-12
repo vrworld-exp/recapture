@@ -5,6 +5,8 @@
 // and the un-complete edge — all without Hive/Flutter. Also covers the config
 // builder + reconciliation.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/application/capture/ledger/captured_photo_record.dart';
+import 'package:recapture/application/capture/ledger/level_capture_ledger_registry.dart';
 import 'package:recapture/application/capture/progression/level_progression.dart';
 import 'package:recapture/application/capture/progression/level_progression_builder.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
@@ -220,6 +222,102 @@ void main() {
       ).stateForId('high')!;
       expect(b.segmentCount, 24);
       expect(b.firedMilestones, {25, 50});
+    });
+  });
+
+  group('progressionFromLedger (upload snapshot)', () {
+    CapturedPhotoRecord rec(int? segment, String path) => CapturedPhotoRecord(
+          segmentIndex: segment,
+          framePath: path,
+          blurScore: 120,
+          meanLuminance: 128,
+          yawDegrees: 0,
+          pitchDegrees: 0,
+          sensorTimestampNs: 1,
+        );
+
+    test('derives per-level accepted + filled counts from the ledgers', () {
+      final registry = LevelCaptureLedgerRegistry();
+      // mid: full ring (12 distinct segments) → complete.
+      for (var i = 0; i < 12; i++) {
+        registry.ledgerFor('mid').recordAccepted(rec(i, 'mid/$i.jpg'));
+      }
+      // high: 3 accepted but only 2 distinct segments → filled < accepted.
+      registry.ledgerFor('high')
+        ..recordAccepted(rec(0, 'high/0.jpg'))
+        ..recordAccepted(rec(0, 'high/0b.jpg'))
+        ..recordAccepted(rec(5, 'high/5.jpg'));
+      // low: never touched (lazily-created empty ledger).
+
+      final p = progressionFromLedger(
+        CaptureConfig.bundledDefault,
+        variant: CaptureFlowVariant.withBottom,
+        registry: registry,
+      );
+
+      expect(p.levels.map((l) => l.levelId).toList(), ['mid', 'high', 'low']);
+      final mid = p.stateForId('mid')!;
+      expect(mid.acceptedCount, 12);
+      expect(mid.filledCount, 12);
+      expect(mid.isComplete, isTrue);
+      final high = p.stateForId('high')!;
+      expect(high.acceptedCount, 3);
+      expect(high.filledCount, 2);
+      expect(high.isComplete, isFalse);
+      final low = p.stateForId('low')!;
+      expect(low.acceptedCount, 0);
+      expect(low.filledCount, 0);
+      expect(p.overallComplete, isFalse);
+    });
+
+    test('null / out-of-range segment indices count as accepted, not filled',
+        () {
+      final registry = LevelCaptureLedgerRegistry();
+      registry.ledgerFor('mid')
+        ..recordAccepted(rec(null, 'a.jpg')) // no segment tracking
+        ..recordAccepted(rec(-1, 'b.jpg')) // defensive: below range
+        ..recordAccepted(rec(99, 'c.jpg')) // defensive: beyond segmentCount
+        ..recordAccepted(rec(3, 'd.jpg'));
+
+      final mid = progressionFromLedger(
+        CaptureConfig.bundledDefault,
+        variant: CaptureFlowVariant.withBottom,
+        registry: registry,
+      ).stateForId('mid')!;
+      expect(mid.acceptedCount, 4);
+      expect(mid.filledCount, 1); // only segment 3
+    });
+
+    test('per-level min-accepted comes from completionThresholds by code', () {
+      final registry = LevelCaptureLedgerRegistry();
+      // Full coverage on 'high' (Level B)…
+      for (var i = 0; i < 12; i++) {
+        registry.ledgerFor('high').recordAccepted(rec(i, 'high/$i.jpg'));
+      }
+      // …but a remote override demands 20 accepted frames for B.
+      final config = CaptureConfig.bundledDefault.copyWith(
+        completionThresholds: CompletionThresholds.fromMap(const {
+          'B': {'minAcceptedFrames': 20},
+        }),
+      );
+
+      final high = progressionFromLedger(
+        config,
+        variant: CaptureFlowVariant.withBottom,
+        registry: registry,
+      ).stateForId('high')!;
+      expect(high.minAcceptedCount, 20);
+      expect(high.isComplete, isFalse); // coverage passes, count gate fails
+    });
+
+    test('without_bottom derives A/B only at the variant shape (18-18)', () {
+      final p = progressionFromLedger(
+        CaptureConfig.bundledDefault,
+        variant: CaptureFlowVariant.withoutBottom,
+        registry: LevelCaptureLedgerRegistry(),
+      );
+      expect(p.levels.map((l) => l.levelId).toList(), ['mid', 'high']);
+      expect(p.levels.map((l) => l.segmentCount).toList(), [18, 18]);
     });
   });
 }

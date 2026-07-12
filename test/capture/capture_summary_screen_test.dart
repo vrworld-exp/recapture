@@ -50,13 +50,34 @@ class _EqualBandsConfigNotifier extends ConfigNotifier {
       );
 }
 
-/// Raises the absolute upload floor: A=3, B=2, C=4 (bundled bands).
+/// Raises the absolute SHOT floor above what coverage alone demands (B needs 9
+/// accepted shots against its 7-segment coverage floor), over the same 10/8/12
+/// segment shape as [_StubConfigNotifier] — so the shot axis of the hard gate
+/// is exercised with coverage satisfied.
 class _HighFloorConfigNotifier extends ConfigNotifier {
   @override
   CaptureConfig build() => CaptureConfig.bundledDefault.copyWith(
+        variantSegments: VariantSegments.fromMap(const {
+          'with_bottom': {'mid': 10, 'high': 8, 'low': 12},
+        }),
         uploadMinShots: const UploadMinShots(
-          perLevelMinShots: {'A': 3, 'B': 2, 'C': 4},
+          perLevelMinShots: {'B': 9},
         ),
+      );
+}
+
+/// Coverage-COMPLETE but below a raised completion count floor (B needs 20
+/// accepted frames) — the "eligible but incomplete" warn-then-allow shape now
+/// that the hard gate itself enforces ring coverage.
+class _HighCompletionConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault.copyWith(
+        variantSegments: VariantSegments.fromMap(const {
+          'with_bottom': {'mid': 10, 'high': 8, 'low': 12},
+        }),
+        completionThresholds: CompletionThresholds.fromMap(const {
+          'B': {'minAcceptedFrames': 20},
+        }),
       );
 }
 
@@ -179,10 +200,15 @@ void main() {
 
     expect(find.text('Complete'), findsNWidgets(2));
     expect(find.text('Incomplete'), findsOneWidget);
-    // B needs ceil(0.8*8)=7 segments, has 3 → 4 short, surfaced.
-    expect(find.text('Need 4 more segments'), findsOneWidget);
+    // B needs ceil(0.8*8)=7 segments, has 3 → 4 short. Coverage-short is now a
+    // HARD block, so the card's hard-floor hint replaces the soft segment hint.
+    expect(find.text('Below upload minimum — add 4 more'), findsOneWidget);
+    expect(find.text('Need 4 more segments'), findsNothing);
     expect(find.text('Total photos: 21'), findsOneWidget);
-    expect(find.byKey(const Key('below_min_notice')), findsOneWidget);
+    // Coverage-short B trips the HARD gate (not the soft warn notice): a
+    // below-coverage bundle is exactly what POST /jobs would reject.
+    expect(find.byKey(const Key('below_min_notice')), findsNothing);
+    expect(find.byKey(const Key('upload_gate_notice')), findsOneWidget);
     expect(find.byKey(const Key('summary_fix_issues')), findsOneWidget);
   });
 
@@ -269,8 +295,13 @@ void main() {
 
   testWidgets('Upload (eligible but incomplete) → confirm; cancel/confirm',
       (tester) async {
-    // All levels ≥1 shot (clears the hard floor) but B short of completion.
-    await pump(tester, registryWith({'mid': 8, 'high': 3, 'low': 10}));
+    // Every level clears the hard floor (coverage + shots), but B sits below
+    // its raised COMPLETION count (7 accepted vs 20) → warn-then-allow.
+    await pump(
+      tester,
+      registryWith({'mid': 8, 'high': 7, 'low': 10}),
+      config: _HighCompletionConfigNotifier.new,
+    );
 
     await tester.tap(find.byKey(const Key('summary_upload')));
     await tester.pumpAndSettle();
@@ -384,15 +415,16 @@ void main() {
       expect(find.text('UPLOADING'), findsNothing);
       expect(named(AnalyticsEvents.uploadInitiated), isEmpty);
 
-      // Blocked analytics fired on the first disabled view, with the deficit.
+      // Blocked analytics fired on the first disabled view, with the deficit —
+      // B needs its 7-segment coverage floor (ceil(0.8×8)), not just 1 shot.
       final blocked = named(AnalyticsEvents.uploadGateBlocked);
       expect(blocked, isNotEmpty);
       expect(blocked.first.props['short_levels'], 'B');
-      expect(blocked.first.props['total_deficit'], 1);
+      expect(blocked.first.props['total_deficit'], 7);
       expect(blocked.first.props['phase'], 'upload');
 
       // Card flags the hard-blocked level.
-      expect(find.text('Below upload minimum — add 1 more'), findsOneWidget);
+      expect(find.text('Below upload minimum — add 7 more'), findsOneWidget);
     });
 
     testWidgets('multiple short levels → both listed, total_deficit summed',
@@ -400,7 +432,8 @@ void main() {
       await pump(tester, registryWith({'mid': 0, 'high': 0, 'low': 10}));
       final blocked = named(AnalyticsEvents.uploadGateBlocked);
       expect(blocked.first.props['short_levels'], 'A,B');
-      expect(blocked.first.props['total_deficit'], 2);
+      // Coverage floors: A ceil(0.8×10)=8, B ceil(0.8×8)=7.
+      expect(blocked.first.props['total_deficit'], 15);
       expect(find.byKey(const Key('upload_remedy_A')), findsOneWidget);
       expect(find.byKey(const Key('upload_remedy_B')), findsOneWidget);
     });
@@ -414,26 +447,31 @@ void main() {
           'fix_issues');
     });
 
-    testWidgets('exactly at the minimum is inclusive → not blocked',
+    testWidgets('exactly at the coverage floor is inclusive → not blocked',
         (tester) async {
-      // Default min = 1; every level at exactly 1 shot is uploadable.
-      await pump(tester, registryWith({'mid': 1, 'high': 1, 'low': 1}));
+      // A 8/10, B 7/8, C 10/12 — each exactly at ceil(0.8×N) — is uploadable
+      // (and complete, so the upload starts without the warn dialog).
+      await pump(tester, registryWith({'mid': 8, 'high': 7, 'low': 10}));
       expect(find.byKey(const Key('upload_gate_notice')), findsNothing);
-      // Eligible but incomplete (coverage) → warn-then-allow, not hard-blocked.
       await tester.tap(find.byKey(const Key('summary_upload')));
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('below_min_dialog')), findsOneWidget);
+      expect(find.byKey(const Key('below_min_dialog')), findsNothing);
+      expect(find.text('UPLOADING'), findsOneWidget);
     });
 
-    testWidgets('config override raises the floor (B needs 2)', (tester) async {
+    testWidgets('config override raises the SHOT floor (B needs 9)',
+        (tester) async {
+      // Coverage met everywhere; only B's raised absolute shot minimum
+      // (9 > its 7 accepted) blocks — the shot axis in isolation.
       await pump(
         tester,
-        registryWith({'mid': 3, 'high': 1, 'low': 4}),
+        registryWith({'mid': 8, 'high': 7, 'low': 10}),
         config: _HighFloorConfigNotifier.new,
       );
       expect(find.byKey(const Key('upload_gate_notice')), findsOneWidget);
-      expect(named(AnalyticsEvents.uploadGateBlocked).first.props['short_levels'],
-          'B');
+      final blocked = named(AnalyticsEvents.uploadGateBlocked);
+      expect(blocked.first.props['short_levels'], 'B');
+      expect(blocked.first.props['total_deficit'], 2);
     });
   });
 }

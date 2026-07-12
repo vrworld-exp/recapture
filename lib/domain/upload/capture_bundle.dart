@@ -123,8 +123,15 @@ class PlannedBundleImage {
 
 /// Plans every accepted source into its deterministic bundle destination. Levels
 /// are processed in canonical flow order (A→B→C via [levelOrderIndex]); within a
-/// level, images sort by (segmentIndex[nulls-last], captureTimestampNs, sourcePath)
-/// and are numbered 1..N. Same input → identical plan (names, paths, order).
+/// level, images sort by (segmentIndex[nulls-last], captureTimestampNs, sourcePath),
+/// sources sharing a NON-NULL segmentIndex collapse to the NEWEST one (a retake
+/// appends a second ledger record for the same segment — the bundle carries at
+/// most ONE image per ring segment, so segment-tracked rings can never exceed
+/// their segment count; the backend rejects a ring with more than its variant
+/// per-ring total), and the survivors are numbered 1..N. Sources with a null
+/// segmentIndex (no live segment at capture time) are all kept — they cannot be
+/// attributed to a segment, so no dedupe key exists for them. Same input →
+/// identical plan (names, paths, order).
 List<PlannedBundleImage> planBundleImages(List<BundleLevelSources> levels) {
   final ordered = [...levels]
     ..sort((a, b) {
@@ -136,7 +143,7 @@ List<PlannedBundleImage> planBundleImages(List<BundleLevelSources> levels) {
   final out = <PlannedBundleImage>[];
   for (final level in ordered) {
     final ring = ringNameForLevelCode(level.levelCode);
-    final sorted = [...level.images]..sort(_compareSources);
+    final sorted = _dedupePerSegment([...level.images]..sort(_compareSources));
     for (var i = 0; i < sorted.length; i++) {
       final src = sorted[i];
       final index = i + 1;
@@ -153,6 +160,24 @@ List<PlannedBundleImage> planBundleImages(List<BundleLevelSources> levels) {
         segmentIndex: src.segmentIndex,
         warned: src.warned,
       ));
+    }
+  }
+  return out;
+}
+
+/// Collapses sources sharing a non-null segmentIndex to ONE — the last in sort
+/// order, i.e. the newest capture (largest captureTimestampNs; path breaks
+/// ties), so a retake replaces the original shot in the bundle. Input must be
+/// sorted by [_compareSources] (equal segments are adjacent, oldest first).
+List<BundleSourceImage> _dedupePerSegment(List<BundleSourceImage> sorted) {
+  final out = <BundleSourceImage>[];
+  for (final src in sorted) {
+    if (src.segmentIndex != null &&
+        out.isNotEmpty &&
+        out.last.segmentIndex == src.segmentIndex) {
+      out[out.length - 1] = src; // later sort position = newer capture wins
+    } else {
+      out.add(src);
     }
   }
   return out;

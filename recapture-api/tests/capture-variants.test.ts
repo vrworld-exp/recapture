@@ -2,16 +2,19 @@
 //
 // Pure unit tests for the canonical capture-flow-variant module — the single
 // source of truth every variant-aware service derives ring sets and counts
-// from (create-job's exact total, upload-urls containment, finalize minimums,
+// from (create-job's count range, upload-urls containment, finalize bounds,
 // remote-config defaults).
 import { describe, it, expect } from 'vitest';
 import {
   CAPTURE_FLOW_VARIANTS,
   DEFAULT_CAPTURE_FLOW_VARIANT,
+  MIN_RING_COVERAGE_PCT,
   isCaptureFlowVariant,
   ringsForVariant,
   expectedPerRing,
   expectedImageCount,
+  minimumPerRing,
+  minimumImageCount,
 } from '@/models/types/captureVariants';
 
 describe('capture flow variants — canonical definition', () => {
@@ -38,6 +41,30 @@ describe('capture flow variants — canonical definition', () => {
       expect(expectedImageCount(variant)).toBe(
         ringsForVariant(variant).length * expectedPerRing(variant)
       );
+    }
+  });
+
+  it('coverage floor: 80% mirrors the client minCoveragePct default', () => {
+    expect(MIN_RING_COVERAGE_PCT).toBe(80);
+  });
+
+  it('with_bottom minimums: ceil(12 × 80%) = 10 per ring, 30 total', () => {
+    expect(minimumPerRing('with_bottom')).toBe(10);
+    expect(minimumImageCount('with_bottom')).toBe(30);
+  });
+
+  it('without_bottom minimums: ceil(18 × 80%) = 15 per ring, 30 total', () => {
+    expect(minimumPerRing('without_bottom')).toBe(15);
+    expect(minimumImageCount('without_bottom')).toBe(30);
+  });
+
+  it('the minimum is always rings × per-ring floor, never above the expected total', () => {
+    for (const variant of CAPTURE_FLOW_VARIANTS) {
+      expect(minimumImageCount(variant)).toBe(
+        ringsForVariant(variant).length * minimumPerRing(variant)
+      );
+      expect(minimumPerRing(variant)).toBeLessThanOrEqual(expectedPerRing(variant));
+      expect(minimumImageCount(variant)).toBeLessThanOrEqual(expectedImageCount(variant));
     }
   });
 

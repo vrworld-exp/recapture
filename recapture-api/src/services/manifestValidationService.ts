@@ -9,6 +9,7 @@
 // Rule order (stable, preserved in the errors array):
 //   FILE_COUNT_MISMATCH → FLOW_VARIANT_MISMATCH → MISSING_REQUIRED_LEVELS
 //   → UNEXPECTED_LEVELS → INSUFFICIENT_PHOTOS_PER_LEVEL
+//   → EXCESS_PHOTOS_PER_LEVEL
 // with MANIFEST_UNREADABLE standing alone when the document lacks the required
 // structure (the rules cannot run against garbage — that is its own finding,
 // not a thrown error: an unreadable client-authored file is a verification
@@ -208,6 +209,30 @@ export function validateCaptureManifest(
         `${underMinLevels.length} level(s) have fewer than ` +
         `${expectations.minPhotosPerLevel} photo(s).`,
       detail: { levels: underMinLevels },
+    });
+  }
+
+  // Rule 6: no EXPECTED level may exceed the per-level ceiling (the variant's
+  // full per-ring count). The floor relaxed to the coverage minimum, so the
+  // ceiling is enforced explicitly — extra entries on a ring are no longer
+  // caught by an exact-total check. Unexpected levels stay Rule 4's finding;
+  // an omitted maxPhotosPerLevel enforces nothing.
+  const maxPerLevel = expectations.maxPhotosPerLevel;
+  const overMaxLevels =
+    maxPerLevel === undefined
+      ? []
+      : [...photosByLevel.entries()]
+          .filter(([levelId]) => !unexpectedLevels.includes(levelId))
+          .filter(([, count]) => count > maxPerLevel)
+          .sort(([a], [b]) => levelSortKey(a).localeCompare(levelSortKey(b)))
+          .map(([levelId, count]) => ({ levelId, count, allowed: maxPerLevel }));
+  if (overMaxLevels.length > 0) {
+    errors.push({
+      rule: 'EXCESS_PHOTOS_PER_LEVEL',
+      message:
+        `${overMaxLevels.length} level(s) have more than ` +
+        `${maxPerLevel} photo(s).`,
+      detail: { levels: overMaxLevels },
     });
   }
 

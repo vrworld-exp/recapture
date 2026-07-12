@@ -111,18 +111,31 @@ void main() {
   });
 
   group('upload hard gate under without_bottom', () {
-    test('eligible with A+B shots only — no Level C floor applies', () {
+    test('eligible with A+B at their coverage floors — no Level C floor applies',
+        () {
+      // without_bottom rings carry 18 segments → floor ceil(0.8 × 18) = 15.
       final c = _container(
-        _registryWith({'mid': 1, 'high': 1}),
+        _registryWith({'mid': 15, 'high': 15}), // zero Level C data
         CaptureFlowVariant.withoutBottom,
       );
       final gate = c.read(uploadGateProvider);
       expect(gate.eligible, isTrue);
     });
 
+    test('a ring below the without_bottom coverage floor (14/18) blocks', () {
+      final c = _container(
+        _registryWith({'mid': 15, 'high': 14}),
+        CaptureFlowVariant.withoutBottom,
+      );
+      final gate = c.read(uploadGateProvider);
+      expect(gate.eligible, isFalse);
+      expect(gate.shortLevelsLabel, 'B');
+      expect(gate.totalDeficit, 1);
+    });
+
     test('with_bottom stays blocked on the missing Level C (control case)', () {
       final c = _container(
-        _registryWith({'mid': 1, 'high': 1}),
+        _registryWith({'mid': 15, 'high': 15}),
         CaptureFlowVariant.withBottom,
       );
       expect(c.read(uploadGateProvider).eligible, isFalse);

@@ -45,7 +45,7 @@ void main() {
     test('within a level, orders by segment then timestamp; numbers 1..N', () {
       final plan = planBundleImages([
         BundleLevelSources(levelCode: 'A', levelId: 'mid', images: [
-          _src('/s/late.jpg', seg: 5, ts: 200),
+          _src('/s/late.jpg', seg: 7, ts: 200),
           _src('/s/early.jpg', seg: 1, ts: 100),
           _src('/s/mid.jpg', seg: 5, ts: 50),
         ]),
@@ -54,6 +54,55 @@ void main() {
           ['/s/early.jpg', '/s/mid.jpg', '/s/late.jpg']);
       expect(plan.map((p) => p.fileName).toList(),
           ['eye_0001.jpg', 'eye_0002.jpg', 'eye_0003.jpg']);
+    });
+
+    test('records sharing a segment collapse to the newest (retake replaces)', () {
+      final plan = planBundleImages([
+        BundleLevelSources(levelCode: 'A', levelId: 'mid', images: [
+          _src('/s/original.jpg', seg: 5, ts: 50),
+          _src('/s/retake.jpg', seg: 5, ts: 200), // newest for segment 5
+          _src('/s/other.jpg', seg: 1, ts: 100),
+        ]),
+      ]);
+      // At most ONE image per ring segment — the bundle can never exceed the
+      // ring's segment count for segment-tracked records.
+      expect(plan.map((p) => p.sourcePath).toList(),
+          ['/s/other.jpg', '/s/retake.jpg']);
+      expect(plan.map((p) => p.fileName).toList(),
+          ['eye_0001.jpg', 'eye_0002.jpg']); // numbering stays compact 1..N
+    });
+
+    test('null-segment records are never deduped (no key to collapse on)', () {
+      final plan = planBundleImages([
+        BundleLevelSources(levelCode: 'A', levelId: 'mid', images: [
+          _src('/s/n1.jpg', seg: null, ts: 1),
+          _src('/s/n2.jpg', seg: null, ts: 2),
+          _src('/s/s0.jpg', seg: 0, ts: 9),
+        ]),
+      ]);
+      expect(plan.map((p) => p.sourcePath).toList(),
+          ['/s/s0.jpg', '/s/n1.jpg', '/s/n2.jpg']);
+    });
+
+    test('dedupe is deterministic under input order (newest always wins)', () {
+      List<BundleLevelSources> input(bool reversed) {
+        final images = [
+          _src('/s/old.jpg', seg: 3, ts: 10),
+          _src('/s/new.jpg', seg: 3, ts: 20),
+        ];
+        return [
+          BundleLevelSources(
+            levelCode: 'A',
+            levelId: 'mid',
+            images: reversed ? images.reversed.toList() : images,
+          ),
+        ];
+      }
+
+      final a = planBundleImages(input(false));
+      final b = planBundleImages(input(true));
+      expect(a.single.sourcePath, '/s/new.jpg');
+      expect(b.single.sourcePath, '/s/new.jpg');
     });
 
     test('null segment sorts after numbered segments', () {

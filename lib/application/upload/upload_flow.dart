@@ -54,6 +54,7 @@ import '../capture/capture_flow_variant_provider.dart';
 import '../capture/ledger/level_capture_ledger_registry.dart';
 import '../capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../capture/progression/level_progression.dart';
+import '../capture/progression/level_progression_builder.dart';
 import '../capture/progression/level_progression_provider.dart';
 import '../config/config_notifier.dart';
 import '../connectivity/connectivity_providers.dart';
@@ -720,9 +721,23 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
   /// Reads the session context from the live providers/stores. Throws (into
   /// the orchestrator's catch → 9F) when no capture session is resolvable.
   Future<UploadFlowContext> _resolveContext() async {
-    final progression = ref.read(levelProgressionControllerProvider);
+    // The progression controller is NOT wired into the live capture flow (its
+    // provider stays null on-device — the flow sequences A→B→C via GoRouter;
+    // see level_progression_provider.dart's SCOPE note), so the snapshot is
+    // derived from the SAME live sources the Summary gate reads: config +
+    // flow variant + the per-level ledgers.
+    var progression = ref.read(levelProgressionControllerProvider);
     if (progression == null) {
-      throw StateError('no active capture progression to upload');
+      progression = progressionFromLedger(
+        ref.read(captureConfigProvider),
+        variant: ref.read(captureFlowVariantProvider),
+        registry: ref.read(levelCaptureLedgerRegistryProvider),
+      );
+      DevUploadLog.instance.add(
+          'progression derived from ledger (${progression.levels.map((l) => '${l.levelCode}=${l.acceptedCount}').join(', ')})');
+    }
+    if (progression.levels.every((l) => l.acceptedCount == 0)) {
+      throw StateError('no captured photos to upload');
     }
 
     final session = ref.read(captureLevelSessionProvider);

@@ -15,6 +15,12 @@
 // writes the files (via the pure [buildCaptureManifest]) so files ↔ manifest can
 // never diverge.
 //
+// PER-RING UPPER BOUND: [planBundleImages] collapses accepted records sharing a
+// segment to the NEWEST one (retakes append a second ledger record for the same
+// segment — see _handleRetakeCapture's replace TODO), so a segment-tracked ring
+// stages at most `segments` images — the ceiling the backend's per-ring count
+// range demands.
+//
 // ATOMICITY: everything is staged under `staging/<jobId>/`, integrity-verified
 // (every manifest image exists on disk, and no unlisted .jpg exists), then the
 // staging dir is RENAMED to the final location — the uploader only ever sees a

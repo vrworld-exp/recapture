@@ -38,7 +38,8 @@ router.use(requireAuth);
  * Ownership comes ONLY from the token; missing, not-owned, and soft-deleted
  * projects all return an identical 404 (no existence leak) with nothing
  * created. `objectSize` must match the project's stored size (400 on mismatch)
- * and `expectedFilesCount` must reach the size's completed-capture minimum.
+ * and `expectedFilesCount` must land in the captureVariant's valid range —
+ * coverage minimum … full total, manifest-inclusive (400 outside it).
  *
  * IDEMPOTENCY (this endpoint introduces the minimal per-endpoint mechanism —
  * none existed): send an `Idempotency-Key` header; a retry with the same key +
@@ -106,10 +107,10 @@ router.post(
           status: 'error',
           code: 'INVALID_REQUEST',
           message:
-            `expectedFilesCount is inconsistent with captureVariant — a completed ` +
-            `'${result.captureVariant}' capture has exactly ${result.required} files ` +
-            `(images + manifest).`,
-          fields: { expectedFilesCount: `must be ${result.required}` },
+            `expectedFilesCount is inconsistent with captureVariant — a ` +
+            `'${result.captureVariant}' capture has between ${result.minimum} and ` +
+            `${result.maximum} files (images + manifest).`,
+          fields: { expectedFilesCount: `must be ${result.minimum}-${result.maximum}` },
         });
         return;
 

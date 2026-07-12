@@ -21,7 +21,8 @@ export type ValidationRuleId =
   | 'FLOW_VARIANT_MISMATCH'
   | 'MISSING_REQUIRED_LEVELS'
   | 'UNEXPECTED_LEVELS'
-  | 'INSUFFICIENT_PHOTOS_PER_LEVEL';
+  | 'INSUFFICIENT_PHOTOS_PER_LEVEL'
+  | 'EXCESS_PHOTOS_PER_LEVEL';
 
 export interface ManifestValidationError {
   rule: ValidationRuleId;
@@ -52,9 +53,16 @@ export interface ManifestExpectations {
    * rings). Typically identical to requiredLevels.
    */
   allowedLevels?: string[];
-  /** Minimum photo count per expected ring level (the variant's per-ring
-   * count — server-derived, never read from the manifest). */
+  /** Minimum photo count per expected ring level (the variant's COVERAGE
+   * floor — minimumPerRing, server-derived, never read from the manifest). */
   minPhotosPerLevel: number;
+  /**
+   * Maximum photo count per expected ring level (the variant's full per-ring
+   * count — expectedPerRing). A level with MORE entries is an
+   * EXCESS_PHOTOS_PER_LEVEL finding. Optional: when omitted, no ceiling is
+   * enforced (pre-range callers; finalize/worker always pass it).
+   */
+  maxPhotosPerLevel?: number;
   /**
    * The job's capture flow variant. When set, a manifest whose top-level
    * `flowVariant` field is present and different is a FLOW_VARIANT_MISMATCH;

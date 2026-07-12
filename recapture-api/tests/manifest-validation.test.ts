@@ -222,6 +222,67 @@ describe('validateCaptureManifest — capture-variant rules', () => {
   });
 });
 
+describe('validateCaptureManifest — per-level ceiling (maxPhotosPerLevel)', () => {
+  const bounded: ManifestExpectations = {
+    requiredLevels: ['EYE', 'TOP'],
+    allowedLevels: ['EYE', 'TOP'],
+    minPhotosPerLevel: 15,
+    maxPhotosPerLevel: 18,
+    expectedFlowVariant: 'without_bottom',
+  };
+
+  it('counts inside [min, max] pass — including the exact bounds', () => {
+    for (const perRing of [15, 16, 18]) {
+      const result = validateCaptureManifest(
+        manifestWith({ EYE: perRing, TOP: perRing }),
+        bounded
+      );
+      expect(result.valid, `perRing=${perRing}`).toBe(true);
+    }
+  });
+
+  it('a level above the ceiling → EXCESS_PHOTOS_PER_LEVEL with a per-level breakdown', () => {
+    const result = validateCaptureManifest(
+      manifestWith({ EYE: 19, TOP: 15 }),
+      bounded
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.rule).toBe('EXCESS_PHOTOS_PER_LEVEL');
+    expect(result.errors[0]!.detail).toEqual({
+      levels: [{ levelId: 'EYE', count: 19, allowed: 18 }],
+    });
+  });
+
+  it('under-floor and over-ceiling rings report independently, in rule order', () => {
+    const result = validateCaptureManifest(
+      manifestWith({ EYE: 20, TOP: 14 }),
+      bounded
+    );
+    expect(result.errors.map((e) => e.rule)).toEqual([
+      'INSUFFICIENT_PHOTOS_PER_LEVEL',
+      'EXCESS_PHOTOS_PER_LEVEL',
+    ]);
+  });
+
+  it('an UNEXPECTED level over the ceiling stays Rule 4 only (no double report)', () => {
+    const result = validateCaptureManifest(
+      manifestWith({ EYE: 15, TOP: 15, LOW: 25 }),
+      bounded
+    );
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]!.rule).toBe('UNEXPECTED_LEVELS');
+  });
+
+  it('an omitted maxPhotosPerLevel enforces no ceiling (pre-range callers)', () => {
+    const result = validateCaptureManifest(
+      manifestWith({ EYE: 99, TOP: 15 }),
+      { ...bounded, maxPhotosPerLevel: undefined }
+    );
+    expect(result.valid).toBe(true);
+  });
+});
+
 describe('validateCaptureManifest — unreadable input', () => {
   it.each([
     ['undefined (unparseable JSON upstream)', undefined],

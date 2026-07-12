@@ -29,6 +29,8 @@ import {
   DEFAULT_CAPTURE_FLOW_VARIANT,
   expectedImageCount,
   expectedPerRing,
+  minimumImageCount,
+  minimumPerRing,
   ringsForVariant,
   type CaptureFlowVariant,
 } from '@/models/types/captureVariants';
@@ -116,7 +118,12 @@ export interface UploadPlan {
 export type CreateJobResult =
   | { outcome: 'PROJECT_NOT_FOUND' }
   | { outcome: 'SIZE_MISMATCH'; projectSize: WireSize }
-  | { outcome: 'COUNT_INCONSISTENT'; required: number; captureVariant: CaptureFlowVariant }
+  | {
+      outcome: 'COUNT_INCONSISTENT';
+      minimum: number;
+      maximum: number;
+      captureVariant: CaptureFlowVariant;
+    }
   | { outcome: 'IDEMPOTENCY_CONFLICT' }
   | { outcome: 'CREATED'; job: JobDto; uploadPlan: UploadPlan }
   | { outcome: 'REPLAYED'; job: JobDto; uploadPlan: UploadPlan };
@@ -129,11 +136,14 @@ export type CreateJobResult =
  *      unauthorized project;
  *   2. the client's `objectSize` must MATCH the project's stored size (the
  *      project is authoritative; a mismatch is a client bug, not a preference);
- *   3. `expectedFilesCount` must EQUAL the variant's exact total —
- *      expectedImageCount(captureVariant) + 1 for the manifest. The variant
- *      fully determines the capture's shape (every manifest entry is an
- *      accepted photo and finalize demands an exact S3 count), so any drift
- *      is a client bug, not headroom.
+ *   3. `expectedFilesCount` must land in the variant's valid RANGE —
+ *      [minimumImageCount + 1, expectedImageCount + 1], both manifest-
+ *      inclusive. The client lets a ring count as complete at
+ *      MIN_RING_COVERAGE_PCT segment coverage, so a partial capture is a
+ *      legitimate upload; the upper bound is still the variant's full total.
+ *      The CLIENT-declared count is stored on the job unchanged and finalize
+ *      demands an exact S3 match against that stored value — the range here
+ *      only bounds what a declared count may be.
  *
  * IDEMPOTENCY: when `idempotencyKey` is provided, a repeat create with the same
  * key + same payload returns the ORIGINAL job and its plan (REPLAYED — the
@@ -163,11 +173,18 @@ export async function createJob(
     return { outcome: 'SIZE_MISMATCH', projectSize: MODEL_TO_WIRE[project.objectSize] };
   }
 
-  // Exact variant total: the flow variant fixes the image count, and the
-  // model's expectedFilesCount is manifest-INCLUSIVE, hence the +1.
-  const required = expectedImageCount(input.captureVariant) + 1;
-  if (input.expectedFilesCount !== required) {
-    return { outcome: 'COUNT_INCONSISTENT', required, captureVariant: input.captureVariant };
+  // Variant range: the flow variant bounds the image count — the coverage
+  // floor (MIN_RING_COVERAGE_PCT per ring) below, the full ring total above.
+  // The model's expectedFilesCount is manifest-INCLUSIVE, hence the +1s.
+  const minimum = minimumImageCount(input.captureVariant) + 1;
+  const maximum = expectedImageCount(input.captureVariant) + 1;
+  if (input.expectedFilesCount < minimum || input.expectedFilesCount > maximum) {
+    return {
+      outcome: 'COUNT_INCONSISTENT',
+      minimum,
+      maximum,
+      captureVariant: input.captureVariant,
+    };
   }
 
   // Fast-path replay: an earlier create with this key already exists.
@@ -574,9 +591,11 @@ export async function finalizeJob(
   // Verification 3: manifest CONTENT rules (pure, collect-all — every broken
   // rule reported in one pass). Bad JSON is a verification failure like any
   // other unreadable-manifest finding, never a 500. The expected ring set and
-  // per-ring floors are SERVER-derived from the job's captureVariant — the
+  // per-ring bounds are SERVER-derived from the job's captureVariant — the
   // client-authored manifest never attests its own minimums, and a declared
-  // flowVariant that disagrees with the job is itself a finding.
+  // flowVariant that disagrees with the job is itself a finding. The per-ring
+  // floor is the coverage minimum (a ring completed at MIN_RING_COVERAGE_PCT
+  // is uploadable); the ceiling stays the variant's full per-ring count.
   let parsedManifest: unknown;
   try {
     parsedManifest = JSON.parse(manifestObject.body);
@@ -588,7 +607,8 @@ export async function finalizeJob(
   const validation = validateCaptureManifest(parsedManifest, {
     requiredLevels: variantRings,
     allowedLevels: variantRings,
-    minPhotosPerLevel: expectedPerRing(variant),
+    minPhotosPerLevel: minimumPerRing(variant),
+    maxPhotosPerLevel: expectedPerRing(variant),
     expectedFlowVariant: variant,
   });
   if (!validation.valid) {

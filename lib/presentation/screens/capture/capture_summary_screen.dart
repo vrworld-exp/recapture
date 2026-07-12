@@ -633,8 +633,15 @@ class _UploadGateNotice extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        'Level ${l.levelCode}: ${l.accepted}/${l.required} '
-                        '— needs ${l.deficit} more',
+                        // Name the BINDING shortfall: ring coverage when the
+                        // level is segments-short, else the raw shot floor.
+                        l.segmentsShort > 0
+                            ? 'Level ${l.levelCode}: '
+                                '${l.filled}/${l.requiredFilled} ring segments '
+                                '— needs ${l.deficit} more'
+                            : 'Level ${l.levelCode}: '
+                                '${l.accepted}/${l.required} '
+                                '— needs ${l.deficit} more',
                         style: Theme.of(context)
                             .textTheme
                             .bodySmall

@@ -15,6 +15,7 @@ import '../../../domain/capture/capture_flow_variant.dart';
 import '../../../domain/capture/coverage_milestones.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
+import '../ledger/level_capture_ledger_registry.dart';
 import 'level_progression.dart';
 
 /// Default min accepted photos per level (the repo has no Dart per-level count
@@ -58,6 +59,41 @@ LevelProgression initialProgressionFromConfig(
         minAcceptedCount: minAcceptedCount,
       ),
     );
+
+/// A progression SNAPSHOT derived from the LIVE capture data — each level's
+/// accepted records in [registry] — instead of the progression controller's
+/// state (which the live capture flow does not populate; it sequences levels
+/// via GoRouter — see level_progression_provider.dart's SCOPE note). The level
+/// shape comes from [levelStatesFromConfig]; the counts come from the SAME
+/// source the Summary gate reads (the per-level ledgers), with each level's
+/// min-accepted threshold resolved per level code so `isComplete` here can
+/// never disagree with the Summary's verdict. Filled = distinct in-range
+/// segment indices among accepted records (the ledger analogue of
+/// SegmentCoverage.filledCount).
+LevelProgression progressionFromLedger(
+  CaptureConfig config, {
+  required CaptureFlowVariant variant,
+  required LevelCaptureLedgerRegistry registry,
+}) {
+  final thresholds = config.completionThresholds;
+  return LevelProgression.of([
+    for (final base in levelStatesFromConfig(config, variant: variant))
+      () {
+        final accepted = registry.ledgerFor(base.levelId).accepted;
+        final filled = accepted
+            .map((r) => r.segmentIndex)
+            .whereType<int>()
+            .where((i) => i >= 0 && i < base.segmentCount)
+            .toSet()
+            .length;
+        return base.copyWith(
+          filledCount: filled,
+          acceptedCount: accepted.length,
+          minAcceptedCount: thresholds.minAcceptedFramesFor(base.levelCode),
+        );
+      }(),
+  ]);
+}
 
 /// Reconciles a [persisted] progression with the CURRENT [config] + [variant]
 /// (either may have changed between sessions): the level SHAPE (order, which
