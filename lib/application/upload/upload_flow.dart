@@ -54,6 +54,7 @@ import '../capture/progression/level_progression_provider.dart';
 import '../config/config_notifier.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../projects/projects_notifier.dart';
+import '../warmup/backend_warmup.dart';
 import 'capture_bundle_packer.dart';
 import 'chunked_upload_manager.dart';
 import 'jobs_multipart_upload_api.dart';
@@ -343,6 +344,7 @@ class UploadFlowOrchestrator {
     // Dio — which reads env config — can never throw out of start().
     required UploadJobsBackend Function() backend,
     required UploadEngineFactory engineFactory,
+    Future<void> Function()? warmUp,
     String Function()? uuid,
     int Function(String path)? fileSize,
     DateTime Function()? now,
@@ -350,6 +352,7 @@ class UploadFlowOrchestrator {
         _pack = pack,
         _backendFactory = backend,
         _engineFactory = engineFactory,
+        _warmUp = warmUp,
         _uuid = uuid ?? randomUuidV4,
         _fileSize = fileSize,
         _now = now ?? DateTime.now {
@@ -360,6 +363,11 @@ class UploadFlowOrchestrator {
   final PackBundleFn _pack;
   final UploadJobsBackend Function() _backendFactory;
   final UploadEngineFactory _engineFactory;
+
+  /// Best-effort backend wake-up (the Render dev instance sleeps when idle;
+  /// a cold start outlasts the API timeouts). Awaited before the first
+  /// backend call — concurrently with the pack — and never fails the flow.
+  final Future<void> Function()? _warmUp;
   final String Function() _uuid;
   final int Function(String path)? _fileSize;
   final DateTime Function() _now;
@@ -391,6 +399,12 @@ class UploadFlowOrchestrator {
     try {
       progress.markRunning();
 
+      // Kick the backend wake-up NOW so it overlaps the (potentially long)
+      // pack below; awaited before the first real backend call. Best-effort:
+      // its failure must never fail the flow (the real call just pays the
+      // cold start itself).
+      final warming = _warmUp?.call();
+
       final backend = _backendFactory();
       final ctx = await _resolveContext();
       _checkCancel();
@@ -412,6 +426,15 @@ class UploadFlowOrchestrator {
         device: ManifestDevice(platform: _platformName),
         cancelToken: _packCancel,
       );
+      _checkCancel();
+
+      if (warming != null) {
+        try {
+          await warming;
+        } catch (_) {
+          // Warm-up is best-effort by contract; never mask the flow with it.
+        }
+      }
       _checkCancel();
 
       final remoteProjectId = await backend.createProject(
@@ -538,6 +561,10 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       pack: _packWithPacker,
       backend: () => DioUploadJobsBackend(ref.read(uploadApiDioProvider)),
       engineFactory: _buildEngine,
+      // The Render dev backend sleeps when idle and a capture session easily
+      // outlasts its idle window — wake it before the first flow call so the
+      // token refresh/createProject don't time out into 9F.
+      warmUp: () => ref.read(backendWarmupServiceProvider).warmUp(),
     );
     state = orchestrator.progress;
     unawaited(orchestrator.run());

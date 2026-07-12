@@ -1,6 +1,7 @@
 // test/auth/auth_notifier_test.dart
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
@@ -65,6 +66,10 @@ class FakeAuthRepository implements AuthRepository {
   /// Result for the next refresh: a session (success) or null → throw.
   AuthSession? Function(String refreshToken)? onRefresh;
 
+  /// When set, refresh throws THIS error (e.g. a DioException) instead of the
+  /// generic rejection — for the transient-vs-rejected split.
+  Object? refreshError;
+
   @override
   Future<OtpSendResult> sendOtp({
     required String channel,
@@ -84,6 +89,7 @@ class FakeAuthRepository implements AuthRepository {
   Future<AuthSession> refresh(String refreshToken) async {
     refreshCalls++;
     if (gate != null) await gate!.future;
+    if (refreshError != null) throw refreshError!;
     final result = onRefresh?.call(refreshToken);
     if (result == null) throw Exception('refresh rejected');
     return result;
@@ -303,6 +309,79 @@ void main() {
       expect(ok, isFalse);
       expect(c.read(authProvider), isA<AuthUnauthenticated>());
       expect(storage.stored, isNull); // rotated session must not be persisted
+    });
+  });
+
+  group('transient vs rejected refresh (the UNK-01 regression)', () {
+    DioException transientError() => DioException(
+          requestOptions: RequestOptions(path: '/auth/refresh'),
+          type: DioExceptionType.connectionTimeout,
+        );
+
+    DioException rejectedError() => DioException(
+          requestOptions: RequestOptions(path: '/auth/refresh'),
+          type: DioExceptionType.badResponse,
+          response: Response(
+            requestOptions: RequestOptions(path: '/auth/refresh'),
+            statusCode: 401,
+          ),
+        );
+
+    test('transient failure (timeout) keeps the session — no silent logout',
+        () async {
+      final storage = FakeAuthStorage(_session());
+      final repo = FakeAuthRepository()..refreshError = transientError();
+      final c = await _booted(storage, repo);
+
+      final ok = await c.read(authProvider.notifier).refresh();
+
+      expect(ok, isFalse);
+      expect(c.read(authProvider), isA<AuthAuthenticated>());
+      expect(storage.stored, isNotNull); // tokens NOT cleared
+    });
+
+    test('rejected refresh (401) clears the session', () async {
+      final storage = FakeAuthStorage(_session());
+      final repo = FakeAuthRepository()..refreshError = rejectedError();
+      final c = await _booted(storage, repo);
+
+      final ok = await c.read(authProvider.notifier).refresh();
+
+      expect(ok, isFalse);
+      expect(c.read(authProvider), isA<AuthUnauthenticated>());
+      expect(storage.stored, isNull);
+    });
+
+    test(
+        'ensureFreshToken: token inside the proactive window + transient '
+        'refresh failure → returns the still-valid current token', () async {
+      // Expires in 1 min: within the 2-min window but NOT hard-expired.
+      final session = _session(expiresIn: const Duration(minutes: 1));
+      final storage = FakeAuthStorage(session);
+      final repo = FakeAuthRepository()..refreshError = transientError();
+      final c = await _booted(storage, repo);
+
+      final token = await c.read(authProvider.notifier).ensureFreshToken();
+
+      expect(token, session.accessToken);
+      expect(c.read(authProvider), isA<AuthAuthenticated>());
+    });
+
+    test(
+        'ensureFreshToken: hard-expired token + transient refresh failure → '
+        'null, but the session survives for a later retry', () async {
+      final session = _session(expiresIn: const Duration(minutes: -1));
+      final storage = FakeAuthStorage(session);
+      final repo = FakeAuthRepository()
+        ..refreshError = transientError()
+        // restore() also refreshes an expired session; keep it failing.
+        ..onRefresh = (_) => null;
+      final c = await _booted(storage, repo);
+
+      final token = await c.read(authProvider.notifier).ensureFreshToken();
+
+      expect(token, isNull);
+      expect(storage.stored, isNotNull); // NOT torn down — retry can succeed
     });
   });
 

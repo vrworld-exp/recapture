@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth_notifier.dart';
 import '../../data/remote/dev_otp_handshake.dart';
+import '../../domain/upload/upload_failure.dart';
 import '../../utils/constants.dart';
 
 /// Supplies a valid Bearer access token for upload-flow backend calls.
@@ -24,6 +25,28 @@ abstract interface class UploadAuthSession {
   /// The current access token, performing/refreshing auth as needed.
   /// [forceRefresh] discards any cached session first (401 recovery).
   Future<String> accessToken({bool forceRefresh = false});
+}
+
+/// A token-acquisition failure carrying its ALREADY-MAPPED 9F category (an
+/// [UploadFailureSignal], so `classifyUploadFailure` never falls back to
+/// UNK-01 for it):
+///   • `auth`    — the session is genuinely gone (rejected/absent): Retry is
+///                 pointless; 9F says "sign in again".
+///   • `network` — the session survived but a TRANSIENT refresh failure left
+///                 no usable token right now (sleeping backend, dead spot):
+///                 retryable, 9F says "check your connection and try again".
+/// [detail] is diagnostics-only — never rendered.
+class UploadAuthException implements Exception, UploadFailureSignal {
+  const UploadAuthException(this.uploadErrorCategory, {this.detail});
+
+  @override
+  final UploadErrorCategory uploadErrorCategory;
+
+  final String? detail;
+
+  @override
+  String toString() => 'UploadAuthException(${uploadErrorCategory.wireName}'
+      '${detail == null ? '' : ': $detail'})';
 }
 
 /// DEV [UploadAuthSession] over the shared dev OTP handshake.
@@ -48,21 +71,26 @@ class AppAuthUploadSession implements UploadAuthSession {
     final auth = _ref.read(authProvider.notifier);
     if (forceRefresh) {
       // 401 recovery: rotate now (single-flight inside the notifier). A failed
-      // rotate means the session is gone — the thrown error surfaces through
-      // the upload flow as an auth failure (Screen 9F), never a silent hang.
+      // rotate surfaces as a MAPPED failure (Screen 9F), never a silent hang.
       final ok = await auth.refresh();
       final token = ok ? auth.accessTokenOrNull : null;
-      if (token == null) {
-        throw StateError('session expired — sign in again to upload');
-      }
+      if (token == null) throw _noToken(auth, 'refresh after 401 failed');
       return token;
     }
     final token = await auth.ensureFreshToken();
-    if (token == null) {
-      throw StateError('not signed in — log in before uploading');
-    }
+    if (token == null) throw _noToken(auth, 'no fresh token');
     return token;
   }
+
+  /// Maps "no usable token" to its true category: session retained after a
+  /// TRANSIENT refresh failure → network (retryable); session absent/cleared
+  /// (rejected refresh, never logged in, stub session torn down) → auth.
+  UploadAuthException _noToken(AuthNotifier auth, String why) =>
+      auth.isAuthenticated
+          ? UploadAuthException(UploadErrorCategory.network,
+              detail: '$why; session retained (transient)')
+          : UploadAuthException(UploadErrorCategory.auth,
+              detail: '$why; session gone — sign in again');
 }
 
 /// The active backend session for uploads: the app's real login session.
@@ -89,11 +117,10 @@ Dio buildUploadApiDio(UploadAuthSession session, {String? baseUrl}) {
         options.headers['Authorization'] = 'Bearer $token';
         handler.next(options);
       } catch (e) {
-        handler.reject(DioException(
-          requestOptions: options,
-          error: e,
-          type: DioExceptionType.unknown,
-        ));
+        // Dio requires a DioException here; _AuthRejectDioException keeps the
+        // inner error's mapped category visible to classifyUploadFailure so a
+        // token failure never degrades to UNK-01.
+        handler.reject(_AuthRejectDioException(requestOptions: options, cause: e));
       }
     },
     onError: (e, handler) async {
@@ -122,3 +149,21 @@ Dio buildUploadApiDio(UploadAuthSession session, {String? baseUrl}) {
 final uploadApiDioProvider = Provider<Dio>(
   (ref) => buildUploadApiDio(ref.watch(uploadAuthSessionProvider)),
 );
+
+/// The DioException the auth interceptor rejects with when token acquisition
+/// fails BEFORE the request goes out. Implements [UploadFailureSignal] with
+/// the inner error's own category (or its classified category as a fallback)
+/// so 9F reports AUTH-01/NET-01 — never the generic UNK-01.
+class _AuthRejectDioException extends DioException
+    implements UploadFailureSignal {
+  _AuthRejectDioException({
+    required super.requestOptions,
+    required Object cause,
+  })  : uploadErrorCategory = cause is UploadFailureSignal
+            ? cause.uploadErrorCategory
+            : classifyUploadFailure(cause),
+        super(error: cause, type: DioExceptionType.unknown);
+
+  @override
+  final UploadErrorCategory uploadErrorCategory;
+}

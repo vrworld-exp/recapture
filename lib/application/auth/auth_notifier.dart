@@ -1,4 +1,5 @@
 // lib/application/auth/auth_notifier.dart
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -91,7 +92,17 @@ class AuthNotifier extends Notifier<AuthState> {
     if (session == null) return null;
     if (session.isAccessTokenExpired || session.needsRefreshWithin(window)) {
       final ok = await refresh();
-      return ok ? state.sessionOrNull?.accessToken : null;
+      if (ok) return state.sessionOrNull?.accessToken;
+      // A TRANSIENT refresh failure retains the session (see _doRefresh). If
+      // the token is only inside the proactive window — not hard-expired —
+      // it is still valid: use it rather than failing the caller. The
+      // server-side 401 (and the caller's forceRefresh recovery) remains the
+      // backstop if it expires mid-flight.
+      final retained = state.sessionOrNull;
+      if (retained != null && !retained.isAccessTokenExpired) {
+        return retained.accessToken;
+      }
+      return null;
     }
     return session.accessToken;
   }
@@ -159,8 +170,27 @@ class AuthNotifier extends Notifier<AuthState> {
       state = AuthAuthenticated(newSession);
       _log('refresh_success');
       return true;
+    } on DioException catch (e) {
+      final code = e.response?.statusCode;
+      final rejected = code != null && code >= 400 && code < 500;
+      if (!rejected) {
+        // TRANSIENT failure (timeout, connection error, 5xx — e.g. a sleeping
+        // backend waking up, or a dead spot on mobile data): the refresh
+        // token was never judged, so the session is NOT torn down. Restore
+        // the authenticated state and report failure; the next caller simply
+        // retries the refresh.
+        if (epoch == _epoch) state = AuthAuthenticated(current);
+        _log('refresh_transient_failure');
+        return false;
+      }
+      // The server REJECTED the token (401/403/…) — the session is gone.
+      await _safeClear();
+      if (epoch == _epoch) state = const AuthUnauthenticated();
+      _log('refresh_failed');
+      return false;
     } catch (_) {
-      // Refresh token expired/rejected, or network error — unrecoverable.
+      // Non-transport failure (malformed response, storage error) — treat as
+      // unrecoverable rather than looping on a broken session.
       await _safeClear();
       if (epoch == _epoch) state = const AuthUnauthenticated();
       _log('refresh_failed');

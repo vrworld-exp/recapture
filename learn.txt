@@ -19,3 +19,21 @@ Commands for Flutter :------------->
     flutter run
 
     flutter build apk
+
+
+
+
+
+
+
+
+Follow this flow -------------------------------------------------------->>>>>>>>>
+
+
+
+flutter clean
+
+flutter pub get
+
+flutter build apk --release
+
