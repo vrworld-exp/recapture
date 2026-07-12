@@ -10,7 +10,10 @@
 //   • a runner-terminal engine failure → an [UploadFlowFailure] carrying the
 //     runner's mapped category (per-attempt failed snapshots are swallowed);
 //   • cancel mid-flight → the engine is aborted and finalize NEVER runs;
-//     cancel during pack → the pack token fires and no backend call is made.
+//     cancel during pack → the pack token fires and no backend call is made;
+//   • the STEP TIMELINE (watchTimeline) transitions at the same points, obeying
+//     the same terminal truth: per-attempt failures show at most a retrying
+//     note; only the terminal outcome fails/cancels the timeline.
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -27,6 +30,7 @@ import 'package:recapture/domain/entities/upload_progress.dart';
 import 'package:recapture/domain/upload/capture_bundle.dart';
 import 'package:recapture/domain/upload/capture_manifest.dart';
 import 'package:recapture/domain/upload/upload_failure.dart';
+import 'package:recapture/domain/upload/upload_flow_steps.dart';
 import 'package:recapture/domain/upload/upload_session_spec.dart';
 
 // ── Fakes ─────────────────────────────────────────────────────────────────────
@@ -145,17 +149,58 @@ class _FakeBackend implements UploadJobsBackend {
   }
 }
 
-/// Collected view of everything the flow's progress surface emitted.
+/// Pre-engine failure: POST /projects throws (e.g. a 500 / dead network).
+class _FailingProjectBackend extends _FakeBackend {
+  @override
+  Future<String> createProject({
+    required String name,
+    required String size,
+    required String mode,
+  }) async {
+    calls.add('createProject');
+    throw Exception('500 INTERNAL');
+  }
+}
+
+/// Collected view of everything the flow's progress surface emitted —
+/// byte/file snapshots, stream errors, AND every step-timeline emission.
 class _ProgressLog {
   final List<UploadProgress> snapshots = [];
   final List<Object> errors = [];
+  final List<UploadFlowTimeline> timelines = [];
   late final StreamSubscription<UploadProgress> _sub;
+  late final StreamSubscription<UploadFlowTimeline> _timelineSub;
 
   _ProgressLog(UploadFlowProgress progress) {
     _sub = progress.watch().listen(snapshots.add, onError: errors.add);
+    _timelineSub = progress.watchTimeline().listen(timelines.add);
   }
 
-  Future<void> dispose() => _sub.cancel();
+  Future<void> dispose() async {
+    await _sub.cancel();
+    await _timelineSub.cancel();
+  }
+}
+
+/// Flattens the emitted timelines into the ordered list of step transitions
+/// ('stepId:status', or 'stepId:info' for an info-only change) so a test can
+/// pin the EXACT sequence the screen would render.
+List<String> _timelineTransitions(List<UploadFlowTimeline> timelines) {
+  final out = <String>[];
+  var prev = UploadFlowTimeline.initial();
+  for (final t in timelines) {
+    for (final id in UploadFlowStepId.values) {
+      final a = prev[id];
+      final b = t[id];
+      if (a.status != b.status) {
+        out.add('${id.name}:${b.status.name}');
+      } else if (a.info != b.info) {
+        out.add('${id.name}:info');
+      }
+    }
+    prev = t;
+  }
+  return out;
 }
 
 /// Lets the async broadcast relay (+ the watch() generator hop) deliver every
@@ -315,6 +360,30 @@ void main() {
     expect(h.log.snapshots.last.filesUploaded, 4);
     expect(h.log.errors, isEmpty);
     expect(h.orchestrator.progress.isActive, isFalse);
+
+    // Step timeline: every step flips running→done in flow order, nothing else.
+    expect(_timelineTransitions(h.log.timelines), [
+      'prepare:running',
+      'prepare:done',
+      'createProject:running',
+      'createProject:done',
+      'createJob:running',
+      'createJob:done',
+      'transfer:running',
+      'transfer:done',
+      'finalize:running',
+      'finalize:done',
+    ]);
+    final tl = h.orchestrator.progress.timeline;
+    expect(tl.isAllDone, isTrue);
+    // Prod-safe info lines: counts/sizes only (bundle = 3 images + manifest).
+    expect(tl[UploadFlowStepId.prepare].info, '4 files · 0.0 MB');
+    expect(tl[UploadFlowStepId.transfer].info, '4 files');
+    // Dev-only raw detail (test flavor is dev — the prod gate strips these).
+    expect(tl[UploadFlowStepId.createProject].devDetail,
+        contains('remoteProjectId=proj-1'));
+    expect(tl[UploadFlowStepId.createJob].devDetail,
+        contains('jobId=job-1'));
   });
 
   test('finalize failure → failed status + stream error, never completed',
@@ -340,6 +409,12 @@ void main() {
       h.log.snapshots.any((p) => p.status == UploadStatus.completed),
       isFalse,
     );
+
+    // Timeline: the FINALIZE step carries the failure; transfer stays done.
+    final tl = h.orchestrator.progress.timeline;
+    expect(tl[UploadFlowStepId.transfer].isDone, isTrue);
+    expect(tl[UploadFlowStepId.finalize].isFailed, isTrue);
+    expect(tl.hasFailure, isTrue);
   });
 
   test('finalize returning a non-QUEUED state is a failure, not a success',
@@ -359,6 +434,8 @@ void main() {
 
     expect(h.log.errors.single, isA<UploadFlowFailure>());
     expect(h.log.snapshots.last.status, UploadStatus.failed);
+    expect(h.orchestrator.progress
+        .timeline[UploadFlowStepId.finalize].isFailed, isTrue);
   });
 
   test(
@@ -384,6 +461,11 @@ void main() {
       h.log.snapshots.any((p) => p.status == UploadStatus.failed),
       isFalse,
     );
+    // The step tracker shows AT MOST a retrying note — the transfer step is
+    // still RUNNING, not failed.
+    final midRun = h.orchestrator.progress.timeline[UploadFlowStepId.transfer];
+    expect(midRun.isRunning, isTrue);
+    expect(midRun.info, 'Retrying…');
 
     h.engine.outcome.complete(const ResilientUploadOutcome(
       status: ResilientUploadStatus.failed,
@@ -399,6 +481,12 @@ void main() {
     expect(err.uploadErrorCategory, UploadErrorCategory.network);
     expect(classifyUploadFailure(err), UploadErrorCategory.network);
     expect(h.backend.calls, isNot(contains('finalizeJob')));
+
+    // Only the runner's TERMINAL outcome fails the transfer step; finalize
+    // was never reached so it stays pending.
+    final tl = h.orchestrator.progress.timeline;
+    expect(tl[UploadFlowStepId.transfer].isFailed, isTrue);
+    expect(tl[UploadFlowStepId.finalize].isPending, isTrue);
   });
 
   test('cancel mid-transfer aborts the engine and NEVER finalizes', () async {
@@ -417,6 +505,13 @@ void main() {
     expect(h.backend.calls, isNot(contains('finalizeJob')));
     expect(h.log.snapshots.last.status, UploadStatus.cancelled);
     expect(h.log.errors, isEmpty);
+
+    // Timeline: completed steps stay done; transfer + finalize are struck.
+    final tl = h.orchestrator.progress.timeline;
+    expect(tl[UploadFlowStepId.createJob].isDone, isTrue);
+    expect(tl[UploadFlowStepId.transfer].isCancelled, isTrue);
+    expect(tl[UploadFlowStepId.finalize].isCancelled, isTrue);
+    expect(tl.isCancelled, isTrue);
   });
 
   test('cancel during pack fires the pack token; no backend call is made',
@@ -452,6 +547,37 @@ void main() {
     expect(h.backend.calls, isEmpty);
     expect(h.log.snapshots.last.status, UploadStatus.cancelled);
     expect(h.log.errors, isEmpty);
+
+    // A cancel during pack strikes every step (prepare included).
+    expect(
+      h.orchestrator.progress.timeline.steps.every((s) => s.isCancelled),
+      isTrue,
+    );
+  });
+
+  test('pre-engine throw (createProject) fails THAT step; later steps pending',
+      () async {
+    final h = _Harness(backend: _FailingProjectBackend());
+
+    await h.orchestrator.run();
+    await _flush();
+    await h.log.dispose();
+
+    // The flow failed before the engine was ever built.
+    expect(h.calls, ['resolveContext', 'pack']);
+    expect(h.log.errors, hasLength(1));
+    expect(h.log.snapshots.last.status, UploadStatus.failed);
+
+    expect(_timelineTransitions(h.log.timelines), [
+      'prepare:running',
+      'prepare:done',
+      'createProject:running',
+      'createProject:failed',
+    ]);
+    final tl = h.orchestrator.progress.timeline;
+    expect(tl[UploadFlowStepId.createJob].isPending, isTrue);
+    expect(tl[UploadFlowStepId.transfer].isPending, isTrue);
+    expect(tl[UploadFlowStepId.finalize].isPending, isTrue);
   });
 
   test('buildUploadSessionSpec rejects a key escaping the plan prefix', () {

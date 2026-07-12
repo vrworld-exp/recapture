@@ -2,9 +2,10 @@
 //
 // The DEV-ONLY autofill chip on the OTP screen: renders only when a devCode is
 // present (development backend echo), carries the unmissable label, and a tap
-// fills the boxes and triggers exactly one verify with that code. Tests run in
-// debug mode, so the !kReleaseMode gate is open here; the release gate itself
-// is a compile-time constant (not testable in flutter test).
+// fills the boxes and triggers exactly one verify with that code. Tests run
+// with the default dev flavor, so the !kAppEnvironment.isProduction gate is
+// open here; the prod-flavor gate itself is a compile-time constant (not
+// testable in flutter test).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/app/theme/app_theme.dart';

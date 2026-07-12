@@ -14,7 +14,9 @@ import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/application/upload/upload_progress_provider.dart';
 import 'package:recapture/domain/entities/upload_progress.dart';
+import 'package:recapture/domain/upload/upload_flow_steps.dart';
 import 'package:recapture/presentation/screens/capture/uploading_screen.dart';
+import 'package:recapture/presentation/widgets/step_checklist_row.dart';
 import 'package:recapture/utils/analytics.dart';
 import 'package:recapture/utils/byte_format.dart';
 
@@ -45,15 +47,18 @@ const int _mb = kBytesPerMb;
 void main() {
   late List<({String name, Map<String, Object?> props})> events;
   late StreamController<UploadProgress> controller;
+  late StreamController<UploadFlowTimeline> timelineController;
 
   setUp(() {
     events = [];
     Analytics.testSink = (name, props) => events.add((name: name, props: props));
     controller = StreamController<UploadProgress>.broadcast();
+    timelineController = StreamController<UploadFlowTimeline>.broadcast();
   });
   tearDown(() {
     Analytics.testSink = null;
     controller.close();
+    timelineController.close();
     debugDefaultTargetPlatformOverride = null; // clear any per-test platform override
   });
 
@@ -81,6 +86,8 @@ void main() {
         overrides: [
           uploadProgressSourceProvider
               .overrideWithValue(_FakeSource(controller)),
+          uploadStepTimelineProvider
+              .overrideWith((ref) => timelineController.stream),
         ],
         child: MaterialApp.router(routerConfig: router),
       ),
@@ -99,6 +106,18 @@ void main() {
   LinearProgressIndicator bar(WidgetTester tester) =>
       tester.widget<LinearProgressIndicator>(
           find.byKey(const Key('upload_progress_bar')));
+
+  Future<void> emitTimeline(WidgetTester tester, UploadFlowTimeline t) async {
+    timelineController.add(t);
+    await tester.pump();
+    await tester.pump();
+  }
+
+  StepRowStatus rowStatus(WidgetTester tester, UploadFlowStepId id) =>
+      tester
+          .widget<StepChecklistRow>(
+              find.byKey(Key('upload_step_${id.name}')))
+          .status;
 
   testWidgets('determinate bar + counters track real progress', (tester) async {
     await pump(tester);
@@ -276,5 +295,177 @@ void main() {
     expect(find.text('PROCESSING'), findsOneWidget);
     expect(named(AnalyticsEvents.uploadStartedView), hasLength(1));
     expect(named(AnalyticsEvents.uploadCompletedView), hasLength(1));
+  });
+
+  // ── Step tracker (the smoke-card timeline over the real flow) ──────────────
+
+  testWidgets('step rows render the seeded timeline states, keyed per step',
+      (tester) async {
+    await pump(tester);
+    await emit(
+        tester, _p(bytes: 10 * _mb, total: 110 * _mb, files: 1, totalFiles: 10));
+    // prepare done → createProject done → createJob running, rest pending.
+    final t = UploadFlowTimeline.initial()
+        .start(UploadFlowStepId.prepare)
+        .complete(UploadFlowStepId.prepare, info: '38 files · 4.2 MB')
+        .start(UploadFlowStepId.createProject)
+        .complete(UploadFlowStepId.createProject)
+        .start(UploadFlowStepId.createJob);
+    await emitTimeline(tester, t);
+
+    expect(rowStatus(tester, UploadFlowStepId.prepare), StepRowStatus.done);
+    expect(rowStatus(tester, UploadFlowStepId.createProject),
+        StepRowStatus.done);
+    expect(
+        rowStatus(tester, UploadFlowStepId.createJob), StepRowStatus.running);
+    expect(
+        rowStatus(tester, UploadFlowStepId.transfer), StepRowStatus.pending);
+    expect(
+        rowStatus(tester, UploadFlowStepId.finalize), StepRowStatus.pending);
+    expect(find.text('Preparing photos'), findsOneWidget);
+    expect(find.text('Creating project'), findsOneWidget);
+    expect(find.text('Registering upload'), findsOneWidget);
+    expect(find.text('Verifying upload'), findsOneWidget);
+  });
+
+  testWidgets('transfer row label live-updates n/N from the progress stream',
+      (tester) async {
+    await pump(tester);
+    final t = UploadFlowTimeline.initial()
+        .start(UploadFlowStepId.prepare)
+        .complete(UploadFlowStepId.prepare)
+        .start(UploadFlowStepId.createProject)
+        .complete(UploadFlowStepId.createProject)
+        .start(UploadFlowStepId.createJob)
+        .complete(UploadFlowStepId.createJob)
+        .start(UploadFlowStepId.transfer);
+    await emitTimeline(tester, t);
+
+    await emit(
+        tester, _p(bytes: 55 * _mb, total: 110 * _mb, files: 5, totalFiles: 10));
+    expect(find.text('Uploading files 5/10'), findsOneWidget);
+    expect(bar(tester).value, 0.5);
+
+    // A later snapshot moves the LABEL too — no timeline emission needed.
+    await emit(
+        tester, _p(bytes: 66 * _mb, total: 110 * _mb, files: 6, totalFiles: 10));
+    expect(find.text('Uploading files 6/10'), findsOneWidget);
+    expect(find.text('Uploading files 5/10'), findsNothing);
+    expect(find.text('6 / 10 files'), findsOneWidget);
+    expect(find.text('66.0 / 110.0 MB'), findsOneWidget);
+  });
+
+  testWidgets('expanding a step reveals its detail (info + dev-flavor lines)',
+      (tester) async {
+    await pump(tester);
+    await emit(
+        tester, _p(bytes: 10 * _mb, total: 110 * _mb, files: 1, totalFiles: 10));
+    final t = UploadFlowTimeline.initial()
+        .start(UploadFlowStepId.prepare, devDetail: ['bundle: /ws/bundles/x'])
+        .complete(UploadFlowStepId.prepare, info: '38 files · 4.2 MB');
+    await emitTimeline(tester, t);
+
+    // Collapsed by default.
+    const detailKey = Key('upload_step_detail_prepare');
+    expect(find.byKey(detailKey), findsNothing);
+
+    // Tap the row HEADER (the label) — once expanded, the row's center is the
+    // detail block, not the InkWell.
+    await tester.tap(find.text('Preparing photos'));
+    await tester.pump();
+    expect(find.byKey(detailKey), findsOneWidget);
+    expect(find.text('38 files · 4.2 MB'), findsOneWidget);
+    // Test flavor is dev → the raw dev line renders (prod strips it at both
+    // the producer and this render gate; not testable from here — see spec).
+    expect(find.text('bundle: /ws/bundles/x'), findsOneWidget);
+
+    // Tapping again collapses.
+    await tester.tap(find.text('Preparing photos'));
+    await tester.pump();
+    expect(find.byKey(detailKey), findsNothing);
+  });
+
+  testWidgets('paused → transfer row shows the paused badge', (tester) async {
+    await pump(tester);
+    final t = UploadFlowTimeline.initial()
+        .start(UploadFlowStepId.prepare)
+        .complete(UploadFlowStepId.prepare)
+        .start(UploadFlowStepId.createProject)
+        .complete(UploadFlowStepId.createProject)
+        .start(UploadFlowStepId.createJob)
+        .complete(UploadFlowStepId.createJob)
+        .start(UploadFlowStepId.transfer);
+    await emitTimeline(tester, t);
+    await emit(
+        tester,
+        _p(
+            status: UploadStatus.paused,
+            bytes: 30 * _mb,
+            total: 110 * _mb,
+            files: 3,
+            totalFiles: 10));
+
+    expect(find.byKey(const Key('upload_transfer_paused_badge')),
+        findsOneWidget);
+    expect(find.text('Paused'), findsOneWidget);
+    expect(find.text('Upload paused'), findsOneWidget); // existing headline
+
+    // Resuming clears the badge.
+    await emit(
+        tester, _p(bytes: 30 * _mb, total: 110 * _mb, files: 3, totalFiles: 10));
+    expect(find.byKey(const Key('upload_transfer_paused_badge')),
+        findsNothing);
+  });
+
+  testWidgets('terminal failure paints the failing step red BEFORE 9F',
+      (tester) async {
+    await pump(tester);
+    await emit(
+        tester, _p(bytes: 30 * _mb, total: 110 * _mb, files: 3, totalFiles: 10));
+    final t = UploadFlowTimeline.initial()
+        .start(UploadFlowStepId.prepare)
+        .complete(UploadFlowStepId.prepare)
+        .start(UploadFlowStepId.createProject)
+        .complete(UploadFlowStepId.createProject)
+        .start(UploadFlowStepId.createJob)
+        .complete(UploadFlowStepId.createJob)
+        .start(UploadFlowStepId.transfer)
+        .fail(UploadFlowStepId.transfer);
+    await emitTimeline(tester, t);
+
+    // The timeline failed but the progress stream hasn't gone terminal yet:
+    // still on Screen 9, transfer row rendered as failed.
+    expect(find.text('FAILED_9F'), findsNothing);
+    expect(rowStatus(tester, UploadFlowStepId.transfer), StepRowStatus.failed);
+
+    // The terminal failed snapshot then routes to 9F as before.
+    await emit(
+        tester,
+        _p(
+            status: UploadStatus.failed,
+            bytes: 30 * _mb,
+            total: 110 * _mb,
+            files: 3,
+            totalFiles: 10));
+    await tester.pumpAndSettle();
+    expect(find.text('FAILED_9F'), findsOneWidget);
+  });
+
+  testWidgets('all steps done → success footer with files · size · duration',
+      (tester) async {
+    await pump(tester);
+    await emit(tester,
+        _p(bytes: 110 * _mb, total: 110 * _mb, files: 10, totalFiles: 10));
+    final t0 = DateTime.utc(2026, 7, 12);
+    var t = UploadFlowTimeline.initial();
+    for (final id in UploadFlowStepId.values) {
+      t = t
+          .start(id, at: t0.add(Duration(seconds: id.index * 2)))
+          .complete(id, at: t0.add(Duration(seconds: id.index * 2 + 1)));
+    }
+    await emitTimeline(tester, t);
+
+    expect(find.byKey(const Key('upload_summary_footer')), findsOneWidget);
+    expect(find.text('✓ 10/10 files · 110.0 MB · 9.0s'), findsOneWidget);
   });
 }

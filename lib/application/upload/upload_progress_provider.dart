@@ -13,6 +13,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/upload_progress.dart';
+import '../../domain/upload/upload_flow_steps.dart';
 import 'upload_flow.dart';
 
 /// The progress feed contract. Implementations push [UploadProgress] snapshots as
@@ -46,3 +47,17 @@ final uploadProgressSourceProvider = Provider<UploadProgressSource>(
 final uploadProgressProvider = StreamProvider.autoDispose<UploadProgress>(
   (ref) => ref.watch(uploadProgressSourceProvider).watch(),
 );
+
+/// The live step-tracker feed for Screen 9: the ACTIVE flow's timeline stream
+/// when one exists, else a single all-pending snapshot. The screen stays a
+/// pure consumer — live transfer counters come from [uploadProgressProvider]
+/// (single source of truth for bytes/files), not from this stream. Widget
+/// tests override this provider directly with a controllable stream.
+final uploadStepTimelineProvider =
+    StreamProvider.autoDispose<UploadFlowTimeline>((ref) {
+  final flow = ref.watch(uploadFlowProvider);
+  if (flow == null) {
+    return Stream<UploadFlowTimeline>.value(UploadFlowTimeline.initial());
+  }
+  return flow.watchTimeline();
+});

@@ -15,6 +15,7 @@
 // logged via diagnostics at the failure site (the uploading screen), not here.
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -23,8 +24,10 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/upload/upload_flow.dart';
+import '../../../dev/dev_log/dev_upload_log.dart';
 import '../../../domain/upload/upload_failure.dart';
 import '../../../utils/analytics.dart';
+import '../../../utils/app_env.dart';
 import '../../widgets/app_button.dart';
 
 class UploadFailedScreen extends ConsumerStatefulWidget {
@@ -173,6 +176,15 @@ class _UploadFailedScreenState extends ConsumerState<UploadFailedScreen> {
                       label: 'Back to Projects',
                       onPressed: _onBackToProjects,
                     ),
+                  // DEV ONLY: the flow's step-by-step timeline (with the raw
+                  // error behind the mapped code above). Same compile-time
+                  // flavor gate as the Dev Tools section; renders nothing
+                  // when no flow has logged, so the privacy contract of this
+                  // screen is unchanged outside a dev investigation.
+                  if (!kAppEnvironment.isProduction) ...[
+                    const SizedBox(height: AppSpacing.xl),
+                    const _DevLogButton(),
+                  ],
                 ],
               ),
             ),
@@ -230,4 +242,123 @@ class _FailureContent {
   const _FailureContent({required this.title, required this.message});
   final String title;
   final String message;
+}
+
+/// DEV-ONLY entry point to the upload flow's diagnostic timeline. Renders
+/// nothing while the log is empty (so tests and untouched sessions see the
+/// unchanged 9F); otherwise a muted button that opens the log sheet. Rebuilt
+/// by the log's own ChangeNotifier.
+class _DevLogButton extends StatelessWidget {
+  const _DevLogButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: DevUploadLog.instance,
+      builder: (context, _) {
+        final log = DevUploadLog.instance;
+        if (log.isEmpty) return const SizedBox.shrink();
+        return TextButton.icon(
+          key: const Key('upload_failed_dev_logs'),
+          onPressed: () => _showSheet(context),
+          icon: const Icon(Icons.terminal, size: 18),
+          label: Text('Dev logs (${log.entries.length})'),
+          style: TextButton.styleFrom(foregroundColor: AppColors.textMuted),
+        );
+      },
+    );
+  }
+
+  void _showSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.bgPrimary,
+      builder: (_) => const _DevLogSheet(),
+    );
+  }
+}
+
+/// The scrollable raw timeline + Copy all / Clear. Raw error text is shown
+/// here BY DESIGN — this sheet exists only in dev-flavor builds.
+class _DevLogSheet extends StatelessWidget {
+  const _DevLogSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.75,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: AnimatedBuilder(
+            animation: DevUploadLog.instance,
+            builder: (context, _) {
+              final log = DevUploadLog.instance;
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text('Upload dev logs', style: textTheme.titleMedium),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: 'Copy all',
+                        icon: const Icon(Icons.copy, size: 20),
+                        onPressed: () async {
+                          await Clipboard.setData(
+                              ClipboardData(text: log.dumpText()));
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Logs copied')),
+                            );
+                          }
+                        },
+                      ),
+                      IconButton(
+                        tooltip: 'Clear',
+                        icon: const Icon(Icons.delete_outline, size: 20),
+                        onPressed: log.clear,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.sm),
+                  Expanded(
+                    child: log.isEmpty
+                        ? Center(
+                            child: Text('No entries',
+                                style: textTheme.bodySmall?.copyWith(
+                                    color: AppColors.textMuted)),
+                          )
+                        : ListView.builder(
+                            itemCount: log.entries.length,
+                            itemBuilder: (context, i) {
+                              final e = log.entries[i];
+                              return Padding(
+                                padding: const EdgeInsets.only(
+                                    bottom: AppSpacing.xs),
+                                child: SelectableText(
+                                  e.line,
+                                  style: textTheme.bodySmall?.copyWith(
+                                    fontFamily: 'monospace',
+                                    fontSize: 11,
+                                    color: e.message.contains('FAILED') ||
+                                            e.message.contains('threw')
+                                        ? AppColors.error
+                                        : AppColors.textSecondary,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
 }

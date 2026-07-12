@@ -11,6 +11,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../platform/haptics.dart';
 import '../../../utils/analytics.dart';
+import '../../../utils/app_env.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/offline_retry_modal.dart';
 
@@ -46,9 +47,11 @@ class OtpVerificationScreen extends StatefulWidget {
   final Future<void> Function() onResend;
 
   /// DEV ONLY: the OTP echoed by a development backend (no SMS/email provider
-  /// is wired). When non-null (and never in release builds) a labelled chip
-  /// renders below the resend row — tapping it fills the boxes and verifies.
-  /// Null against a production backend → the chip does not exist.
+  /// is wired). When non-null (and never in prod-flavor builds — same
+  /// compile-time `kAppEnvironment` gate as the Dev Tools section, so dev
+  /// release APKs keep the chip) a labelled chip renders below the resend
+  /// row — tapping it fills the boxes and verifies. Null against a production
+  /// backend → the chip does not exist.
   final String? devCode;
 
   @override
@@ -285,7 +288,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
             ],
             const SizedBox(height: AppSpacing.lg),
             _buildResend(),
-            if (!kReleaseMode && widget.devCode != null) ...[
+            if (!kAppEnvironment.isProduction && widget.devCode != null) ...[
               const SizedBox(height: AppSpacing.lg),
               _DevCodeChip(
                 code: widget.devCode!,
@@ -391,8 +394,8 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
 /// DEV-ONLY helper chip: shows the backend's echoed OTP with an unmissable
 /// "FOR DEV ONLY" label; tapping fills the boxes and verifies. Rendered only
-/// when a devCode exists (development backend) and never in release builds —
-/// production users can never see it.
+/// when a devCode exists (development backend) and never in prod-flavor
+/// builds (`--dart-define=ENV=prod`) — production users can never see it.
 class _DevCodeChip extends StatelessWidget {
   const _DevCodeChip({required this.code, required this.onTap});
 

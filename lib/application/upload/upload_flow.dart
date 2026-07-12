@@ -39,12 +39,16 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../data/local/active_session_box.dart';
 import '../../data/local/upload_progress_box.dart';
+import '../../dev/dev_log/dev_upload_log.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/upload_progress.dart';
 import '../../domain/upload/capture_bundle.dart';
 import '../../domain/upload/capture_manifest.dart';
 import '../../domain/upload/upload_failure.dart';
+import '../../domain/upload/upload_flow_steps.dart';
 import '../../domain/upload/upload_session_spec.dart';
+import '../../utils/app_env.dart';
+import '../../utils/byte_format.dart';
 import '../capture/analytics/capture_level_session.dart';
 import '../capture/capture_flow_variant_provider.dart';
 import '../capture/ledger/level_capture_ledger_registry.dart';
@@ -149,8 +153,20 @@ class RunnerUploadEngine implements UploadEngine {
   UploadProgressSource get progress => manager;
 
   @override
-  Future<ResilientUploadOutcome> run(UploadSessionSpec spec) =>
-      runner.run(spec);
+  Future<ResilientUploadOutcome> run(UploadSessionSpec spec) async {
+    final outcome = await runner.run(spec);
+    if (outcome.status == ResilientUploadStatus.failed) {
+      // Dev diagnostics: the RAW engine error behind the mapped category —
+      // this is what a bare UNK-01 on 9F is hiding.
+      DevUploadLog.instance.add(
+        'engine failed (category=${(outcome.category ?? UploadErrorCategory.unknown).wireName}, '
+        'retriesExhausted=${outcome.autoRetriesExhausted}, '
+        'reason=${manager.lastFailureReason ?? '-'})',
+        error: manager.lastFailureError,
+      );
+    }
+    return outcome;
+  }
 
   @override
   void pause() => manager.pause();
@@ -174,6 +190,16 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
       StreamController<UploadProgress>.broadcast();
   UploadProgress _current = UploadProgress.initial;
 
+  // ── Step timeline (Screen 9's live step tracker) ───────────────────────────
+  // Broadcast-with-replay, matching the watch() idiom above. The orchestrator
+  // transitions steps at the same points it logs to DevUploadLog; the terminal
+  // methods below keep the timeline consistent with the flow's terminal truth
+  // (fail → the running step goes red; cancel → the rest is struck; completed
+  // → finalize flips done) so the two surfaces can never disagree.
+  final StreamController<UploadFlowTimeline> _timelineRelay =
+      StreamController<UploadFlowTimeline>.broadcast();
+  UploadFlowTimeline _timeline = UploadFlowTimeline.initial();
+
   /// The engine's held-back `completed` snapshot (real totals) — released by
   /// [markCompleted] once finalize confirms QUEUED.
   UploadProgress? _held;
@@ -192,12 +218,23 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   /// The latest snapshot (test/diagnostic convenience; the screen streams).
   UploadProgress get current => _current;
 
+  /// The latest step-timeline snapshot (test/diagnostic convenience).
+  UploadFlowTimeline get timeline => _timeline;
+
   // ── UploadProgressSource ───────────────────────────────────────────────────
 
   @override
   Stream<UploadProgress> watch() async* {
     yield _current; // replay the current snapshot to a new subscriber
     yield* _relay.stream;
+  }
+
+  /// The step-timeline feed Screen 9's tracker observes (replay-current, same
+  /// idiom as [watch]). Live counters for the transfer step do NOT ride this
+  /// stream — the screen composes them from the byte/file feed above.
+  Stream<UploadFlowTimeline> watchTimeline() async* {
+    yield _timeline;
+    yield* _timelineRelay.stream;
   }
 
   // ── UploadController (idempotent; safe pre-engine) ─────────────────────────
@@ -218,6 +255,38 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
     if (!_relay.isClosed) _relay.add(next);
   }
 
+  void _applyTimeline(UploadFlowTimeline next) {
+    if (identical(next, _timeline)) return; // invalid transition → no-op
+    _timeline = next;
+    if (!_timelineRelay.isClosed) _timelineRelay.add(next);
+  }
+
+  /// Raw diagnostics never reach a production build's memory, matching the
+  /// DevUploadLog gate — the timeline's devDetail is dev-flavor-only data.
+  static List<String> _gatedDevDetail(List<String> lines) =>
+      kAppEnvironment.isProduction ? const [] : lines;
+
+  /// Orchestrator hook: step [id] began.
+  void stepStarted(UploadFlowStepId id, {List<String> devDetail = const []}) {
+    if (_terminal) return;
+    _applyTimeline(_timeline.start(id, devDetail: _gatedDevDetail(devDetail)));
+  }
+
+  /// Orchestrator hook: step [id] finished. [info] must be prod-safe
+  /// (counts/sizes only); raw ids/paths go in [devDetail].
+  void stepCompleted(
+    UploadFlowStepId id, {
+    String? info,
+    List<String> devDetail = const [],
+  }) {
+    if (_terminal) return;
+    _applyTimeline(_timeline.complete(
+      id,
+      info: info,
+      devDetail: _gatedDevDetail(devDetail),
+    ));
+  }
+
   /// Flow kicked off (pre-engine): show an active-but-empty state instead of
   /// idle so Screen 9 renders "uploading" while the bundle packs.
   void markRunning() {
@@ -236,10 +305,19 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
           _held = p;
           _push(p.copyWith(status: UploadStatus.inProgress));
         case UploadStatus.failed:
-          break; // per-attempt failure — the runner may still auto-retry
+          // Per-attempt failure — the runner may still auto-retry. The step
+          // tracker shows AT MOST a retrying note; it flips to failed only on
+          // the runner's TERMINAL outcome (via fail()).
+          _applyTimeline(
+              _timeline.updateInfo(UploadFlowStepId.transfer, 'Retrying…'));
         case UploadStatus.idle:
           break; // pre-start replay — the flow is already inProgress
         default:
+          // A fresh attempt is moving again → clear any retrying note.
+          if (p.status == UploadStatus.inProgress) {
+            _applyTimeline(
+                _timeline.updateInfo(UploadFlowStepId.transfer, null));
+          }
           _push(p);
       }
     });
@@ -250,6 +328,10 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   void markCompleted() {
     if (_terminal) return;
     _terminal = true;
+    DevUploadLog.instance.add('flow COMPLETED (job QUEUED)');
+    // Safety net: the finalize step flips done with the flow's completion
+    // (a no-op when the orchestrator already completed it explicitly).
+    _applyTimeline(_timeline.complete(UploadFlowStepId.finalize));
     _push((_held ?? _current).copyWith(status: UploadStatus.completed));
     unawaited(_sub?.cancel());
   }
@@ -260,6 +342,14 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   void fail(Object error) {
     if (_terminal) return;
     _terminal = true;
+    // Dev diagnostics: EVERY terminal failure passes through here — this line
+    // is what turns a bare 9F code into an actionable raw error in the panel.
+    DevUploadLog.instance.add('flow FAILED', error: error);
+    // The step that was running (or next up) goes red — with the raw error as
+    // dev-only detail; the prod UI never renders it (9F stays mapped-only).
+    _applyTimeline(_timeline.failRunning(
+      devDetail: _gatedDevDetail(['${error.runtimeType}: $error']),
+    ));
     if (!_relay.isClosed) _relay.addError(error);
     _push(_current.copyWith(status: UploadStatus.failed));
     unawaited(_sub?.cancel());
@@ -270,6 +360,7 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   void markCancelled() {
     if (_terminal) return;
     _terminal = true;
+    _applyTimeline(_timeline.cancelRemaining());
     if (_current.status != UploadStatus.cancelled) {
       _push(_current.copyWith(status: UploadStatus.cancelled));
     }
@@ -398,6 +489,8 @@ class UploadFlowOrchestrator {
     _started = true;
     try {
       progress.markRunning();
+      progress.stepStarted(UploadFlowStepId.prepare);
+      DevUploadLog.instance.add('flow started');
 
       // Kick the backend wake-up NOW so it overlaps the (potentially long)
       // pack below; awaited before the first real backend call. Best-effort:
@@ -408,6 +501,11 @@ class UploadFlowOrchestrator {
       final backend = _backendFactory();
       final ctx = await _resolveContext();
       _checkCancel();
+      DevUploadLog.instance.add(
+          'context resolved (project="${ctx.projectName}", '
+          'localProjectId=${ctx.localProjectId.isEmpty ? '<empty>' : ctx.localProjectId}, '
+          'sessionId=${ctx.captureSessionId.isEmpty ? '<empty>' : ctx.captureSessionId}, '
+          'variant=${ctx.variant.id})');
 
       // Local ids for the bundle/manifest — the REMOTE ids are minted below;
       // the backend pairs files↔manifest by keys/photo entries, not these.
@@ -427,23 +525,46 @@ class UploadFlowOrchestrator {
         cancelToken: _packCancel,
       );
       _checkCancel();
+      DevUploadLog.instance
+          .add('bundle packed (${bundle.totalImages} images + manifest)');
+      progress.stepCompleted(
+        UploadFlowStepId.prepare,
+        // images + manifest — the same count finalize verifies against.
+        info: '${bundle.totalImages + 1} files · '
+            '${formatMb(bundle.totalBytes)} MB',
+        devDetail: [
+          'bundle: ${bundle.path}',
+          for (final e in bundle.perLevelCounts.entries)
+            '${e.key}: ${e.value} images',
+        ],
+      );
 
       if (warming != null) {
         try {
           await warming;
-        } catch (_) {
+        } catch (e) {
           // Warm-up is best-effort by contract; never mask the flow with it.
+          DevUploadLog.instance.add('warmup failed (ignored)', error: e);
         }
       }
       _checkCancel();
 
+      DevUploadLog.instance.add('POST /projects …');
+      progress.stepStarted(UploadFlowStepId.createProject);
       final remoteProjectId = await backend.createProject(
         name: ctx.projectName,
         size: ctx.objectSize,
         mode: 'guided',
       );
       _checkCancel();
+      DevUploadLog.instance.add('project created (remoteId=$remoteProjectId); '
+          'POST /jobs (expectedFiles=${bundle.totalImages + 1}) …');
+      progress.stepCompleted(
+        UploadFlowStepId.createProject,
+        devDetail: ['remoteProjectId=$remoteProjectId'],
+      );
 
+      progress.stepStarted(UploadFlowStepId.createJob);
       final job = await backend.createJob(
         projectId: remoteProjectId,
         objectSize: ctx.objectSize,
@@ -455,6 +576,15 @@ class UploadFlowOrchestrator {
       );
       _checkCancel();
 
+      DevUploadLog.instance.add('job created (jobId=${job.jobId})');
+      progress.stepCompleted(
+        UploadFlowStepId.createJob,
+        devDetail: [
+          'jobId=${job.jobId}',
+          'keyPrefix=${job.keyPrefix}',
+          'expectedFiles=${bundle.totalImages + 1}',
+        ],
+      );
       final spec = buildUploadSessionSpec(
         bundle: bundle,
         keyPrefix: job.keyPrefix,
@@ -462,6 +592,9 @@ class UploadFlowOrchestrator {
         sessionId: job.jobId,
         fileSize: _fileSize,
       );
+      DevUploadLog.instance.add(
+          'upload spec built (${spec.totalFiles} files); starting transfer …');
+      progress.stepStarted(UploadFlowStepId.transfer);
 
       final engine = _engineFactory(job.jobId);
       _engine = engine;
@@ -482,20 +615,28 @@ class UploadFlowOrchestrator {
             detail: 'auto-retries exhausted: ${outcome.autoRetriesExhausted}',
           ));
         case ResilientUploadStatus.succeeded:
+          DevUploadLog.instance
+              .add('transfer complete; POST /jobs/${job.jobId}/finalize …');
+          progress.stepCompleted(
+            UploadFlowStepId.transfer,
+            info: '${spec.totalFiles} files',
+          );
           await _finalize(backend, job.jobId, spec.totalFiles);
       }
     } on _FlowCancelled {
       progress.markCancelled();
-    } on BundlePackException catch (e) {
+    } on BundlePackException catch (e, st) {
       if (e.isCancelled || _cancelRequested) {
         progress.markCancelled();
       } else {
+        DevUploadLog.instance.add('bundle pack threw', error: e, stack: st);
         progress.fail(e);
       }
-    } catch (e) {
+    } catch (e, st) {
       if (_cancelRequested) {
         progress.markCancelled();
       } else {
+        DevUploadLog.instance.add('flow step threw', error: e, stack: st);
         progress.fail(e);
       }
     }
@@ -513,11 +654,13 @@ class UploadFlowOrchestrator {
       progress.markCancelled();
       return;
     }
+    progress.stepStarted(UploadFlowStepId.finalize);
     try {
       final state = await backend.finalizeJob(
         jobId: jobId,
         reportedFilesCount: reportedFilesCount,
       );
+      DevUploadLog.instance.add('finalize returned state=$state');
       if (state != 'QUEUED') {
         progress.fail(UploadFlowFailure(
           UploadErrorCategory.server,
@@ -525,6 +668,10 @@ class UploadFlowOrchestrator {
         ));
         return;
       }
+      progress.stepCompleted(
+        UploadFlowStepId.finalize,
+        devDetail: ['state=$state'],
+      );
       progress.markCompleted();
     } catch (e) {
       // 422 VERIFICATION_FAILED / 409 / transport — classified by the screen.
