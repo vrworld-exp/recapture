@@ -2,7 +2,7 @@
 //
 // Widget tests for the Dev Tools section:
 //   - flavor gating both ways (dev renders, prod builds nothing),
-//   - the Projects screen carries the section in the dev flavor,
+//   - the Projects screen no longer embeds the section (removed from the hub),
 //   - the Health pill: success renders code + latency + raw body; a
 //     connection error renders the unreachable state without throwing.
 import 'dart:convert';
@@ -75,7 +75,7 @@ void main() {
       expect(find.text('S3 Upload Smoke Test'), findsNothing);
     });
 
-    testWidgets('the Projects screen carries the section (test env = dev)',
+    testWidgets('the Projects screen does not embed the section (any flavor)',
         (tester) async {
       await tester.pumpWidget(
         ProviderScope(
@@ -89,7 +89,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('DEV TOOLS'), findsOneWidget);
+      expect(find.text('DEV TOOLS'), findsNothing);
     });
   });
 

@@ -33,7 +33,15 @@ Follow this flow -------------------------------------------------------->>>>>>>
 
 flutter clean
 
+flutter pub outdated
+
+flutter pub upgrade --major-versions
+
 flutter pub get
+
+flutter doctor
+
+flutter run
 
 flutter build apk --release
 

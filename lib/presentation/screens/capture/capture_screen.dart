@@ -189,6 +189,15 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// persisted ON/OFF preference — this is transient and never saved.
   bool _autoCaptureSuspended = false;
 
+  /// User-facing play/pause gate over the automatic capture progression.
+  /// Starts TRUE (paused): entering the screen never begins capturing on its
+  /// own — the user starts it with the play button in the bottom bar and can
+  /// pause/resume at any time. Gates ONLY the auto-capture fire loop; the
+  /// manual shutter is an explicit tap and stays live, and preview/sensors/HUD
+  /// all keep running so the user can frame while paused. Transient, never
+  /// persisted (every entry starts paused by design).
+  bool _capturePaused = true;
+
   /// Single in-flight guard shared by the manual shutter path and the
   /// auto-capture loop, so the two can never run overlapping captures against
   /// the one native capture resource.
@@ -562,6 +571,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     });
   }
 
+  /// Flips the play/pause capture gate from the bottom-bar icon button.
+  void _toggleCapturePaused() {
+    setState(() => _capturePaused = !_capturePaused);
+  }
+
   /// Retake intent from the post-shot toast. Dismisses the toast; the real
   /// discard + re-arm for the shot's ring position is a separate capture task.
   // TODO(capture): discard the rejected/flagged frame and re-arm capture for the
@@ -787,6 +801,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         stability!.stability == Stability.stable;
     final coverage = ref.read(segmentCoverageProvider);
     final enabled = _autoCapture.isOn &&
+        !_capturePaused &&
         !_autoCaptureSuspended &&
         _retake == null &&
         !_levelCompleteNavigated &&
@@ -1311,6 +1326,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   ),
                   _BottomBar(
                     captureCount: _captureCount,
+                    playPause: _PlayPauseButton(
+                      paused: _capturePaused,
+                      onToggle: _toggleCapturePaused,
+                    ),
                     shutter: _ShutterControl(
                       band: _resolvedBand,
                       onCapture: _performCapture,
@@ -1576,6 +1595,7 @@ class _ProgressMeterHud extends ConsumerWidget {
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.captureCount,
+    required this.playPause,
     required this.shutter,
     required this.thumbnails,
   });
@@ -1583,6 +1603,9 @@ class _BottomBar extends StatelessWidget {
   /// Photos captured this session (every real frame, whether or not it could
   /// fill a segment) — the numerator of the bottom-right counter.
   final int captureCount;
+
+  /// The play/pause icon control gating the auto-capture progression.
+  final Widget playPause;
 
   /// The gated shutter control (assembles its own readiness from providers).
   final Widget shutter;
@@ -1605,12 +1628,51 @@ class _BottomBar extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               // Recent-capture thumbnail strip (replaces the old static tiles).
-              SizedBox(width: 160, child: thumbnails),
+              // Flexible so the slot compresses before the bar can overflow on
+              // narrow screens now that the play/pause control shares the row.
+              Flexible(child: SizedBox(width: 160, child: thumbnails)),
+              playPause,
               shutter,
               // Live frame counter (the auto-capture ON/OFF state lives in the
               // top-right AutoCaptureIndicator pill).
               _CaptureCounter(captureCount: captureCount),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Icon-only play/pause control for the capture progression (bottom bar, left
+/// of the shutter). Shows a play icon while paused — capture waits for the
+/// user — and a pause icon while running.
+class _PlayPauseButton extends StatelessWidget {
+  const _PlayPauseButton({required this.paused, required this.onToggle});
+
+  final bool paused;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: paused ? 'Start capturing' : 'Pause capturing',
+      child: Material(
+        color: AppColors.surface2.withValues(alpha: 0.9),
+        shape: const CircleBorder(),
+        child: InkWell(
+          key: const ValueKey('capture_play_pause'),
+          customBorder: const CircleBorder(),
+          onTap: onToggle,
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Icon(
+              paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+              color: Colors.white,
+              size: 28,
+            ),
           ),
         ),
       ),
