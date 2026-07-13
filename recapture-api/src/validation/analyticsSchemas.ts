@@ -11,6 +11,11 @@ import { z } from 'zod';
 import { OBJECT_SIZE_VALUES, CAPTURE_MODE_VALUES } from '@/validation/projectSchemas';
 // Same rule for the capture flow variant ids (POST /jobs' enum).
 import { CAPTURE_FLOW_VARIANTS } from '@/models/types/captureVariants';
+// And for access roles (the User model's enum) — admin events carry the
+// actor's role as an enum value, never a free-form string.
+import { USER_ROLES } from '@/models/User';
+// Same for the project status filter values the admin list accepts.
+import { PROJECT_STATUS_VALUES } from '@/models/Project';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -44,6 +49,10 @@ export const AnalyticsEvent = {
   // ── Pre-Capture checklist funnel (client-emitted) ─────────────────────────
   PRECAPTURE_CHECKLIST_STARTED: 'precapture_checklist_started',
   PRECAPTURE_TIP_OPENED: 'precapture_tip_opened',
+  // ── Admin / staff live-projects access (P7-A) ─────────────────────────────
+  ADMIN_PROJECTS_LISTED: 'admin_projects_listed',
+  PROJECT_EXPORT_GENERATED: 'project_export_generated',
+  ADMIN_ACCESS_DENIED: 'admin_access_denied',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -276,6 +285,41 @@ const precaptureTipOpenedProps = z
   })
   .strict();
 
+// Admin / staff live-projects events (P7-A). All identifiers pre-hashed via
+// hashIdentifier — an admin event must never carry a raw user/project id pair
+// that links an owner to their content outside the authed API surface.
+
+/** A staff user listed the cross-user live projects (GET /admin/projects). */
+const adminProjectsListedProps = z
+  .object({
+    actor_role: z.enum(USER_ROLES),
+    // The APPLIED status filter: 'default' = the uploaded-and-finalized set
+    // (PROCESSING/COMPLETED); otherwise the explicit ?status= override.
+    status_filter: z.enum([...PROJECT_STATUS_VALUES, 'default'] as const),
+    page_size: z.number().int().positive(),
+  })
+  .strict();
+
+/** A presigned export manifest was generated (GET /admin/projects/:id/export).
+ * NEVER carries a presigned URL — ids are hashed, counts are counts. */
+const projectExportGeneratedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    job_id_hash: z.string().min(1),
+    file_count: z.number().int().nonnegative(),
+    ttl_seconds: z.number().int().positive(),
+  })
+  .strict();
+
+/** requireRole rejected an authenticated caller (role below the minimum). */
+const adminAccessDeniedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    route: z.string().min(1),
+  })
+  .strict();
+
 /**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
@@ -302,6 +346,9 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PERMISSION_DENIED]: permissionDeniedProps,
   [AnalyticsEvent.PRECAPTURE_CHECKLIST_STARTED]: precaptureChecklistStartedProps,
   [AnalyticsEvent.PRECAPTURE_TIP_OPENED]: precaptureTipOpenedProps,
+  [AnalyticsEvent.ADMIN_PROJECTS_LISTED]: adminProjectsListedProps,
+  [AnalyticsEvent.PROJECT_EXPORT_GENERATED]: projectExportGeneratedProps,
+  [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

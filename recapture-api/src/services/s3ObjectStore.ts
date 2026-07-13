@@ -9,6 +9,7 @@ import {
   HeadObjectCommand,
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3Client } from '@/config/s3';
 
 /**
@@ -49,6 +50,57 @@ export async function countObjectsUnderPrefix(bucket: string, prefix: string): P
     continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
   } while (continuationToken);
   return count;
+}
+
+/** One listed object: its full key and byte size. */
+export interface ListedObject {
+  key: string;
+  size: number;
+}
+
+/**
+ * Lists every object under [prefix] (key + size), following continuation
+ * tokens like {@link countObjectsUnderPrefix} and applying the same
+ * folder-marker exclusion. Used by the staff export, whose per-job object
+ * count is small (≤ ~120) — the result is returned as one array, not a stream.
+ */
+export async function listObjectsUnderPrefix(
+  bucket: string,
+  prefix: string
+): Promise<ListedObject[]> {
+  const objects: ListedObject[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const page = await s3Client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
+      })
+    );
+    for (const object of page.Contents ?? []) {
+      if (object.Key && !object.Key.endsWith('/')) {
+        objects.push({ key: object.Key, size: object.Size ?? 0 });
+      }
+    }
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return objects;
+}
+
+/**
+ * Presigns a GET URL for one object. Local SigV4 signing — no network call —
+ * so presigning a whole export manifest in parallel is cheap. The URL is a
+ * bearer credential for that object until [expiresInSeconds]: NEVER log it.
+ */
+export async function presignObjectGetUrl(
+  bucket: string,
+  key: string,
+  expiresInSeconds: number
+): Promise<string> {
+  return getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key }), {
+    expiresIn: expiresInSeconds,
+  });
 }
 
 /** Result of fetching a text object: absent (404) or its body string. */
