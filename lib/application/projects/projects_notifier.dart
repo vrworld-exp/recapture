@@ -170,7 +170,8 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     final index = current.indexWhere((p) => p.id == id);
     if (index == -1) {
       // Already gone (e.g. a rapid double-delete) — confirm with the repo but
-      // make no further state change.
+      // make no further state change. Without the entity we can't supply the
+      // confirmName echo; the repository resolves it server-side.
       await _repo.delete(id);
       await _captureCleanup.purgeProjectCaptureData(id);
       return;
@@ -181,7 +182,8 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
       [for (final p in current) if (p.id != id) p],
     );
     try {
-      await _repo.delete(id);
+      // The backend refuses a delete without the exact current name.
+      await _repo.delete(id, confirmName: removed.name);
     } catch (_) {
       // Rollback: re-insert by id at its original index when the list shape
       // still allows it, else append. Keyed off the live list (it may have

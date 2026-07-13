@@ -26,13 +26,18 @@ const ProjectStatsSchema = new Schema<ProjectStats>(
   { _id: false } // embedded sub-document — no separate _id needed
 );
 
-export type ProjectStatus =
-  | 'DRAFT'
-  | 'CAPTURING'
-  | 'UPLOADING'
-  | 'PROCESSING'
-  | 'COMPLETED'
-  | 'FAILED';
+/** The full status vocabulary as a value — the schema enum, the admin list's
+ * `?status=` filter, and analytics all derive from this ONE array. */
+export const PROJECT_STATUS_VALUES = [
+  'DRAFT',
+  'CAPTURING',
+  'UPLOADING',
+  'PROCESSING',
+  'COMPLETED',
+  'FAILED',
+] as const;
+
+export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
 /** How the capture session is driven (mirrors the app's CaptureMode). */
 export type CaptureMode = 'GUIDED' | 'MANUAL';
@@ -89,7 +94,7 @@ const ProjectSchema = new Schema<IProject>(
     },
     status: {
       type: String,
-      enum: ['DRAFT', 'CAPTURING', 'UPLOADING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+      enum: PROJECT_STATUS_VALUES,
       default: 'DRAFT',
       required: true,
     },
@@ -128,6 +133,11 @@ ProjectSchema.index({ userId: 1, updatedAt: -1, _id: -1 });
 // Secondary query pattern: "filter a user's projects by status"
 // (e.g. show only DRAFT/CAPTURING projects on Projects screen "in progress" section)
 ProjectSchema.index({ userId: 1, status: 1 });
+
+// Admin/staff query pattern (GET /admin/projects): cross-USER list filtered by
+// status, same deterministic (updatedAt DESC, _id DESC) cursor ordering as the
+// owner list — `_id` in the key keeps the tie-breaker index-backed.
+ProjectSchema.index({ status: 1, updatedAt: -1, _id: -1 });
 
 export const Project = model<IProject>('Project', ProjectSchema);
 

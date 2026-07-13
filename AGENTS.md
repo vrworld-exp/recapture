@@ -106,6 +106,30 @@ do not remove it).
   the envelope; standardize `requireAuth` when convenient (don't silently depend
   on the legacy shape).
 
+### Roles & staff access (`/admin` route group)
+- `User.role`: `USER | MODEL_ARTIST | ADMIN` (default `USER`; pre-role docs read
+  as `USER` via the schema default — no migration). Granted **only** by
+  `scripts/set-user-role.ts` (DB flag); there is deliberately **no grant UI or
+  endpoint**.
+- Privilege is **inclusive upward** (`ADMIN ⊇ MODEL_ARTIST ⊇ USER`). Every check
+  goes through `hasRoleAtLeast` (`models/User.ts`) — exact-equality role checks
+  are a bug.
+- `middleware/requireRole.ts` (`requireRole(minRole)`) runs **after**
+  `requireAuth`, resolves the role with a **fresh DB read per request** (role is
+  NOT a JWT claim, so grants/revocations apply immediately), attaches it to
+  `req.user.role`, and rejects with a standard-envelope `403 FORBIDDEN`
+  (+ `admin_access_denied` analytics).
+- The **`/admin` route group** (`routes/admin.ts`) is staff-only (min role
+  `MODEL_ARTIST`), read-only: cross-user live-projects list/detail + a
+  presigned-GET **export manifest**. Staff DTOs carry an opaque `ownerId` —
+  **never** owner phone/email. The client learns its own role via
+  `GET /auth/me` (also PII-free).
+- Export URLs are presigned S3 GETs with TTL `ADMIN_EXPORT_URL_TTL_SECONDS`
+  (default 3600), rate-limited per user via the generic `consumeRateWindow`
+  (`ADMIN_EXPORT_MAX_PER_WINDOW`/`ADMIN_EXPORT_WINDOW_SECONDS`). A presigned URL
+  is a bearer credential: it may appear ONLY in the export response body —
+  never in logs or analytics.
+
 ### Config & secrets
 - **All tunables and secrets come from env.** `config/env.ts` validates them with
   Zod and **exits the process on missing/invalid required vars** (fail fast).
@@ -159,6 +183,12 @@ do not remove it).
   interceptor is the seam for token rotation.
 - **Connectivity** is a mockable abstraction (providers) so offline behavior is
   testable without a real network.
+- **Role/staff UI:** the client learns its role from `GET /auth/me`
+  (`userRoleProvider` / `isStaffProvider`, default `USER`, **fail-closed** on
+  any fetch failure) and persists it as a warm-start hint in the
+  `active_session` box (not secure storage — it is server-enforced, not a
+  secret). Staff-only surfaces (the Projects screen's "Live projects" tab)
+  gate on `isStaffProvider`; the backend re-checks the role on every request.
 
 ### Testing
 - Hermetic: isolated store, deterministic, no real network, full teardown. Never

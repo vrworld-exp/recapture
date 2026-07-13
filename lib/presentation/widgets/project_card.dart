@@ -57,7 +57,12 @@ class ProjectCard extends StatelessWidget {
                     ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
-                      'Updated ${project.updatedAt.timeAgo}',
+                      // Photo count comes from the API's stats.totalPhotos —
+                      // populated once an upload finalizes; hidden until then.
+                      project.totalPhotos > 0
+                          ? '${project.totalPhotos} photos · '
+                              'Updated ${project.updatedAt.timeAgo}'
+                          : 'Updated ${project.updatedAt.timeAgo}',
                       style: Theme.of(context)
                           .textTheme
                           .bodySmall

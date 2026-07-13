@@ -1,18 +1,19 @@
 // lib/data/repositories/projects_repository.dart
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/create_project_options.dart';
 import '../../domain/entities/project.dart';
-import '../../domain/entities/project_status.dart';
+import '../remote/api_client.dart';
 
 /// Data access for the Projects Hub. The interface `ProjectsNotifier` depends
 /// on — it owns all projects HTTP and error translation, so the notifier is
 /// pure state and never touches the network.
 ///
-/// Backend reality (see recapture-api): `rename`, `delete` and `retry` return
-/// success only (no entity body), so those return `void`/`Future<void>` and the
-/// notifier reconciles the in-state project locally. `list` and `create` return
-/// full entities.
+/// Backend reality (see recapture-api): `rename` and `delete` return
+/// success-only shapes the notifier doesn't need, so those return
+/// `Future<void>` and the notifier reconciles the in-state project locally.
+/// `list` and `create` return full entities.
 abstract interface class ProjectsRepository {
   /// Fetches the user's projects. Throws on network failure.
   Future<List<Project>> list();
@@ -28,8 +29,11 @@ abstract interface class ProjectsRepository {
   /// Renames a project. Backend returns success only. Throws on network failure.
   Future<void> rename(String id, String newName);
 
-  /// Permanently deletes a project. Throws on network failure.
-  Future<void> delete(String id);
+  /// Soft-deletes a project. The backend independently enforces a
+  /// [confirmName] echo of the project's exact current name; callers that
+  /// have the entity MUST pass it (the repository falls back to one extra
+  /// lookup when it is absent — rare stale-UI path).
+  Future<void> delete(String id, {String? confirmName});
 
   /// Re-queues a failed project for processing (status returns to `processing`).
   /// Backend returns success only. Throws on network failure.
@@ -37,25 +41,23 @@ abstract interface class ProjectsRepository {
 }
 
 /// Concrete [ProjectsRepository] backed by the recapture-api `/projects`
-/// endpoints.
-///
-/// TODO(api): the bodies are stubbed (no central Dio client consumes
-/// `dioProvider` yet — see lib/data/remote/api_client.dart). Replace each stub
-/// with the real Dio call and keep error translation here. Throw on network
-/// failure so the notifier/screens can surface the offline/retry modal.
+/// endpoints, over the app Dio (Bearer attach + 401-refresh via
+/// [AuthInterceptor]). Non-2xx surfaces as a [DioException] — the notifier and
+/// screens already translate throws into the offline/retry modal.
 class RemoteProjectsRepository implements ProjectsRepository {
-  const RemoteProjectsRepository();
+  const RemoteProjectsRepository(this._dio);
+
+  final Dio _dio;
 
   @override
   Future<List<Project>> list() async {
-    // TODO(api): final res = await dio.get('/projects');
-    //            return (res.data as List).map((e) => Project.fromMap(e)).toList();
-    // The demo-era hardcoded seed projects were removed on purpose: a fresh
-    // login lands on the real empty state ("Nothing captured yet") instead of
-    // fake "previously captured" cards. Real projects render once the Dio call
-    // above lands; the delay keeps the loading skeleton behavior observable.
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    return const <Project>[];
+    final res = await _dio.get<Map<String, dynamic>>('/projects');
+    final items = res.data?['items'];
+    if (items is! List) return const <Project>[];
+    return [
+      for (final item in items)
+        if (item is Map<String, dynamic>) Project.fromMap(item),
+    ];
   }
 
   @override
@@ -64,37 +66,51 @@ class RemoteProjectsRepository implements ProjectsRepository {
     required ObjectSize size,
     required CaptureMode mode,
   }) async {
-    // TODO(api): final res = await dio.post('/projects', data: {
-    //   'name': name, 'size': size.apiValue, 'mode': mode.apiValue });
-    //            return Project.fromMap(res.data as Map<String, dynamic>);
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    return Project(
-      id: 'p${DateTime.now().millisecondsSinceEpoch}',
-      name: name,
-      status: ProjectStatus.draft,
-      updatedAt: DateTime.now(),
+    final res = await _dio.post<Map<String, dynamic>>(
+      '/projects',
+      data: {'name': name, 'size': size.apiValue, 'mode': mode.apiValue},
     );
+    final project = res.data?['project'];
+    if (project is! Map<String, dynamic>) {
+      throw StateError('POST /projects returned no project');
+    }
+    return Project.fromMap(project);
   }
 
   @override
   Future<void> rename(String id, String newName) async {
-    // TODO(api): await dio.patch('/projects/$id', data: {'name': newName});
-    await Future<void>.delayed(const Duration(milliseconds: 500));
+    await _dio.patch<Map<String, dynamic>>(
+      '/projects/$id',
+      data: {'name': newName},
+    );
   }
 
   @override
-  Future<void> delete(String id) async {
-    // TODO(api): await dio.delete('/projects/$id');
-    await Future<void>.delayed(const Duration(milliseconds: 500));
+  Future<void> delete(String id, {String? confirmName}) async {
+    // The backend refuses to delete without the exact current name — when the
+    // caller couldn't supply it (stale UI), fetch it first.
+    var name = confirmName;
+    if (name == null) {
+      final res = await _dio.get<Map<String, dynamic>>('/projects/$id');
+      final project = res.data?['project'];
+      name = project is Map ? (project['name'] ?? '').toString() : '';
+    }
+    await _dio.delete<Map<String, dynamic>>(
+      '/projects/$id',
+      data: {'confirmName': name},
+    );
   }
 
   @override
   Future<void> retry(String id) async {
-    // TODO(api): await dio.post('/projects/$id/reprocess');
-    await Future<void>.delayed(const Duration(milliseconds: 500));
+    // TODO(api): the backend has no reprocess route yet (FAILED → QUEUED is a
+    // worker/admin concern). Keep the optimistic UI flow alive; the next list
+    // refresh reconciles the real status.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
   }
 }
 
 /// App-wide projects repository.
-final projectsRepositoryProvider =
-    Provider<ProjectsRepository>((ref) => const RemoteProjectsRepository());
+final projectsRepositoryProvider = Provider<ProjectsRepository>(
+  (ref) => RemoteProjectsRepository(ref.watch(dioProvider)),
+);

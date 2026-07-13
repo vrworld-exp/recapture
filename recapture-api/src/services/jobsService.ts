@@ -53,7 +53,7 @@ import {
   presignPartUrls,
 } from '@/services/s3MultipartService';
 import { getObjectText, countObjectsUnderPrefix } from '@/services/s3ObjectStore';
-import { updateProjectStatus } from '@/services/projectsService';
+import { updateProjectStatus, setProjectCaptureStats } from '@/services/projectsService';
 import { buildJobKeyPrefix, buildManifestKey } from '@/utils/s3Keys';
 import { validateCaptureManifest } from '@/services/manifestValidationService';
 import type { ManifestValidationError } from '@/models/types/manifest.types';
@@ -667,6 +667,16 @@ async function queuedResult(job: IJob, alreadyQueued: boolean): Promise<Finalize
     );
   } else {
     await updateProjectStatus(projectId, 'PROCESSING');
+    // Hub-card stats ride the same funnel as the status write: the verified
+    // count minus the manifest (photos only), stamped with the job's queuedAt
+    // so a replay rewrites identical values (no timestamp drift) and a crash
+    // between the QUEUED flip and this write self-heals on the replay.
+    const uploadedCount = job.upload?.uploadedFilesCount ?? 0;
+    await setProjectCaptureStats(
+      projectId,
+      Math.max(0, uploadedCount - 1),
+      job.queuedAt ?? job.updatedAt
+    );
   }
   return {
     outcome: 'QUEUED',

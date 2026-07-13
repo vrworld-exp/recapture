@@ -91,7 +91,7 @@ class FakeProjectsRepository implements ProjectsRepository {
   }
 
   @override
-  Future<void> delete(String id) async {
+  Future<void> delete(String id, {String? confirmName}) async {
     if (!online) throw const _Offline();
   }
 

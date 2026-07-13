@@ -12,8 +12,48 @@ import {
 import { sendOtp } from '@/services/otpService';
 import { verifyOtp } from '@/services/verifyOtpService';
 import { refreshSession } from '@/services/refreshTokenService';
+import { requireAuth } from '@/middleware/auth';
+import { User } from '@/models/User';
 
 const router = Router();
+
+/**
+ * GET /auth/me — the authenticated user's own account snapshot; how the client
+ * learns its role (fetched at app start / after OTP verify — a role changed by
+ * scripts/set-user-role.ts is picked up then, which is the accepted v1 lag).
+ *
+ * Deliberately returns NO raw phone/email (PII stance: the client doesn't need
+ * them, so they don't ship) — only the id, role, verification flags, and
+ * createdAt.
+ */
+router.get(
+  '/me',
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user!.userId).exec();
+    if (!user) {
+      // Valid token for a vanished user — an auth failure, same envelope as
+      // requireAuth's own rejections.
+      res.status(401).json({
+        status: 'error',
+        code: 'UNAUTHENTICATED',
+        message: 'Invalid or expired token.',
+      });
+      return;
+    }
+
+    res.status(200).json({
+      status: 'success',
+      user: {
+        id: user.id as string,
+        role: user.role,
+        phoneVerified: user.phoneVerified,
+        emailVerified: user.emailVerified,
+        createdAt: user.createdAt.toISOString(),
+      },
+    });
+  })
+);
 
 /**
  * POST /auth/send-otp — generate and dispatch an OTP via SMS or email.

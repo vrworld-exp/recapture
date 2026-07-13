@@ -8,10 +8,10 @@ import 'auth_interceptor.dart';
 /// The app's configured Dio client: base URL + timeouts from [AppConfig] with
 /// the [AuthInterceptor] wired in for token attach and 401-refresh.
 ///
-/// TODO(api): no repository consumes this yet — `ProjectsRepository` and
-/// `AuthRepository` bodies are still stubbed. Switching those to real Dio calls
-/// is a follow-up; the auth plumbing (Bearer attach, single-flight 401 refresh
-/// and retry) is already complete here.
+/// Consumed by the authed repositories (`ProjectsRepository`,
+/// `AccountRepository`, `LiveProjectsRepository`). The unauthenticated auth
+/// endpoints (`AuthRepository`) deliberately use a bare Dio instead — refresh
+/// must never ride this client's own 401-refresh interceptor.
 final dioProvider = Provider<Dio>((ref) {
   final dio = Dio(
     BaseOptions(

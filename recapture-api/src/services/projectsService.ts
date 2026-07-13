@@ -11,6 +11,14 @@ import { encodeCursor, type ProjectCursor } from '@/utils/cursor';
 import { NotFoundError } from '@/utils/errors';
 import type { CreateProjectInput } from '@/validation/projectSchemas';
 
+/** Capture stats surfaced on the Hub card (photo count, last activity). */
+export interface ProjectStatsDto {
+  totalPhotos: number;
+  warnings: number;
+  /** ISO instant of the most recent finalized capture upload; null before one. */
+  lastCaptureAt: string | null;
+}
+
 /** Minimal project shape for the Hub list view — no internal-only fields. */
 export interface ProjectListItem {
   id: string;
@@ -18,6 +26,7 @@ export interface ProjectListItem {
   status: IProject['status'];
   /** ISO instant of the last status transition; null before the first one. */
   statusUpdatedAt: string | null;
+  stats: ProjectStatsDto;
   updatedAt: string;
   createdAt: string;
 }
@@ -256,16 +265,30 @@ export async function getProject(
   return project ? toListItem(project) : null;
 }
 
-function toListItem(p: IProject): ProjectListItem {
+/**
+ * The ONE Project DTO mapper — list/get/create/rename on /projects and the
+ * /admin list all serialize through here so the shapes can never drift
+ * (AGENTS.md: one Project DTO by contract). Exported for the admin service,
+ * which layers `ownerId` on top.
+ */
+export function toProjectListItem(p: IProject): ProjectListItem {
   return {
     id: p.id as string,
     name: p.name,
     status: p.status,
     statusUpdatedAt: p.statusUpdatedAt ? p.statusUpdatedAt.toISOString() : null,
+    stats: {
+      totalPhotos: p.stats?.totalPhotos ?? 0,
+      warnings: p.stats?.warnings ?? 0,
+      lastCaptureAt: p.stats?.lastCaptureAt ? p.stats.lastCaptureAt.toISOString() : null,
+    },
     updatedAt: p.updatedAt.toISOString(),
     createdAt: p.createdAt.toISOString(),
   };
 }
+
+// Internal alias — pre-existing call sites in this file use the short name.
+const toListItem = toProjectListItem;
 
 // ── Project status lifecycle ──────────────────────────────────────────────────
 
@@ -328,5 +351,32 @@ export async function updateProjectStatus(
 
   if (!result) {
     throw new NotFoundError(`Project ${projectId} not found — cannot set status to ${status}`);
+  }
+}
+
+/**
+ * Records a finalized capture upload on the project's Hub-card stats: the
+ * verified photo count (manifest-EXCLUSIVE — the caller subtracts the manifest
+ * from the S3-verified object count) and when the capture landed. Called from
+ * finalize's QUEUED funnel alongside the PROCESSING transition; the caller
+ * passes the job's `queuedAt` as `lastCaptureAt`, so idempotent finalize
+ * replays rewrite identical values instead of drifting the timestamp. Plain
+ * `$set` — same no-transaction, sequential-write pattern as the status write.
+ * Missing project throws like {@link updateProjectStatus} (same integrity
+ * rule: a job pointing at a vanished project must surface loudly).
+ */
+export async function setProjectCaptureStats(
+  projectId: string,
+  totalPhotos: number,
+  lastCaptureAt: Date
+): Promise<void> {
+  const result = await Project.findByIdAndUpdate(
+    projectId,
+    { $set: { 'stats.totalPhotos': totalPhotos, 'stats.lastCaptureAt': lastCaptureAt } },
+    { new: false, runValidators: true }
+  ).exec();
+
+  if (!result) {
+    throw new NotFoundError(`Project ${projectId} not found — cannot record capture stats`);
   }
 }

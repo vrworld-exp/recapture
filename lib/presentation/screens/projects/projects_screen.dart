@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
 import '../../../dev/dev_probe/dev_tools_section.dart';
 import '../../../domain/entities/project.dart';
@@ -18,6 +19,11 @@ import '../../widgets/offline_retry_modal.dart';
 import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
+import 'live_projects_view.dart';
+
+/// Which list the (staff-only) segmented control shows. Non-staff users never
+/// see the control and always get [mine].
+enum _ProjectsTab { mine, live }
 
 /// Projects Hub. The list state lives entirely in [projectsProvider] (single
 /// source of truth) — this screen renders loading/empty/loaded/error straight
@@ -45,6 +51,10 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
   /// Dedupe guard so the auto offline modal isn't stacked on repeated error
   /// emissions for the same failed load.
   bool _loadErrorModalOpen = false;
+
+  /// Active tab. Only meaningful for staff (the control is hidden otherwise,
+  /// and non-staff can never leave [_ProjectsTab.mine]).
+  _ProjectsTab _tab = _ProjectsTab.mine;
 
   ProjectsNotifier get _notifier => ref.read(projectsProvider.notifier);
 
@@ -206,6 +216,41 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     });
 
     final projectsAsync = ref.watch(projectsProvider);
+    // Staff gating: the Live tab exists ONLY for MODEL_ARTIST/ADMIN accounts
+    // (server-verified via /auth/me; every /admin call is re-checked
+    // server-side). Non-staff users get the exact pre-existing screen.
+    final isStaff = ref.watch(isStaffProvider);
+    final showLive = isStaff && _tab == _ProjectsTab.live;
+
+    final listBody = showLive
+        ? const LiveProjectsView()
+        : _buildBody(projectsAsync);
+    final tabbedBody = isStaff
+        ? Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, 0),
+                child: SegmentedButton<_ProjectsTab>(
+                  segments: const [
+                    ButtonSegment(
+                      value: _ProjectsTab.mine,
+                      label: Text('My projects'),
+                    ),
+                    ButtonSegment(
+                      value: _ProjectsTab.live,
+                      label: Text('Live projects'),
+                    ),
+                  ],
+                  selected: {_tab},
+                  onSelectionChanged: (selection) =>
+                      setState(() => _tab = selection.first),
+                ),
+              ),
+              Expanded(child: listBody),
+            ],
+          )
+        : listBody;
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
@@ -222,19 +267,22 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => context.pushNamed(AppRouteNames.createProject),
-        backgroundColor: AppColors.mirageRed,
-        child: const Icon(Icons.add, color: Colors.white),
-      ),
+      // Creating a project belongs to My projects; the Live tab is read-only.
+      floatingActionButton: showLive
+          ? null
+          : FloatingActionButton(
+              onPressed: () => context.pushNamed(AppRouteNames.createProject),
+              backgroundColor: AppColors.mirageRed,
+              child: const Icon(Icons.add, color: Colors.white),
+            ),
       // The Dev Tools section is compile-time gated: in prod flavors the
       // const condition folds away and the section never exists in the tree.
       body: kAppEnvironment.isProduction
-          ? _buildBody(projectsAsync)
+          ? tabbedBody
           : Column(
               children: [
                 const DevToolsSection(),
-                Expanded(child: _buildBody(projectsAsync)),
+                Expanded(child: tabbedBody),
               ],
             ),
     );

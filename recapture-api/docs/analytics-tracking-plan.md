@@ -199,6 +199,29 @@ Like the permission funnel, the pre-capture screen may precede login, so
   `presentation` (`bottom_sheet`|`popover`, optional), `user_id_hash` (string,
   optional)
 
+### Admin / staff live-projects access (P7-A)
+
+Server-emitted from the staff-only `/admin` route group (min role
+`MODEL_ARTIST`) and its gate. **Never** carries owner phone/email or a
+presigned URL — actor/project/job identifiers are hashed.
+
+### `admin_projects_listed`
+- **When:** `GET /admin/projects` (staff cross-user list) succeeds.
+- **Props:** `actor_role` (`USER`|`MODEL_ARTIST`|`ADMIN`), `status_filter`
+  (a ProjectStatus, or `default` = the PROCESSING/COMPLETED live set),
+  `page_size` (int > 0)
+
+### `project_export_generated`
+- **When:** `GET /admin/projects/:id/export` returns a presigned-URL manifest.
+  Nothing fires on 404/409/429.
+- **Props:** `actor_id_hash` (string), `project_id_hash` (string),
+  `job_id_hash` (string), `file_count` (int ≥ 0), `ttl_seconds` (int > 0)
+
+### `admin_access_denied`
+- **When:** `requireRole` rejects an **authenticated** caller whose role is
+  below the route's minimum (403). Unauthenticated 401s emit nothing.
+- **Props:** `actor_id_hash` (string), `route` (string, e.g. `GET /admin/projects`)
+
 ## QA
 
 Run `npx tsx scripts/analytics-qa.ts` (see the script header for the dev/prod

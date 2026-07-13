@@ -64,6 +64,14 @@ const envSchema = z.object({
    */
   UPLOAD_PLAN_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),
 
+  // ── Staff export (GET /admin/projects/:id/export) ──────────────────────────
+  /** Validity of the presigned GET URLs in an export manifest (seconds). */
+  ADMIN_EXPORT_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /** Max export manifests one staff user may generate per window. */
+  ADMIN_EXPORT_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
+  /** Sliding window for the export cap (seconds). */
+  ADMIN_EXPORT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /** How often the worker polls for claimable jobs (milliseconds). */
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
