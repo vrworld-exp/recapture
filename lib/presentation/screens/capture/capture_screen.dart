@@ -1655,23 +1655,46 @@ class _PlayPauseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Paused = the CTA to start capturing, so it wears the red-energy
+    // gradient + glow; running = quiet obsidian surface with a gold rim.
     return Semantics(
       button: true,
       label: paused ? 'Start capturing' : 'Pause capturing',
-      child: Material(
-        color: AppColors.surface2.withValues(alpha: 0.9),
-        shape: const CircleBorder(),
-        child: InkWell(
-          key: const ValueKey('capture_play_pause'),
-          customBorder: const CircleBorder(),
-          onTap: onToggle,
-          child: SizedBox(
-            width: 48,
-            height: 48,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: paused ? AppColors.primaryGradient : null,
+          color: paused ? null : AppColors.surface2.withValues(alpha: 0.9),
+          border: Border.all(
+            color: paused
+                ? AppColors.redGlow.withValues(alpha: 0.6)
+                : AppColors.royalGold.withValues(alpha: 0.4),
+            width: 1.5,
+          ),
+          boxShadow: paused
+              ? [
+                  BoxShadow(
+                    color: AppColors.redGlow.withValues(alpha: 0.4),
+                    blurRadius: 16,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          shape: const CircleBorder(),
+          child: InkWell(
+            key: const ValueKey('capture_play_pause'),
+            customBorder: const CircleBorder(),
+            onTap: onToggle,
             child: Icon(
               paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-              color: Colors.white,
-              size: 28,
+              color: AppColors.textPrimary,
+              size: 34,
             ),
           ),
         ),
