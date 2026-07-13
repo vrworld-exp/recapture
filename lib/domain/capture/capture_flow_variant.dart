@@ -46,8 +46,15 @@ enum CaptureFlowVariant {
   /// Tolerant parse of a wire/persisted id. Unknown or null → [withBottom]
   /// (the pre-variant behavior — every legacy session was 3-ring). Never throws,
   /// matching the repo's defensive-parse convention.
-  static CaptureFlowVariant fromId(String? id) => switch (id) {
+  static CaptureFlowVariant fromId(String? id) =>
+      tryFromId(id) ?? CaptureFlowVariant.withBottom;
+
+  /// Strict parse: the exact wire ids only; anything else (including null) →
+  /// null. Lets persistence callers distinguish "never chosen" from a real
+  /// choice instead of collapsing both onto the legacy default.
+  static CaptureFlowVariant? tryFromId(String? id) => switch (id) {
+        'with_bottom' => CaptureFlowVariant.withBottom,
         'without_bottom' => CaptureFlowVariant.withoutBottom,
-        _ => CaptureFlowVariant.withBottom,
+        _ => null,
       };
 }

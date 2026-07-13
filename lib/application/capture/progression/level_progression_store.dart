@@ -197,8 +197,15 @@ class LevelProgressionStore {
   /// The persisted flow variant for [projectId]. Absent or unknown (every
   /// pre-variant project) → [CaptureFlowVariant.withBottom], the legacy 3-ring
   /// behavior. Never throws.
-  Future<CaptureFlowVariant> loadVariant(String projectId) async {
+  Future<CaptureFlowVariant> loadVariant(String projectId) async =>
+      await loadVariantOrNull(projectId) ?? CaptureFlowVariant.withBottom;
+
+  /// The persisted flow variant for [projectId], or null when none was ever
+  /// saved (or the stored id is unknown). Lets callers keep their own default
+  /// for never-captured projects instead of the legacy 3-ring fallback.
+  Future<CaptureFlowVariant?> loadVariantOrNull(String projectId) async {
     final box = await _open();
-    return CaptureFlowVariant.fromId(box.get(_variantKey(projectId)));
+    final raw = box.get(_variantKey(projectId));
+    return CaptureFlowVariant.tryFromId(raw is String ? raw : null);
   }
 }

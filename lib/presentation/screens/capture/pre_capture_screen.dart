@@ -8,9 +8,12 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
 import '../../../application/capture/ledger/level_capture_ledger_registry_provider.dart';
+import '../../../application/capture/progression/level_progression_provider.dart';
 import '../../../application/capture/session/capture_session_store.dart';
+import '../../../application/config/config_notifier.dart';
 import '../../../data/local/active_session_box.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/entities/capture_config.dart';
 import '../../../domain/entities/checklist_item.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
@@ -70,10 +73,14 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
     _resolveProjectContext();
   }
 
-  /// Best-effort resolve of the project context: presets the variant control
-  /// from the project's PERSISTED choice and computes the lock. Never fatal —
-  /// an unavailable store leaves the live default (with_bottom) and the control
-  /// unlocked.
+  /// Best-effort resolve of the project context: computes the lock, then
+  /// presets the variant control — the project's PERSISTED choice when one
+  /// exists, else the product default "No — bottom stays hidden" (persisted
+  /// immediately, so capture entry / resume see the same answer even when the
+  /// user never touches the control). Legacy exception: a project with
+  /// accepted photos but NO stored variant predates the variant feature and
+  /// stays on the 3-ring flow it was captured under. Never fatal — an
+  /// unavailable store leaves the in-memory variant and the control unlocked.
   Future<void> _resolveProjectContext() async {
     String? projectId;
     try {
@@ -82,12 +89,15 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
     } catch (_) {
       projectId = null;
     }
-    if (!mounted || projectId == null) return;
-    _projectId = projectId;
-    try {
-      await ref.read(captureFlowVariantProvider.notifier).loadFor(projectId);
-    } catch (_) {/* keep the in-memory variant */}
     if (!mounted) return;
+    final notifier = ref.read(captureFlowVariantProvider.notifier);
+    if (projectId == null) {
+      // No project context: still preselect the product default (in memory
+      // only — there is nowhere to persist it).
+      notifier.restore(CaptureFlowVariant.withoutBottom);
+      return;
+    }
+    _projectId = projectId;
     bool locked;
     try {
       locked = await projectHasAcceptedCaptures(
@@ -97,6 +107,26 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
       );
     } catch (_) {
       locked = false;
+    }
+    if (!mounted) return;
+    CaptureFlowVariant? persisted;
+    try {
+      persisted = await ref
+          .read(levelProgressionStoreProvider)
+          .loadVariantOrNull(projectId);
+    } catch (_) {
+      persisted = null; // unreadable store → treat as "never chosen"
+    }
+    if (!mounted) return;
+    if (persisted != null) {
+      notifier.restore(persisted);
+    } else if (locked) {
+      notifier.restore(CaptureFlowVariant.withBottom);
+    } else {
+      await notifier.select(
+        CaptureFlowVariant.withoutBottom,
+        projectId: projectId,
+      );
     }
     if (mounted && locked != _variantLocked) {
       setState(() => _variantLocked = locked);
@@ -215,7 +245,7 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
 
 /// The "can you capture the bottom of the object?" question — a Yes/No pair of
 /// selectable option cards whose answer selects the capture flow variant.
-class _BottomCaptureQuestion extends StatelessWidget {
+class _BottomCaptureQuestion extends ConsumerWidget {
   const _BottomCaptureQuestion({
     required this.selected,
     required this.locked,
@@ -227,7 +257,15 @@ class _BottomCaptureQuestion extends StatelessWidget {
   final ValueChanged<CaptureFlowVariant> onSelect;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Per-ring photo counts for the option copy, through the same
+    // config × variant resolver the flow itself uses ('mid' is representative:
+    // variant counts are uniform across rings).
+    final config = ref.watch(captureConfigProvider);
+    final withBottomN =
+        effectiveSegmentsFor(config, CaptureFlowVariant.withBottom, 'mid');
+    final withoutBottomN =
+        effectiveSegmentsFor(config, CaptureFlowVariant.withoutBottom, 'mid');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -246,21 +284,23 @@ class _BottomCaptureQuestion extends StatelessWidget {
               ?.copyWith(color: AppColors.textMuted),
         ),
         const SizedBox(height: AppSpacing.sm),
+        // "No" leads: it is the session default (preselected), so the common
+        // path needs no interaction; "Yes" is the opt-in below it.
         _VariantOptionCard(
-          title: 'Yes — capture the bottom',
+          title: 'No — bottom stays hidden',
           subtitle:
-              "You'll capture 3 rings — eye, top and bottom level (12 photos each).",
-          value: CaptureFlowVariant.withBottom,
+              "You'll capture 2 rings — eye and top level ($withoutBottomN photos each).",
+          value: CaptureFlowVariant.withoutBottom,
           selected: selected,
           locked: locked,
           onSelect: onSelect,
         ),
         const SizedBox(height: AppSpacing.sm),
         _VariantOptionCard(
-          title: 'No — bottom stays hidden',
+          title: 'Yes — capture the bottom',
           subtitle:
-              "You'll capture 2 rings — eye and top level (18 photos each).",
-          value: CaptureFlowVariant.withoutBottom,
+              "You'll capture 3 rings — eye, top and bottom level ($withBottomN photos each).",
+          value: CaptureFlowVariant.withBottom,
           selected: selected,
           locked: locked,
           onSelect: onSelect,

@@ -386,7 +386,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     }
     // Restore the project's persisted flow variant BEFORE the draft resume —
     // the draft's segment-count validation (and this ring's N) depend on it.
-    // Best-effort: an unavailable store leaves the live default (with_bottom).
+    // Best-effort: an unavailable store keeps the in-memory variant.
     final projectId = _projectId;
     if (projectId != null) {
       try {

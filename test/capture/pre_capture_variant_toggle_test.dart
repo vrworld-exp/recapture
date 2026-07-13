@@ -21,9 +21,11 @@ import 'package:recapture/application/capture/progression/level_progression_prov
 import 'package:recapture/application/capture/progression/level_progression_store.dart';
 import 'package:recapture/application/capture/session/capture_session_state.dart';
 import 'package:recapture/application/capture/session/capture_session_store.dart';
+import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
 import 'package:recapture/domain/entities/active_session.dart';
+import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/checklist_item.dart';
 import 'package:recapture/presentation/screens/capture/pre_capture_screen.dart';
 import 'package:recapture/utils/analytics.dart';
@@ -39,6 +41,13 @@ const _oneItem = <ChecklistItem>[
     tooltipContent: 'Extended guidance for X.',
   ),
 ];
+
+/// ConfigNotifier whose [build] skips the Hive/network bootstrap — serves the
+/// bundled default (the variant option copy reads it for photo counts).
+class _StubConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault;
+}
 
 class _FakeSessionBox extends ActiveSessionBox {
   _FakeSessionBox([this._projectId]);
@@ -60,6 +69,10 @@ class _FakeProgressionStore extends LevelProgressionStore {
   @override
   Future<CaptureFlowVariant> loadVariant(String projectId) async =>
       variants[projectId] ?? CaptureFlowVariant.withBottom;
+
+  @override
+  Future<CaptureFlowVariant?> loadVariantOrNull(String projectId) async =>
+      variants[projectId];
 
   @override
   Future<void> save(String projectId, LevelProgression p, {int? savedAtMs}) async {}
@@ -123,6 +136,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       levelProgressionStoreProvider
           .overrideWithValue(progressionStore ?? _FakeProgressionStore()),
+      captureConfigProvider.overrideWith(_StubConfigNotifier.new),
     ]);
     addTearDown(container.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(
@@ -140,71 +154,87 @@ void main() {
     return container;
   }
 
-  testWidgets('renders the question with Yes selected by default', (tester) async {
-    final container = await pump(tester);
-    expect(find.text('Can you capture the bottom of the object?'), findsOneWidget);
-    expect(find.text('Yes — capture the bottom'), findsOneWidget);
-    expect(find.text('No — bottom stays hidden'), findsOneWidget);
-    expect(
-      container.read(captureFlowVariantProvider),
-      CaptureFlowVariant.withBottom,
-    );
-  });
-
   testWidgets(
-      'selecting No updates the variant, persists it, and logs the transition',
+      'renders the question with No preselected (product default), No card first',
       (tester) async {
     final store = _FakeProgressionStore();
     final container = await pump(tester, progressionStore: store);
-
-    await tester.ensureVisible(find.text('No — bottom stays hidden'));
-    await tester.tap(find.text('No — bottom stays hidden'));
-    await tester.pumpAndSettle();
-
+    expect(find.text('Can you capture the bottom of the object?'), findsOneWidget);
+    expect(find.text('Yes — capture the bottom'), findsOneWidget);
+    expect(find.text('No — bottom stays hidden'), findsOneWidget);
+    // The default option leads the pair.
+    expect(
+      tester.getTopLeft(find.text('No — bottom stays hidden')).dy,
+      lessThan(tester.getTopLeft(find.text('Yes — capture the bottom')).dy),
+    );
     expect(
       container.read(captureFlowVariantProvider),
       CaptureFlowVariant.withoutBottom,
     );
+    // The preset is persisted immediately so capture entry / resume see the
+    // same answer even if the user never touches the control...
     expect(store.variants['p1'], CaptureFlowVariant.withoutBottom);
+    // ...but it is a PRESET, not a user action — no transition event.
+    expect(named(AnalyticsEvents.bottomCaptureOptionSelected), isEmpty);
+  });
+
+  testWidgets(
+      'selecting Yes updates the variant, persists it, and logs the transition',
+      (tester) async {
+    final store = _FakeProgressionStore();
+    final container = await pump(tester, progressionStore: store);
+
+    await tester.ensureVisible(find.text('Yes — capture the bottom'));
+    await tester.tap(find.text('Yes — capture the bottom'));
+    await tester.pumpAndSettle();
+
+    expect(
+      container.read(captureFlowVariantProvider),
+      CaptureFlowVariant.withBottom,
+    );
+    expect(store.variants['p1'], CaptureFlowVariant.withBottom);
     final logged = named(AnalyticsEvents.bottomCaptureOptionSelected);
     expect(logged, hasLength(1));
-    expect(logged.single.props['flow_variant'], 'without_bottom');
+    expect(logged.single.props['flow_variant'], 'with_bottom');
   });
 
   testWidgets('re-selecting the current value logs NOTHING (transition-only)',
       (tester) async {
     await pump(tester);
 
-    // Yes is already selected — tapping it is not a transition.
-    await tester.ensureVisible(find.text('Yes — capture the bottom'));
-    await tester.tap(find.text('Yes — capture the bottom'));
-    await tester.pumpAndSettle();
-    expect(named(AnalyticsEvents.bottomCaptureOptionSelected), isEmpty);
-
-    // No → 1 event; No again → still 1; back to Yes → 2.
+    // No is already selected (the preset) — tapping it is not a transition.
     await tester.ensureVisible(find.text('No — bottom stays hidden'));
     await tester.tap(find.text('No — bottom stays hidden'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('No — bottom stays hidden'));
+    expect(named(AnalyticsEvents.bottomCaptureOptionSelected), isEmpty);
+
+    // Yes → 1 event; Yes again → still 1; back to No → 2.
+    await tester.ensureVisible(find.text('Yes — capture the bottom'));
+    await tester.tap(find.text('Yes — capture the bottom'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Yes — capture the bottom'));
     await tester.pumpAndSettle();
     expect(named(AnalyticsEvents.bottomCaptureOptionSelected), hasLength(1));
 
-    await tester.tap(find.text('Yes — capture the bottom'));
+    await tester.tap(find.text('No — bottom stays hidden'));
     await tester.pumpAndSettle();
     final logged = named(AnalyticsEvents.bottomCaptureOptionSelected);
     expect(logged, hasLength(2));
-    expect(logged.last.props['flow_variant'], 'with_bottom');
+    expect(logged.last.props['flow_variant'], 'without_bottom');
   });
 
   testWidgets('presets from the project persisted variant on entry',
       (tester) async {
+    // Persisted OPPOSITE of the product default proves persistence wins.
     final store = _FakeProgressionStore()
-      ..variants['p1'] = CaptureFlowVariant.withoutBottom;
+      ..variants['p1'] = CaptureFlowVariant.withBottom;
     final container = await pump(tester, progressionStore: store);
     expect(
       container.read(captureFlowVariantProvider),
-      CaptureFlowVariant.withoutBottom,
+      CaptureFlowVariant.withBottom,
     );
+    // No preset overwrite: the stored choice stands.
+    expect(store.variants['p1'], CaptureFlowVariant.withBottom);
   });
 
   testWidgets('locks once the project has an accepted photo', (tester) async {
@@ -232,15 +262,20 @@ void main() {
     expect(named(AnalyticsEvents.bottomCaptureOptionSelected), isEmpty);
   });
 
-  testWidgets('no project context → selection still works in-memory',
+  testWidgets('no project context → preset + selection still work in-memory',
       (tester) async {
     final container = await pump(tester, projectId: null);
-    await tester.ensureVisible(find.text('No — bottom stays hidden'));
-    await tester.tap(find.text('No — bottom stays hidden'));
-    await tester.pumpAndSettle();
+    // The product default is preselected even with nowhere to persist it.
     expect(
       container.read(captureFlowVariantProvider),
       CaptureFlowVariant.withoutBottom,
+    );
+    await tester.ensureVisible(find.text('Yes — capture the bottom'));
+    await tester.tap(find.text('Yes — capture the bottom'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(captureFlowVariantProvider),
+      CaptureFlowVariant.withBottom,
     );
   });
 }

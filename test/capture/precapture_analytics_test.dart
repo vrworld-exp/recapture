@@ -16,8 +16,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';
 import 'package:recapture/domain/entities/active_session.dart';
+import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/checklist_item.dart';
 import 'package:recapture/presentation/screens/capture/pre_capture_screen.dart';
 import 'package:recapture/presentation/widgets/checklist_tooltip_sheet.dart';
@@ -29,6 +31,18 @@ class _FakeSessionBox extends ActiveSessionBox {
   @override
   Future<ActiveSession?> read() async => null;
 }
+
+/// ConfigNotifier whose [build] skips the Hive/network bootstrap — serves the
+/// bundled default (the variant option copy reads it for photo counts).
+class _StubConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault;
+}
+
+/// The override list every screen pump in this file uses.
+final _overrides = <Override>[
+  captureConfigProvider.overrideWith(_StubConfigNotifier.new),
+];
 
 final _items = <ChecklistItem>[
   ChecklistItem(
@@ -71,8 +85,9 @@ void main() {
     WidgetTester tester, {
     TargetPlatform platform = TargetPlatform.android,
   }) async {
-    // ProviderScope: the screen reads the flow-variant provider (Riverpod).
+    // ProviderScope: the screen reads the flow-variant + config providers.
     await tester.pumpWidget(ProviderScope(
+      overrides: _overrides,
       child: MaterialApp(
         theme: AppTheme.dark.copyWith(platform: platform),
         home: PreCaptureScreen(items: _items, sessionBox: _FakeSessionBox()),
@@ -97,6 +112,7 @@ void main() {
       await tester.pumpAndSettle();
       // …and a forced re-pump (e.g. rotation) of the same State.
       await tester.pumpWidget(ProviderScope(
+        overrides: _overrides,
         child: MaterialApp(
           theme: AppTheme.dark,
           home: PreCaptureScreen(items: _items, sessionBox: _FakeSessionBox()),
@@ -114,7 +130,10 @@ void main() {
       expect(only(AnalyticsEvents.precaptureChecklistStarted), hasLength(1));
 
       // Leave (dispose the State) then return (a fresh State → new entry).
+      // Same overrides as pumpScreen: Riverpod forbids changing a live
+      // ProviderScope's override list between pumps.
       await tester.pumpWidget(ProviderScope(
+        overrides: _overrides,
         child: MaterialApp(
           theme: AppTheme.dark,
           home: const Scaffold(body: Text('ELSEWHERE')),

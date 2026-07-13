@@ -17,8 +17,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';
 import 'package:recapture/domain/entities/active_session.dart';
+import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/checklist_item.dart';
 import 'package:recapture/presentation/screens/capture/pre_capture_screen.dart';
 import 'package:recapture/presentation/widgets/checklist_item_tile.dart';
@@ -43,6 +45,19 @@ const _items = <ChecklistItem>[
   ),
 ];
 
+/// ConfigNotifier whose [build] skips the Hive/network bootstrap (the test
+/// host has no initialized Hive) — just serves the bundled default. The
+/// variant option copy reads this for its per-ring photo counts.
+class _StubConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault;
+}
+
+/// The override list every pump in this file uses.
+final _overrides = <Override>[
+  captureConfigProvider.overrideWith(_StubConfigNotifier.new),
+];
+
 /// No-Hive [ActiveSessionBox]: the test host has no initialized Hive, and a
 /// real box open poisons the test zone with Hive's internal unlistened future.
 class _FakeSessionBox extends ActiveSessionBox {
@@ -53,8 +68,9 @@ class _FakeSessionBox extends ActiveSessionBox {
 /// Pumps the screen on its own (no router) — fine for everything except the
 /// Start-navigation tests.
 Future<void> _pumpPlain(WidgetTester tester, {List<ChecklistItem>? items}) async {
-  // ProviderScope: the screen reads the flow-variant provider (Riverpod).
+  // ProviderScope: the screen reads the flow-variant + config providers.
   await tester.pumpWidget(ProviderScope(
+    overrides: _overrides,
     child: MaterialApp(
       theme: AppTheme.dark,
       home: items == null
@@ -95,6 +111,7 @@ Future<_PushSpy> _pumpRouter(WidgetTester tester) async {
   );
   addTearDown(router.dispose);
   await tester.pumpWidget(ProviderScope(
+    overrides: _overrides,
     child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
   ));
   await tester.pumpAndSettle();
@@ -231,6 +248,7 @@ void main() {
 
     testWidgets('no overflow under a large text scale', (tester) async {
       await tester.pumpWidget(ProviderScope(
+        overrides: _overrides,
         child: MaterialApp(
           theme: AppTheme.dark,
           home: MediaQuery(
