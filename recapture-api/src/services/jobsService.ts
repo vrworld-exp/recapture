@@ -27,10 +27,10 @@ import { Project } from '@/models/Project';
 import { type ObjectSize } from '@/models/types/capture.types';
 import {
   DEFAULT_CAPTURE_FLOW_VARIANT,
-  expectedImageCount,
-  expectedPerRing,
-  minimumImageCount,
-  minimumPerRing,
+  compatMaximumImageCount,
+  compatMaximumPerRing,
+  compatMinimumImageCount,
+  compatMinimumPerRing,
   ringsForVariant,
   type CaptureFlowVariant,
 } from '@/models/types/captureVariants';
@@ -137,13 +137,15 @@ export type CreateJobResult =
  *   2. the client's `objectSize` must MATCH the project's stored size (the
  *      project is authoritative; a mismatch is a client bug, not a preference);
  *   3. `expectedFilesCount` must land in the variant's valid RANGE —
- *      [minimumImageCount + 1, expectedImageCount + 1], both manifest-
- *      inclusive. The client lets a ring count as complete at
+ *      [compatMinimumImageCount + 1, compatMaximumImageCount + 1], both
+ *      manifest-inclusive. The client lets a ring count as complete at
  *      MIN_RING_COVERAGE_PCT segment coverage, so a partial capture is a
- *      legitimate upload; the upper bound is still the variant's full total.
- *      The CLIENT-declared count is stored on the job unchanged and finalize
- *      demands an exact S3 match against that stored value — the range here
- *      only bounds what a declared count may be.
+ *      legitimate upload; the upper bound is the variant's full total. The
+ *      bounds are the LEGACY-COMPATIBLE (union-over-revisions) ones: a session
+ *      captured under an older remote config reaches create-job with the old
+ *      counts and must stay uploadable. The CLIENT-declared count is stored on
+ *      the job unchanged and finalize demands an exact S3 match against that
+ *      stored value — the range here only bounds what a declared count may be.
  *
  * IDEMPOTENCY: when `idempotencyKey` is provided, a repeat create with the same
  * key + same payload returns the ORIGINAL job and its plan (REPLAYED — the
@@ -174,10 +176,12 @@ export async function createJob(
   }
 
   // Variant range: the flow variant bounds the image count — the coverage
-  // floor (MIN_RING_COVERAGE_PCT per ring) below, the full ring total above.
+  // floor (MIN_RING_COVERAGE_PCT per ring) below, the full ring total above,
+  // both widened to the union over retired count revisions (compat*) so a
+  // capture made under an older config stays uploadable after a deploy.
   // The model's expectedFilesCount is manifest-INCLUSIVE, hence the +1s.
-  const minimum = minimumImageCount(input.captureVariant) + 1;
-  const maximum = expectedImageCount(input.captureVariant) + 1;
+  const minimum = compatMinimumImageCount(input.captureVariant) + 1;
+  const maximum = compatMaximumImageCount(input.captureVariant) + 1;
   if (input.expectedFilesCount < minimum || input.expectedFilesCount > maximum) {
     return {
       outcome: 'COUNT_INCONSISTENT',
@@ -595,7 +599,9 @@ export async function finalizeJob(
   // client-authored manifest never attests its own minimums, and a declared
   // flowVariant that disagrees with the job is itself a finding. The per-ring
   // floor is the coverage minimum (a ring completed at MIN_RING_COVERAGE_PCT
-  // is uploadable); the ceiling stays the variant's full per-ring count.
+  // is uploadable); the ceiling is the variant's full per-ring count. Both are
+  // the LEGACY-COMPATIBLE (compat*) bounds: a job created before a per-ring
+  // count change carries the old counts and must still finalize.
   let parsedManifest: unknown;
   try {
     parsedManifest = JSON.parse(manifestObject.body);
@@ -607,8 +613,8 @@ export async function finalizeJob(
   const validation = validateCaptureManifest(parsedManifest, {
     requiredLevels: variantRings,
     allowedLevels: variantRings,
-    minPhotosPerLevel: minimumPerRing(variant),
-    maxPhotosPerLevel: expectedPerRing(variant),
+    minPhotosPerLevel: compatMinimumPerRing(variant),
+    maxPhotosPerLevel: compatMaximumPerRing(variant),
     expectedFlowVariant: variant,
   });
   if (!validation.valid) {

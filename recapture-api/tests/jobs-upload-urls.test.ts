@@ -79,7 +79,7 @@ async function makeJob(
     .send({
       projectId: p.id,
       objectSize: 'medium',
-      expectedFilesCount: 37,
+      expectedFilesCount: 49,
       ...(captureVariant ? { captureVariant } : {}),
     });
   expect(res.status).toBe(201);
@@ -426,7 +426,7 @@ describe('canonical key convention — end-to-end agreement with @/utils/s3Keys'
     const created = await request(app)
       .post('/jobs')
       .set(auth)
-      .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 37 });
+      .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 49 });
     expect(created.status).toBe(201);
     const scope = { userId, projectId: p.id as string, jobId: created.body.job.id as string };
 

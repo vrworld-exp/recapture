@@ -79,7 +79,7 @@ async function makeProject(
 async function makeFinalizedJob(
   ownerId: string,
   projectId: string,
-  { state = 'QUEUED', expectedFilesCount = 37 }: { state?: string; expectedFilesCount?: number } = {}
+  { state = 'QUEUED', expectedFilesCount = 49 }: { state?: string; expectedFilesCount?: number } = {}
 ) {
   const jobId = new Types.ObjectId();
   const scope = { userId: ownerId, projectId, jobId: jobId.toHexString() };
@@ -251,7 +251,7 @@ describe('GET /admin/projects', () => {
     const { auth } = await makeUser('MODEL_ARTIST');
 
     const live1 = await makeProject(ownerA.id, 'PROCESSING', {
-      stats: { totalPhotos: 36, warnings: 2, lastCaptureAt: new Date() },
+      stats: { totalPhotos: 48, warnings: 2, lastCaptureAt: new Date() },
     });
     const live2 = await makeProject(ownerB.id, 'COMPLETED');
     await makeProject(ownerA.id, 'DRAFT');
@@ -270,7 +270,7 @@ describe('GET /admin/projects', () => {
     const item = res.body.items.find((p: { id: string }) => p.id === live1.id);
     expect(item.ownerId).toBe(ownerA.id);
     expect(item.stats).toEqual({
-      totalPhotos: 36,
+      totalPhotos: 48,
       warnings: 2,
       lastCaptureAt: expect.any(String),
     });
@@ -355,7 +355,7 @@ describe('GET /admin/projects/:id', () => {
     expect(res.body.job).toEqual({
       id: job.id,
       state: 'QUEUED',
-      expectedFilesCount: 37,
+      expectedFilesCount: 49,
       finalizedAt: expect.any(String),
     });
   });
@@ -388,9 +388,9 @@ describe('GET /admin/projects/:id/export', () => {
     const project = await makeProject(owner.id, 'COMPLETED');
     const job = await makeFinalizedJob(owner.id, project.id as string, {
       state: 'COMPLETED',
-      expectedFilesCount: 37,
+      expectedFilesCount: 49,
     });
-    mockS3List(36);
+    mockS3List(48);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const res = await request(app).get(`/admin/projects/${project.id}/export`).set(auth);
@@ -399,9 +399,9 @@ describe('GET /admin/projects/:id/export', () => {
     const exp = res.body.export;
     expect(exp.projectId).toBe(project.id);
     expect(exp.jobId).toBe(job.id);
-    expect(exp.fileCount).toBe(37);
-    expect(exp.expectedFileCount).toBe(37);
-    expect(exp.files).toHaveLength(37);
+    expect(exp.fileCount).toBe(49);
+    expect(exp.expectedFileCount).toBe(49);
+    expect(exp.files).toHaveLength(49);
 
     // TTL: expiresAt - generatedAt == ADMIN_EXPORT_URL_TTL_SECONDS, and the
     // presigned URLs themselves carry the same expiry.
@@ -429,7 +429,7 @@ describe('GET /admin/projects/:id/export', () => {
     );
     expect(events).toHaveLength(1);
     const props = JSON.parse(String(events[0]![1]));
-    expect(props.file_count).toBe(37);
+    expect(props.file_count).toBe(49);
     expect(props.ttl_seconds).toBe(env.ADMIN_EXPORT_URL_TTL_SECONDS);
     expect(props.project_id_hash).not.toBe(project.id);
     expect(String(events[0]![1])).not.toContain('X-Amz-');
@@ -439,14 +439,14 @@ describe('GET /admin/projects/:id/export', () => {
     const owner = await makeUser('USER');
     const { auth } = await makeUser('ADMIN');
     const project = await makeProject(owner.id, 'PROCESSING');
-    await makeFinalizedJob(owner.id, project.id as string, { expectedFilesCount: 37 });
-    mockS3List(30); // 31 objects listed vs 37 expected
+    await makeFinalizedJob(owner.id, project.id as string, { expectedFilesCount: 49 });
+    mockS3List(30); // 31 objects listed vs 49 expected
 
     const res = await request(app).get(`/admin/projects/${project.id}/export`).set(auth);
 
     expect(res.status).toBe(200);
     expect(res.body.export.fileCount).toBe(31);
-    expect(res.body.export.expectedFileCount).toBe(37);
+    expect(res.body.export.expectedFileCount).toBe(49);
   });
 
   it('409 NOT_EXPORTABLE when no job passed the finalize gate', async () => {
@@ -476,7 +476,7 @@ describe('GET /admin/projects/:id/export', () => {
     const { auth } = await makeUser('MODEL_ARTIST');
     const project = await makeProject(owner.id, 'COMPLETED');
     await makeFinalizedJob(owner.id, project.id as string);
-    mockS3List(36);
+    mockS3List(48);
 
     for (let i = 0; i < env.ADMIN_EXPORT_MAX_PER_WINDOW; i++) {
       const ok = await request(app).get(`/admin/projects/${project.id}/export`).set(auth);
@@ -505,16 +505,16 @@ describe('finalize → project stats', () => {
     const jobRes = await request(app)
       .post('/jobs')
       .set(owner.auth)
-      .send({ projectId: project.id, objectSize: 'medium', expectedFilesCount: 37 });
+      .send({ projectId: project.id, objectSize: 'medium', expectedFilesCount: 49 });
     expect(jobRes.status).toBe(201);
     const jobId = jobRes.body.job.id as string;
     await Job.updateOne({ _id: jobId }, { $set: { state: 'UPLOADING' } });
 
-    // Script GET (manifest) + LIST (37 objects) like the finalize suite does.
+    // Script GET (manifest) + LIST (49 objects) like the finalize suite does.
     const manifestBody = JSON.stringify({
-      summary: { totalPhotos: 36, warningsCount: 0, overallComplete: true },
+      summary: { totalPhotos: 48, warningsCount: 0, overallComplete: true },
       photos: ['EYE', 'TOP', 'LOW'].flatMap((ring) =>
-        Array.from({ length: 12 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
+        Array.from({ length: 16 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
       ),
     });
     vi.spyOn(s3Client, 'send').mockImplementation((async (cmd: {
@@ -526,7 +526,7 @@ describe('finalize → project stats', () => {
       }
       if (cmd.constructor.name === 'ListObjectsV2Command') {
         return {
-          Contents: Array.from({ length: 37 }, (_, i) => ({
+          Contents: Array.from({ length: 49 }, (_, i) => ({
             Key: `${cmd.input.Prefix}f_${i}.jpg`,
           })),
           IsTruncated: false,
@@ -540,21 +540,21 @@ describe('finalize → project stats', () => {
 
     const saved = await Project.findById(project.id).exec();
     expect(saved!.status).toBe('PROCESSING');
-    expect(saved!.stats!.totalPhotos).toBe(36); // 37 verified − the manifest
+    expect(saved!.stats!.totalPhotos).toBe(48); // 49 verified − the manifest
     expect(saved!.stats!.lastCaptureAt).toBeInstanceOf(Date);
 
     // Owner list DTO surfaces the stats (the All Projects card contract).
     const list = await request(app).get('/projects').set(owner.auth);
     const dto = list.body.items.find((p: { id: string }) => p.id === project.id);
     expect(dto.status).toBe('PROCESSING');
-    expect(dto.stats.totalPhotos).toBe(36);
+    expect(dto.stats.totalPhotos).toBe(48);
     expect(dto.stats.lastCaptureAt).toEqual(expect.any(String));
 
     // Idempotent replay: stats identical, lastCaptureAt does not drift.
     const replay = await request(app).post(`/jobs/${jobId}/finalize`).set(owner.auth);
     expect(replay.status).toBe(200);
     const after = await Project.findById(project.id).exec();
-    expect(after!.stats!.totalPhotos).toBe(36);
+    expect(after!.stats!.totalPhotos).toBe(48);
     expect(after!.stats!.lastCaptureAt!.toISOString()).toBe(
       saved!.stats!.lastCaptureAt!.toISOString()
     );

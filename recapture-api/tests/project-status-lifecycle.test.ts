@@ -60,15 +60,15 @@ async function createJobFor(projectId: string, idempotencyKey?: string) {
   const req = request(app)
     .post('/jobs')
     .set(auth)
-    .send({ projectId, objectSize: 'medium', expectedFilesCount: 37 });
+    .send({ projectId, objectSize: 'medium', expectedFilesCount: 49 });
   if (idempotencyKey) req.set('Idempotency-Key', idempotencyKey);
   return req;
 }
 
-/** Valid with_bottom manifest: 12 photos on each of EYE/TOP/LOW. */
+/** Valid with_bottom manifest: 16 photos on each of EYE/TOP/LOW. */
 function validManifestBody(): string {
   const photos = ['EYE', 'TOP', 'LOW'].flatMap((ring) =>
-    Array.from({ length: 12 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
+    Array.from({ length: 16 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
   );
   return JSON.stringify({
     summary: { totalPhotos: photos.length, warningsCount: 0, overallComplete: true },
@@ -77,7 +77,7 @@ function validManifestBody(): string {
 }
 
 /** Scripts S3 GET (manifest) + LIST (object count) on the shared client. */
-function mockS3(objectCount = 37) {
+function mockS3(objectCount = 49) {
   const impl = async (cmd: { constructor: { name: string }; input: Record<string, unknown> }) => {
     switch (cmd.constructor.name) {
       case 'GetObjectCommand':

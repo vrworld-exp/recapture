@@ -43,12 +43,12 @@ const auth = {
   })}`,
 };
 
-/** Creates a project + job (default: the full 37 files — 36 images + manifest
+/** Creates a project + job (default: the full 49 files — 48 images + manifest
  * for both variants; pass a partial count for coverage-floor cases) and moves
  * it to UPLOADING. */
 async function makeUploadingJob(
   captureVariant?: 'with_bottom' | 'without_bottom',
-  expectedFilesCount = 37
+  expectedFilesCount = 49
 ): Promise<string> {
   const p = await Project.create({
     userId: new Types.ObjectId(userId),
@@ -73,12 +73,12 @@ async function makeUploadingJob(
 
 /**
  * A content-valid capture manifest: `photosPerRing` on each given ring (the
- * with_bottom shape by default — 12 × EYE/TOP/LOW = 36 entries), declared
+ * with_bottom shape by default — 16 × EYE/TOP/LOW = 48 entries), declared
  * consistently. `flowVariant` is the manifest's optional top-level field;
  * omitted by default like a pre-variant client would.
  */
 function validManifestBody(
-  photosPerRing = 12,
+  photosPerRing = 16,
   rings: string[] = ['EYE', 'TOP', 'LOW'],
   flowVariant?: string
 ): string {
@@ -103,7 +103,7 @@ function validManifestBody(
 function mockS3({
   manifestExists = true,
   manifestBody = validManifestBody(),
-  objectCount = 37,
+  objectCount = 49,
   pageSize = 1000,
   listError = false,
 } = {}) {
@@ -141,7 +141,7 @@ function mockS3({
 describe('POST /jobs/:jobId/finalize — happy path', () => {
   it('200: verifies manifest + count, flips to QUEUED (the enqueue), records queuedAt', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 37 });
+    mockS3({ objectCount: 49 });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
@@ -150,30 +150,30 @@ describe('POST /jobs/:jobId/finalize — happy path', () => {
     expect(res.body.status).toBe('success');
     expect(res.body.jobId).toBe(jobId);
     expect(res.body.state).toBe('QUEUED');
-    expect(res.body.filesVerified).toBe(37);
+    expect(res.body.filesVerified).toBe(49);
     expect(Date.parse(res.body.queuedAt)).not.toBeNaN();
     expect(res.body.idempotentReplay).toBeUndefined();
 
     const saved = await Job.findById(jobId).exec();
     expect(saved!.state).toBe('QUEUED');
     expect(saved!.queuedAt).toBeInstanceOf(Date);
-    expect(saved!.upload!.uploadedFilesCount).toBe(37);
+    expect(saved!.upload!.uploadedFilesCount).toBe(49);
 
     const queued = logSpy.mock.calls.filter((c) =>
       String(c[0]).includes('[analytics] job_queued')
     );
     expect(queued).toHaveLength(1);
-    expect(String(queued[0]![1])).toContain('"files_verified":37');
+    expect(String(queued[0]![1])).toContain('"files_verified":49');
   });
 
   it('paginates the S3 listing — a truncated first page never undercounts', async () => {
     const jobId = await makeUploadingJob();
-    const sendSpy = mockS3({ objectCount: 37, pageSize: 15 }); // 3 pages
+    const sendSpy = mockS3({ objectCount: 49, pageSize: 20 }); // 3 pages
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
     expect(res.status).toBe(200);
-    expect(res.body.filesVerified).toBe(37);
+    expect(res.body.filesVerified).toBe(49);
     const listCalls = sendSpy.mock.calls.filter(
       (c) => (c[0] as { constructor: { name: string } }).constructor.name ===
         'ListObjectsV2Command'
@@ -183,12 +183,12 @@ describe('POST /jobs/:jobId/finalize — happy path', () => {
 
   it('a matching reportedFilesCount cross-check passes', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 37 });
+    mockS3({ objectCount: 49 });
 
     const res = await request(app)
       .post(`/jobs/${jobId}/finalize`)
       .set(auth)
-      .send({ reportedFilesCount: 37 });
+      .send({ reportedFilesCount: 49 });
 
     expect(res.status).toBe(200);
   });
@@ -215,14 +215,14 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
 
     expect(res.status).toBe(422);
     expect(res.body.reason).toBe('count_mismatch');
-    expect(res.body.expectedFilesCount).toBe(37);
+    expect(res.body.expectedFilesCount).toBe(49);
     expect(res.body.actualFilesCount).toBe(30);
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
   });
 
   it('MORE objects than expected (stray/duplicates) → 422, never silently queued', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 50 });
+    mockS3({ objectCount: 60 });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
@@ -233,12 +233,12 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
 
   it('reportedFilesCount disagreeing with S3 → 422 (S3 stays the authority)', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 37 });
+    mockS3({ objectCount: 49 });
 
     const res = await request(app)
       .post(`/jobs/${jobId}/finalize`)
       .set(auth)
-      .send({ reportedFilesCount: 36 });
+      .send({ reportedFilesCount: 48 });
 
     expect(res.status).toBe(422);
     expect(res.body.reason).toBe('reported_count_mismatch');
@@ -248,7 +248,8 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
   it('manifest failing ALL content rules → 422 with every finding, in rule order', async () => {
     const jobId = await makeUploadingJob();
     // Declares 10 but has 8 entries; LOW absent entirely; EYE/TOP under the
-    // with_bottom coverage floor of 10 (80% of the 12-per-ring total).
+    // with_bottom compat coverage floor of 10 (80% of the retired 12-per-ring
+    // revision — the widest floor finalize accepts).
     const photos = [
       ...Array.from({ length: 5 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
       ...Array.from({ length: 3 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
@@ -305,25 +306,25 @@ describe('POST /jobs/:jobId/finalize — verification failures (422, no state ch
 });
 
 describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
-  it("happy path 'with_bottom': 3×12 manifest declaring its variant → QUEUED", async () => {
+  it("happy path 'with_bottom': 3×16 manifest declaring its variant → QUEUED", async () => {
     const jobId = await makeUploadingJob('with_bottom');
-    mockS3({ manifestBody: validManifestBody(12, ['EYE', 'TOP', 'LOW'], 'with_bottom') });
+    mockS3({ manifestBody: validManifestBody(16, ['EYE', 'TOP', 'LOW'], 'with_bottom') });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
     expect(res.status).toBe(200);
     expect(res.body.state).toBe('QUEUED');
-    expect(res.body.filesVerified).toBe(37);
+    expect(res.body.filesVerified).toBe(49);
   });
 
-  it("happy path 'without_bottom': 2×18 manifest + 37 objects → QUEUED; idempotent replay OK", async () => {
+  it("happy path 'without_bottom': 2×24 manifest + 49 objects → QUEUED; idempotent replay OK", async () => {
     const jobId = await makeUploadingJob('without_bottom');
-    mockS3({ manifestBody: validManifestBody(18, ['EYE', 'TOP'], 'without_bottom') });
+    mockS3({ manifestBody: validManifestBody(24, ['EYE', 'TOP'], 'without_bottom') });
 
     const first = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
     expect(first.status).toBe(200);
     expect(first.body.state).toBe('QUEUED');
-    expect(first.body.filesVerified).toBe(37);
+    expect(first.body.filesVerified).toBe(49);
 
     // Replay must not re-verify — drop the S3 mock entirely.
     vi.restoreAllMocks();
@@ -335,7 +336,7 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
 
   it("a 'without_bottom' manifest WITHOUT a flowVariant field is tolerated (pre-variant clients)", async () => {
     const jobId = await makeUploadingJob('without_bottom');
-    mockS3({ manifestBody: validManifestBody(18, ['EYE', 'TOP']) }); // no flowVariant
+    mockS3({ manifestBody: validManifestBody(24, ['EYE', 'TOP']) }); // no flowVariant
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
@@ -345,11 +346,11 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
 
   it("LOW entries on a 'without_bottom' job → 422 UNEXPECTED_LEVELS, nothing queued", async () => {
     const jobId = await makeUploadingJob('without_bottom');
-    // EYE/TOP meet their 18-per-ring floor and the count is declared
+    // EYE/TOP carry their full 24-per-ring count and the total is declared
     // consistently — the stray LOW ring is the ONLY finding.
     const photos = [
-      ...Array.from({ length: 18 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
-      ...Array.from({ length: 18 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
+      ...Array.from({ length: 24 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
+      ...Array.from({ length: 24 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
       { photoId: 'L0', ringName: 'LOW' },
       { photoId: 'L1', ringName: 'LOW' },
     ];
@@ -373,7 +374,7 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
 
   it("a variant ring missing entirely (TOP on 'without_bottom') → 422 MISSING_REQUIRED_LEVELS", async () => {
     const jobId = await makeUploadingJob('without_bottom');
-    mockS3({ manifestBody: validManifestBody(18, ['EYE'], 'without_bottom') });
+    mockS3({ manifestBody: validManifestBody(24, ['EYE'], 'without_bottom') });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
@@ -387,7 +388,7 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
   it('manifest flowVariant disagreeing with the job → 422 FLOW_VARIANT_MISMATCH', async () => {
     const jobId = await makeUploadingJob('without_bottom');
     // Ring shape satisfies without_bottom — ONLY the declared variant is wrong.
-    mockS3({ manifestBody: validManifestBody(18, ['EYE', 'TOP'], 'with_bottom') });
+    mockS3({ manifestBody: validManifestBody(24, ['EYE', 'TOP'], 'with_bottom') });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
@@ -403,10 +404,10 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
 
   it('collect-all: mismatch + unexpected LOW + under-minimum rings reported together, in order', async () => {
     const jobId = await makeUploadingJob('without_bottom');
-    // A full with_bottom-shaped manifest (3×12, declared) on a without_bottom
-    // job: wrong declared variant, a LOW ring that should not exist, and
-    // EYE/TOP below the 15-per-ring coverage floor (80% of 18) — every
-    // violated rule in one pass.
+    // A legacy-full with_bottom-shaped manifest (3×12, declared) on a
+    // without_bottom job: wrong declared variant, a LOW ring that should not
+    // exist, and EYE/TOP below the 15-per-ring compat coverage floor (80% of
+    // the retired 18-per-ring revision) — every violated rule in one pass.
     mockS3({ manifestBody: validManifestBody(12, ['EYE', 'TOP', 'LOW'], 'with_bottom') });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
@@ -425,49 +426,68 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
   });
 
-  it("happy path PARTIAL 'without_bottom': 16+16 manifest + 33 objects → QUEUED end-to-end", async () => {
+  it("happy path PARTIAL 'without_bottom': 21+21 manifest + 43 objects → QUEUED end-to-end", async () => {
     // The real-device case behind the coverage-floor range: both rings
-    // finished at 16/18 (≥ the 80% floor of 15), 32 images + manifest = 33.
-    const jobId = await makeUploadingJob('without_bottom', 33);
+    // finished at 21/24 (≥ the 80% floor of 20), 42 images + manifest = 43.
+    const jobId = await makeUploadingJob('without_bottom', 43);
     mockS3({
-      manifestBody: validManifestBody(16, ['EYE', 'TOP'], 'without_bottom'),
-      objectCount: 33, // S3 matches the STORED expectedFilesCount exactly
+      manifestBody: validManifestBody(21, ['EYE', 'TOP'], 'without_bottom'),
+      objectCount: 43, // S3 matches the STORED expectedFilesCount exactly
     });
 
     const res = await request(app)
       .post(`/jobs/${jobId}/finalize`)
       .set(auth)
-      .send({ reportedFilesCount: 33 });
+      .send({ reportedFilesCount: 43 });
 
     expect(res.status).toBe(200);
     expect(res.body.state).toBe('QUEUED');
-    expect(res.body.filesVerified).toBe(33);
+    expect(res.body.filesVerified).toBe(43);
     const saved = await Job.findById(jobId).exec();
     expect(saved!.state).toBe('QUEUED');
-    expect(saved!.upload!.uploadedFilesCount).toBe(33);
+    expect(saved!.upload!.uploadedFilesCount).toBe(43);
   });
 
-  it('a partial job still demands the EXACT stored count from S3 (32 ≠ 33 → 422)', async () => {
-    const jobId = await makeUploadingJob('without_bottom', 33);
+  it("BACK-COMPAT: a legacy pre-bump job (2×18 manifest, 37 stored) still finalizes → QUEUED", async () => {
+    // A job created before the 16/24-per-ring bump: stored expectedFilesCount
+    // 37 (2×18 + manifest) with 18-per-ring content. Finalize must verify it
+    // against the STORED count and the compat per-ring bounds, not reject it
+    // under the new 20-per-ring floor.
+    const jobId = await makeUploadingJob('without_bottom', 37);
     mockS3({
-      manifestBody: validManifestBody(16, ['EYE', 'TOP'], 'without_bottom'),
-      objectCount: 32, // one object short of what the client declared
+      manifestBody: validManifestBody(18, ['EYE', 'TOP'], 'without_bottom'),
+      objectCount: 37,
+    });
+
+    const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('QUEUED');
+    expect(res.body.filesVerified).toBe(37);
+  });
+
+  it('a partial job still demands the EXACT stored count from S3 (42 ≠ 43 → 422)', async () => {
+    const jobId = await makeUploadingJob('without_bottom', 43);
+    mockS3({
+      manifestBody: validManifestBody(21, ['EYE', 'TOP'], 'without_bottom'),
+      objectCount: 42, // one object short of what the client declared
     });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
 
     expect(res.status).toBe(422);
     expect(res.body.reason).toBe('count_mismatch');
-    expect(res.body.expectedFilesCount).toBe(33);
-    expect(res.body.actualFilesCount).toBe(32);
+    expect(res.body.expectedFilesCount).toBe(43);
+    expect(res.body.actualFilesCount).toBe(42);
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
   });
 
-  it("a ring below the coverage floor (14/18) → 422 INSUFFICIENT_PHOTOS_PER_LEVEL", async () => {
+  it("a ring below the compat coverage floor (14 < 15) → 422 INSUFFICIENT_PHOTOS_PER_LEVEL", async () => {
     // 14 + 17 images + manifest = 32 files — the TOTAL is inside the create
-    // range (31–37), but the EYE ring sits below the 15-per-ring coverage
-    // floor. Manifest declared consistently + S3 count matching, so only the
-    // per-ring floor rule fires.
+    // range (31–49), but the EYE ring sits below even the 15-per-ring compat
+    // coverage floor (80% of the retired 18-per-ring revision). Manifest
+    // declared consistently + S3 count matching, so only the per-ring floor
+    // rule fires.
     const jobId = await makeUploadingJob('without_bottom', 32);
     const photos = [
       ...Array.from({ length: 14 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
@@ -494,14 +514,14 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
   });
 
-  it("a ring above the variant's per-ring total (19/18) → 422 EXCESS_PHOTOS_PER_LEVEL", async () => {
-    // 19 + 15 images + manifest = 35 files — in the create range, but the EYE
-    // ring exceeds the 18-per-ring ceiling. The exact-total check no longer
+  it("a ring above the variant's per-ring total (25/24) → 422 EXCESS_PHOTOS_PER_LEVEL", async () => {
+    // 25 + 20 images + manifest = 46 files — in the create range, but the EYE
+    // ring exceeds the 24-per-ring ceiling. The exact-total check no longer
     // catches this, so the explicit per-ring ceiling rule must.
-    const jobId = await makeUploadingJob('without_bottom', 35);
+    const jobId = await makeUploadingJob('without_bottom', 46);
     const photos = [
-      ...Array.from({ length: 19 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
-      ...Array.from({ length: 15 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
+      ...Array.from({ length: 25 }, (_, i) => ({ photoId: `E${i}`, ringName: 'EYE' })),
+      ...Array.from({ length: 20 }, (_, i) => ({ photoId: `T${i}`, ringName: 'TOP' })),
     ];
     mockS3({
       manifestBody: JSON.stringify({
@@ -509,7 +529,7 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
         summary: { totalPhotos: photos.length },
         photos,
       }),
-      objectCount: 35,
+      objectCount: 46,
     });
 
     const res = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
@@ -519,7 +539,7 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
     expect(res.body.validationErrors).toHaveLength(1);
     expect(res.body.validationErrors[0].rule).toBe('EXCESS_PHOTOS_PER_LEVEL');
     expect(res.body.validationErrors[0].detail.levels).toEqual([
-      { levelId: 'EYE', count: 19, allowed: 18 },
+      { levelId: 'EYE', count: 25, allowed: 24 },
     ]);
     expect((await Job.findById(jobId).exec())!.state).toBe('UPLOADING');
   });
@@ -528,7 +548,7 @@ describe('POST /jobs/:jobId/finalize — capture flow variants', () => {
 describe('POST /jobs/:jobId/finalize — idempotency + state guards', () => {
   it('re-finalizing a QUEUED job replays without re-verifying or re-enqueuing', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 37 });
+    mockS3({ objectCount: 49 });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const first = await request(app).post(`/jobs/${jobId}/finalize`).set(auth);
@@ -544,7 +564,7 @@ describe('POST /jobs/:jobId/finalize — idempotency + state guards', () => {
     expect(second.status).toBe(200);
     expect(second.body.idempotentReplay).toBe(true);
     expect(second.body.queuedAt).toBe(first.body.queuedAt); // original enqueue time
-    expect(second.body.filesVerified).toBe(37);
+    expect(second.body.filesVerified).toBe(49);
 
     // No second job_queued across both calls.
     const secondEvents = logSpy2.mock.calls.filter((c) =>
@@ -556,7 +576,7 @@ describe('POST /jobs/:jobId/finalize — idempotency + state guards', () => {
 
   it('concurrent finalizes → both 200, exactly one enqueue/event', async () => {
     const jobId = await makeUploadingJob();
-    mockS3({ objectCount: 37 });
+    mockS3({ objectCount: 49 });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const [a, b] = await Promise.all([
@@ -632,8 +652,8 @@ describe('POST /jobs/:jobId/finalize — rejection side-effects: zero enqueue + 
       { mock: { manifestExists: false } }, // manifest_missing
       { mock: { manifestBody: '{not json' } }, // manifest_invalid (unreadable)
       { mock: { manifestBody: validManifestBody(5) } }, // manifest_invalid (content rules)
-      { mock: { objectCount: 50 } }, // count_mismatch (over-count)
-      { mock: {}, body: { reportedFilesCount: 36 } }, // reported_count_mismatch
+      { mock: { objectCount: 60 } }, // count_mismatch (over-count)
+      { mock: {}, body: { reportedFilesCount: 48 } }, // reported_count_mismatch
     ];
     for (const c of cases) {
       const jobId = await makeUploadingJob();

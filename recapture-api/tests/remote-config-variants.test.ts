@@ -34,8 +34,8 @@ afterEach(async () => {
 // The block the client's bundled defaults mirror — asserted as LITERAL numbers
 // on purpose (this is the cross-codebase contract, not a derived value).
 const EXPECTED_VARIANT_SEGMENTS = {
-  with_bottom: { mid: 12, high: 12, low: 12 },
-  without_bottom: { mid: 18, high: 18 },
+  with_bottom: { mid: 16, high: 16, low: 16 },
+  without_bottom: { mid: 24, high: 24 },
 };
 
 /** A stored config that satisfies the full served schema. */
