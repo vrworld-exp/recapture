@@ -250,7 +250,7 @@ void main() {
   });
 
   group('factory from config (per-level counts via effectiveSegmentsFor)', () {
-    test('with_bottom builds A/B/C at the variant counts (12-12-12)', () {
+    test('with_bottom builds A/B/C at the variant counts (16-16-16)', () {
       final machines = levelSegmentMachinesFromConfig(
         CaptureConfig.bundledDefault,
         variant: CaptureFlowVariant.withBottom,
@@ -260,23 +260,23 @@ void main() {
       final byCode = {for (final m in machines) m.levelCode: m};
       // Variant bundled defaults win over the legacy band counts (10/8/12).
       expect(byCode['A']!.levelId, 'mid');
-      expect(byCode['A']!.segmentCount, 12);
+      expect(byCode['A']!.segmentCount, 16);
       expect(byCode['B']!.levelId, 'high');
-      expect(byCode['B']!.segmentCount, 12);
+      expect(byCode['B']!.segmentCount, 16);
       expect(byCode['C']!.levelId, 'low');
-      expect(byCode['C']!.segmentCount, 12);
+      expect(byCode['C']!.segmentCount, 16);
     });
 
-    test('without_bottom builds A/B only at 18-18 (no Level C machine)', () {
+    test('without_bottom builds A/B only at 24-24 (no Level C machine)', () {
       final machines = levelSegmentMachinesFromConfig(
         CaptureConfig.bundledDefault,
         variant: CaptureFlowVariant.withoutBottom,
       );
       expect(machines.length, 2);
       expect(machines[0].levelId, 'mid');
-      expect(machines[0].segmentCount, 18);
+      expect(machines[0].segmentCount, 24);
       expect(machines[1].levelId, 'high');
-      expect(machines[1].segmentCount, 18);
+      expect(machines[1].segmentCount, 24);
     });
 
     test('machines from config are independent instances', () {
@@ -298,7 +298,7 @@ void main() {
       );
       expect(c.levelId, 'low');
       expect(c.levelCode, 'C');
-      expect(c.segmentCount, 12);
+      expect(c.segmentCount, 16);
     });
 
     test('missing band falls back to the first band shell; the count still '
@@ -315,14 +315,14 @@ void main() {
         ),
       );
       // 'high' band absent → the band SHELL falls back to the only band, but
-      // the segment count resolves through the variant defaults (high=12).
+      // the segment count resolves through the variant defaults (high=16).
       final b = levelSegmentMachineFor(
         CaptureLevel.b,
         cfg,
         variant: CaptureFlowVariant.withBottom,
       );
       expect(b.band.id, 'mid'); // fell back to the only band
-      expect(b.segmentCount, 12); // variant bundled default for 'high'
+      expect(b.segmentCount, 16); // variant bundled default for 'high'
     });
   });
 }

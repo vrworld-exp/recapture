@@ -103,9 +103,10 @@ function variantSegmentsBlock(variant: CaptureFlowVariant): Record<string, numbe
  * defaults can never silently diverge from the server's own capture rules.
  */
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
-  // Version 2: the 0–180° camera-tilt band scale (bumped so client ETag/304
-  // caches roll over to the new payload).
-  version: 2,
+  // Version 3: guided-capture per-ring counts raised to 16×3 / 24×2 (48 total;
+  // bumped so client ETag/304 caches roll over to the new payload). Version 2
+  // was the 0–180° camera-tilt band scale.
+  version: 3,
   // LOW/EYE/TOP guided-capture rings as camera-tilt bands tiling [0, 180]:
   // BOTTOM ring `low` (tilt up) / EYE ring `mid` (hold straight) / TOP ring
   // `high` (tilt down). Mirrors the client's bundled defaults; legacy per-band

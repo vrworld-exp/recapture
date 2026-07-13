@@ -83,7 +83,7 @@ class _StepFailure implements Exception {
   final String detail;
 }
 
-/// The Upload smoke pipeline: auth → project → job → bundle → 37 uploads →
+/// The Upload smoke pipeline: auth → project → job → bundle → 49 uploads →
 /// finalize, all against the real backend (and through it, real S3).
 class UploadSmokeService {
   UploadSmokeService({
@@ -245,7 +245,7 @@ class UploadSmokeService {
             'Use "Clear test files" below to delete them after testing.';
       });
 
-      // 5) Upload all 37 files sequentially (initiate → PUT → complete),
+      // 5) Upload all 49 files sequentially (initiate → PUT → complete),
       // reading each file's bytes back from disk when the bundle was written.
       await runStep(_stepUpload, (s) async {
         for (final file in bundle.files) {

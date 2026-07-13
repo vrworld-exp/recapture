@@ -8,7 +8,7 @@ import {
 
 /**
  * Absolute upper bound on `expectedFilesCount` — a sanity cap far above any
- * legitimate capture (both flow variants max out at 36 images plus the
+ * legitimate capture (both flow variants max out at 48 images plus the
  * manifest), so a garbage/hostile count can never inflate a job record. The
  * variant-derived RANGE (coverage minimum … full total) is enforced in the
  * service, where the job's captureVariant is known.

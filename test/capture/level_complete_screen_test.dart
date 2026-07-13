@@ -10,8 +10,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:recapture/application/config/config_notifier.dart';
+import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/presentation/screens/capture/level_complete_screen.dart';
 import 'package:recapture/utils/analytics.dart';
+
+/// ConfigNotifier whose [build] skips the network bootstrap (which would leave
+/// a pending timer in the test) — just serves the bundled default synchronously.
+class _StubConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault;
+}
 
 void main() {
   late List<({String name, Map<String, Object?> props})> events;
@@ -64,7 +73,12 @@ void main() {
       ],
     );
     await tester.pumpWidget(
-      ProviderScope(child: MaterialApp.router(routerConfig: router)),
+      ProviderScope(
+        overrides: [
+          captureConfigProvider.overrideWith(_StubConfigNotifier.new),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
     );
     await tester.pump();
   }
@@ -72,7 +86,9 @@ void main() {
   testWidgets('renders "Level B complete" + summary + both CTAs', (tester) async {
     await pump(tester);
     expect(find.text('Level B complete'), findsOneWidget);
-    expect(find.text('32 / 36'), findsOneWidget);
+    // Denominator = Level B's effective ring count (bundled default config,
+    // with_bottom variant → 'high' band = 16).
+    expect(find.text('32 / 16'), findsOneWidget);
     expect(find.text('87%'), findsOneWidget);
     expect(find.text('Start Level C'), findsOneWidget);
     expect(find.text('Review Top Ring'), findsOneWidget);
@@ -85,7 +101,7 @@ void main() {
     expect(completed, hasLength(1));
     expect(completed.first.props['level'], 'B');
     expect(completed.first.props['accepted'], 32);
-    expect(completed.first.props['target'], 36);
+    expect(completed.first.props['target'], 16); // effective B-ring count
     expect(completed.first.props['coverage_pct'], 87);
     expect(completed.first.props['rejected'], 0);
   });

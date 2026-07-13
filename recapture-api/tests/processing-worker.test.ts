@@ -43,7 +43,7 @@ const RAW_BUCKET = 'test-raw-bucket';
 const RAW_PREFIX = 'dev/u1/p1/j1/';
 const MANIFEST_KEY = `${RAW_PREFIX}capture_manifest.json`;
 
-/** A QUEUED with_bottom job expecting 37 objects (36 photos + manifest). */
+/** A QUEUED with_bottom job expecting 49 objects (48 photos + manifest). */
 function makeQueuedJob(overrides: Partial<IJob> = {}): Promise<IJob> {
   return Job.create({
     projectId: new Types.ObjectId(),
@@ -52,8 +52,8 @@ function makeQueuedJob(overrides: Partial<IJob> = {}): Promise<IJob> {
     captureVariant: 'with_bottom',
     upload: {
       uploadMethod: 'S3_PRESIGNED_MULTIPART',
-      expectedFilesCount: 37,
-      uploadedFilesCount: 37,
+      expectedFilesCount: 49,
+      uploadedFilesCount: 49,
       checksumAlgo: 'md5',
       rawBucket: RAW_BUCKET,
       rawPrefix: RAW_PREFIX,
@@ -63,10 +63,10 @@ function makeQueuedJob(overrides: Partial<IJob> = {}): Promise<IJob> {
   });
 }
 
-/** Valid with_bottom manifest: 12 photos on each of EYE/TOP/LOW. */
+/** Valid with_bottom manifest: 16 photos on each of EYE/TOP/LOW. */
 function validManifestBody(): string {
   const photos = ['EYE', 'TOP', 'LOW'].flatMap((ring) =>
-    Array.from({ length: 12 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
+    Array.from({ length: 16 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
   );
   return JSON.stringify({
     flowVariant: 'with_bottom',
@@ -150,7 +150,7 @@ const inState = (id: Types.ObjectId, state: string) => async () => {
 
 describe('processing worker: valid bundle', () => {
   it('downloads + validates the manifest, runs the stage pipeline, completes', async () => {
-    const spy = mockS3({ manifest: validManifestBody(), objectCount: 37 });
+    const spy = mockS3({ manifest: validManifestBody(), objectCount: 49 });
     const job = await makeQueuedJob();
 
     await withWorker({}, async () => {
@@ -158,7 +158,7 @@ describe('processing worker: valid bundle', () => {
     });
 
     const done = await Job.findById(job._id).lean();
-    expect(done?.result).toMatchObject({ validated: true, filesVerified: 37, pipeline: 'engine' });
+    expect(done?.result).toMatchObject({ validated: true, filesVerified: 49, pipeline: 'engine' });
     expect(done?.stageProgress).toMatchObject({ stage: 'COMPLETED', percent: 100 });
     expect(done?.artifacts?.glbKey).toBe(`${RAW_PREFIX}model.glb`);
     expect(done?.startedAt).toBeInstanceOf(Date);
@@ -175,7 +175,7 @@ describe('processing worker: valid bundle', () => {
 
 describe('processing worker: terminal validation failures (never retried)', () => {
   it('manifest gone from S3 → FAILED with MANIFEST_MISSING on the first attempt', async () => {
-    mockS3({ manifest: 'absent', objectCount: 37 });
+    mockS3({ manifest: 'absent', objectCount: 49 });
     const job = await makeQueuedJob({ maxAttempts: 3 });
 
     await withWorker({}, async () => {
@@ -189,7 +189,7 @@ describe('processing worker: terminal validation failures (never retried)', () =
   });
 
   it('object count drifted since finalize → FAILED with FILE_COUNT_MISMATCH', async () => {
-    mockS3({ manifest: validManifestBody(), objectCount: 36 });
+    mockS3({ manifest: validManifestBody(), objectCount: 48 });
     const job = await makeQueuedJob();
 
     await withWorker({}, async () => {
@@ -198,14 +198,14 @@ describe('processing worker: terminal validation failures (never retried)', () =
 
     const failed = await Job.findById(job._id).lean();
     expect(failed?.error?.code).toBe('FILE_COUNT_MISMATCH');
-    expect(failed?.error?.message).toContain('Expected 37');
+    expect(failed?.error?.message).toContain('Expected 49');
     expect(failed?.nextRetryAt).toBeNull();
   });
 
   it('manifest content breaks a rule → FAILED with MANIFEST_INVALID and rule ids in details', async () => {
     const bad = JSON.parse(validManifestBody()) as { summary: { totalPhotos: number } };
     bad.summary.totalPhotos = 99; // FILE_COUNT_MISMATCH content rule
-    mockS3({ manifest: JSON.stringify(bad), objectCount: 37 });
+    mockS3({ manifest: JSON.stringify(bad), objectCount: 49 });
     const job = await makeQueuedJob();
 
     await withWorker({}, async () => {
@@ -219,7 +219,7 @@ describe('processing worker: terminal validation failures (never retried)', () =
   });
 
   it('unparseable manifest JSON → FAILED via the MANIFEST_UNREADABLE content rule', async () => {
-    mockS3({ manifest: '{not json', objectCount: 37 });
+    mockS3({ manifest: '{not json', objectCount: 49 });
     const job = await makeQueuedJob();
 
     await withWorker({}, async () => {
@@ -234,7 +234,7 @@ describe('processing worker: terminal validation failures (never retried)', () =
 
 describe('processing worker: transient failures (retried)', () => {
   it('a transient S3 error re-queues with backoff instead of failing terminally', async () => {
-    mockS3({ manifest: new Error('S3 timeout'), objectCount: 37 });
+    mockS3({ manifest: new Error('S3 timeout'), objectCount: 49 });
     const job = await makeQueuedJob({ maxAttempts: 3 });
 
     await withWorker({}, async () => {

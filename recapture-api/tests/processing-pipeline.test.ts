@@ -72,8 +72,8 @@ function makeQueuedJob(overrides: Partial<IJob> = {}): Promise<IJob> {
     captureVariant: 'with_bottom',
     upload: {
       uploadMethod: 'S3_PRESIGNED_MULTIPART',
-      expectedFilesCount: 37,
-      uploadedFilesCount: 37,
+      expectedFilesCount: 49,
+      uploadedFilesCount: 49,
       checksumAlgo: 'md5',
       rawBucket: RAW_BUCKET,
       rawPrefix: RAW_PREFIX,
@@ -85,7 +85,7 @@ function makeQueuedJob(overrides: Partial<IJob> = {}): Promise<IJob> {
 
 function validManifestBody(): string {
   const photos = ['EYE', 'TOP', 'LOW'].flatMap((ring) =>
-    Array.from({ length: 12 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
+    Array.from({ length: 16 }, (_, i) => ({ photoId: `${ring}_${i}`, ringName: ring }))
   );
   return JSON.stringify({
     flowVariant: 'with_bottom',
@@ -102,7 +102,7 @@ function mockValidS3() {
         return { Body: { transformToString: async () => validManifestBody() } };
       case 'ListObjectsV2Command':
         return {
-          Contents: Array.from({ length: 37 }, (_, i) => ({
+          Contents: Array.from({ length: 49 }, (_, i) => ({
             Key: `${cmd.input.Prefix as string}f_${i}.jpg`,
           })),
           IsTruncated: false,

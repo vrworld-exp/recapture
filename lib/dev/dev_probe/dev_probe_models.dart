@@ -39,7 +39,7 @@ class ProbeStep {
 
   final String id;
 
-  /// Mutable so the aggregated upload row can carry live "n/37" progress.
+  /// Mutable so the aggregated upload row can carry live "n/49" progress.
   String title;
   ProbeStepState state = ProbeStepState.pending;
 

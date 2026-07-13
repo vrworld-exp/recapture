@@ -290,31 +290,31 @@ void main() {
     });
 
     test('regression (§eyeRingSegments-for-all-levels bug): N follows the '
-        'ACTIVE band + variant — an 18-segment Top Ring buckets by 18', () async {
-      // A without_bottom session capturing Level B (band "high") → N = 18.
+        'ACTIVE band + variant — a 24-segment Top Ring buckets by 24', () async {
+      // A without_bottom session capturing Level B (band "high") → N = 24.
       container
           .read(captureFlowVariantProvider.notifier)
           .restore(CaptureFlowVariant.withoutBottom);
       container.read(activeCaptureBandIdProvider.notifier).set('high');
-      expect(container.read(activeLevelSegmentCountProvider), 18);
+      expect(container.read(activeLevelSegmentCountProvider), 24);
       // Let the stream provider rebuild + re-subscribe (broadcast events sent
       // during the swap would be lost) before feeding the baseline sample.
       await pumpEventQueue();
 
       source.add(_yaw(0)); // baseline this ring at 0°
       await pumpEventQueue();
-      // 30° into an 18-segment ring (20°/segment) is segment 1 — under the old
-      // Eye-Ring-pinned N (12 → 30°/segment) this same turn would read 1 too,
-      // so probe 50°: 18-seg → segment 2; 12-seg would say segment 1.
+      // Probe 50°: a 24-segment ring (15°/segment) buckets it as segment 3 —
+      // under an Eye-Ring-pinned N (16 → 22.5°/segment) the same turn would
+      // read segment 2, so the two Ns are distinguishable.
       source.add(_yaw(50));
       await pumpEventQueue();
       expect(
         container.read(currentRingSegmentProvider).valueOrNull?.currentSegment,
-        2,
-        reason: 'yaw→segment must bucket by THIS ring\'s N (18), not the Eye Ring\'s',
+        3,
+        reason: 'yaw→segment must bucket by THIS ring\'s N (24), not the Eye Ring\'s',
       );
       // …and the fill state sized itself to the same N (single source).
-      expect(container.read(segmentCoverageProvider).segmentCount, 18);
+      expect(container.read(segmentCoverageProvider).segmentCount, 24);
     });
   });
 

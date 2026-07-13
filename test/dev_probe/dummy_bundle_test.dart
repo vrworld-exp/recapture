@@ -1,8 +1,8 @@
 // test/dev_probe/dummy_bundle_test.dart
 //
 // Pins the dummy-bundle generator to the `with_bottom` variant contract the
-// backend enforces at finalize: exactly 37 files (36 images + manifest),
-// 12 per ring across EYE/TOP/LOW, JPEG SOI/EOI framing, keys contained under
+// backend enforces at finalize: exactly 49 files (48 images + manifest),
+// 16 per ring across EYE/TOP/LOW, JPEG SOI/EOI framing, keys contained under
 // the given plan prefix, and a manifest that round-trips with matching counts.
 import 'dart:convert';
 
@@ -16,25 +16,25 @@ void main() {
   DummyBundle build() =>
       buildDummyBundle(keyPrefix: keyPrefix, manifestKey: manifestKey);
 
-  test('exactly 37 entries: 36 images + 1 manifest', () {
+  test('exactly 49 entries: 48 images + 1 manifest', () {
     final bundle = build();
-    expect(kSmokeExpectedFilesCount, 37);
-    expect(bundle.files, hasLength(37));
+    expect(kSmokeExpectedFilesCount, 49);
+    expect(bundle.files, hasLength(49));
     expect(bundle.manifest.key, manifestKey);
     expect(
       bundle.files.where((f) => f.key.endsWith('.jpg')),
-      hasLength(36),
+      hasLength(48),
     );
   });
 
-  test('12 images per ring across EYE/TOP/LOW, canonical names', () {
+  test('16 images per ring across EYE/TOP/LOW, canonical names', () {
     final bundle = build();
     for (final ring in ['EYE', 'TOP', 'LOW']) {
       final ringFiles = bundle.files
           .where((f) => f.key.startsWith('${keyPrefix}images/$ring/'))
           .toList();
-      expect(ringFiles, hasLength(12), reason: 'ring $ring');
-      for (var i = 1; i <= 12; i++) {
+      expect(ringFiles, hasLength(16), reason: 'ring $ring');
+      for (var i = 1; i <= 16; i++) {
         final name =
             '${ring.toLowerCase()}_${i.toString().padLeft(4, '0')}.jpg';
         expect(
@@ -75,21 +75,21 @@ void main() {
 
     expect(manifest['flowVariant'], kSmokeFlowVariant);
     final summary = manifest['summary'] as Map<String, dynamic>;
-    expect(summary['totalPhotos'], 36);
+    expect(summary['totalPhotos'], 48);
     expect(summary['warningsCount'], 0);
 
     final photos = (manifest['photos'] as List).cast<Map<String, dynamic>>();
-    expect(photos, hasLength(36));
+    expect(photos, hasLength(48));
     for (final ring in ['EYE', 'TOP', 'LOW']) {
       expect(
         photos.where((p) => p['ringName'] == ring),
-        hasLength(12),
+        hasLength(16),
         reason: 'ring $ring',
       );
     }
     // Every photo has a non-empty photoId, all unique.
     final ids = photos.map((p) => p['photoId'] as String).toSet();
-    expect(ids, hasLength(36));
+    expect(ids, hasLength(48));
     expect(ids.every((id) => id.isNotEmpty), isTrue);
   });
 

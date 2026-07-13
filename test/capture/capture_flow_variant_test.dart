@@ -6,7 +6,7 @@
 //   - VariantSegments: never-throw fromMap, per-entry fallback to the bundled
 //     numbers, toMap round-trip, equality, and the sanitizer clamp.
 //   - effectiveSegmentsFor precedence: variant override → bundled variant
-//     default → legacy PitchBand.segments → 12.
+//     default → legacy PitchBand.segments → 16.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/analytics/capture_level_events.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
@@ -56,11 +56,11 @@ void main() {
   group('VariantSegments', () {
     test('bundled defaults carry the product numbers', () {
       const v = VariantSegments.bundledDefault;
-      expect(v.segmentsFor('with_bottom', 'mid'), 12);
-      expect(v.segmentsFor('with_bottom', 'high'), 12);
-      expect(v.segmentsFor('with_bottom', 'low'), 12);
-      expect(v.segmentsFor('without_bottom', 'mid'), 18);
-      expect(v.segmentsFor('without_bottom', 'high'), 18);
+      expect(v.segmentsFor('with_bottom', 'mid'), 16);
+      expect(v.segmentsFor('with_bottom', 'high'), 16);
+      expect(v.segmentsFor('with_bottom', 'low'), 16);
+      expect(v.segmentsFor('without_bottom', 'mid'), 24);
+      expect(v.segmentsFor('without_bottom', 'high'), 24);
       // The 2-ring variant deliberately has NO 'low' entry.
       expect(v.segmentsFor('without_bottom', 'low'), isNull);
     });
@@ -72,9 +72,9 @@ void main() {
         42: {'mid': 5},
       });
       expect(v.segmentsFor('with_bottom', 'mid'), 14); // override kept
-      expect(v.segmentsFor('with_bottom', 'high'), 12); // dropped → bundled
-      expect(v.segmentsFor('with_bottom', 'low'), 12); // dropped → bundled
-      expect(v.segmentsFor('without_bottom', 'mid'), 18); // garbage → bundled
+      expect(v.segmentsFor('with_bottom', 'high'), 16); // dropped → bundled
+      expect(v.segmentsFor('with_bottom', 'low'), 16); // dropped → bundled
+      expect(v.segmentsFor('without_bottom', 'mid'), 24); // garbage → bundled
     });
 
     test('non-map input → bundled defaults', () {
@@ -129,15 +129,15 @@ void main() {
 
     test('bundled variant default beats the legacy band count', () {
       // Bundled pitchBands still carry the legacy mid=10 — the variant default
-      // (12) must win so old cached configs can't shrink the new flow.
+      // (16) must win so old cached configs can't shrink the new flow.
       expect(
         effectiveSegmentsFor(
             CaptureConfig.bundledDefault, CaptureFlowVariant.withBottom, 'mid'),
-        12,
+        16,
       );
     });
 
-    test('unknown band falls back to the legacy band count, then 12', () {
+    test('unknown band falls back to the legacy band count, then 16', () {
       final cfg = CaptureConfig.bundledDefault.copyWith(pitchBands: const [
         PitchBand(id: 'custom', minDegrees: 0, maxDegrees: 45, segments: 7),
       ]);
@@ -146,10 +146,10 @@ void main() {
         effectiveSegmentsFor(cfg, CaptureFlowVariant.withBottom, 'custom'),
         7,
       );
-      // Completely unknown band → the final 12 floor.
+      // Completely unknown band → the final 16 floor.
       expect(
         effectiveSegmentsFor(cfg, CaptureFlowVariant.withBottom, 'nowhere'),
-        12,
+        16,
       );
     });
 

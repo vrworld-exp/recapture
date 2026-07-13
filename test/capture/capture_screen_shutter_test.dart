@@ -150,19 +150,20 @@ void main() {
     captureResult = {'id': 'cap_0', 'path': '/tmp/cap_0.jpg', 'timestampNs': 1};
     await pumpScreen(tester);
 
-    // Two 0/12 readouts pre-capture: the bottom-right photo counter AND the ring
-    // badge's filled/N (bundled-default 'mid' band N = 10). Never the demo 12/36.
-    expect(find.text('0/12'), findsNWidgets(2));
+    // Two 0/16 readouts pre-capture: the bottom-right photo counter AND the ring
+    // badge's filled/N (effective 'mid' count under with_bottom = 16). Never the
+    // demo 12/36.
+    expect(find.text('0/16'), findsNWidgets(2));
     expect(find.text('12/36'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('capture_shutter')));
     await tester.pump();
     await tester.pump();
 
-    // The photo counter advanced; the ring badge stays 0/12 (inert sensors →
+    // The photo counter advanced; the ring badge stays 0/16 (inert sensors →
     // unknown segment → a real frame cannot claim coverage).
-    expect(find.text('1/12'), findsOneWidget);
-    expect(find.text('0/12'), findsOneWidget);
+    expect(find.text('1/16'), findsOneWidget);
+    expect(find.text('0/16'), findsOneWidget);
     await teardownScreen(tester);
   });
 
@@ -171,16 +172,16 @@ void main() {
     captureResult = null; // no bound session / busy / unsupported
     await pumpScreen(tester);
 
-    expect(find.text('0/12'), findsNWidgets(2));
+    expect(find.text('0/16'), findsNWidgets(2));
 
     await tester.tap(find.byKey(const ValueKey('capture_shutter')));
     await tester.pump();
     await tester.pump();
 
     expect(captureCalls, contains('captureSingle'));
-    expect(find.text('0/12'), findsNWidgets(2),
+    expect(find.text('0/16'), findsNWidgets(2),
         reason: 'counter must not advance');
-    expect(find.text('1/12'), findsNothing);
+    expect(find.text('1/16'), findsNothing);
     await teardownScreen(tester);
   });
 }

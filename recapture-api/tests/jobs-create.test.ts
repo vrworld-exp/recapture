@@ -16,6 +16,10 @@ import { env } from '@/config/env';
 import { Project } from '@/models/Project';
 import { Job } from '@/models/Job';
 import { PART_SIZE_MIN, MAX_PARTS } from '@/services/jobsService';
+import {
+  DEFAULT_CAPTURE_FLOW_VARIANT,
+  expectedImageCount,
+} from '@/models/types/captureVariants';
 
 const app = createApp();
 let mongod: MongoMemoryServer;
@@ -61,9 +65,12 @@ async function makeProject(
 const userId = new Types.ObjectId().toHexString();
 const auth = { Authorization: `Bearer ${tokenFor(userId)}` };
 
-/** A valid body (default with_bottom variant: 36 images + manifest = 37). */
+/** The default variant's full total, manifest-inclusive (48 images + 1). */
+const FULL_FILES = expectedImageCount(DEFAULT_CAPTURE_FLOW_VARIANT) + 1;
+
+/** A valid body (default with_bottom variant: full images + manifest). */
 function validBody(projectId: string) {
-  return { projectId, objectSize: 'medium', expectedFilesCount: 37 };
+  return { projectId, objectSize: 'medium', expectedFilesCount: FULL_FILES };
 }
 
 describe('POST /jobs — happy path', () => {
@@ -82,7 +89,7 @@ describe('POST /jobs — happy path', () => {
     expect(job.projectId).toBe(projectId);
     expect(job.objectSize).toBe('medium');
     expect(job.captureVariant).toBe('with_bottom'); // default when unsent
-    expect(job.expectedFilesCount).toBe(37);
+    expect(job.expectedFilesCount).toBe(FULL_FILES);
 
     // Plan: job-scoped key space + echoed S3 hard limits + bounded expiry.
     expect(uploadPlan.uploadMethod).toBe('S3_PRESIGNED_MULTIPART');
@@ -107,7 +114,7 @@ describe('POST /jobs — happy path', () => {
     expect(saved!.objectSize).toBe('MEDIUM');
     expect(saved!.captureVariant).toBe('with_bottom');
     expect(saved!.userId.toHexString()).toBe(userId);
-    expect(saved!.upload!.expectedFilesCount).toBe(37);
+    expect(saved!.upload!.expectedFilesCount).toBe(FULL_FILES);
     expect(saved!.upload!.uploadedFilesCount).toBe(0);
     expect(saved!.upload!.rawPrefix).toBe(uploadPlan.keyPrefix);
     expect(saved!.upload!.manifestKey).toBe(uploadPlan.manifestKey);
@@ -117,7 +124,7 @@ describe('POST /jobs — happy path', () => {
       String(c[0]).includes('[analytics] job_created')
     );
     expect(jobCreated).toHaveLength(1);
-    expect(String(jobCreated[0]![1])).toContain('"expected_files_count":37');
+    expect(String(jobCreated[0]![1])).toContain(`"expected_files_count":${FULL_FILES}`);
     expect(String(jobCreated[0]![1])).toContain('"flow_variant":"with_bottom"');
   });
 
@@ -186,13 +193,15 @@ describe('POST /jobs — validation (400)', () => {
     expect(await Job.countDocuments()).toBe(0);
   });
 
-  // The valid range is [minimumImageCount + 1, expectedImageCount + 1] —
-  // the coverage floor (80% per ring) to the full total, manifest-inclusive.
-  // Both variants: 30 images minimum, 36 maximum → 31–37 files.
+  // The valid range is [compatMinimumImageCount + 1, compatMaximumImageCount
+  // + 1] — the legacy-compatible coverage floor (80% per ring, min over the
+  // retired 12/18 revision and the current 16/24 one) to the highest full
+  // total, manifest-inclusive. Both variants: 30 images minimum, 48 maximum
+  // → 31–49 files.
   it.each([
     ['far undershoot', 10],
-    ['one below the coverage floor (min − 1)', 30],
-    ['one above the full total (max + 1)', 38],
+    ['one below the compat coverage floor (min − 1)', 30],
+    ['one above the full total (max + 1)', 50],
     ['overshoot (pre-variant size-based count)', 73],
   ])(
     'expectedFilesCount %s → 400 naming the valid range',
@@ -204,9 +213,9 @@ describe('POST /jobs — validation (400)', () => {
         .send({ projectId, objectSize: 'medium', expectedFilesCount: count });
 
       expect(res.status).toBe(400);
-      // with_bottom: [3 × 10 + manifest, 3 × 12 + manifest] = 31–37.
-      expect(res.body.message).toContain('between 31 and 37');
-      expect(res.body.fields.expectedFilesCount).toBe('must be 31-37');
+      // with_bottom: [3 × 10 + manifest, 3 × 16 + manifest] = 31–49.
+      expect(res.body.message).toContain('between 31 and 49');
+      expect(res.body.fields.expectedFilesCount).toBe('must be 31-49');
       expect(await Job.countDocuments()).toBe(0);
     }
   );
@@ -215,7 +224,7 @@ describe('POST /jobs — validation (400)', () => {
     ['with_bottom', 'with_bottom'],
     ['without_bottom', 'without_bottom'],
   ])('%s: the range bounds are accepted exactly (min and max)', async (_n, captureVariant) => {
-    for (const count of [31, 37]) {
+    for (const count of [31, 49]) {
       const projectId = await makeProject(userId, 'MEDIUM');
       const res = await request(app)
         .post('/jobs')
@@ -231,7 +240,7 @@ describe('POST /jobs — validation (400)', () => {
     ['with_bottom', 'with_bottom'],
     ['without_bottom', 'without_bottom'],
   ])('%s: min − 1 and max + 1 → 400 with the range', async (_n, captureVariant) => {
-    for (const count of [30, 38]) {
+    for (const count of [30, 50]) {
       const projectId = await makeProject(userId, 'MEDIUM');
       const res = await request(app)
         .post('/jobs')
@@ -241,15 +250,15 @@ describe('POST /jobs — validation (400)', () => {
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('INVALID_REQUEST');
       expect(res.body.message).toContain(`'${captureVariant}'`);
-      expect(res.body.message).toContain('between 31 and 37');
-      expect(res.body.fields.expectedFilesCount).toBe('must be 31-37');
+      expect(res.body.message).toContain('between 31 and 49');
+      expect(res.body.fields.expectedFilesCount).toBe('must be 31-49');
     }
     expect(await Job.countDocuments()).toBe(0);
   });
 
-  it('a partial without_bottom capture (16/18 per ring → 33 files) is accepted', async () => {
-    // The real-device case behind the range: two rings finished at 16/18
-    // segments (≥ the 80% coverage floor of 15) pack 32 images + manifest.
+  it('a partial without_bottom capture (21/24 per ring → 43 files) is accepted', async () => {
+    // The real-device case behind the range: two rings finished at 21/24
+    // segments (≥ the 80% coverage floor of 20) pack 42 images + manifest.
     const projectId = await makeProject(userId, 'MEDIUM');
     const res = await request(app)
       .post('/jobs')
@@ -258,14 +267,33 @@ describe('POST /jobs — validation (400)', () => {
         projectId,
         objectSize: 'medium',
         captureVariant: 'without_bottom',
-        expectedFilesCount: 33,
+        expectedFilesCount: 43,
       });
 
     expect(res.status).toBe(201);
-    expect(res.body.job.expectedFilesCount).toBe(33);
+    expect(res.body.job.expectedFilesCount).toBe(43);
     // Finalize verifies against the STORED client count — it must persist as-is.
     const saved = await Job.findById(res.body.job.id).exec();
-    expect(saved!.upload!.expectedFilesCount).toBe(33);
+    expect(saved!.upload!.expectedFilesCount).toBe(43);
+  });
+
+  it('BACK-COMPAT: a capture made under the retired 12/18-per-ring config is still accepted', async () => {
+    // A session captured before the 16/24 bump reaches create-job with the old
+    // counts (client config is cached) — the compat range must admit it.
+    for (const [captureVariant, count] of [
+      ['with_bottom', 37], // legacy full: 3 × 12 + manifest
+      ['without_bottom', 37], // legacy full: 2 × 18 + manifest
+      ['with_bottom', 31], // legacy coverage floor: 3 × 10 + manifest
+    ] as const) {
+      const projectId = await makeProject(userId, 'MEDIUM');
+      const res = await request(app)
+        .post('/jobs')
+        .set(auth)
+        .send({ projectId, objectSize: 'medium', captureVariant, expectedFilesCount: count });
+
+      expect(res.status).toBe(201);
+      expect(res.body.job.expectedFilesCount).toBe(count);
+    }
   });
 });
 
@@ -350,7 +378,7 @@ describe('POST /jobs — idempotency', () => {
       .set(auth)
       .set('Idempotency-Key', key)
       .send(validBody(projectId));
-    // Both variants total 37 files, so the ONLY drift is the variant itself —
+    // Both variants total 49 files, so the ONLY drift is the variant itself —
     // it must still conflict like any other body drift under the same key.
     const second = await request(app)
       .post('/jobs')
@@ -405,7 +433,7 @@ describe('POST /jobs — idempotency', () => {
       projectId,
       objectSize: 'medium',
       captureVariant: 'without_bottom',
-      expectedFilesCount: 33, // partial (16+16 images + manifest)
+      expectedFilesCount: 43, // partial (21+21 images + manifest)
     };
 
     const first = await request(app)
@@ -467,7 +495,7 @@ describe('POST /jobs — captureVariant', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.job.captureVariant).toBe('without_bottom');
-    expect(res.body.job.expectedFilesCount).toBe(37); // 2 rings × 18 + manifest
+    expect(res.body.job.expectedFilesCount).toBe(FULL_FILES); // 2 rings × 24 + manifest
     expect(res.body.uploadPlan.levels).toEqual(['EYE', 'TOP']); // no LOW planned
 
     const saved = await Job.findById(res.body.job.id).exec();

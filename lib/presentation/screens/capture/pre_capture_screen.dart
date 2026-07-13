@@ -19,7 +19,7 @@ import '../../widgets/checklist_item_tile.dart';
 
 /// Pre-capture checklist. The user acknowledges each required item — and
 /// answers the "can you capture the bottom?" question that selects the capture
-/// FLOW VARIANT (with_bottom 3-ring 12-12-12 vs without_bottom 2-ring 18-18) —
+/// FLOW VARIANT (with_bottom 3-ring 16-16-16 vs without_bottom 2-ring 24-24) —
 /// before the Start CTA navigates into the capture flow.
 ///
 /// Item acknowledgment stays local widget state (transient); the flow-variant

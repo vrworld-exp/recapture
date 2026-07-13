@@ -1,7 +1,7 @@
 // lib/application/capture/capture_flow_variant_provider.dart
 //
 // Reactive + persistence wiring for the capture FLOW VARIANT (with_bottom
-// 3-ring 12-12-12 vs without_bottom 2-ring 18-18 — see CaptureFlowVariant).
+// 3-ring 16-16-16 vs without_bottom 2-ring 24-24 — see CaptureFlowVariant).
 //
 // OWNERSHIP: the variant is chosen on the Pre-Capture Checklist (Screen 4),
 // held here for the whole app session, and persisted per project as a sibling

@@ -5,6 +5,8 @@ import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/capture_flow_variant_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
+import '../../application/config/config_notifier.dart';
+import '../../domain/entities/capture_config.dart';
 import '../../domain/capture/capture_flow_variant.dart';
 import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
@@ -203,17 +205,28 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.levelAComplete,
         // TODO(capture): supply the REAL summary from the aggregated Level A
         // result (same source as the in-capture progress meter / ring map).
-        // Placeholder values until the completion-summary aggregation lands.
-        builder: (context, _) => LevelACompleteScreen(
-          summary: const LevelASummary(
-            accepted: 34,
-            target: 36,
-            coveragePct: 92,
-            rejected: 1,
-          ),
-          onStartLevelB: () => context.go(AppRoutes.levelBIntro),
-          onReview: () => context.push(AppRoutes.levelAReview),
-          onDoneExit: () => context.go(AppRoutes.projects),
+        // accepted/coveragePct/rejected are placeholders until the
+        // completion-summary aggregation lands; the TARGET comes from the real
+        // config × variant resolver so the copy always names the true count.
+        builder: (context, _) => Consumer(
+          builder: (context, ref, _) {
+            final target = effectiveSegmentsFor(
+              ref.watch(captureConfigProvider),
+              ref.watch(captureFlowVariantProvider),
+              'mid',
+            );
+            return LevelACompleteScreen(
+              summary: LevelASummary(
+                accepted: target - 2,
+                target: target,
+                coveragePct: 92,
+                rejected: 1,
+              ),
+              onStartLevelB: () => context.go(AppRoutes.levelBIntro),
+              onReview: () => context.push(AppRoutes.levelAReview),
+              onDoneExit: () => context.go(AppRoutes.projects),
+            );
+          },
         ),
       ),
       // Level B — dedicated Top Ring intro (tilt-down rule + Begin/Skip),

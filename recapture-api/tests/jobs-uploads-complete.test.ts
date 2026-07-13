@@ -59,7 +59,7 @@ async function makeJob(
     .send({
       projectId: p.id,
       objectSize: 'medium',
-      expectedFilesCount: 37,
+      expectedFilesCount: 49,
       ...(captureVariant ? { captureVariant } : {}),
     });
   expect(res.status).toBe(201);

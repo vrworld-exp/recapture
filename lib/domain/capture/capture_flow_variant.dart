@@ -4,10 +4,10 @@
 // the object's bottom can be captured, chosen by the user on the Pre-Capture
 // Checklist (Screen 4) before the guided flow begins.
 //
-//   with_bottom    → 3 rings: Eye (mid) → Top (high) → Bottom (low), 12
-//                    segments per ring (12-12-12, 36 total)
-//   without_bottom → 2 rings: Eye (mid) → Top (high), 18 segments per ring
-//                    (18-18, 36 total). The Bottom Ring (Level C) never appears.
+//   with_bottom    → 3 rings: Eye (mid) → Top (high) → Bottom (low), 16
+//                    segments per ring (16-16-16, 48 total)
+//   without_bottom → 2 rings: Eye (mid) → Top (high), 24 segments per ring
+//                    (24-24, 48 total). The Bottom Ring (Level C) never appears.
 //
 // INVARIANT: the 2-ring variant is always a PREFIX of the 3-ring one (A→B),
 // so the flow order never changes between variants — only where it ends.

@@ -129,19 +129,19 @@ void main() {
       expect(levels.map((l) => l.levelCode).toList(), ['A', 'B', 'C']);
       // pitchBandIdForLevel: A=mid, B=high, C=low.
       expect(levels.map((l) => l.levelId).toList(), ['mid', 'high', 'low']);
-      // Segment counts come from the variant defaults (12-12-12), which win
+      // Segment counts come from the variant defaults (16-16-16), which win
       // over the legacy band counts (10/8/12).
-      expect(levels.map((l) => l.segmentCount).toList(), [12, 12, 12]);
+      expect(levels.map((l) => l.segmentCount).toList(), [16, 16, 16]);
     });
 
-    test('without_bottom builds A→B only at 18-18 (Level C dropped)', () {
+    test('without_bottom builds A→B only at 24-24 (Level C dropped)', () {
       final levels = levelStatesFromConfig(
         CaptureConfig.bundledDefault,
         variant: CaptureFlowVariant.withoutBottom,
       );
       expect(levels.map((l) => l.levelCode).toList(), ['A', 'B']);
       expect(levels.map((l) => l.levelId).toList(), ['mid', 'high']);
-      expect(levels.map((l) => l.segmentCount).toList(), [18, 18]);
+      expect(levels.map((l) => l.segmentCount).toList(), [24, 24]);
     });
 
     test('reconcile carries progress, adopts new segment count, clamps frontier',
@@ -185,9 +185,9 @@ void main() {
         CaptureConfig.bundledDefault,
         variant: CaptureFlowVariant.withoutBottom,
       );
-      // C simply disappears; A/B carry progress at the 18-segment shape.
+      // C simply disappears; A/B carry progress at the 24-segment shape.
       expect(r.levels.map((l) => l.levelId).toList(), ['mid', 'high']);
-      expect(r.levels.map((l) => l.segmentCount).toList(), [18, 18]);
+      expect(r.levels.map((l) => l.segmentCount).toList(), [24, 24]);
       expect(r.currentLevel.levelId, 'high'); // frontier kept by id
       expect(r.stateForId('mid')!.acceptedCount, 12); // progress carried
       expect(r.stateForId('low'), isNull);
@@ -238,8 +238,8 @@ void main() {
 
     test('derives per-level accepted + filled counts from the ledgers', () {
       final registry = LevelCaptureLedgerRegistry();
-      // mid: full ring (12 distinct segments) → complete.
-      for (var i = 0; i < 12; i++) {
+      // mid: full ring (16 distinct segments) → complete.
+      for (var i = 0; i < 16; i++) {
         registry.ledgerFor('mid').recordAccepted(rec(i, 'mid/$i.jpg'));
       }
       // high: 3 accepted but only 2 distinct segments → filled < accepted.
@@ -257,8 +257,8 @@ void main() {
 
       expect(p.levels.map((l) => l.levelId).toList(), ['mid', 'high', 'low']);
       final mid = p.stateForId('mid')!;
-      expect(mid.acceptedCount, 12);
-      expect(mid.filledCount, 12);
+      expect(mid.acceptedCount, 16);
+      expect(mid.filledCount, 16);
       expect(mid.isComplete, isTrue);
       final high = p.stateForId('high')!;
       expect(high.acceptedCount, 3);
@@ -310,14 +310,14 @@ void main() {
       expect(high.isComplete, isFalse); // coverage passes, count gate fails
     });
 
-    test('without_bottom derives A/B only at the variant shape (18-18)', () {
+    test('without_bottom derives A/B only at the variant shape (24-24)', () {
       final p = progressionFromLedger(
         CaptureConfig.bundledDefault,
         variant: CaptureFlowVariant.withoutBottom,
         registry: LevelCaptureLedgerRegistry(),
       );
       expect(p.levels.map((l) => l.levelId).toList(), ['mid', 'high']);
-      expect(p.levels.map((l) => l.segmentCount).toList(), [18, 18]);
+      expect(p.levels.map((l) => l.segmentCount).toList(), [24, 24]);
     });
   });
 }

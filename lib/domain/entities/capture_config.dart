@@ -225,8 +225,8 @@ class UploadMinShots {
 ///
 /// ```json
 /// {
-///   "with_bottom":    { "mid": 12, "high": 12, "low": 12 },
-///   "without_bottom": { "mid": 18, "high": 18 }
+///   "with_bottom":    { "mid": 16, "high": 16, "low": 16 },
+///   "without_bottom": { "mid": 24, "high": 24 }
 /// }
 /// ```
 ///
@@ -246,10 +246,10 @@ class VariantSegments {
 
   final Map<String, Map<String, int>> _perVariant;
 
-  /// The product defaults: 12-12-12 with bottom, 18-18 without (36 total both).
+  /// The product defaults: 16-16-16 with bottom, 24-24 without (48 total both).
   static const VariantSegments bundledDefault = VariantSegments(perVariant: {
-    'with_bottom': {'mid': 12, 'high': 12, 'low': 12},
-    'without_bottom': {'mid': 18, 'high': 18},
+    'with_bottom': {'mid': 16, 'high': 16, 'low': 16},
+    'without_bottom': {'mid': 24, 'high': 24},
   });
 
   /// The configured count for ([variantId], [bandId]): the stored override when
@@ -332,7 +332,7 @@ class VariantSegments {
 ///
 /// Precedence: variant override / bundled variant default
 /// ([VariantSegments.segmentsFor]) → the band's legacy [PitchBand.segments]
-/// (old cached configs) → 12. Always `>= 1`.
+/// (old cached configs) → 16. Always `>= 1`.
 int effectiveSegmentsFor(
   CaptureConfig config,
   CaptureFlowVariant variant,
@@ -343,7 +343,7 @@ int effectiveSegmentsFor(
   for (final b in config.pitchBands) {
     if (b.id == bandId && b.segments >= 1) return b.segments;
   }
-  return 12;
+  return 16;
 }
 
 /// App-wide capture configuration. Server-tunable without an app release.
@@ -367,7 +367,7 @@ class CaptureConfig {
   /// Per-level absolute-minimum accepted shots required to upload (hard gate).
   final UploadMinShots uploadMinShots;
 
-  /// Per-flow-variant ring segment counts (12-12-12 / 18-18 by default) —
+  /// Per-flow-variant ring segment counts (16-16-16 / 24-24 by default) —
   /// resolved through [effectiveSegmentsFor], never read raw by flow consumers.
   final VariantSegments variantSegments;
 

@@ -7,7 +7,7 @@
 // server-side consumer (create-job count cross-check, upload-urls key
 // containment, finalize manifest validation, remote-config defaults) derives
 // ring sets and counts from the helpers here. Re-declaring a ring list or a
-// per-ring count anywhere else is a bug — including hardcoding the 36 total.
+// per-ring count anywhere else is a bug — including hardcoding the 48 total.
 //
 // Ring names are the S3/manifest vocabulary (EYE/TOP/LOW — see utils/s3Keys);
 // the client's band ids (mid/high/low) are a different vocabulary that stays
@@ -30,16 +30,31 @@ export const DEFAULT_CAPTURE_FLOW_VARIANT: CaptureFlowVariant = 'with_bottom';
 
 /**
  * Per-variant shape. `without_bottom` drops the LOW ring and redistributes
- * the coverage over the remaining two rings — both variants total 36 images
- * today (12×3 vs 18×2), but consumers must use expectedImageCount(), never
+ * the coverage over the remaining two rings — both variants total 48 images
+ * today (16×3 vs 24×2), but consumers must use expectedImageCount(), never
  * assume the totals coincide.
  */
 const VARIANT_DEFS: Record<
   CaptureFlowVariant,
   { rings: readonly CaptureRingName[]; perRing: number }
 > = {
-  with_bottom: { rings: ['EYE', 'TOP', 'LOW'], perRing: 12 },
-  without_bottom: { rings: ['EYE', 'TOP'], perRing: 18 },
+  with_bottom: { rings: ['EYE', 'TOP', 'LOW'], perRing: 16 },
+  without_bottom: { rings: ['EYE', 'TOP'], perRing: 24 },
+};
+
+/**
+ * Per-ring counts of RETIRED protocol revisions, per variant. The client's
+ * counts are remote-config-tunable and captures are long-lived: a session
+ * captured under an older config (or a Job document created before a deploy)
+ * can reach create-job/finalize AFTER the counts changed. Count checks that
+ * gate an already-captured bundle therefore accept the UNION of legacy and
+ * current ranges via the compat* helpers below — otherwise every pre-change
+ * capture would be rejected as COUNT_INCONSISTENT/MANIFEST_INVALID.
+ * Append here when perRing changes; never remove a revision that shipped.
+ */
+const LEGACY_PER_RING: Record<CaptureFlowVariant, readonly number[]> = {
+  with_bottom: [12],
+  without_bottom: [18],
 };
 
 /** True when `value` is one of the two variant wire ids. */
@@ -80,7 +95,7 @@ export const MIN_RING_COVERAGE_PCT = 80;
 
 /** Minimum image count on EACH of the variant's rings —
  * ceil(expectedPerRing × MIN_RING_COVERAGE_PCT / 100)
- * (→ 15 for without_bottom's 18, 10 for with_bottom's 12). */
+ * (→ 20 for without_bottom's 24, 13 for with_bottom's 16). */
 export function minimumPerRing(variant: CaptureFlowVariant): number {
   return Math.ceil((expectedPerRing(variant) * MIN_RING_COVERAGE_PCT) / 100);
 }
@@ -89,4 +104,35 @@ export function minimumPerRing(variant: CaptureFlowVariant): number {
  * manifest — same +1 convention as expectedImageCount). */
 export function minimumImageCount(variant: CaptureFlowVariant): number {
   return ringsForVariant(variant).length * minimumPerRing(variant);
+}
+
+// ── Legacy-compatible bounds ─────────────────────────────────────────────────
+// Every per-ring count this variant has EVER shipped with (current first).
+function perRingCandidates(variant: CaptureFlowVariant): number[] {
+  return [expectedPerRing(variant), ...LEGACY_PER_RING[variant]];
+}
+
+/** Lowest per-ring floor across current + retired revisions —
+ * min over revisions of ceil(perRing × MIN_RING_COVERAGE_PCT / 100). Use for
+ * checks that gate a bundle which may have been CAPTURED under an older
+ * config (create-job range, finalize/worker manifest bounds). */
+export function compatMinimumPerRing(variant: CaptureFlowVariant): number {
+  return Math.min(
+    ...perRingCandidates(variant).map((n) => Math.ceil((n * MIN_RING_COVERAGE_PCT) / 100))
+  );
+}
+
+/** Highest per-ring ceiling across current + retired revisions. */
+export function compatMaximumPerRing(variant: CaptureFlowVariant): number {
+  return Math.max(...perRingCandidates(variant));
+}
+
+/** Legacy-compatible minimum total images (excludes the manifest). */
+export function compatMinimumImageCount(variant: CaptureFlowVariant): number {
+  return ringsForVariant(variant).length * compatMinimumPerRing(variant);
+}
+
+/** Legacy-compatible maximum total images (excludes the manifest). */
+export function compatMaximumImageCount(variant: CaptureFlowVariant): number {
+  return ringsForVariant(variant).length * compatMaximumPerRing(variant);
 }

@@ -1,4 +1,4 @@
-// test/dev_probe/upload_smoke_service_test.dart
+﻿// test/dev_probe/upload_smoke_service_test.dart
 //
 // Drives the whole upload smoke pipeline against a fake Dio HttpClientAdapter
 // (no real network): asserts the request order and shapes (method/path/body,
@@ -53,7 +53,7 @@ class _FakeBackend {
   final requests = <RequestOptions>[];
   int _uploadCounter = 0;
 
-  /// uploadId → the ETag the fake S3 PUT returned for it.
+  /// uploadId â†’ the ETag the fake S3 PUT returned for it.
   final putEtags = <String, String>{};
 
   /// Mismatches found when uploads/complete arrived (asserted empty).
@@ -135,7 +135,7 @@ class _FakeBackend {
           'status': 'success',
           'jobId': 'j1',
           'state': 'QUEUED',
-          'filesVerified': 37,
+          'filesVerified': 49,
           'queuedAt': '2026-07-10T00:00:00.000Z',
         });
     }
@@ -162,12 +162,12 @@ void main() {
         reason: run.steps
             .map((s) => '${s.id}=${s.state.name}: ${s.detail}')
             .join('\n'));
-    expect(run.filesCompleted, 37);
-    expect(run.totalFiles, 37);
+    expect(run.filesCompleted, 49);
+    expect(run.totalFiles, 49);
     expect(run.elapsed, isNotNull);
     expect(run.totalBytes, greaterThan(0));
 
-    // Request order: handshake, project, job, then 37×(initiate→PUT→complete),
+    // Request order: handshake, project, job, then 37Ã—(initiateâ†’PUTâ†’complete),
     // then finalize.
     final signatures = backend.requests
         .map((o) =>
@@ -179,13 +179,13 @@ void main() {
       'POST /projects',
       'POST /jobs',
     ]);
-    for (var i = 0; i < 37; i++) {
+    for (var i = 0; i < 49; i++) {
       expect(signatures[4 + i * 3], 'POST /jobs/j1/uploads/initiate');
       expect(signatures[5 + i * 3], 'PUT s3');
       expect(signatures[6 + i * 3], 'POST /jobs/j1/uploads/complete');
     }
     expect(signatures.last, 'POST /jobs/j1/finalize');
-    expect(signatures, hasLength(4 + 37 * 3 + 1));
+    expect(signatures, hasLength(4 + 49 * 3 + 1));
 
     // Body shapes.
     final projectReq =
@@ -198,16 +198,16 @@ void main() {
 
     final jobReq = backend.requests.firstWhere((o) => o.uri.path == '/jobs');
     expect((jobReq.data as Map)['captureVariant'], 'with_bottom');
-    expect((jobReq.data as Map)['expectedFilesCount'], 37);
+    expect((jobReq.data as Map)['expectedFilesCount'], 49);
     expect(jobReq.headers['Idempotency-Key'], 'fixed-uuid-1234');
 
     final finalizeReq = backend.requests
         .firstWhere((o) => o.uri.path == '/jobs/j1/finalize');
-    expect((finalizeReq.data as Map)['reportedFilesCount'], 37);
+    expect((finalizeReq.data as Map)['reportedFilesCount'], 49);
 
     // The ETag each S3 PUT returned was threaded into that file's complete.
     expect(backend.etagViolations, isEmpty);
-    expect(backend.putEtags, hasLength(37));
+    expect(backend.putEtags, hasLength(49));
 
     // The S3 PUTs carried no Authorization header (presigned URL is the auth).
     for (final put in backend.requests.where((o) => o.uri.host == 's3.test')) {
@@ -239,18 +239,18 @@ void main() {
         reason: run.steps
             .map((s) => '${s.id}=${s.state.name}: ${s.detail}')
             .join('\n'));
-    expect(run.filesCompleted, 37);
+    expect(run.filesCompleted, 49);
 
-    // The bundle landed on disk in the capture layout, 37 files total.
+    // The bundle landed on disk in the capture layout, 49 files total.
     final files = tempRoot
         .listSync(recursive: true)
         .whereType<File>()
         .map((f) => f.path.replaceAll(Platform.pathSeparator, '/'))
         .toList();
-    expect(files, hasLength(37));
-    expect(files.where((p) => p.contains('/images/EYE/')), hasLength(12));
-    expect(files.where((p) => p.contains('/images/TOP/')), hasLength(12));
-    expect(files.where((p) => p.contains('/images/LOW/')), hasLength(12));
+    expect(files, hasLength(49));
+    expect(files.where((p) => p.contains('/images/EYE/')), hasLength(16));
+    expect(files.where((p) => p.contains('/images/TOP/')), hasLength(16));
+    expect(files.where((p) => p.contains('/images/LOW/')), hasLength(16));
     expect(files.where((p) => p.endsWith('/capture_manifest.json')),
         hasLength(1));
 
@@ -259,8 +259,8 @@ void main() {
     expect(bundleStep.detail, contains(tempRoot.path));
     expect(bundleStep.detail, contains('Clear test files'));
 
-    // The full upload conversation still happened (37 initiate/PUT/complete).
-    expect(backend.putEtags, hasLength(37));
+    // The full upload conversation still happened (49 initiate/PUT/complete).
+    expect(backend.putEtags, hasLength(49));
     expect(backend.etagViolations, isEmpty);
   });
 
@@ -275,7 +275,7 @@ void main() {
     expect(sendOtps, hasLength(1));
   });
 
-  test('devCode absent → auth step fails with a clear message', () async {
+  test('devCode absent â†’ auth step fails with a clear message', () async {
     final backend = _FakeBackend();
     final api = Dio(BaseOptions(baseUrl: 'http://api.test'))
       ..httpClientAdapter = _FakeAdapter((o) async {
@@ -304,8 +304,8 @@ void main() {
         'code': 'VERIFICATION_FAILED',
         'reason': 'manifest_invalid',
         'message': 'The capture manifest failed validation.',
-        'expectedFilesCount': 37,
-        'actualFilesCount': 37,
+        'expectedFilesCount': 49,
+        'actualFilesCount': 49,
         'validationErrors': [
           {
             'rule': 'RING_PHOTO_COUNT_BELOW_MINIMUM',
@@ -328,7 +328,7 @@ void main() {
       expect(step.state, ProbeStepState.success, reason: step.id);
       expect(step.detail, isNotNull, reason: step.id);
     }
-    expect(run.filesCompleted, 37); // uploads finished before the 422
+    expect(run.filesCompleted, 49); // uploads finished before the 422
 
     // The envelope surfaced verbatim: code, message, and the rule ids.
     expect(finalize.detail, contains('VERIFICATION_FAILED'));
