@@ -714,8 +714,48 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       // token refresh/createProject don't time out into 9F.
       warmUp: () => ref.read(backendWarmupServiceProvider).warmUp(),
     );
-    state = orchestrator.progress;
+    _install(orchestrator.progress);
     unawaited(orchestrator.run());
+  }
+
+  /// Installs a flow surface as the active one and wires the post-upload
+  /// refresh: the flow's terminal `completed` (finalize confirmed QUEUED — the
+  /// backend project now exists as PROCESSING with its photo count) triggers a
+  /// [projectsProvider] refresh so the new project appears on All Projects
+  /// without a restart. Application-layer wiring by design — no widget owns it.
+  void _install(UploadFlowProgress progress) {
+    state = progress;
+    StreamSubscription<UploadProgress>? sub;
+    sub = progress.watch().listen(
+      (p) {
+        switch (p.status) {
+          case UploadStatus.completed:
+            unawaited(_refreshProjectsAfterUpload());
+            unawaited(sub?.cancel());
+          case UploadStatus.failed:
+          case UploadStatus.cancelled:
+            unawaited(sub?.cancel()); // terminal without a new remote project
+          default:
+            break;
+        }
+      },
+      // Terminal failures ride the stream as error objects (for Screen 9F's
+      // classification) — irrelevant here, but they must not go unhandled.
+      onError: (_, __) {},
+    );
+  }
+
+  /// Test seam: installs [progress] exactly like [start] does, without
+  /// constructing the production orchestrator (no Hive/network/filesystem).
+  @visibleForTesting
+  void installForTest(UploadFlowProgress progress) => _install(progress);
+
+  /// Best-effort: a failed refresh never surfaces into the (already
+  /// successful) upload flow — the Hub revalidates again on its next visit.
+  Future<void> _refreshProjectsAfterUpload() async {
+    try {
+      await ref.read(projectsProvider.notifier).refresh();
+    } catch (_) {/* keep the upload success; the list refreshes later */}
   }
 
   /// Reads the session context from the live providers/stores. Throws (into

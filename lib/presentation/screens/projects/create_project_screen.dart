@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
+import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/projects/projects_notifier.dart';
@@ -132,9 +133,7 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary),
-          onPressed: () {
-            if (context.canPop()) context.pop();
-          },
+          onPressed: () => navigateBack(context),
         ),
         title: Text('New Project', style: Theme.of(context).textTheme.titleLarge),
       ),

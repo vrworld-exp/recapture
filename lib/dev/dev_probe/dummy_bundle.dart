@@ -2,16 +2,16 @@
 //
 // Pure in-memory generator for the upload smoke test's dummy capture bundle.
 // Mirrors the `with_bottom` capture-variant contract the backend enforces:
-// 12 photos per ring on EYE/TOP/LOW (36 images) + capture_manifest.json = 37
+// 16 photos per ring on EYE/TOP/LOW (48 images) + capture_manifest.json = 49
 // files exactly. No IO, no Flutter — unit-testable as plain Dart.
 import 'dart:convert';
 import 'dart:typed_data';
 
 /// Local mirror of the `with_bottom` variant contract (the backend's
 /// captureVariants table). The generator derives every count from this table;
-/// a unit test pins 36 + 1 = 37.
+/// a unit test pins 48 + 1 = 49.
 const List<String> kSmokeRings = ['EYE', 'TOP', 'LOW'];
-const int kSmokePhotosPerRing = 12;
+const int kSmokePhotosPerRing = 16;
 const String kSmokeFlowVariant = 'with_bottom';
 
 /// Total files the bundle must contain: the variant's images + the manifest.
@@ -26,7 +26,7 @@ class BundleFile {
   final Uint8List bytes;
 }
 
-/// The generated bundle: 36 image blobs + the manifest, keys already under
+/// The generated bundle: 48 image blobs + the manifest, keys already under
 /// the job's plan prefix.
 class DummyBundle {
   const DummyBundle({required this.files});

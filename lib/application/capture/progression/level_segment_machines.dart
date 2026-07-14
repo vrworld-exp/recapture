@@ -7,8 +7,8 @@
 // summary can never disagree on segment count or which band it is.
 //
 // Each level resolves its band via the single [pitchBandIdForLevel] map and its
-// count via [effectiveSegmentsFor] (variant counts → legacy band counts → 12),
-// so the 12-12-12 / 18-18 variant counts come straight from remote config with
+// count via [effectiveSegmentsFor] (variant counts → legacy band counts → 16),
+// so the 16-16-16 / 24-24 variant counts come straight from remote config with
 // no code change. The instances are fully independent; the level progression
 // controller composes them via the machine's uniform interface.
 //

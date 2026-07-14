@@ -189,6 +189,15 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// persisted ON/OFF preference — this is transient and never saved.
   bool _autoCaptureSuspended = false;
 
+  /// User-facing play/pause gate over the automatic capture progression.
+  /// Starts TRUE (paused): entering the screen never begins capturing on its
+  /// own — the user starts it with the play button in the bottom bar and can
+  /// pause/resume at any time. Gates ONLY the auto-capture fire loop; the
+  /// manual shutter is an explicit tap and stays live, and preview/sensors/HUD
+  /// all keep running so the user can frame while paused. Transient, never
+  /// persisted (every entry starts paused by design).
+  bool _capturePaused = true;
+
   /// Single in-flight guard shared by the manual shutter path and the
   /// auto-capture loop, so the two can never run overlapping captures against
   /// the one native capture resource.
@@ -377,7 +386,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     }
     // Restore the project's persisted flow variant BEFORE the draft resume —
     // the draft's segment-count validation (and this ring's N) depend on it.
-    // Best-effort: an unavailable store leaves the live default (with_bottom).
+    // Best-effort: an unavailable store keeps the in-memory variant.
     final projectId = _projectId;
     if (projectId != null) {
       try {
@@ -560,6 +569,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       'new_state': newOn ? 'on' : 'off',
       'device_type': _deviceType,
     });
+  }
+
+  /// Flips the play/pause capture gate from the bottom-bar icon button.
+  void _toggleCapturePaused() {
+    setState(() => _capturePaused = !_capturePaused);
   }
 
   /// Retake intent from the post-shot toast. Dismisses the toast; the real
@@ -787,6 +801,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         stability!.stability == Stability.stable;
     final coverage = ref.read(segmentCoverageProvider);
     final enabled = _autoCapture.isOn &&
+        !_capturePaused &&
         !_autoCaptureSuspended &&
         _retake == null &&
         !_levelCompleteNavigated &&
@@ -1190,9 +1205,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
 
   void _exitToProjects() => context.go(AppRoutes.projects);
 
-  /// System/hardware back: when there is unsaved progress the route is blocked
-  /// ([PopScope.canPop] false) and this confirms via the SAME flow as the
-  /// top-bar back, so both behave identically.
+  /// System/hardware back: the route is always blocked ([PopScope.canPop]
+  /// false — a successful pop of the go()-navigated single-page stack would
+  /// exit the app) and this confirms via the SAME flow as the top-bar back,
+  /// so both behave identically.
   void _onPopInvoked(bool didPop, Object? result) {
     if (didPop) return;
     unawaited(_confirmExit());
@@ -1207,9 +1223,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // are unavailable.
     ref.watch(ringPositionBinderProvider);
     return PopScope(
-      // Blocked while there is unsaved progress so the system back gesture/button
-      // funnels through the same Save & Exit confirmation as the top-bar back.
-      canPop: !_hasUnsavedProgress,
+      // ALWAYS intercepted: the capture route is go()-navigated (single-page
+      // stack), so letting a pop "succeed" would exit the app. Every back path
+      // funnels through _confirmExit — Save & Exit modal with unsaved progress,
+      // straight to Projects without.
+      canPop: false,
       onPopInvokedWithResult: _onPopInvoked,
       child: Scaffold(
         backgroundColor: AppColors.bgPrimary,
@@ -1311,6 +1329,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   ),
                   _BottomBar(
                     captureCount: _captureCount,
+                    playPause: _PlayPauseButton(
+                      paused: _capturePaused,
+                      onToggle: _toggleCapturePaused,
+                    ),
                     shutter: _ShutterControl(
                       band: _resolvedBand,
                       onCapture: _performCapture,
@@ -1576,6 +1598,7 @@ class _ProgressMeterHud extends ConsumerWidget {
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.captureCount,
+    required this.playPause,
     required this.shutter,
     required this.thumbnails,
   });
@@ -1583,6 +1606,9 @@ class _BottomBar extends StatelessWidget {
   /// Photos captured this session (every real frame, whether or not it could
   /// fill a segment) — the numerator of the bottom-right counter.
   final int captureCount;
+
+  /// The play/pause icon control gating the auto-capture progression.
+  final Widget playPause;
 
   /// The gated shutter control (assembles its own readiness from providers).
   final Widget shutter;
@@ -1605,12 +1631,74 @@ class _BottomBar extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               // Recent-capture thumbnail strip (replaces the old static tiles).
-              SizedBox(width: 160, child: thumbnails),
+              // Flexible so the slot compresses before the bar can overflow on
+              // narrow screens now that the play/pause control shares the row.
+              Flexible(child: SizedBox(width: 160, child: thumbnails)),
+              playPause,
               shutter,
               // Live frame counter (the auto-capture ON/OFF state lives in the
               // top-right AutoCaptureIndicator pill).
               _CaptureCounter(captureCount: captureCount),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Icon-only play/pause control for the capture progression (bottom bar, left
+/// of the shutter). Shows a play icon while paused — capture waits for the
+/// user — and a pause icon while running.
+class _PlayPauseButton extends StatelessWidget {
+  const _PlayPauseButton({required this.paused, required this.onToggle});
+
+  final bool paused;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    // Paused = the CTA to start capturing, so it wears the red-energy
+    // gradient + glow; running = quiet obsidian surface with a gold rim.
+    return Semantics(
+      button: true,
+      label: paused ? 'Start capturing' : 'Pause capturing',
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: paused ? AppColors.primaryGradient : null,
+          color: paused ? null : AppColors.surface2.withValues(alpha: 0.9),
+          border: Border.all(
+            color: paused
+                ? AppColors.redGlow.withValues(alpha: 0.6)
+                : AppColors.royalGold.withValues(alpha: 0.4),
+            width: 1.5,
+          ),
+          boxShadow: paused
+              ? [
+                  BoxShadow(
+                    color: AppColors.redGlow.withValues(alpha: 0.4),
+                    blurRadius: 16,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          shape: const CircleBorder(),
+          child: InkWell(
+            key: const ValueKey('capture_play_pause'),
+            customBorder: const CircleBorder(),
+            onTap: onToggle,
+            child: Icon(
+              paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+              color: AppColors.textPrimary,
+              size: 34,
+            ),
           ),
         ),
       ),

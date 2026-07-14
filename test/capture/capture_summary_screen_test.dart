@@ -22,7 +22,7 @@ import 'package:recapture/utils/analytics.dart';
 
 /// The historical per-level counts (A=10, B=8, C=12) pinned explicitly via a
 /// variant-segments override, so the per-level scenarios below keep their
-/// distinct-N semantics (bundled defaults are now 12-12-12 under with_bottom).
+/// distinct-N semantics (bundled defaults are now 16-16-16 under with_bottom).
 class _StubConfigNotifier extends ConfigNotifier {
   @override
   CaptureConfig build() => CaptureConfig.bundledDefault.copyWith(
@@ -381,7 +381,7 @@ void main() {
   testWidgets('missing band → counts resolve via the variant defaults, no crash',
       (tester) async {
     // The 'low' band is absent from the config's pitchBands, but the effective
-    // count resolver falls back to the variant defaults (low=12 with_bottom),
+    // count resolver falls back to the variant defaults (low=16 with_bottom),
     // so Level C still shows a REAL coverage instead of a placeholder.
     await pump(
       tester,
@@ -389,7 +389,7 @@ void main() {
       config: _NoLowBandConfigNotifier.new,
     );
     expect(find.text('—'), findsNothing);
-    expect(find.text('8%'), findsOneWidget); // low: 1/12 = 8.3 → 8
+    expect(find.text('6%'), findsOneWidget); // low: 1/16 = 6.25 → 6
     expect(find.text('Capture summary'), findsOneWidget);
   });
 

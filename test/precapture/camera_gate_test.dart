@@ -24,6 +24,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/application/config/config_notifier.dart';
+import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/data/local/permission_flow_box.dart';
 import 'package:recapture/domain/entities/permission_flow_state.dart';
 import 'package:recapture/domain/entities/permission_item.dart';
@@ -32,6 +34,18 @@ import 'package:recapture/presentation/screens/capture/permissions_screen.dart';
 import 'package:recapture/data/local/active_session_box.dart';
 import 'package:recapture/domain/entities/active_session.dart';
 import 'package:recapture/presentation/screens/capture/pre_capture_screen.dart';
+
+/// ConfigNotifier whose [build] skips the Hive/network bootstrap — serves the
+/// bundled default (the pre-capture variant copy reads it for photo counts).
+class _StubConfigNotifier extends ConfigNotifier {
+  @override
+  CaptureConfig build() => CaptureConfig.bundledDefault;
+}
+
+/// The override list every pump in this file uses.
+final _overrides = <Override>[
+  captureConfigProvider.overrideWith(_StubConfigNotifier.new),
+];
 
 // ── Mock seam: the permission facade ─────────────────────────────────────────
 // Overrides every public method so platform routing / permission_handler / the
@@ -159,6 +173,7 @@ void main() {
     addTearDown(built.router.dispose);
     await tester.pumpWidget(
       ProviderScope(
+        overrides: _overrides,
         child:
             MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
       ),
@@ -358,6 +373,7 @@ void main() {
       addTearDown(built.router.dispose);
       await tester.pumpWidget(
         ProviderScope(
+        overrides: _overrides,
         child:
             MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
       ),
@@ -434,6 +450,7 @@ void main() {
     addTearDown(built.router.dispose);
     await tester.pumpWidget(
       ProviderScope(
+        overrides: _overrides,
         child:
             MaterialApp.router(theme: AppTheme.dark, routerConfig: built.router),
       ),

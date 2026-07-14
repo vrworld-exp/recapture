@@ -1,6 +1,6 @@
 // lib/presentation/screens/capture/ar_preview_screen.dart
 import 'package:flutter/material.dart';
-import 'package:go_router/go_router.dart';
+import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../widgets/app_button.dart';
@@ -43,9 +43,7 @@ class ArPreviewScreen extends StatelessWidget {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () {
-                        if (context.canPop()) context.pop();
-                      },
+                      onPressed: () => navigateBack(context),
                     ),
                     const Spacer(),
                     Container(

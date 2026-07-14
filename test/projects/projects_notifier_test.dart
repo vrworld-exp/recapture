@@ -70,7 +70,7 @@ class FakeProjectsRepository implements ProjectsRepository {
   }
 
   @override
-  Future<void> delete(String id) async {
+  Future<void> delete(String id, {String? confirmName}) async {
     deleteCalls++;
     if (deleteGate != null) await deleteGate!.future;
     if (failDelete) throw Exception('delete failed');

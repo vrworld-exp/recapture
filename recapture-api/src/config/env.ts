@@ -73,27 +73,6 @@ const envSchema = z.object({
   /** Sliding window for the export cap (seconds). */
   ADMIN_EXPORT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
-  // ── Email dispatch (OTP over email — src/providers/email.ts) ────────────────
-  // All optional: unset in dev/test, where the OTP flow runs against the stub
-  // or OTP_SIMULATE_DISPATCH_FAILURE. When SMTP_USER + SMTP_PASS are BOTH set,
-  // sendEmail dispatches a real message via the nodemailer transport.
-  /** SMTP host. Defaults to Gmail's submission host. */
-  SMTP_HOST: z.string().min(1).default('smtp.gmail.com'),
-  /** SMTP port. 465 = implicit TLS (secure); 587 = STARTTLS. */
-  SMTP_PORT: z.coerce.number().int().positive().default(465),
-  /** Implicit TLS on connect (true for port 465). */
-  SMTP_SECURE: z
-    .enum(['true', 'false'])
-    .default('true')
-    .transform((v) => v === 'true'),
-  /** SMTP username. For Gmail, the full address. Required to send real email. */
-  SMTP_USER: z.string().min(1).optional(),
-  /** SMTP password. For Gmail this MUST be an App Password, never the account
-   *  password. Secret — set it only in the gitignored .env, never in source. */
-  SMTP_PASS: z.string().min(1).optional(),
-  /** From: header address. Falls back to SMTP_USER when unset. */
-  MAIL_FROM: z.string().min(1).optional(),
-
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /** How often the worker polls for claimable jobs (milliseconds). */
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),

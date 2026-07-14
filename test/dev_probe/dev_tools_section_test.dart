@@ -2,7 +2,7 @@
 //
 // Widget tests for the Dev Tools section:
 //   - flavor gating both ways (dev renders, prod builds nothing),
-//   - the Projects screen carries the section in the dev flavor,
+//   - the Projects screen no longer embeds the section (removed from the hub),
 //   - the Health pill: success renders code + latency + raw body; a
 //     connection error renders the unreachable state without throwing.
 import 'dart:convert';
@@ -12,6 +12,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
 import 'package:recapture/dev/dev_probe/dev_probe_service.dart';
 import 'package:recapture/dev/dev_probe/dev_tools_section.dart';
@@ -74,18 +75,21 @@ void main() {
       expect(find.text('S3 Upload Smoke Test'), findsNothing);
     });
 
-    testWidgets('the Projects screen carries the section (test env = dev)',
+    testWidgets('the Projects screen does not embed the section (any flavor)',
         (tester) async {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
             projectsProvider.overrideWith(_FakeProjectsNotifier.new),
+            // Keep the P7-A staff gate inert: the real role chain reads the
+            // Hive-backed role store, which needs an initialized Hive.
+            isStaffProvider.overrideWithValue(false),
           ],
           child: const MaterialApp(home: ProjectsScreen()),
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('DEV TOOLS'), findsOneWidget);
+      expect(find.text('DEV TOOLS'), findsNothing);
     });
   });
 

@@ -47,6 +47,7 @@ dependencies:
   # Code generation annotations
   freezed_annotation: ^2.4.1
   json_annotation: ^4.9.0
+  share_plus: ^13.2.0
 
 dev_dependencies:
   flutter_test:

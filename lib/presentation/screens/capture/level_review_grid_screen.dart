@@ -63,7 +63,13 @@ class LevelReviewGridScreen extends ConsumerWidget {
       },
       onBackToCapture: () {
         _logAction('back_to_capture', level);
-        if (context.canPop()) context.pop();
+        // Pop when the grid was pushed; the normal flow go()-navigates here
+        // (nothing to pop), so fall back to the level's capture route.
+        if (context.canPop()) {
+          context.pop();
+        } else {
+          context.go(_captureRouteForLevel(level));
+        }
       },
       // Per-tile Retake → re-shoot that ring position. Navigate to the level's
       // capture screen in retake mode (RetakeRequest via `extra`); an accepted

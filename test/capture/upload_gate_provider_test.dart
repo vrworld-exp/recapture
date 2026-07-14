@@ -5,7 +5,7 @@
 // BOTH per-level floors — the config-driven absolute shot minimum
 // (CaptureConfig.uploadMinShots) AND the ring-coverage completion floor
 // (minCoveragePct of the variant's segment count: bundled with_bottom =
-// ceil(80% × 12) = 10 distinct segments per level — the same floor the
+// ceil(80% × 16) = 13 distinct segments per level — the same floor the
 // backend's POST /jobs range enforces). Verifies config-driven thresholds,
 // coverage enforcement (duplicates don't count), default fallback, fail-safe
 // on empty data, reactivity, and the passed/blocked analytics.
@@ -20,9 +20,9 @@ import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/utils/analytics.dart';
 
-/// The bundled-default coverage floor per level: with_bottom rings carry 12
-/// segments each, so 80% coverage demands ceil(0.8 × 12) = 10 filled segments.
-const int kCoverageFloor = 10;
+/// The bundled-default coverage floor per level: with_bottom rings carry 16
+/// segments each, so 80% coverage demands ceil(0.8 × 16) = 13 filled segments.
+const int kCoverageFloor = 13;
 
 /// Bundled default → every level's absolute shot minimum is the default (1);
 /// the coverage floor is [kCoverageFloor].
@@ -32,12 +32,12 @@ class _DefaultConfig extends ConfigNotifier {
 }
 
 /// Per-level shot-minimum override ABOVE the coverage floor, so the shot axis
-/// is testable on its own: A demands 12 accepted shots.
+/// is testable on its own: A demands 15 accepted shots.
 class _OverrideConfig extends ConfigNotifier {
   @override
   CaptureConfig build() => CaptureConfig.bundledDefault.copyWith(
         uploadMinShots: const UploadMinShots(
-          perLevelMinShots: {'A': 12},
+          perLevelMinShots: {'A': 15},
         ),
       );
 }
@@ -78,7 +78,7 @@ ProviderContainer _container(
 }
 
 void main() {
-  test('every level at the coverage floor (10 distinct segments) → eligible',
+  test('every level at the coverage floor (13 distinct segments) → eligible',
       () {
     final gate = _container(_registry(
             {'mid': kCoverageFloor, 'high': kCoverageFloor, 'low': kCoverageFloor}))
@@ -98,26 +98,30 @@ void main() {
   });
 
   test('duplicate-segment shots do NOT count toward coverage', () {
-    final reg =
-        _registry({'mid': kCoverageFloor, 'high': kCoverageFloor, 'low': 9});
-    // A 10th shot on an ALREADY-FILLED segment: accepted rises to 10 but the
-    // distinct coverage stays 9 — the gate must stay closed (the packer
-    // dedupes to one image per segment, so the bundle would be 9 on this ring).
+    final reg = _registry({
+      'mid': kCoverageFloor,
+      'high': kCoverageFloor,
+      'low': kCoverageFloor - 1,
+    });
+    // An extra shot on an ALREADY-FILLED segment: accepted rises to the floor
+    // but the distinct coverage stays one short — the gate must stay closed
+    // (the packer dedupes to one image per segment, so the bundle would be
+    // one short on this ring).
     reg.ledgerFor('low').recordAccepted(_shot(0, '/low/dup.jpg'));
     final gate = _container(reg).read(uploadGateProvider);
     expect(gate.eligible, isFalse);
     expect(gate.shortLevelsLabel, 'C');
-    expect(gate.shortLevels.single.accepted, 10);
-    expect(gate.shortLevels.single.filled, 9);
+    expect(gate.shortLevels.single.accepted, kCoverageFloor);
+    expect(gate.shortLevels.single.filled, kCoverageFloor - 1);
     expect(gate.totalDeficit, 1);
   });
 
-  test('config-driven shot minimum above the coverage floor (A=12)', () {
+  test('config-driven shot minimum above the coverage floor (A=15)', () {
     final gate = _container(
       _registry({'mid': kCoverageFloor, 'high': kCoverageFloor, 'low': kCoverageFloor}),
       config: _OverrideConfig.new,
     ).read(uploadGateProvider);
-    // A: coverage met (10/10) but 10/12 shots → short by 2.
+    // A: coverage met (13/13) but 13/15 shots → short by 2.
     expect(gate.eligible, isFalse);
     expect(gate.shortLevelsLabel, 'A');
     expect(gate.shortLevels.single.deficit, 2);

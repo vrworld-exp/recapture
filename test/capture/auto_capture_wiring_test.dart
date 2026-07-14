@@ -153,11 +153,19 @@ void main() {
     await tester.pump(); // preview 'start' resolves → running
   }
 
+  /// Taps the bottom-bar play/pause icon. Capture enters PAUSED (the screen
+  /// never starts capturing on its own), so every test that expects the auto
+  /// loop to be able to fire must press play first.
+  Future<void> tapPlayPause(WidgetTester tester) async {
+    await tester.tap(find.byKey(const ValueKey('capture_play_pause')));
+    await tester.pump();
+  }
+
   /// Emits a debounced STABLE transition and a handful of in-band (Level A
   /// 'mid' = [30°, 60°)) orientation ticks at yaw 0 (→ segment 0). Multiple
   /// ticks because the first valid sample seeds the yaw baseline / segment
   /// provider before the pitch listener can read a known segment.
-  Future<void> driveInBandStable(WidgetTester tester) async {
+  Future<void> driveInBandStable(WidgetTester tester, {double yawDeg = 0}) async {
     stability.add(const StabilityStateEvent(
       stable: true,
       gyroMag: 0,
@@ -166,7 +174,7 @@ void main() {
     ));
     await tester.pump();
     for (var i = 0; i < 4; i++) {
-      orientation.add(_orientation(tiltDeg: 90, timestampNs: i));
+      orientation.add(_orientation(tiltDeg: 90, yawDeg: yawDeg, timestampNs: i));
       await tester.pump();
       await tester.pump(); // stream → provider → tick → fire resolves
     }
@@ -176,6 +184,7 @@ void main() {
       'AUTO ON: an in-band stable tick fires a capture on its own '
       '(autocapture_triggered + segment filled, single-shot)', (tester) async {
     await pumpScreen(tester, autoEnabled: true);
+    await tapPlayPause(tester); // capture starts paused — press play
     await driveInBandStable(tester);
 
     // Exactly ONE fire: the fire-time segment filled, so every later tick over
@@ -211,6 +220,7 @@ void main() {
   testWidgets('AUTO OFF: the same in-band stable ticks never fire',
       (tester) async {
     await pumpScreen(tester, autoEnabled: false);
+    await tapPlayPause(tester); // playing — so AUTO OFF is the only gate here
     await driveInBandStable(tester);
 
     expect(captureCalls, 0);
@@ -219,8 +229,41 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets(
+      'starts PAUSED: AUTO ON in-band stable ticks never fire until play is '
+      'tapped, and pausing again stops the loop', (tester) async {
+    await pumpScreen(tester, autoEnabled: true);
+
+    // No play tap: entering the screen must never begin capturing on its own.
+    await driveInBandStable(tester);
+    expect(captureCalls, 0);
+    expect(autoEvents(), isEmpty);
+
+    // Play → the same conjunction now fires.
+    await tapPlayPause(tester);
+    await driveInBandStable(tester);
+    expect(captureCalls, 1);
+
+    // Let the 200ms post-shot flash clear (it covers the whole screen and
+    // would swallow the tap), then pause and wait out the REAL 500ms cooldown
+    // (it is wall-clock, not test-clock) so the pause gate is the only thing
+    // that can explain the absence of a second fire.
+    await tester.pump(const Duration(milliseconds: 250));
+    await tapPlayPause(tester);
+    await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 600)));
+
+    // A DIFFERENT (unfilled) segment past the cooldown still never fires.
+    await driveInBandStable(tester, yawDeg: 180);
+    expect(captureCalls, 1);
+    expect(autoEvents(), hasLength(1));
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('AUTO ON but out of band: never fires', (tester) async {
     await pumpScreen(tester, autoEnabled: true);
+    await tapPlayPause(tester); // playing — so the band is the only gate here
     stability.add(const StabilityStateEvent(
       stable: true,
       gyroMag: 0,

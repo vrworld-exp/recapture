@@ -90,8 +90,8 @@ void main() {
     expect(await ctrl.advance(), isFalse);
     expect(c.read(levelProgressionControllerProvider)!.currentLevelIndex, 0);
 
-    // Complete A (mid: 12 segments under with_bottom) → advance succeeds, persists.
-    await ctrl.recordLevelProgress('mid', filledCount: 12, acceptedCount: 12);
+    // Complete A (mid: 16 segments under with_bottom) → advance succeeds, persists.
+    await ctrl.recordLevelProgress('mid', filledCount: 16, acceptedCount: 16);
     expect(await ctrl.advance(), isTrue);
     expect(c.read(levelProgressionControllerProvider)!.currentLevel.levelCode, 'B');
     expect(store.saved['p1']!.currentLevelIndex, 1);
@@ -103,12 +103,12 @@ void main() {
     final ctrl = c.read(levelProgressionControllerProvider.notifier);
     await ctrl.start('p1');
 
-    // Complete all three (12 segments each under with_bottom), advancing to C.
-    await ctrl.recordLevelProgress('mid', filledCount: 12, acceptedCount: 12);
+    // Complete all three (16 segments each under with_bottom), advancing to C.
+    await ctrl.recordLevelProgress('mid', filledCount: 16, acceptedCount: 16);
     await ctrl.advance();
-    await ctrl.recordLevelProgress('high', filledCount: 12, acceptedCount: 12);
+    await ctrl.recordLevelProgress('high', filledCount: 16, acceptedCount: 16);
     await ctrl.advance();
-    await ctrl.recordLevelProgress('low', filledCount: 12, acceptedCount: 12);
+    await ctrl.recordLevelProgress('low', filledCount: 16, acceptedCount: 16);
     expect(ctrl.overallComplete, isTrue);
 
     // Delete drops B below the gate.
@@ -124,10 +124,10 @@ void main() {
     // Simulate a prior session persisted at B with partial coverage.
     store.saved['p1'] = LevelProgression.of([
       const LevelProgressState(
-          levelId: 'mid', levelCode: 'A', segmentCount: 10, filledCount: 10, acceptedCount: 10),
+          levelId: 'mid', levelCode: 'A', segmentCount: 16, filledCount: 16, acceptedCount: 16),
       const LevelProgressState(
-          levelId: 'high', levelCode: 'B', segmentCount: 8, filledCount: 3, acceptedCount: 3),
-      const LevelProgressState(levelId: 'low', levelCode: 'C', segmentCount: 12),
+          levelId: 'high', levelCode: 'B', segmentCount: 16, filledCount: 3, acceptedCount: 3),
+      const LevelProgressState(levelId: 'low', levelCode: 'C', segmentCount: 16),
     ], currentLevelIndex: 1);
 
     final c = _container(store);

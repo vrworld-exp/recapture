@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/routes/app_router.dart';
+import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../platform/haptics.dart';
@@ -257,9 +258,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary),
-          onPressed: () {
-            if (context.canPop()) context.pop();
-          },
+          onPressed: () => navigateBack(context),
         ),
       ),
       body: Padding(

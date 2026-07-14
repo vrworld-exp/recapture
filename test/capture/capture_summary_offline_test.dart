@@ -41,9 +41,9 @@ CapturedPhotoRecord _accepted(int seg, String path) => CapturedPhotoRecord(
 /// enabled CTA).
 LevelCaptureLedgerRegistry _completeRegistry() {
   final reg = LevelCaptureLedgerRegistry();
-  // Every ring is 12 segments under the default with_bottom variant → each
-  // needs ≥10 filled (80%) to be complete.
-  for (final e in {'mid': 10, 'high': 10, 'low': 10}.entries) {
+  // Every ring is 16 segments under the default with_bottom variant → each
+  // needs ≥13 filled (80%) to be complete.
+  for (final e in {'mid': 13, 'high': 13, 'low': 13}.entries) {
     final ledger = reg.ledgerFor(e.key);
     for (var i = 0; i < e.value; i++) {
       ledger.recordAccepted(_accepted(i, '/${e.key}/$i.jpg'));

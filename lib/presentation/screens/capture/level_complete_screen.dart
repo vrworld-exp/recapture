@@ -8,6 +8,9 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/capture_analytics.dart';
 import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
+import '../../../application/capture/capture_flow_variant_provider.dart';
+import '../../../application/config/config_notifier.dart';
+import '../../../domain/entities/capture_config.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
@@ -51,9 +54,15 @@ class LevelCompleteScreen extends ConsumerStatefulWidget {
 }
 
 class _LevelCompleteScreenState extends ConsumerState<LevelCompleteScreen> {
-  /// Photos-accepted denominator shown in the recap ("X / 36") AND reported as
+  /// Photos-accepted denominator shown in the recap ("X / N") AND reported as
   /// `target` in the completion analytics — one place so the two never disagree.
-  static const int _displayTarget = 36;
+  /// N is this level's effective ring segment count (config × flow variant),
+  /// through the same [effectiveSegmentsFor] resolver the flow uses.
+  int get _displayTarget => effectiveSegmentsFor(
+        ref.read(captureConfigProvider),
+        ref.read(captureFlowVariantProvider),
+        pitchBandIdForLevel(_level),
+      );
 
   /// One-shot guard so a rapid double-tap on either CTA fires a single nav.
   bool _dispatched = false;

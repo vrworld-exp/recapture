@@ -1,7 +1,7 @@
 // lib/application/capture/capture_flow_variant_provider.dart
 //
 // Reactive + persistence wiring for the capture FLOW VARIANT (with_bottom
-// 3-ring 12-12-12 vs without_bottom 2-ring 18-18 — see CaptureFlowVariant).
+// 3-ring 16-16-16 vs without_bottom 2-ring 24-24 — see CaptureFlowVariant).
 //
 // OWNERSHIP: the variant is chosen on the Pre-Capture Checklist (Screen 4),
 // held here for the whole app session, and persisted per project as a sibling
@@ -27,7 +27,10 @@ import 'session/capture_session_store.dart';
 /// The active session's flow variant. Defaults to [CaptureFlowVariant.withBottom]
 /// (the legacy 3-ring flow) until the checklist selection / a persisted project
 /// value loads — so a flow that never touches the checklist behaves exactly as
-/// before the variant existed.
+/// before the variant existed. The PRODUCT default for a fresh project is
+/// "No — bottom stays hidden": the checklist PRESETS (and persists)
+/// [CaptureFlowVariant.withoutBottom] on entry when the project has no stored
+/// choice yet — see PreCaptureScreen._resolveProjectContext.
 final captureFlowVariantProvider =
     NotifierProvider<CaptureFlowVariantController, CaptureFlowVariant>(
   CaptureFlowVariantController.new,
@@ -58,6 +61,9 @@ class CaptureFlowVariantController extends Notifier<CaptureFlowVariant> {
   /// pre-variant projects resolve to [CaptureFlowVariant.withBottom]) and
   /// returns it. Called at capture-flow entry so a resumed session runs the
   /// SAME variant it was captured under, not whatever the checklist last showed.
+  /// (The checklist itself persists its preset on entry, so a project the user
+  /// walked through the checklist always has a stored variant by the time this
+  /// runs.)
   Future<CaptureFlowVariant> loadFor(String projectId) async {
     CaptureFlowVariant variant;
     try {

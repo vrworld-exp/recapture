@@ -109,7 +109,7 @@ abstract final class AnalyticsEvents {
 
   /// The user changed the "can you capture the bottom?" answer on the
   /// pre-capture checklist — the input that selects the capture FLOW VARIANT
-  /// (with_bottom 3-ring 12-12-12 vs without_bottom 2-ring 18-18). Fires on
+  /// (with_bottom 3-ring 16-16-16 vs without_bottom 2-ring 24-24). Fires on
   /// TRANSITION only (never on re-selecting the current value or on rebuilds).
   /// Props: { flow_variant, device_type }.
   static const String bottomCaptureOptionSelected =

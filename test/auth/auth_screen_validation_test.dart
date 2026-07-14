@@ -5,6 +5,8 @@
 // input shows an inline error and NEVER navigates to the OTP step, editing
 // clears the error, the country sheet swaps the dial code (and its rules),
 // and valid input proceeds to the OTP route.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,9 +39,26 @@ class _FakeAuthRepository extends AuthRepository {
   }
 }
 
+/// Repository whose send-otp stays pending until the test completes it,
+/// freezing the screen in its in-flight state.
+class _PendingAuthRepository extends AuthRepository {
+  final completer = Completer<OtpSendResult>();
+  int sendCalls = 0;
+
+  @override
+  Future<OtpSendResult> sendOtp({
+    required String channel,
+    required String identifier,
+  }) {
+    sendCalls++;
+    return completer.future;
+  }
+}
+
 const _otpMarker = 'OTP SCREEN STUB';
 
-Future<void> _pumpAuth(WidgetTester tester) async {
+Future<void> _pumpAuth(WidgetTester tester,
+    {AuthRepository? repository}) async {
   final router = GoRouter(
     initialLocation: AppRoutes.auth,
     routes: [
@@ -60,7 +79,8 @@ Future<void> _pumpAuth(WidgetTester tester) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
-        authRepositoryProvider.overrideWithValue(_FakeAuthRepository()),
+        authRepositoryProvider
+            .overrideWithValue(repository ?? _FakeAuthRepository()),
       ],
       child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
     ),
@@ -176,6 +196,30 @@ void main() {
     await _tapSendOtp(tester);
     expect(find.text('Enter a valid email address.'), findsOneWidget);
     expect(find.text(_otpMarker), findsNothing);
+  });
+
+  testWidgets(
+      'while send-otp is pending the button shows a spinner and blocks '
+      're-taps; success then navigates', (tester) async {
+    final repo = _PendingAuthRepository();
+    await _pumpAuth(tester, repository: repo);
+    await tester.enterText(
+        find.byKey(const ValueKey('auth_phone_field')), '9876543210');
+    await tester.tap(find.text('Send OTP'));
+    // pump (not settle): the spinner animates for as long as the request
+    // is in flight.
+    await tester.pump();
+
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('Send OTP'), findsNothing);
+    // The disabled button swallows further taps.
+    await tester.tap(find.byType(ElevatedButton));
+    await tester.pump();
+    expect(repo.sendCalls, 1);
+
+    repo.completer.complete(const OtpSendResult());
+    await tester.pumpAndSettle();
+    expect(find.text(_otpMarker), findsOneWidget);
   });
 
   testWidgets('email tab: a valid address proceeds to the OTP step',

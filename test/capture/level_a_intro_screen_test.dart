@@ -7,7 +7,7 @@
 //
 // The persistence store is injected (a fake), navigation is captured via the
 // `onProceed` override, and analytics are asserted through `Analytics.testSink`.
-// captureConfigProvider resolves to its bundled default (eye ring = 12 segments).
+// captureConfigProvider resolves to its bundled default (eye ring = 16 segments).
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -112,8 +112,8 @@ void main() {
       (tester) async {
     await pumpScreen(tester);
 
-    // Bundled default with_bottom eye ring = 12 segments.
-    expect(find.textContaining('cover all 12 positions'), findsOneWidget);
+    // Bundled default with_bottom eye ring = 16 segments.
+    expect(find.textContaining('cover all 16 positions'), findsOneWidget);
     expect(find.text('Begin'), findsOneWidget);
     expect(find.text('Skip'), findsOneWidget);
     expect(find.byType(EyeRingIntroAnimation), findsOneWidget);

@@ -69,33 +69,33 @@ void main() {
     expect(summaries.map((s) => s.level).toList(),
         [CaptureLevel.a, CaptureLevel.b, CaptureLevel.c]);
 
-    // Every ring is 12 segments under the default with_bottom variant, so the
-    // 80% gate needs ceil(0.8*12)=10 filled segments per level.
-    final a = summaries[0]; // mid: 2 frames of 12
+    // Every ring is 16 segments under the default with_bottom variant, so the
+    // 80% gate needs ceil(0.8*16)=13 filled segments per level.
+    final a = summaries[0]; // mid: 2 frames of 16
     expect(a.name, 'Eye Ring');
     expect(a.frameCount, 2);
     expect(a.warnedCount, 0);
     expect(a.minRequired, 1);
-    expect(a.coveragePct, 17); // 16.7 → 17
+    expect(a.coveragePct, 13); // 12.5 → 13
     expect(a.isComplete, isFalse);
-    expect(a.completion.segmentsShort, 8); // need 10, filled 2
+    expect(a.completion.segmentsShort, 11); // need 13, filled 2
     expect(a.completion.photosShort, 0); // 2 >= 1
-    expect(a.shortfall, 8);
+    expect(a.shortfall, 11);
     expect(a.thumbnailPath, '/mid/0.jpg');
 
-    final b = summaries[1]; // high: 1 of 12
+    final b = summaries[1]; // high: 1 of 16
     expect(b.frameCount, 1);
     expect(b.warnedCount, 1);
-    expect(b.coveragePct, 8); // 8.3 → 8
-    expect(b.completion.segmentsShort, 9);
+    expect(b.coveragePct, 6); // 6.25 → 6
+    expect(b.completion.segmentsShort, 12);
     expect(b.warnings.single.message, contains('too dark'));
 
-    final c = summaries[2]; // low: 0 of 12, need 10; 0 photos
+    final c = summaries[2]; // low: 0 of 16, need 13; 0 photos
     expect(c.frameCount, 0);
     expect(c.coveragePct, 0);
-    expect(c.completion.segmentsShort, 10);
+    expect(c.completion.segmentsShort, 13);
     expect(c.completion.photosShort, 1);
-    expect(c.shortfall, 11);
+    expect(c.shortfall, 14);
     expect(c.thumbnailPath, isNull);
   });
 
@@ -103,14 +103,14 @@ void main() {
     final summaries =
         _container(_registry({'mid': 2, 'high': 1, 'low': 0}))
             .read(captureSummaryProvider);
-    // C has the largest shortfall (11) → most work.
+    // C has the largest shortfall (14) → most work.
     expect(mostWorkLevel(summaries), CaptureLevel.c);
     expect(allLevelsComplete(summaries), isFalse);
   });
 
   test('all levels complete → mostWorkLevel null, allLevelsComplete true', () {
-    // Every ring is 12 segments → each needs ≥10 filled (80%) + ≥1 photo.
-    final summaries = _container(_registry({'mid': 10, 'high': 10, 'low': 10}))
+    // Every ring is 16 segments → each needs ≥13 filled (80%) + ≥1 photo.
+    final summaries = _container(_registry({'mid': 13, 'high': 13, 'low': 13}))
         .read(captureSummaryProvider);
     expect(summaries.every((s) => s.isComplete), isTrue);
     expect(mostWorkLevel(summaries), isNull);

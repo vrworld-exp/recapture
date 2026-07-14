@@ -5,6 +5,8 @@ import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/capture_flow_variant_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
+import '../../application/config/config_notifier.dart';
+import '../../domain/entities/capture_config.dart';
 import '../../domain/capture/capture_flow_variant.dart';
 import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
@@ -31,6 +33,7 @@ import '../../presentation/screens/capture/processing_screen.dart';
 import '../../presentation/screens/capture/model_ready_screen.dart';
 import '../../presentation/screens/capture/ar_preview_screen.dart';
 import 'auth_router_notifier.dart';
+import 'flow_back.dart';
 import 'route_error_screen.dart';
 
 /// Named route paths for the ReCapture app.
@@ -146,7 +149,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.otpVerify,
         name: AppRouteNames.otpVerify,
-        builder: (_, __) => const OtpScreen(),
+        builder: (_, __) => const FlowBackScope(child: OtpScreen()),
       ),
       GoRoute(
         path: AppRoutes.projects,
@@ -156,23 +159,23 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.createProject,
         name: AppRouteNames.createProject,
-        builder: (_, __) => const CreateProjectScreen(),
+        builder: (_, __) => const FlowBackScope(child: CreateProjectScreen()),
       ),
       GoRoute(
         path: AppRoutes.preCapture,
         name: AppRouteNames.preCapture,
-        builder: (_, __) => const PreCaptureScreen(),
+        builder: (_, __) => const FlowBackScope(child: PreCaptureScreen()),
       ),
       GoRoute(
         path: AppRoutes.permissions,
         name: AppRouteNames.permissions,
-        builder: (_, __) => const PermissionsScreen(),
+        builder: (_, __) => const FlowBackScope(child: PermissionsScreen()),
       ),
       // Level A — dedicated Eye Ring intro (animation + rules + Begin/Skip).
       GoRoute(
         path: AppRoutes.levelAIntro,
         name: AppRouteNames.levelAIntro,
-        builder: (_, __) => const LevelAIntroScreen(),
+        builder: (_, __) => const FlowBackScope(child: LevelAIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.levelACapture,
@@ -203,17 +206,30 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.levelAComplete,
         // TODO(capture): supply the REAL summary from the aggregated Level A
         // result (same source as the in-capture progress meter / ring map).
-        // Placeholder values until the completion-summary aggregation lands.
-        builder: (context, _) => LevelACompleteScreen(
-          summary: const LevelASummary(
-            accepted: 34,
-            target: 36,
-            coveragePct: 92,
-            rejected: 1,
+        // accepted/coveragePct/rejected are placeholders until the
+        // completion-summary aggregation lands; the TARGET comes from the real
+        // config × variant resolver so the copy always names the true count.
+        builder: (context, _) => FlowBackScope(
+          child: Consumer(
+            builder: (context, ref, _) {
+              final target = effectiveSegmentsFor(
+                ref.watch(captureConfigProvider),
+                ref.watch(captureFlowVariantProvider),
+                'mid',
+              );
+              return LevelACompleteScreen(
+                summary: LevelASummary(
+                  accepted: target - 2,
+                  target: target,
+                  coveragePct: 92,
+                  rejected: 1,
+                ),
+                onStartLevelB: () => context.go(AppRoutes.levelBIntro),
+                onReview: () => context.push(AppRoutes.levelAReview),
+                onDoneExit: () => context.go(AppRoutes.projects),
+              );
+            },
           ),
-          onStartLevelB: () => context.go(AppRoutes.levelBIntro),
-          onReview: () => context.push(AppRoutes.levelAReview),
-          onDoneExit: () => context.go(AppRoutes.projects),
         ),
       ),
       // Level B — dedicated Top Ring intro (tilt-down rule + Begin/Skip),
@@ -221,7 +237,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBIntro,
         name: AppRouteNames.levelBIntro,
-        builder: (_, __) => const LevelBIntroScreen(),
+        builder: (_, __) => const FlowBackScope(child: LevelBIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.levelBCapture,
@@ -262,17 +278,19 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
               ? CaptureFlowVariant.withBottom
               : ref.read(captureFlowVariantProvider);
           final nextRoute = levelBCompleteNextRoute(variant);
-          return LevelCompleteScreen(
-            levelLabel: 'B',
-            levelName: 'Top Ring',
-            photosAccepted: 32,
-            coveragePercent: 87,
-            warningsCount: 1,
-            nextRoute: nextRoute,
-            nextLabel: nextRoute == AppRoutes.captureSummary
-                ? 'Continue'
-                : 'Start Level C',
-            reviewRoute: AppRoutes.levelBReview,
+          return FlowBackScope(
+            child: LevelCompleteScreen(
+              levelLabel: 'B',
+              levelName: 'Top Ring',
+              photosAccepted: 32,
+              coveragePercent: 87,
+              warningsCount: 1,
+              nextRoute: nextRoute,
+              nextLabel: nextRoute == AppRoutes.captureSummary
+                  ? 'Continue'
+                  : 'Start Level C',
+              reviewRoute: AppRoutes.levelBReview,
+            ),
           );
         },
       ),
@@ -286,7 +304,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.levelCIntro,
         name: AppRouteNames.levelCIntro,
         redirect: (_, __) => _levelCGuardRedirect(ref),
-        builder: (_, __) => const LevelCIntroScreen(),
+        builder: (_, __) => const FlowBackScope(child: LevelCIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.levelCCapture,
@@ -321,15 +339,17 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.levelCComplete,
         name: AppRouteNames.levelCComplete,
         redirect: (_, __) => _levelCGuardRedirect(ref),
-        builder: (_, __) => const LevelCompleteScreen(
-          levelLabel: 'C',
-          levelName: 'Low Ring',
-          photosAccepted: 30,
-          coveragePercent: 78,
-          warningsCount: 2,
-          nextRoute: AppRoutes.captureSummary,
-          nextLabel: 'Continue',
-          reviewRoute: AppRoutes.levelCReview,
+        builder: (_, __) => const FlowBackScope(
+          child: LevelCompleteScreen(
+            levelLabel: 'C',
+            levelName: 'Low Ring',
+            photosAccepted: 30,
+            coveragePercent: 78,
+            warningsCount: 2,
+            nextRoute: AppRoutes.captureSummary,
+            nextLabel: 'Continue',
+            reviewRoute: AppRoutes.levelCReview,
+          ),
         ),
       ),
       GoRoute(
@@ -365,17 +385,17 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.processing,
         name: AppRouteNames.processing,
-        builder: (_, __) => const ProcessingScreen(),
+        builder: (_, __) => const FlowBackScope(child: ProcessingScreen()),
       ),
       GoRoute(
         path: AppRoutes.modelReady,
         name: AppRouteNames.modelReady,
-        builder: (_, __) => const ModelReadyScreen(),
+        builder: (_, __) => const FlowBackScope(child: ModelReadyScreen()),
       ),
       GoRoute(
         path: AppRoutes.arPreview,
         name: AppRouteNames.arPreview,
-        builder: (_, __) => const ArPreviewScreen(),
+        builder: (_, __) => const FlowBackScope(child: ArPreviewScreen()),
       ),
     ],
   );

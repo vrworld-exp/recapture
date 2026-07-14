@@ -322,7 +322,19 @@ POST /jobs/6a5118f8119fa27578c7c989/finalize → 200 (985ms)
 
 
 
-// // // Also cretae data based on user login, i have seen there is no data created based on logIn. so make in Action.
+// // // Also cretae data based on user login, i have seen there is no data created based on logIn. so make in Action. ✅
+
+
+
+
+
+
+A loading ui for auth screen ✅
+
+
+
+Back navigation is not working properly when user using phone keys to back from one screen to another screen so fix it
+
 
 
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../data/local/level_intro_box.dart';
@@ -156,9 +157,7 @@ class _LevelIntroScaffoldState extends ConsumerState<LevelIntroScaffold> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new,
               color: AppColors.textPrimary),
-          onPressed: () {
-            if (context.canPop()) context.pop();
-          },
+          onPressed: () => navigateBack(context),
         ),
         title: Text(_content.appBarTitle, style: theme.textTheme.titleLarge),
       ),

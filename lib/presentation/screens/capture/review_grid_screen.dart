@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/review_flow_events.dart';
@@ -262,10 +263,18 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
       builder: (context, _) {
         final selectionMode = _selection.isSelectionMode;
         return PopScope(
-          // While selecting, BACK must exit selection — not pop the screen.
-          canPop: !selectionMode,
+          // Always intercepted. While selecting, BACK exits selection — not the
+          // screen; otherwise it goes through the shared flow-back helper (the
+          // review route is go()-navigated, so a successful pop of the
+          // single-page stack would exit the app).
+          canPop: false,
           onPopInvokedWithResult: (didPop, _) {
-            if (!didPop && selectionMode) _selection.exitSelection();
+            if (didPop) return;
+            if (selectionMode) {
+              _selection.exitSelection();
+            } else {
+              navigateBack(context);
+            }
           },
           child: Scaffold(
             backgroundColor: AppColors.bgPrimary,

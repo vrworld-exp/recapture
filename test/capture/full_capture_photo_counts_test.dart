@@ -3,8 +3,8 @@
 // QA: a full Guided Capture produces the expected number of photos, per level
 // and in total, for BOTH flow variants:
 //
-//   with_bottom    → A(mid) 12 + B(high) 12 + C(low) 12 = 36
-//   without_bottom → A(mid) 18 + B(high) 18             = 36
+//   with_bottom    → A(mid) 16 + B(high) 16 + C(low) 16 = 48
+//   without_bottom → A(mid) 24 + B(high) 24             = 48
 //
 // TESTS ONLY — this file asserts against the production sources of truth
 // (CaptureFlowVariant.levels, VariantSegments.bundledDefault via
@@ -33,11 +33,11 @@ void main() {
   })>[
     (
       variant: CaptureFlowVariant.withBottom,
-      expected: {CaptureLevel.a: 12, CaptureLevel.b: 12, CaptureLevel.c: 12},
+      expected: {CaptureLevel.a: 16, CaptureLevel.b: 16, CaptureLevel.c: 16},
     ),
     (
       variant: CaptureFlowVariant.withoutBottom,
-      expected: {CaptureLevel.a: 18, CaptureLevel.b: 18},
+      expected: {CaptureLevel.a: 24, CaptureLevel.b: 24},
     ),
   ];
 
@@ -73,7 +73,7 @@ void main() {
         });
       }
 
-      test('total photos for a full capture = 36', () {
+      test('total photos for a full capture = 48', () {
         // Total derived as the SUM of the per-level expectations within the
         // test — NOT a second independently hardcoded constant.
         final expectedTotal =
@@ -83,8 +83,8 @@ void main() {
         final builtTotal =
             machines.fold<int>(0, (sum, m) => sum + m.segmentCount);
         expect(builtTotal, expectedTotal);
-        // Both variants land on the same 36-photo budget by design.
-        expect(expectedTotal, 36);
+        // Both variants land on the same 48-photo budget by design.
+        expect(expectedTotal, 48);
       });
 
       test('a full simulated capture fills every segment of every level '
@@ -103,7 +103,7 @@ void main() {
           expect(m.isComplete, isTrue);
           expect(m.filledCount, m.segmentCount);
         }
-        expect(captured, 36);
+        expect(captured, 48);
       });
     });
   }
@@ -138,7 +138,7 @@ void main() {
       });
       expect(
         effectiveSegmentsFor(overridden, CaptureFlowVariant.withBottom, 'mid'),
-        12, // bundled variant default, NOT the legacy band count
+        16, // bundled variant default, NOT the legacy band count
       );
       expect(
         effectiveSegmentsFor(overridden, CaptureFlowVariant.withBottom, 'low'),
@@ -147,7 +147,7 @@ void main() {
       expect(
         effectiveSegmentsFor(
             overridden, CaptureFlowVariant.withoutBottom, 'mid'),
-        18,
+        24,
       );
     });
   });

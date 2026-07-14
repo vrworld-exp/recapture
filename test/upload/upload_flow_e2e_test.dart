@@ -5,7 +5,7 @@
 //
 //   real devCode OTP login (AuthNotifier + AuthRepository) →
 //   AppAuthUploadSession → buildUploadApiDio (Bearer + 401-refresh) →
-//   real CaptureBundlePacker (36 images, with_bottom 12/12/12) →
+//   real CaptureBundlePacker (48 images, with_bottom 16/16/16) →
 //   POST /projects → POST /jobs → ChunkedUploadManager
 //   (JobsMultipartUploadApi + DioS3PartClient presigned part PUTs) inside
 //   ResilientUploadRunner → POST /jobs/:id/finalize → QUEUED → completed.
@@ -48,7 +48,7 @@ import 'package:recapture/domain/entities/upload_progress.dart';
 import 'package:recapture/domain/upload/capture_manifest.dart';
 
 const _base = 'http://localhost:3000';
-const _perLevel = 12; // with_bottom: 12-12-12 → 36 images + manifest = 37
+const _perLevel = 16; // with_bottom: 16-16-16 → 48 images + manifest = 49
 
 Future<bool> _backendUp() async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
@@ -182,7 +182,7 @@ void main() {
         baseUrl: _base,
       );
 
-      // ── A real 36-image capture session on disk (with_bottom 12/12/12) ─────
+      // ── A real 48-image capture session on disk (with_bottom 16/16/16) ─────
       const sessionId = 'e2e-sess-1';
       final srcRoot = Directory('${tmp.path}/src')..createSync(recursive: true);
       final registry = LevelCaptureLedgerRegistry();
@@ -283,7 +283,7 @@ void main() {
       expect(orchestrator.progress.current.status, UploadStatus.completed,
           reason: 'finalize must return QUEUED and release completed');
       expect(orchestrator.progress.current.filesUploaded,
-          _perLevel * levelIds.length + 1); // 36 images + manifest
+          _perLevel * levelIds.length + 1); // 48 images + manifest
     },
     timeout: const Timeout(Duration(minutes: 5)),
   );
