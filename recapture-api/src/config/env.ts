@@ -15,6 +15,7 @@ const envSchema = z.object({
   S3_BUCKET_RAW: z.string().min(1, 'S3_BUCKET_RAW is required'),
   S3_BUCKET_ARTIFACTS: z.string().min(1, 'S3_BUCKET_ARTIFACTS is required'),
   CLOUDFRONT_BASE_URL: z.string().url('CLOUDFRONT_BASE_URL must be a valid URL'),
+  // backedendMakeAliveUrl: z.string().url('backendMakeAliveUrl must be a valid URL'),
 
   // ── OTP (POST /auth/send-otp) ──────────────────────────────────────────────
   // All tunables come from env; every one has a safe default so existing
