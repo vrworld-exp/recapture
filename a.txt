@@ -333,7 +333,7 @@ A loading ui for auth screen ✅
 
 
 
-Back navigation is not working properly when user using phone keys to back from one screen to another screen so fix it
+Back navigation is not working properly when user using phone keys to back from one screen to another screen so fix it ✅✅✅✅
 
 
 
@@ -347,12 +347,180 @@ Back navigation is not working properly when user using phone keys to back from 
 
 
 
-// // // // Err while sending node mailer msg 
-
-
-
+// // // // Err while sending node mailer msg ✅✅✅
 
 Plese try again, There is problem in sending otp. Error : Error: Invalid login: 535-5.7.8 Username and Password not accepted. For more information, go to 535 5.7.8 https://support.google.com/mail/?p=BadCredentials d2e1a72fcca58-84a4f7dadcfsm1680461b3a.48 - gsmtp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// // // Next prompt for single project preview ------------------------------------------------>>>>>>>>>>>>>>>>>>>>>>
+
+
+# Task: Add a staff-only "Preview" gallery per project (view / download / delete photos)
+
+## Goal
+Admin and 3D-artist accounts get a "Preview" button on each project. Tapping it
+opens a new page that shows ALL of that project's captured photos in a grid,
+with a per-photo Download action and a per-photo Delete action, so staff can
+curate the set before/instead of a bulk export.
+
+## Where this lives (do NOT touch non-staff surfaces)
+- The button goes on the STAFF "Live projects" tab card: `_LiveProjectCard` in
+  `lib/presentation/screens/projects/live_projects_view.dart`, next to the
+  existing "Export" button. That whole tab is already gated by
+  `isStaffProvider` (MODEL_ARTIST/ADMIN via /auth/me), so Preview is staff-only
+  automatically. Do NOT add it to `lib/presentation/widgets/project_card.dart`
+  (the shared My-projects card used by every user) — leaving that untouched is
+  how we guarantee no non-staff regression.
+- If Preview is ALSO wanted on My-projects for staff, add it via an OPTIONAL,
+  nullable `onPreview` callback on ProjectCard rendered only when non-null, and
+  have ProjectsScreen pass it only when `ref.watch(isStaffProvider)` is true.
+  Default: Live tab only (simpler, zero blast radius). [DECIDE if My tab too.]
+
+## Reuse what already exists — do not duplicate
+- Photo source of truth: `GET /admin/projects/:id/export`
+  (`recapture-api/src/services/adminProjectsService.ts` → `buildProjectExport`).
+  Response `export.files[]` = `{ key, url (presigned GET, bearer credential),
+  size }` plus `fileCount`, `expectedFileCount`, `generatedAt`, `expiresAt`.
+- Client fetch: `LiveProjectsRepository.export(projectId)` already returns this
+  map and translates errors into `LiveProjectsException`
+  (forbidden / notExportable / rateLimited / network / server). Reuse it.
+- Use each `files[i].url` as BOTH the `Image.network` thumbnail source AND the
+  download URL. Fetch the manifest ONCE per Preview open and hold it in the
+  screen's provider — the export endpoint is RATE-LIMITED
+  (ADMIN_EXPORT_MAX_PER_WINDOW, default 10/user/hour) and URLs expire in ~1h
+  (ADMIN_EXPORT_URL_TTL_SECONDS). Never request a fresh manifest per thumbnail.
+
+## Client work
+1. Route: add `previewGallery` to `AppRoutes`/`AppRouteNames` in
+   `lib/app/routes/app_router.dart`, e.g. path `/admin/projects/:id/preview`,
+   with a GoRoute that reads the project id from the path param. Because it's a
+   go()-replaced flow screen, wrap it in `FlowBackScope` OR give it its own
+   AppBar back arrow calling `navigateBack(context)` — match the existing
+   back-navigation pattern in `lib/app/routes/flow_back.dart` so hardware back
+   doesn't exit the app. Add a `flowBackRouteFor` mapping
+   previewGallery → projects.
+2. State: a `previewGalleryProvider` (family by projectId) that loads the
+   manifest via `LiveProjectsRepository.export`, exposing an
+   `AsyncValue<PreviewManifest>` (a small typed model: files list +
+   expiresAt + fileCount/expectedFileCount). Parse the raw map into typed
+   `PreviewPhoto { key, url, size }` in the repo or a mapper — do not leak
+   `Map<String,dynamic>` into the widget.
+3. Screen: `PreviewGalleryScreen` — `GridView` of thumbnails from
+   `photo.url`, each with graceful error/loader placeholders (reuse the
+   `_ThumbnailPlaceholder` pattern). Tap a photo → full-screen viewer with
+   Download + Delete. Show a header with fileCount and a subtle "links expire
+   at HH:MM" note (reuse the expiry formatting already in `_export`). Loading /
+   empty / error states mapped-copy-only, same as `_showFailure` in
+   live_projects_view.dart (never render a raw code or URL).
+4. Button: on `_LiveProjectCard`, add a secondary "Preview" button
+   (icon e.g. Icons.photo_library_outlined) shown for the same `_exportable`
+   statuses as Export, navigating to the preview route with the project id.
+   Keep Export exactly as-is.
+5. Download (mobile semantics — DECIDE and state which):
+   - Simplest, no new plugin: fetch bytes from `photo.url` → write to a temp
+     file (path_provider) → hand to the share sheet (share_plus, already a dep)
+     so the user saves it to Photos/Files/Drive. This mirrors the existing
+     export-share pattern and adds no permissions.
+   - Or add a gallery-save plugin (e.g. image_gallery_saver) for a true
+     "save to camera roll" — requires new platform permissions/plugin. Only if
+     product requires it. Default: share-sheet download.
+   Per-photo download in flight → per-key spinner guard (a Set<String> like
+   `_exportInFlight`).
+
+## Backend work — the NEW, destructive piece (design carefully)
+There is currently NO way to delete a single captured object. You must add:
+1. An S3 delete primitive in `recapture-api/src/services/s3ObjectStore.ts`
+   (e.g. `deleteObject(bucket, key)` and/or `deleteObjects` for a batch) — this
+   module today only lists/presigns/reads.
+2. A mutating admin endpoint, e.g.
+   `DELETE /admin/projects/:id/photos` with body `{ keys: string[] }` (keys are
+   RELATIVE-to-rawPrefix, exactly as the export manifest emits them). It must:
+   - run `requireAuth → requireRole(...)` like the rest of `src/routes/admin.ts`;
+   - resolve the project's exportable job + `rawPrefix` the SAME way
+     `buildProjectExport` does;
+   - REBUILD the absolute key as `rawPrefix + relativeKey` and enforce KEY
+     CONTAINMENT (reject any key that escapes the job's prefix — mirror the
+     upload-urls containment/410 rule) so a caller can't delete arbitrary S3
+     objects;
+   - delete only the matched objects; return which keys were deleted vs missing;
+   - emit an analytics event with HASHED ids only (never the key/url), following
+     the existing `hashIdentifier` pattern; never log the presigned URL or key.
+   - Add a Zod schema in `src/validation/adminSchemas.ts` for params + body.
+3. [DECIDE — surface this to the product owner, don't silently pick]:
+   a. WHO may delete — ADMIN only, or MODEL_ARTIST too? Deleting a user's raw
+      capture is destructive and irreversible. Recommend `requireRole('ADMIN')`
+      on the delete route even though browse/export is MODEL_ARTIST+.
+   b. HARD delete vs soft/quarantine. Hard-deleting a raw object after finalize
+      makes `fileCount < expectedFileCount` and can break a later re-run /
+      reprocess of that job. Recommend either (i) blocking delete once a job has
+      progressed past QUEUED, or (ii) moving the object to a `deleted/` prefix
+      instead of destroying it. At minimum, document the consequence.
+   c. Whether deleting should also decrement any stored photo count / mark the
+      job so exports reflect the new truth.
+
+## After a delete (client)
+Remove the photo from the in-memory manifest list locally and update the count —
+do NOT immediately re-fetch the manifest (that spends a rate-limit token and
+re-presigns everything). Offer manual refresh (pull-to-refresh) if the user
+wants a fresh set. Show a confirm dialog before deleting (reuse the app's
+platform-adaptive delete-confirmation modal pattern if one exists), and a
+mapped-copy snackbar on success/failure.
+
+## Non-regression guardrails (the "don't affect other features" bar)
+- No signature change to shared `ProjectCard` unless the optional-callback path
+  above is chosen; even then it must be nullable with a default of null.
+- Do not modify the export endpoint, the export share flow, or the My-projects
+  list. Preview is additive.
+- Presigned URLs stay out of logs/analytics/exceptions everywhere (existing rule).
+- The delete route is a NEW path; the existing `/admin` read routes are unchanged.
+
+## Tests
+Backend (Vitest + supertest, mongodb-memory-server — existing stack):
+- Delete endpoint: 200 deletes only the targeted keys; key OUTSIDE the job
+  prefix → rejected (containment); non-staff/no-role → 403; unknown project →
+  404; wrong role per decision (a) → 403.
+Client (widget + unit):
+- PreviewGalleryScreen renders N thumbnails from a fake manifest; shows mapped
+  copy on `notExportable`/`network`/`forbidden`; delete removes the tile locally
+  and does not re-request the manifest; download invokes the share/save seam
+  (inject a fake, like `ShareLauncher`) exactly once per photo.
+- Preview button appears on `_LiveProjectCard` for exportable statuses and
+  routes with the correct project id.
+
+## Verification
+- `flutter test` and (backend) `npm test` fully green.
+- Run the app as a staff account (isStaffProvider true): Live tab → Preview →
+  grid loads, download saves a file, delete removes a photo after confirm.
+- Confirm a NON-staff account sees no Preview button and the My-projects card is
+  byte-for-byte unchanged.
+- Confirm hardware back from the Preview page returns to Projects, not the OS
+  home screen.
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
