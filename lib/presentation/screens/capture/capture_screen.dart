@@ -1205,9 +1205,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
 
   void _exitToProjects() => context.go(AppRoutes.projects);
 
-  /// System/hardware back: when there is unsaved progress the route is blocked
-  /// ([PopScope.canPop] false) and this confirms via the SAME flow as the
-  /// top-bar back, so both behave identically.
+  /// System/hardware back: the route is always blocked ([PopScope.canPop]
+  /// false — a successful pop of the go()-navigated single-page stack would
+  /// exit the app) and this confirms via the SAME flow as the top-bar back,
+  /// so both behave identically.
   void _onPopInvoked(bool didPop, Object? result) {
     if (didPop) return;
     unawaited(_confirmExit());
@@ -1222,9 +1223,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // are unavailable.
     ref.watch(ringPositionBinderProvider);
     return PopScope(
-      // Blocked while there is unsaved progress so the system back gesture/button
-      // funnels through the same Save & Exit confirmation as the top-bar back.
-      canPop: !_hasUnsavedProgress,
+      // ALWAYS intercepted: the capture route is go()-navigated (single-page
+      // stack), so letting a pop "succeed" would exit the app. Every back path
+      // funnels through _confirmExit — Save & Exit modal with unsaved progress,
+      // straight to Projects without.
+      canPop: false,
       onPopInvokedWithResult: _onPopInvoked,
       child: Scaffold(
         backgroundColor: AppColors.bgPrimary,

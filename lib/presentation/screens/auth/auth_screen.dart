@@ -45,7 +45,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   String? _phoneError;
   String? _emailError;
 
-  /// Double-tap guard around the send-otp network step.
+  /// Double-tap guard around the send-otp network step. Also drives the
+  /// Send OTP button's spinner/disabled state while the request is pending.
   bool _sending = false;
 
   @override
@@ -70,7 +71,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   /// dispatch installs the OTP request and navigates to the OTP screen.
   Future<void> _onSendOtp() async {
     if (_sending || !_validateActiveTab()) return;
-    _sending = true;
+    setState(() => _sending = true);
     try {
       final status = await _connectivity.currentStatus();
       if (!mounted) return;
@@ -118,7 +119,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       if (!mounted) return;
       _installAndGo(result);
     } finally {
-      _sending = false;
+      // _installAndGo may have navigated away; only repaint if still here.
+      if (mounted) setState(() => _sending = false);
     }
   }
 
@@ -274,6 +276,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             const SizedBox(height: AppSpacing.xxl),
             AppButton(
               label: 'Send OTP',
+              isLoading: _sending,
               onPressed: _onSendOtp,
             ),
             const SizedBox(height: AppSpacing.lg),

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/routes/app_router.dart';
+import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
@@ -172,9 +173,7 @@ class _LevelAIntroScreenState extends ConsumerState<LevelAIntroScreen> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new,
               color: AppColors.textPrimary),
-          onPressed: () {
-            if (context.canPop()) context.pop();
-          },
+          onPressed: () => navigateBack(context),
         ),
         title: Text('Level A: Eye Ring',
             style: Theme.of(context).textTheme.titleLarge),

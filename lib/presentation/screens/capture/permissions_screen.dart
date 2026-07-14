@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
+import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../data/local/permission_flow_box.dart';
@@ -289,9 +290,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary),
-          onPressed: () {
-            if (context.canPop()) context.pop();
-          },
+          onPressed: () => navigateBack(context),
         ),
         title: Text('Enable permissions', style: Theme.of(context).textTheme.titleLarge),
       ),
