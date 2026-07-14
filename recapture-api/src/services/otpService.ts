@@ -104,15 +104,15 @@ export async function sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
   // Capture the prior state for rollback before we overwrite it.
   const snapshot: OtpSnapshot | null = existing
     ? {
-        channel: existing.channel,
-        otpHash: existing.otpHash,
-        expiresAt: existing.expiresAt,
-        attempts: existing.attempts,
-        lastSentAt: existing.lastSentAt,
-        windowStartedAt: existing.windowStartedAt,
-        sendCount: existing.sendCount,
-        purgeAt: existing.purgeAt,
-      }
+      channel: existing.channel,
+      otpHash: existing.otpHash,
+      expiresAt: existing.expiresAt,
+      attempts: existing.attempts,
+      lastSentAt: existing.lastSentAt,
+      windowStartedAt: existing.windowStartedAt,
+      sendCount: existing.sendCount,
+      purgeAt: existing.purgeAt,
+    }
     : null;
 
   // ── 4) Persist (overwrite prior unexpired OTP → only the newest verifies) ──
@@ -139,7 +139,10 @@ export async function sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
     } else {
       await sendEmail(input.email, code);
     }
-  } catch {
+  } catch (e: any) {
+
+    console.error('OTP dispatch failed:', e);
+
     // Roll back so a failed send does not consume the cooldown/window.
     if (snapshot) {
       await OtpCode.findOneAndUpdate({ identifier }, snapshot).exec();

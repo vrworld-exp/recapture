@@ -334,3 +334,22 @@ POST /jobs/6a5118f8119fa27578c7c989/finalize → 200 (985ms)
 
 
 
+
+// // // // Err while sending node mailer msg 
+
+
+
+
+Plese try again, There is problem in sending otp. Error : Error: Invalid login: 535-5.7.8 Username and Password not accepted. For more information, go to 535 5.7.8 https://support.google.com/mail/?p=BadCredentials d2e1a72fcca58-84a4f7dadcfsm1680461b3a.48 - gsmtp
+
+
+
+
+
+
+
+
+
+
+
+
