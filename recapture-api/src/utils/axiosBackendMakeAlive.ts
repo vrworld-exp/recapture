@@ -29,8 +29,10 @@ async function ping(): Promise<HealthResponse> {
 
 export async function axiosBackendMakeAlive(): Promise<void> {
     try {
+
+        const min = 1000 * 60 * 10;  // 10 mins
         // const health = await ping();
-        await setInterval(ping, 10000); // ping every 10 seconds
+        await setInterval(ping, min); // ping every 10 seconds
         // console.log('✅ Backend health check passed');
     } catch (err) {
         console.error('❌ Backend health check failed:', err);
