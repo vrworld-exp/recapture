@@ -212,11 +212,19 @@ export async function buildProjectExport(projectId: string): Promise<BuildExport
   const ttlSeconds = env.ADMIN_EXPORT_URL_TTL_SECONDS;
   const generatedAt = new Date();
   const files = await Promise.all(
-    objects.map(async (object) => ({
-      key: toRelativeKey(object.key, rawPrefix),
-      url: await presignObjectGetUrl(rawBucket, object.key, ttlSeconds),
-      size: object.size,
-    }))
+    objects.map(async (object) => {
+      const key = toRelativeKey(object.key, rawPrefix);
+      // Presign with Content-Disposition so the SAME url is both a thumbnail
+      // source AND a one-click browser download with the right filename (the
+      // basename of the relative key). See presignObjectGetUrl for why this is
+      // safe to reuse for the `<img>` thumbnail.
+      const downloadFilename = key.slice(key.lastIndexOf('/') + 1);
+      return {
+        key,
+        url: await presignObjectGetUrl(rawBucket, object.key, ttlSeconds, { downloadFilename }),
+        size: object.size,
+      };
+    })
   );
 
   return {

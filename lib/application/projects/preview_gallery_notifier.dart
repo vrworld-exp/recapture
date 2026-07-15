@@ -41,6 +41,31 @@ class PreviewGalleryNotifier
     state = const AsyncLoading<PreviewManifest>().copyWithPrevious(state);
     state = await AsyncValue.guard(() => _load(arg));
   }
+
+  /// Returns a [photo] guaranteed to carry a still-valid presigned url. The
+  /// manifest is loaded once and its urls expire (~1h); if the current
+  /// manifest is at/near expiry this re-fetches it (spending a rate-limit
+  /// token) and returns the fresh entry for the same [PreviewPhoto.key]. When
+  /// the url is still good — the common case — it returns [photo] untouched and
+  /// spends nothing. Used by the Download action so a save never fails on (or
+  /// silently writes) an expired url; matters especially on web, where the
+  /// browser downloads the url directly with no chance to catch a 403.
+  Future<PreviewPhoto> freshPhotoFor(PreviewPhoto photo, {DateTime Function()? now}) async {
+    final clock = now ?? DateTime.now;
+    final expiresAt = state.valueOrNull?.expiresAt;
+    // Refresh when expiry is unknown or within a 60s safety margin of now.
+    final stale = expiresAt == null ||
+        !expiresAt.isAfter(clock().toUtc().add(const Duration(seconds: 60)));
+    if (!stale) return photo;
+
+    await refresh();
+    for (final f in state.valueOrNull?.files ?? const <PreviewPhoto>[]) {
+      if (f.key == photo.key) return f;
+    }
+    // The key vanished (e.g. deleted since) — fall back to the original so the
+    // caller still attempts, and surfaces a mapped failure if the url is dead.
+    return photo;
+  }
 }
 
 /// Preview gallery state for a given projectId. Auto-disposed when the screen

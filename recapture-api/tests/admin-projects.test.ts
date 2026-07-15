@@ -418,6 +418,10 @@ describe('GET /admin/projects/:id/export', () => {
     expect(image).toBeDefined();
     expect(image.url).toContain(`X-Amz-Expires=${env.ADMIN_EXPORT_URL_TTL_SECONDS}`);
     expect(image.url).toContain(encodeURIComponent('images/EYE/eye_0001.jpg').replace(/%2F/gi, '/'));
+    // Content-Disposition makes each url a one-click browser download with the
+    // key's basename as the filename (no CORS byte-fetch needed on web).
+    expect(image.url).toContain('response-content-disposition=');
+    expect(decodeURIComponent(image.url)).toContain('attachment; filename="eye_0001.jpg"');
     for (const f of exp.files) {
       expect(f.key.startsWith('dev/')).toBe(false);
       expect(f.key).not.toContain(owner.id);

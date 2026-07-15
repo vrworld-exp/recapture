@@ -12,7 +12,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/projects/preview_download_service.dart';
-import 'package:recapture/application/projects/preview_gallery_notifier.dart';
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'package:recapture/domain/entities/preview_manifest.dart';
@@ -49,8 +48,8 @@ class _RecordingDownloader implements PreviewDownloader {
   Future<void> download(PreviewPhoto photo) async => downloaded.add(photo.key);
 }
 
-Map<String, dynamic> _manifest(List<String> keys) => {
-      'expiresAt': '2026-07-15T13:00:00.000Z',
+Map<String, dynamic> _manifest(List<String> keys, {String expiresAt = '2099-01-01T00:00:00.000Z'}) => {
+      'expiresAt': expiresAt,
       'fileCount': keys.length,
       'expectedFileCount': keys.length,
       'files': [
@@ -123,6 +122,31 @@ void main() {
     await tester.tap(find.widgetWithText(ElevatedButton, 'Download'));
     await tester.pump();
 
+    expect(dl.downloaded, ['images/EYE/a.jpg']);
+  });
+
+  testWidgets('Download refreshes an expired manifest, then downloads fresh url',
+      (tester) async {
+    // Manifest already expired → the download must re-fetch (freshPhotoFor)
+    // before handing the photo to the downloader, so no dead url is used.
+    final repo = _FakeRepo()
+      ..exportResult =
+          _manifest(['images/EYE/a.jpg'], expiresAt: '2000-01-01T00:00:00.000Z');
+    final dl = _RecordingDownloader();
+
+    await tester.pumpWidget(_app(repo, dl, admin: false));
+    await tester.pump();
+    expect(repo.exportCalls, 1);
+
+    await tester.tap(find.byKey(const ValueKey('preview_tile_images/EYE/a.jpg')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Download'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+
+    // Re-fetched once (the refresh) and still downloaded the same key.
+    expect(repo.exportCalls, 2);
     expect(dl.downloaded, ['images/EYE/a.jpg']);
   });
 

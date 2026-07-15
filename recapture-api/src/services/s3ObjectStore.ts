@@ -1,4 +1,4 @@
-// src/services/s3ObjectStore.ts
+﻿// src/services/s3ObjectStore.ts
 //
 // Small S3 object-inspection helpers over the SHARED configured client
 // (config/s3.ts — never a second client): existence check (HEAD) and a
@@ -94,15 +94,45 @@ export async function listObjectsUnderPrefix(
  * Presigns a GET URL for one object. Local SigV4 signing — no network call —
  * so presigning a whole export manifest in parallel is cheap. The URL is a
  * bearer credential for that object until [expiresInSeconds]: NEVER log it.
+ *
+ * Pass `downloadFilename` to have S3 return the object with
+ * `Content-Disposition: attachment; filename="…"`. This makes the presigned URL
+ * a browser-downloadable link (correct filename + the object's stored
+ * content-type) WITHOUT any cross-origin byte fetch — the raw-captures bucket
+ * has no CORS policy, so a web client can't XHR the bytes, but a plain
+ * navigation to a Content-Disposition URL downloads fine. It does not affect
+ * how the same URL renders as an `<img>`/decoder subresource (that path ignores
+ * the header), so it is safe to reuse one URL for both thumbnail and download.
  */
 export async function presignObjectGetUrl(
   bucket: string,
   key: string,
-  expiresInSeconds: number
+  expiresInSeconds: number,
+  options?: { downloadFilename?: string }
 ): Promise<string> {
-  return getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key }), {
-    expiresIn: expiresInSeconds,
-  });
+  const disposition = options?.downloadFilename
+    ? `attachment; filename="${sanitizeContentDispositionFilename(options.downloadFilename)}"`
+    : undefined;
+  return getSignedUrl(
+    s3Client,
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ...(disposition ? { ResponseContentDisposition: disposition } : {}),
+    }),
+    { expiresIn: expiresInSeconds }
+  );
+}
+
+/**
+ * Sanitizes a filename for the quoted-string form of a Content-Disposition
+ * header: replaces any whitespace — including the CR/LF a header-injection
+ * attempt would need — plus the `"`/`\` that would break the quoting. S3 keys
+ * are already restricted to a safe alphabet, so in practice this is a no-op
+ * belt-and-braces.
+ */
+function sanitizeContentDispositionFilename(name: string): string {
+  return name.replace(/["\\\s]/g, '_');
 }
 
 /** Result of fetching a text object: absent (404) or its body string. */

@@ -105,6 +105,46 @@ void main() {
     expect(repo.exportCalls, 1);
   });
 
+  test('freshPhotoFor returns the same photo (no re-fetch) when url is valid',
+      () async {
+    repo.exportResult = _manifest(['images/EYE/a.jpg']);
+    final manifest = await container.read(previewGalleryProvider('p1').future);
+    final photo = manifest.files.first;
+
+    final fresh = await container
+        .read(previewGalleryProvider('p1').notifier)
+        .freshPhotoFor(photo, now: () => DateTime.utc(2026, 7, 15, 12));
+
+    expect(fresh.url, photo.url);
+    // Well before expiry (13:00Z) → no token spent.
+    expect(repo.exportCalls, 1);
+  });
+
+  test('freshPhotoFor re-fetches an expired manifest and returns the fresh url',
+      () async {
+    repo.exportResult = _manifest(['images/EYE/a.jpg']);
+    final manifest = await container.read(previewGalleryProvider('p1').future);
+    final photo = manifest.files.first;
+    expect(repo.exportCalls, 1);
+
+    // Simulate the server re-presigning: same key, a new url on the next fetch.
+    repo.exportResult = {
+      ..._manifest(['images/EYE/a.jpg']),
+      'files': [
+        {'key': 'images/EYE/a.jpg', 'url': 'https://signed/fresh', 'size': 100},
+      ],
+    };
+
+    final fresh = await container
+        .read(previewGalleryProvider('p1').notifier)
+        // Past the manifest's 13:00Z expiry → must refresh.
+        .freshPhotoFor(photo, now: () => DateTime.utc(2026, 7, 15, 14));
+
+    expect(fresh.key, 'images/EYE/a.jpg');
+    expect(fresh.url, 'https://signed/fresh');
+    expect(repo.exportCalls, 2);
+  });
+
   test('deletePhoto failure rethrows and leaves the list intact', () async {
     repo.exportResult = _manifest(['images/EYE/a.jpg']);
     repo.deleteFail =

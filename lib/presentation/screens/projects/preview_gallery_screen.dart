@@ -62,8 +62,13 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
     if (_downloadInFlight.contains(photo.key)) return;
     setState(() => _downloadInFlight.add(photo.key));
     try {
-      await ref.read(previewDownloaderProvider).download(photo);
-      _snack('Saved ${photo.fileName}');
+      // The manifest's presigned urls expire (~1h) — refresh if stale so the
+      // save (and, on web, the direct browser download) never hits a dead url.
+      final fresh = await ref
+          .read(previewGalleryProvider(widget.projectId).notifier)
+          .freshPhotoFor(photo);
+      await ref.read(previewDownloaderProvider).download(fresh);
+      _snack('Saved ${fresh.fileName}');
     } catch (_) {
       // Never surface the presigned URL or a raw error.
       _snack('Couldn’t download this photo. Please try again.');
