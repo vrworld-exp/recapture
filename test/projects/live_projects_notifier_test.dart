@@ -38,6 +38,11 @@ class _ScriptedLiveRepo implements LiveProjectsRepository {
   @override
   Future<Map<String, dynamic>> export(String projectId) async =>
       throw UnimplementedError('not used here');
+
+  @override
+  Future<PreviewDeleteResult> deletePhotos(
+          String projectId, List<String> keys) async =>
+      throw UnimplementedError('not used here');
 }
 
 void main() {

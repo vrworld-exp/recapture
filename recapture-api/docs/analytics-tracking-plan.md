@@ -217,6 +217,14 @@ presigned URL — actor/project/job identifiers are hashed.
 - **Props:** `actor_id_hash` (string), `project_id_hash` (string),
   `job_id_hash` (string), `file_count` (int ≥ 0), `ttl_seconds` (int > 0)
 
+### `project_photos_deleted`
+- **When:** `DELETE /admin/projects/:id/photos` (ADMIN-only) soft-deletes one or
+  more captured objects (moves them to the job's `deleted/` namespace). Nothing
+  fires on 400/403/404/409.
+- **Props:** `actor_id_hash` (string), `project_id_hash` (string),
+  `job_id_hash` (string), `deleted_count` (int ≥ 0), `missing_count` (int ≥ 0).
+  **Never** carries a key or presigned URL.
+
 ### `admin_access_denied`
 - **When:** `requireRole` rejects an **authenticated** caller whose role is
   below the route's minimum (403). Unauthenticated 401s emit nothing.

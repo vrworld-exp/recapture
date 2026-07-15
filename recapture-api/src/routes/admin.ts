@@ -11,12 +11,14 @@ import { requireRole } from '@/middleware/requireRole';
 import {
   adminListProjectsQuerySchema,
   adminProjectIdParamsSchema,
+  adminDeletePhotosBodySchema,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
   listAllCapturedProjects,
   getAdminProjectDetail,
   buildProjectExport,
+  softDeleteProjectPhotos,
 } from '@/services/adminProjectsService';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
@@ -178,6 +180,94 @@ router.get(
     });
 
     res.status(200).json({ status: 'success', export: result.export });
+  })
+);
+
+/**
+ * DELETE /admin/projects/:id/photos — SOFT-delete captured photos from a
+ * project's exportable job (staff curation).
+ *
+ * ADMIN-ONLY (a stricter gate than the browse/export routes' MODEL_ARTIST):
+ * deleting a user's raw capture is destructive, so the route adds its own
+ * requireRole('ADMIN') on top of the router-level MODEL_ARTIST gate. Body carries
+ * the RELATIVE keys to remove (exactly as the export manifest emits them).
+ *
+ * "Delete" here MOVES each object to the job's reserved `deleted/` namespace
+ * (recoverable, out of the export set) rather than destroying it. Any key that
+ * escapes the job prefix is refused before anything is touched (containment).
+ * Analytics carries HASHED ids + counts only — never a key or presigned URL.
+ */
+router.delete(
+  '/projects/:id/photos',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = adminDeletePhotosBodySchema.safeParse(req.body);
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      const field = issue?.path.join('.') || 'body';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const result = await softDeleteProjectPhotos(params.data.id, body.data.keys);
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Project not found.',
+      });
+      return;
+    }
+
+    if (result.outcome === 'NOT_EXPORTABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'This project has no finalized upload to modify.',
+      });
+      return;
+    }
+
+    if (result.outcome === 'INVALID_KEY') {
+      // Never echo the offending key back verbatim — it is caller-controlled and
+      // would let an attacker probe the message. Mirrors upload-urls' 400.
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: "Each key must live under the job's file set.",
+        fields: { keys: "must be an export-manifest key (no '..' or absolute path)" },
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.PROJECT_PHOTOS_DELETED, {
+      actor_id_hash: hashIdentifier(req.user!.userId),
+      project_id_hash: hashIdentifier(result.projectId),
+      job_id_hash: hashIdentifier(result.jobId),
+      deleted_count: result.deleted.length,
+      missing_count: result.missing.length,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      deleted: result.deleted,
+      missing: result.missing,
+    });
   })
 );
 

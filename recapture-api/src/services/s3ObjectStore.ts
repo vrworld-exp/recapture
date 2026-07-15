@@ -5,6 +5,8 @@
 // FULLY-PAGINATED object count under a prefix. Pure S3 concerns; the finalize
 // verification rules live in jobsService.
 import {
+  CopyObjectCommand,
+  DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
@@ -120,6 +122,56 @@ export async function getObjectText(bucket: string, key: string): Promise<Fetche
     if (isNotFound(err)) return { outcome: 'absent' };
     throw err;
   }
+}
+
+/**
+ * Copies one object (server-side) from (bucket, sourceKey) to (bucket, destKey).
+ * S3 CopyObject is a single server-side operation — no bytes transit this
+ * process. A missing source surfaces as a thrown NoSuchKey; the caller decides
+ * whether that is an error or a "already gone" no-op.
+ */
+export async function copyObject(
+  bucket: string,
+  sourceKey: string,
+  destKey: string
+): Promise<void> {
+  await s3Client.send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      // CopySource is `${bucket}/${key}` URL-encoded so keys with reserved
+      // characters (none in our canonical keys, but be correct) copy safely.
+      CopySource: encodeURI(`${bucket}/${sourceKey}`),
+      Key: destKey,
+    })
+  );
+}
+
+/**
+ * Deletes one object at (bucket, key). S3 DeleteObject is idempotent — deleting
+ * an absent key is a success (204), never a 404 — so this never throws for a
+ * missing key.
+ */
+export async function deleteObject(bucket: string, key: string): Promise<void> {
+  await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+/**
+ * "Soft delete" one object: copy it to [destKey], then delete the original — an
+ * S3 has no native move, so this is the two-step equivalent. Returns:
+ *   - 'moved'   — the source existed and is now only at destKey.
+ *   - 'missing' — the source did not exist (nothing copied, nothing deleted).
+ * The copy runs first so a crash between the two steps leaves the object
+ * readable at BOTH locations (recoverable) rather than lost.
+ */
+export async function moveObject(
+  bucket: string,
+  sourceKey: string,
+  destKey: string
+): Promise<'moved' | 'missing'> {
+  if (!(await objectExists(bucket, sourceKey))) return 'missing';
+  await copyObject(bucket, sourceKey, destKey);
+  await deleteObject(bucket, sourceKey);
+  return 'moved';
 }
 
 function isNotFound(err: unknown): boolean {

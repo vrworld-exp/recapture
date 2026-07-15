@@ -1,7 +1,9 @@
 // lib/presentation/screens/projects/live_projects_view.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/projects/live_projects_notifier.dart';
@@ -169,6 +171,10 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
                 project: project,
                 isExporting: _exportInFlight.contains(project.id),
                 onExport: () => _export(project),
+                onPreview: () => context.pushNamed(
+                  AppRouteNames.previewGallery,
+                  pathParameters: {'id': project.id},
+                ),
               );
             },
           ),
@@ -197,11 +203,13 @@ class _LiveProjectCard extends StatelessWidget {
     required this.project,
     required this.isExporting,
     required this.onExport,
+    required this.onPreview,
   });
 
   final LiveProject project;
   final bool isExporting;
   final VoidCallback onExport;
+  final VoidCallback onPreview;
 
   bool get _exportable =>
       project.status == ProjectStatus.processing ||
@@ -249,15 +257,27 @@ class _LiveProjectCard extends StatelessWidget {
             const Divider(
                 color: AppColors.disabled, thickness: 0.5, height: 1),
             const SizedBox(height: AppSpacing.md),
-            Align(
-              alignment: Alignment.centerRight,
-              child: AppButton.secondary(
-                label: 'Export',
-                icon: Icons.ios_share,
-                isFullWidth: false,
-                isLoading: isExporting,
-                onPressed: onExport,
-              ),
+            // Expanded slots bound each button's width (AppButton's theme has
+            // an infinite minimumSize, so a bare Row child would overflow).
+            Row(
+              children: [
+                Expanded(
+                  child: AppButton.secondary(
+                    label: 'Preview',
+                    icon: Icons.photo_library_outlined,
+                    onPressed: onPreview,
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: AppButton.secondary(
+                    label: 'Export',
+                    icon: Icons.ios_share,
+                    isLoading: isExporting,
+                    onPressed: onExport,
+                  ),
+                ),
+              ],
             ),
           ],
         ],

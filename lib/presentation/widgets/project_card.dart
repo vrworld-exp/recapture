@@ -19,6 +19,7 @@ class ProjectCard extends StatelessWidget {
     required this.onView,
     required this.onRetry,
     required this.onMore,
+    this.onPreview,
     this.isActionInFlight = false,
   });
 
@@ -30,6 +31,12 @@ class ProjectCard extends StatelessWidget {
   /// Opens the project options sheet (Rename / Delete). The card stays free of
   /// sheet logic — it only signals intent.
   final ValueChanged<Project> onMore;
+
+  /// OPTIONAL staff-only "Preview" action. Null for every non-staff caller
+  /// (default) — the button renders ONLY when this is non-null, so the shared
+  /// My-projects card is byte-for-byte unchanged for regular users. The screen
+  /// passes it only for staff on an exportable project.
+  final ValueChanged<Project>? onPreview;
 
   /// When true the action button shows a loading state and is disabled
   /// (per-project in-flight guard owned by the screen).
@@ -90,15 +97,34 @@ class ProjectCard extends StatelessWidget {
 
   List<Widget> _buildActionArea(BuildContext context) {
     final action = project.status.cardAction;
-    if (action == ProjectCardAction.none) return const [];
+    final showPreview = onPreview != null;
+    if (action == ProjectCardAction.none && !showPreview) return const [];
+
+    final trailing = <Widget>[
+      if (showPreview)
+        AppButton.secondary(
+          label: 'Preview',
+          icon: Icons.photo_library_outlined,
+          isFullWidth: false,
+          onPressed: () => onPreview!(project),
+        ),
+      if (action != ProjectCardAction.none) _buildAction(context, action),
+    ];
 
     return [
       const SizedBox(height: AppSpacing.md),
       const Divider(color: AppColors.disabled, thickness: 0.5, height: 1),
       const SizedBox(height: AppSpacing.md),
-      Align(
-        alignment: Alignment.centerRight,
-        child: _buildAction(context, action),
+      // AppButton's theme sets an infinite minimumSize width, so each child
+      // needs a bounded-width slot — Expanded gives that (a lone action fills
+      // the row, matching the previous single-Align layout).
+      Row(
+        children: [
+          for (var i = 0; i < trailing.length; i++) ...[
+            if (i > 0) const SizedBox(width: AppSpacing.sm),
+            Expanded(child: trailing[i]),
+          ],
+        ],
       ),
     ];
   }

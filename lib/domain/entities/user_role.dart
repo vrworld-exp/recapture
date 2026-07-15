@@ -18,6 +18,11 @@ enum UserRole {
   /// therefore fails CLOSED.
   bool get isStaff => this != UserRole.user;
 
+  /// True only for [admin] — the gate for destructive staff actions (e.g.
+  /// soft-deleting a captured photo), mirroring the backend's ADMIN-only
+  /// `DELETE /admin/projects/:id/photos`. Fails CLOSED for a failed role fetch.
+  bool get isAdmin => this == UserRole.admin;
+
   /// Wire value, matching the backend enum exactly.
   String get apiValue => switch (this) {
         UserRole.user => 'USER',

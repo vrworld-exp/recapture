@@ -50,6 +50,20 @@ abstract interface class LiveProjectsRepository {
   /// `export` object (the artist-facing JSON written to the share file).
   /// Throws [LiveProjectsException] (notExportable / rateLimited / …).
   Future<Map<String, dynamic>> export(String projectId);
+
+  /// Soft-deletes the given job-root-RELATIVE [keys] (exactly as the export
+  /// manifest emits them) from [projectId]'s exportable job. Returns which keys
+  /// were deleted vs already missing. Throws [LiveProjectsException]
+  /// (forbidden when the account is not ADMIN / notExportable / network / …).
+  Future<PreviewDeleteResult> deletePhotos(String projectId, List<String> keys);
+}
+
+/// Outcome of a soft-delete: the keys that were moved out vs those already gone.
+class PreviewDeleteResult {
+  const PreviewDeleteResult({required this.deleted, required this.missing});
+
+  final List<String> deleted;
+  final List<String> missing;
 }
 
 class RemoteLiveProjectsRepository implements LiveProjectsRepository {
@@ -93,6 +107,30 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
         throw const LiveProjectsException(LiveProjectsFailure.server);
       }
       return export;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<PreviewDeleteResult> deletePhotos(
+    String projectId,
+    List<String> keys,
+  ) async {
+    try {
+      final res = await _dio.delete<Map<String, dynamic>>(
+        '/admin/projects/$projectId/photos',
+        data: {'keys': keys},
+      );
+      final data = res.data ?? const {};
+      List<String> asStrings(Object? v) => [
+            if (v is List)
+              for (final e in v) e.toString(),
+          ];
+      return PreviewDeleteResult(
+        deleted: asStrings(data['deleted']),
+        missing: asStrings(data['missing']),
+      );
     } on DioException catch (e) {
       throw _translate(e);
     }

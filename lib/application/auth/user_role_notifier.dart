@@ -116,3 +116,7 @@ final userRoleProvider =
 
 /// True when the signed-in user may see staff-only surfaces (Live projects).
 final isStaffProvider = Provider<bool>((ref) => ref.watch(userRoleProvider).isStaff);
+
+/// True only for ADMIN — gates destructive staff actions (photo soft-delete),
+/// mirroring the backend's ADMIN-only delete route. Fails closed.
+final isAdminProvider = Provider<bool>((ref) => ref.watch(userRoleProvider).isAdmin);

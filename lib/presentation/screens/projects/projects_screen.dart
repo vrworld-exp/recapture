@@ -155,6 +155,23 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     context.goNamed(AppRouteNames.modelReady);
   }
 
+  /// Staff-only per-project Preview (My-projects surface). Pushed so hardware
+  /// back returns here. No in-flight claim: it's a pure navigation, not a
+  /// mutation, and the Preview screen owns its own load/guards.
+  void _onPreview(Project p) {
+    _logAction('preview', p);
+    context.pushNamed(
+      AppRouteNames.previewGallery,
+      pathParameters: {'id': p.id},
+    );
+  }
+
+  /// A project has a finalized upload worth previewing (mirrors the backend's
+  /// exportable set: PROCESSING/COMPLETED).
+  static bool _isExportable(Project p) =>
+      p.status == ProjectStatus.processing ||
+      p.status == ProjectStatus.completed;
+
   Future<void> _onRetry(Project p) async {
     if (!_claim(p)) return;
     _logAction('retry', p);
@@ -286,6 +303,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
         onRetry: () => ref.invalidate(projectsProvider),
       ),
       data: (projects) {
+        // Staff get a Preview action on their OWN exportable projects too; the
+        // callback is null for everyone else, so the shared card is unchanged.
+        final isStaff = ref.watch(isStaffProvider);
         if (projects.isEmpty) {
           // Empty state is pull-to-refreshable too — a user with no projects can
           // swipe to re-check. The scroll view fills the viewport so the gesture
@@ -321,6 +341,8 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 onView: _onView,
                 onRetry: _onRetry,
                 onMore: _onMore,
+                onPreview:
+                    isStaff && _isExportable(project) ? _onPreview : null,
               );
             },
           ),

@@ -14,7 +14,11 @@ import {
   toProjectListItem,
   type ProjectListItem,
 } from '@/services/projectsService';
-import { listObjectsUnderPrefix, presignObjectGetUrl } from '@/services/s3ObjectStore';
+import {
+  listObjectsUnderPrefix,
+  moveObject,
+  presignObjectGetUrl,
+} from '@/services/s3ObjectStore';
 import { encodeCursor, type ProjectCursor } from '@/utils/cursor';
 import { env } from '@/config/env';
 
@@ -160,6 +164,23 @@ export type BuildExportResult =
   | { outcome: 'EXPORTED'; export: ExportManifest };
 
 /**
+ * The reserved sub-prefix under a job root where soft-deleted objects are
+ * parked (`{rawPrefix}deleted/{relativeKey}`). Kept UNDER the job root so:
+ *   • the export can hide them with one relative-key prefix test, and
+ *   • the total object count under rawPrefix is unchanged by a soft delete, so
+ *     a finalize replay (which counts objects under rawPrefix) still matches
+ *     expectedFilesCount.
+ * A caller can never target this namespace for deletion (containment rejects a
+ * key starting with it), so `deleted/deleted/…` nesting cannot occur.
+ */
+export const DELETED_KEY_PREFIX = 'deleted/';
+
+/** A job-root object key stripped to its export-relative form. */
+function toRelativeKey(absoluteKey: string, rawPrefix: string): string {
+  return absoluteKey.startsWith(rawPrefix) ? absoluteKey.slice(rawPrefix.length) : absoluteKey;
+}
+
+/**
  * Builds the presigned-URL export manifest for a project's most recent
  * upload-finalized job. Lists the ACTUAL objects under the job's stored
  * `rawPrefix` (the canonical builder's output persisted at create time — the
@@ -181,13 +202,18 @@ export async function buildProjectExport(projectId: string): Promise<BuildExport
   if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
 
   const { rawBucket, rawPrefix } = job.upload;
-  const objects = await listObjectsUnderPrefix(rawBucket, rawPrefix);
+  // Soft-deleted objects live under `{rawPrefix}deleted/` — list everything,
+  // then drop that namespace so a curated-away photo never reappears in the
+  // export (and `fileCount` reflects the post-curation truth vs expectedFileCount).
+  const objects = (await listObjectsUnderPrefix(rawBucket, rawPrefix)).filter(
+    (object) => !toRelativeKey(object.key, rawPrefix).startsWith(DELETED_KEY_PREFIX)
+  );
 
   const ttlSeconds = env.ADMIN_EXPORT_URL_TTL_SECONDS;
   const generatedAt = new Date();
   const files = await Promise.all(
     objects.map(async (object) => ({
-      key: object.key.startsWith(rawPrefix) ? object.key.slice(rawPrefix.length) : object.key,
+      key: toRelativeKey(object.key, rawPrefix),
       url: await presignObjectGetUrl(rawBucket, object.key, ttlSeconds),
       size: object.size,
     }))
@@ -205,6 +231,77 @@ export async function buildProjectExport(projectId: string): Promise<BuildExport
       files,
     },
   };
+}
+
+export type SoftDeletePhotosResult =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  | { outcome: 'NOT_EXPORTABLE' }
+  /** A requested key escapes the job prefix (or targets the deleted/ namespace)
+   * — the WHOLE request is refused, nothing is touched. */
+  | { outcome: 'INVALID_KEY'; key: string }
+  | {
+      outcome: 'DELETED';
+      projectId: string;
+      jobId: string;
+      /** Relative keys that existed and were moved to the deleted/ namespace. */
+      deleted: string[];
+      /** Relative keys that were already absent (idempotent no-op). */
+      missing: string[];
+    };
+
+/**
+ * A relative key is safe to soft-delete iff it stays strictly INSIDE the job
+ * root: non-empty, not absolute, no `.`/`..`/empty segment (traversal), and not
+ * already under the reserved deleted/ namespace. Mirrors the upload-urls
+ * "key must live under the job's keyPrefix" containment rule.
+ */
+function isContainedRelativeKey(relativeKey: string): boolean {
+  if (typeof relativeKey !== 'string' || relativeKey.length === 0) return false;
+  if (relativeKey.startsWith('/')) return false;
+  if (relativeKey.startsWith(DELETED_KEY_PREFIX)) return false;
+  return relativeKey.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+}
+
+/**
+ * SOFT-deletes captured objects for a project's exportable job: each RELATIVE
+ * key (exactly as the export manifest emits it) is moved from
+ * `{rawPrefix}{key}` to `{rawPrefix}deleted/{key}` — recoverable, and out of the
+ * export set. The exportable job + rawPrefix are resolved the SAME way
+ * buildProjectExport does (never recomputed), so a caller can only ever affect
+ * the objects it can already see.
+ *
+ * Fail-closed on containment: if ANY key escapes the job prefix the whole
+ * request is refused and nothing is moved. Missing keys are reported (not an
+ * error) so a double-tap / stale manifest is idempotent.
+ */
+export async function softDeleteProjectPhotos(
+  projectId: string,
+  relativeKeys: string[]
+): Promise<SoftDeletePhotosResult> {
+  const project = await Project.findOne({
+    _id: new Types.ObjectId(projectId),
+    deletedAt: null,
+  }).exec();
+  if (!project) return { outcome: 'PROJECT_NOT_FOUND' };
+
+  const job = await findExportableJob(projectId);
+  if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
+
+  // Dedupe while preserving order; validate containment on ALL keys first.
+  const keys = [...new Set(relativeKeys)];
+  for (const key of keys) {
+    if (!isContainedRelativeKey(key)) return { outcome: 'INVALID_KEY', key };
+  }
+
+  const { rawBucket, rawPrefix } = job.upload;
+  const deleted: string[] = [];
+  const missing: string[] = [];
+  for (const key of keys) {
+    const result = await moveObject(rawBucket, `${rawPrefix}${key}`, `${rawPrefix}${DELETED_KEY_PREFIX}${key}`);
+    (result === 'moved' ? deleted : missing).push(key);
+  }
+
+  return { outcome: 'DELETED', projectId: project.id as string, jobId: job.id as string, deleted, missing };
 }
 
 /** The project's most recent job whose upload passed the finalize gate. */

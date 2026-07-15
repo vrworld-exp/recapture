@@ -30,3 +30,19 @@ export const adminProjectIdParamsSchema = z
     id: z.string().regex(OBJECT_ID_RE, 'Invalid project id'),
   })
   .strict();
+
+/**
+ * Body for DELETE /admin/projects/:id/photos: the RELATIVE keys (exactly as the
+ * export manifest emits them, e.g. `images/EYE/eye_0001.jpg`) to soft-delete.
+ * At least one, bounded to a job's object count ceiling so one request can't ask
+ * to move thousands of objects. Per-key CONTAINMENT (no traversal / prefix
+ * escape) is enforced in the service against the resolved job prefix — the shape
+ * check here only guarantees non-empty strings.
+ */
+export const adminDeletePhotosBodySchema = z
+  .object({
+    keys: z.array(z.string().min(1).max(1024)).min(1).max(500),
+  })
+  .strict();
+
+export type AdminDeletePhotosBody = z.infer<typeof adminDeletePhotosBodySchema>;

@@ -52,6 +52,7 @@ export const AnalyticsEvent = {
   // ── Admin / staff live-projects access (P7-A) ─────────────────────────────
   ADMIN_PROJECTS_LISTED: 'admin_projects_listed',
   PROJECT_EXPORT_GENERATED: 'project_export_generated',
+  PROJECT_PHOTOS_DELETED: 'project_photos_deleted',
   ADMIN_ACCESS_DENIED: 'admin_access_denied',
 } as const;
 
@@ -312,6 +313,18 @@ const projectExportGeneratedProps = z
   })
   .strict();
 
+/** Staff soft-deleted captured photos (DELETE /admin/projects/:id/photos).
+ * NEVER carries a key or presigned URL — ids are hashed, the rest are counts. */
+const projectPhotosDeletedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    job_id_hash: z.string().min(1),
+    deleted_count: z.number().int().nonnegative(),
+    missing_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
 /** requireRole rejected an authenticated caller (role below the minimum). */
 const adminAccessDeniedProps = z
   .object({
@@ -348,6 +361,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PRECAPTURE_TIP_OPENED]: precaptureTipOpenedProps,
   [AnalyticsEvent.ADMIN_PROJECTS_LISTED]: adminProjectsListedProps,
   [AnalyticsEvent.PROJECT_EXPORT_GENERATED]: projectExportGeneratedProps,
+  [AnalyticsEvent.PROJECT_PHOTOS_DELETED]: projectPhotosDeletedProps,
   [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 

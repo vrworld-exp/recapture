@@ -31,7 +31,13 @@ import 'app_router.dart';
 /// app, which is correct there). Deliberately ABSENT: the capture screens
 /// (their Save & Exit flow owns back → projects) and the summary/upload
 /// screens (their own PopScope guards own the decision).
-String? flowBackRouteFor(String location) => switch (location) {
+String? flowBackRouteFor(String location) {
+  // The Preview gallery path carries a concrete project id (`:id`), so it can't
+  // be matched by the exact-string switch below — detect it by shape first.
+  if (location.startsWith('/admin/projects/') && location.endsWith('/preview')) {
+    return AppRoutes.projects;
+  }
+  return switch (location) {
       AppRoutes.otpVerify => AppRoutes.auth,
       AppRoutes.createProject => AppRoutes.projects,
       AppRoutes.preCapture => AppRoutes.projects,
@@ -50,6 +56,7 @@ String? flowBackRouteFor(String location) => switch (location) {
       AppRoutes.arPreview => AppRoutes.modelReady,
       _ => null,
     };
+}
 
 /// The one BACK behavior every back affordance (system key, AppBar arrow)
 /// funnels through: pop a genuinely pushed route when one exists, else go()

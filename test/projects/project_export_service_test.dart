@@ -30,6 +30,11 @@ class _FakeLiveRepo implements LiveProjectsRepository {
     if (fail != null) throw fail;
     return exportResult!;
   }
+
+  @override
+  Future<PreviewDeleteResult> deletePhotos(
+          String projectId, List<String> keys) async =>
+      throw UnimplementedError('not used here');
 }
 
 class _RecordingShare implements ShareLauncher {

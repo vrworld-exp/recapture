@@ -17,6 +17,7 @@ import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
+import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
@@ -45,6 +46,9 @@ abstract final class AppRoutes {
   static const otpVerify = '/auth/otp';
   static const projects = '/projects';
   static const createProject = '/projects/new';
+
+  /// Staff-only per-project Preview gallery. `:id` = the project id.
+  static const previewGallery = '/admin/projects/:id/preview';
   static const preCapture = '/capture/pre';
   static const permissions = '/capture/permissions';
   static const levelAIntro = '/capture/level-a/intro';
@@ -75,6 +79,7 @@ abstract final class AppRouteNames {
   static const otpVerify = 'otpVerify';
   static const projects = 'projects';
   static const createProject = 'createProject';
+  static const previewGallery = 'previewGallery';
   static const preCapture = 'preCapture';
   static const permissions = 'permissions';
   static const levelAIntro = 'levelAIntro';
@@ -160,6 +165,18 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.createProject,
         name: AppRouteNames.createProject,
         builder: (_, __) => const FlowBackScope(child: CreateProjectScreen()),
+      ),
+      // Staff-only per-project Preview gallery. Reached via push (hardware back
+      // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel
+      // through navigateBack so a go()-replaced entry can't exit the app either.
+      GoRoute(
+        path: AppRoutes.previewGallery,
+        name: AppRouteNames.previewGallery,
+        builder: (context, state) => FlowBackScope(
+          child: PreviewGalleryScreen(
+            projectId: state.pathParameters['id'] ?? '',
+          ),
+        ),
       ),
       GoRoute(
         path: AppRoutes.preCapture,
