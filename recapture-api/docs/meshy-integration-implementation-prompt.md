@@ -1,380 +1,345 @@
-# Implementation Prompt — Meshy AI Reconstruction Engine
+# Implementation Prompt — Meshy AI On-Demand Model Generation
 
 > Hand this whole document to a coding agent (or use it as your own worklist).
 > It is self-contained: context, exact files, signatures, tests, and a
 > definition of done. Companion design doc:
 > [`meshy-integration.md`](./meshy-integration.md). When anything here disagrees
-> with `AGENTS.md`, **AGENTS.md wins**.
+> with `AGENTS.md`, **AGENTS.md wins**. This spans BOTH codebases — the
+> Node/TS backend (`recapture-api/`) and the Flutter client (repo root).
 
 ---
 
-## Context (read first)
+## The decision (read first)
 
-We are **adding** a **Meshy AI Multi-Image to 3D** cloud engine as a **second,
-selectable** reconstruction backend — **not** replacing the existing in-house
-path. Meshy generates the model from a few captured photos; we download the
-result and store it on **our** S3 (`BUCKET_ARTIFACTS`), keeping only our
-non-expiring CloudFront URL in Mongo.
+A **staff user** (ADMIN **or** MODEL_ARTIST) opens a project's **Preview
+gallery**, **selects 3–4 captured photos**, and taps **Create Model**. That
+kicks off **Meshy AI Multi-Image to 3D**. When Meshy finishes, we download the
+model, store it on **our** S3 (`BUCKET_ARTIFACTS`), and persist a per-project
+**model record** with the model URL and an **origin flag** (`source: 'meshy'`).
+The project owner (and staff) can then **view the generated 3D model** in the
+app, badged **"Created by Meshy AI."** If everyone is satisfied with the Meshy
+result, no manual model creation is needed; if not, the existing backend path
+remains available.
 
-> **Decision (important):** the current built-in path (the `stub` today, the real
-> backend photogrammetry engine later) MUST stay in place and fully functional.
-> A single config switch (`RECONSTRUCTION_ENGINE`) chooses which engine the
-> worker uses per deploy, so we can run Meshy in production and still fall back
-> to — or later build out — the backend way without touching this code. **Do not
-> delete, gut, or bypass `stubReconstructionEngine` or the built-in path.**
+### What this is NOT
 
-This plugs into an existing seam — **do not** re-architect the worker, the stage
-state machine, the finalize endpoint, or the mobile app. Meshy is one more
-`ReconstructionEngine` implementation living beside the built-in one; both
-satisfy the same interface and the orchestrator can't tell them apart.
+- **Not** an automatic/worker-driven replacement of the capture pipeline. The
+  existing capture→finalize→processing pipeline (the in-house "backend/manual
+  way", `stubReconstructionEngine` today) is **left untouched** and remains the
+  fallback. Meshy generation is a **separate, human-triggered** flow.
+- **Not** an automatic image picker — a human chooses the 3–4 images. (Meshy
+  Multi-Image to 3D accepts exactly 1–4 images; we enforce **min 3, max 4**.)
 
-Key existing files to understand before writing:
+### Flow end-to-end
 
-- [`src/worker/engine/reconstructionEngine.ts`](../src/worker/engine/reconstructionEngine.ts)
-  — the `ReconstructionEngine` interface (`reconstruct`/`texture`/`optimize`),
-  the `EngineStageInput`/`EngineArtifacts`/`OptimizeOutput` types, the `stub`
-  engine, and `setReconstructionEngine()`. **This is the seam you implement.**
-- [`src/worker/processors/captureProcessingPipeline.ts`](../src/worker/processors/captureProcessingPipeline.ts)
-  — the orchestrator: drives `PROCESSING → TEXTURING → OPTIMIZING`, threads each
-  stage's return value into the next as `priorOutputs[STAGE]`, and persists
-  transitions atomically. Read it to understand the idempotency/resume contract.
-- [`src/config/env.ts`](../src/config/env.ts) — Zod env schema (add vars here).
-- [`src/config/s3.ts`](../src/config/s3.ts) — `s3Client`, `BUCKET_ARTIFACTS`,
-  `CLOUDFRONT_BASE`.
-- [`src/worker/index.ts`](../src/worker/index.ts) — worker entry point; register
-  the engine here.
-- [`src/worker/workerTypes.ts`](../src/worker/workerTypes.ts) — `NonRetryableJobError`.
-- The capture manifest per-photo shape (client-authored, read at the engine):
-  `photos[]` each carry `imagePath`, `ringName` (EYE/TOP/LOW), `segmentIndex`,
-  `quality.blurScore` (variance of Laplacian — **higher = sharper**),
-  `orientation.yawDegrees`. Source of truth:
-  [`lib/domain/upload/capture_manifest.dart`](../../lib/domain/upload/capture_manifest.dart).
-
-### Non-negotiable contracts (from the seam header)
-
-1. **Idempotent per stage** — a stage may be re-run after a crash, lease
-   takeover, or retry. Same inputs → same outputs. Deterministic artifact keys;
-   overwrite, never append.
-2. **`onProgress` is the lease renewal** — a stage that can outlast
-   `WORKER_CLAIM_TIMEOUT_MS` (default 120 s) MUST call `onProgress` periodically
-   or the job gets re-claimed mid-flight. `onProgress` also **throws**
-   `JobCanceledError`/`ClaimLostError` when the job is canceled/stolen — let it
-   propagate; never swallow it.
-3. **Error routing** — throw plain `Error` for transient trouble (worker retries
-   with backoff, resuming at the same stage) or `NonRetryableJobError` for input
-   problems retrying can't fix (terminal `FAILED`).
-4. **Secrets** — `MESHY_API_KEY` is env-only, never logged, never sent to the
-   client. Follow `AGENTS.md` secrets rules.
-5. **CI never calls the live Meshy API** — tests inject a fake engine / mock the
-   transport. The `stub` engine remains the default so existing worker tests
-   stay hermetic.
-6. **Coexistence** — the built-in engine and the Meshy engine both remain
-   registered/available; `RECONSTRUCTION_ENGINE` only chooses which one runs.
-   Never remove the built-in path.
+1. Staff opens Preview gallery → multi-selects **3–4** photos → **Create Model**.
+2. `POST /admin/projects/:id/model { keys: [...] }` validates and **enqueues a
+   `MESHY_MODEL_GENERATION` worker job**; creates a `ProjectModel` record
+   (`status: QUEUED`, `source: 'meshy'`) and returns it.
+3. The worker claims the job: presigns GET URLs for the selected keys → submits
+   to Meshy → polls to completion (lease-renewing) → downloads the GLB/USDZ/
+   thumbnail → re-uploads to **our** S3 → updates the record to
+   `SUCCEEDED` with our CloudFront URLs.
+4. Client polls the record; on `SUCCEEDED` shows **View 3D Model** (rendered via
+   `model_viewer_plus`) with the **Meshy** badge. Staff/owner can **approve** it.
 
 ---
 
-## Task 1 — Env config
+## Existing pieces to REUSE (do not reinvent)
 
-**File:** [`src/config/env.ts`](../src/config/env.ts) (+ `.env.example`)
+- **Roles** — [`src/models/User.ts`](../src/models/User.ts): `USER < MODEL_ARTIST
+  < ADMIN`, compared via `hasRoleAtLeast`. "Artist" = `MODEL_ARTIST`. Gate the new
+  staff endpoints with `requireRole('MODEL_ARTIST')` (ADMIN passes by
+  inheritance) — see [`src/routes/admin.ts`](../src/routes/admin.ts).
+- **The selected keys** — the client already holds them: `PreviewPhoto.key`
+  ([`lib/domain/entities/preview_manifest.dart`]) is the **relative
+  export-manifest key**, the exact shape the admin soft-delete endpoint accepts.
+  Reuse its **containment validator** (`softDeleteProjectPhotos` /
+  `adminProjectsService.ts`) so a key that escapes the job prefix is refused.
+- **Async infra** — the worker supports multiple job types via
+  `registerProcessor(jobType, processor)`
+  ([`src/worker/index.ts`](../src/worker/index.ts)). Add a **new job type**;
+  reuse the claim/lease/retry/resume machinery (do NOT block the API for the
+  minutes Meshy takes, and do NOT hand-roll a new async system).
+- **Meshy transport** — the `meshyClient` + status→error mapping specced in the
+  companion doc [`meshy-integration.md`](./meshy-integration.md) §Meshy client.
+- **Preview gallery** —
+  [`lib/presentation/screens/projects/preview_gallery_screen.dart`] and
+  [`lib/application/projects/preview_gallery_notifier.dart`]. Add selection +
+  the CTA here; the screen is already staff-only.
 
-Add to the Zod schema:
+---
+
+## Non-negotiable contracts
+
+1. **Additive & non-destructive** — do NOT modify or bypass the capture
+   processing pipeline, `reconstructionEngine.ts`, finalize, or the automatic
+   worker path. Meshy generation is a new, parallel job type.
+2. **Idempotent / no double-charge** — Meshy generations cost credits. The
+   create endpoint honors `Idempotency-Key`; the worker persists `meshyTaskId`
+   on the `ProjectModel` record the instant the task is created and **resumes
+   polling** an existing task on re-claim rather than resubmitting.
+3. **`onProgress` = lease renewal** — the generation stage can outlast
+   `WORKER_CLAIM_TIMEOUT_MS` (120 s). Poll-and-report on every tick or the job
+   gets re-claimed mid-flight. `onProgress` throws on cancel/claim-loss — let it
+   propagate.
+4. **Error routing** — plain `Error` = retryable (429/5xx/network); Meshy
+   `402`/quota, `400`/`422` bad input, and task-`FAILED` → `NonRetryableJobError`
+   (terminal). A quota failure must NOT retry-burn credits.
+5. **Never store Meshy URLs in the DB** — they expire. Download and re-host to
+   `BUCKET_ARTIFACTS`; the record stores only our CloudFront URLs.
+6. **Containment** — every caller-supplied key is validated to live under the
+   project's job prefix before anything is presigned or fetched.
+7. **Secrets & PII** — `MESHY_API_KEY` env-only, never logged; analytics carry
+   **hashed** ids + counts only, never keys or presigned URLs (match existing
+   admin routes).
+8. **CI never hits the live Meshy/AWS APIs** — mock the transport and S3.
+
+---
+
+## Data model — `ProjectModel` (history, one record per generation)
+
+**File (new):** `src/models/ProjectModel.ts` (+ types).
+
+We keep **full history**: each Create-Model tap is its own record, so artists can
+regenerate with different photos, compare, and **approve** the best one.
 
 ```ts
-// ── Reconstruction engine selection ───────────────────────────────────────
-/**
- * Which reconstruction backend the worker runs. 'builtin' = the in-house
- * pipeline (stub today, real photogrammetry later); 'meshy' = Meshy AI cloud.
- * Both engines stay in the codebase — this only picks the active one per deploy.
- */
-RECONSTRUCTION_ENGINE: z.enum(['builtin', 'meshy']).default('meshy'),
+export type ModelSource = 'meshy' | 'manual';
+export type ModelStatus = 'QUEUED' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED';
 
-// ── Meshy AI (reconstruction engine) ──────────────────────────────────────
-// Required ONLY when RECONSTRUCTION_ENGINE=meshy. Keep these optional at the
-// schema level and assert MESHY_API_KEY presence when the meshy engine is
-// selected (Task 5), so a 'builtin' deploy boots without a Meshy key.
-MESHY_API_KEY: z.string().min(1).optional(),
+interface ProjectModel {
+  projectId: ObjectId;            // owning project (indexed)
+  jobId: ObjectId;               // the source capture job the photos came from
+  source: ModelSource;           // 'meshy' — the origin flag ("Created by Meshy AI")
+  status: ModelStatus;
+  selectedKeys: string[];        // 3–4 relative export-manifest keys chosen by staff
+  meshyTaskId?: string;          // persisted for idempotent resume (never a URL)
+  artifacts?: {                  // populated on SUCCEEDED (our keys/URLs only)
+    glbKey: string; usdzKey?: string; previewImageKey?: string;
+    cdnUrls: { glb: string; usdz?: string; preview?: string };
+  };
+  approved?: { at: Date; byUserId: ObjectId };   // the "we're satisfied" gate
+  error?: { code: string; message: string };
+  createdByUserId: ObjectId;     // the staff actor
+  createdByRole: UserRole;       // MODEL_ARTIST | ADMIN (for audit)
+  createdAt: Date; updatedAt: Date;
+}
+```
+
+Index `{ projectId: 1, createdAt: -1 }`. `source: 'manual'` is reserved for the
+future backend path so both origins coexist under one shape.
+
+---
+
+## Backend tasks
+
+### T1 — Env config
+
+[`src/config/env.ts`](../src/config/env.ts) (+ `.env.example`):
+
+```ts
+MESHY_API_KEY: z.string().min(1, 'MESHY_API_KEY is required'),
 MESHY_BASE_URL: z.string().url().default('https://api.meshy.ai'),
-/** Poll cadence for a running Meshy task (ms). Must stay << WORKER_CLAIM_TIMEOUT_MS. */
-MESHY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
-/** Hard cap on total wait for one Meshy task before giving up (ms). */
+MESHY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000), // << WORKER_CLAIM_TIMEOUT_MS
 MESHY_TASK_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
-/** How many capture photos to send (Meshy multi-image allows max 4). */
-MESHY_MAX_IMAGES: z.coerce.number().int().min(1).max(4).default(4),
+/** Presigned-GET TTL for the images handed to Meshy (s). */
+MESHY_SOURCE_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+/** Create-Model rate cap per staff user. */
+MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
+MESHY_CREATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 ```
 
-Mirror every var (with a placeholder, no real key) in `.env.example`, and
-document `RECONSTRUCTION_ENGINE` there with both allowed values.
+**Acceptance:** worker + API boot with these set; missing `MESHY_API_KEY` fails
+fast with a clear message.
 
-**Acceptance:** a `builtin` deploy boots with **no** Meshy vars set; a `meshy`
-deploy fails fast with a clear message when `MESHY_API_KEY` is missing (asserted
-in Task 5's selector, not the raw schema).
+### T2 — `meshyClient` (transport only)
 
----
+**File (new):** `src/worker/engine/meshy/meshyClient.ts`. Exactly as the
+companion doc §Meshy client: `createMultiImageTask(imageUrls)` / `getTask(id)` /
+optional `cancelTask(id)`; `Authorization: Bearer`; normalize Meshy's fields into
+typed `MeshyTask`; **status → error-class mapping** per contract #4. Confirm the
+live request/response shape against
+[Multi-Image to 3D](https://docs.meshy.ai/en/api/multi-image-to-3d). Never log
+the key or full image URLs. **Tests:** each HTTP status → correct error class,
+mocked transport.
 
-## Task 2 — Meshy HTTP client (transport only)
+### T3 — `ProjectModel` model + service
 
-**File (new):** `src/worker/engine/meshy/meshyClient.ts`
+**Files:** `src/models/ProjectModel.ts`, `src/services/projectModelsService.ts`.
 
-A thin typed wrapper over the Meshy REST API. No business logic, no S3, no DB.
+Service functions (pure-ish, thin over Mongo):
+- `createMeshyModelRequest({ projectId, keys, actor }) → ProjectModel | Outcome`
+  — resolves the project's exportable job (reuse `adminProjectsService` helpers),
+  validates **3 ≤ keys ≤ 4** and **containment** of every key under the job
+  prefix, creates the record (`QUEUED`), returns it. Outcomes mirror the admin
+  routes: `PROJECT_NOT_FOUND`, `NOT_EXPORTABLE`, `INVALID_KEY`, `INVALID_COUNT`.
+- `listProjectModels(projectId)` — history, newest first.
+- `approveModel(modelId, actor)` — sets `approved`; only a `SUCCEEDED` record.
 
-```ts
-export type MeshyTaskStatus =
-  | 'PENDING' | 'IN_PROGRESS' | 'SUCCEEDED' | 'FAILED' | 'CANCELED';
+### T4 — `POST /admin/projects/:id/model` (create)
 
-export interface MeshyTask {
-  id: string;
-  status: MeshyTaskStatus;
-  progress: number;                 // 0–100
-  modelUrls: { glb?: string; usdz?: string; fbx?: string; obj?: string };
-  thumbnailUrl?: string;
-  expiresAt?: number;               // ms since epoch — result URLs die after this
-  error?: { message: string };
-}
+Add to [`src/routes/admin.ts`](../src/routes/admin.ts) (router-level
+`requireRole('MODEL_ARTIST')` already applies):
 
-export interface MeshyClient {
-  createMultiImageTask(imageUrls: string[]): Promise<{ taskId: string }>;
-  getTask(taskId: string): Promise<MeshyTask>;
-  cancelTask?(taskId: string): Promise<void>;
-}
-```
+- Validate `:id` and body `{ keys: string[] }` (Zod: 3–4 non-empty strings).
+- **Rate-limit** per staff user (`consumeRateWindow`, `MESHY_CREATE_*`) — each
+  generation costs credits.
+- **`Idempotency-Key`** header: if a record already exists for this
+  (project, actor, key) within a short window, return it instead of enqueuing a
+  second job (no double charge on a double-tap).
+- Call `createMeshyModelRequest(...)`; map outcomes to the standard envelope
+  (`404` / `409 NOT_EXPORTABLE` / `400 INVALID_REQUEST` — never echo the
+  offending key, per the existing soft-delete route).
+- **Enqueue** a `MESHY_MODEL_GENERATION` Job carrying `{ modelId, projectId,
+  jobId, selectedKeys }` (state `QUEUED`).
+- `track(...)` with **hashed** ids + `key_count` only.
+- `201` with the `ProjectModel` record.
 
-Requirements:
+Also add **`GET /admin/projects/:id/models`** (list history) and include the
+latest `SUCCEEDED` model in `GET /admin/projects/:id` detail.
 
-- `Authorization: Bearer ${MESHY_API_KEY}`; base URL from `MESHY_BASE_URL`.
-- Confirm the exact request/response shape against the live docs
-  ([Multi-Image to 3D](https://docs.meshy.ai/en/api/multi-image-to-3d)) and
-  normalize into the types above (field names may differ — adapt in the client,
-  not in callers).
-- **Status → error mapping** (throw these; callers rely on the class):
-  - `401`/`403` → `NonRetryableJobError('MESHY_AUTH')` (misconfig, don't retry).
-  - `402` / insufficient-credits → `NonRetryableJobError('MESHY_QUOTA')`.
-  - `400`/`422` bad request/images → `NonRetryableJobError('MESHY_BAD_INPUT')`.
-  - `429` → plain `Error` (retryable).
-  - `5xx` / network / timeout → plain `Error` (retryable).
-- Never log the API key, bearer header, or full presigned image URLs.
+### T5 — Worker processor `MESHY_MODEL_GENERATION`
 
-**Acceptance:** unit tests (mocked transport) prove each HTTP status maps to the
-correct error class; no live network in tests.
+**Files:** `src/worker/processors/meshyModelProcessor.ts`, register it in
+[`src/worker/index.ts`](../src/worker/index.ts) via `registerProcessor`.
 
----
+Processing (single logical stage; reuse the lease/progress helpers):
+1. Load the `ProjectModel` by `modelId`; flip → `PROCESSING`.
+2. **Resume guard:** if `record.meshyTaskId` exists, skip submission and resume
+   polling it.
+3. Otherwise resolve `selectedKeys` → absolute S3 keys under the job's
+   `rawPrefix` (same resolution the soft-delete/export path uses) → presign
+   short-lived GET URLs (`MESHY_SOURCE_URL_TTL_SECONDS`) →
+   `createMultiImageTask(urls)` → **persist `meshyTaskId` on the record
+   immediately**.
+4. Poll every `MESHY_POLL_INTERVAL_MS` until terminal or `MESHY_TASK_TIMEOUT_MS`;
+   renew the lease each tick (contract #3). `FAILED` → `NonRetryableJobError`;
+   timeout → plain `Error`.
+5. Download the GLB/USDZ/thumbnail (they expire), `PutObject` into
+   `BUCKET_ARTIFACTS` under deterministic per-model keys
+   (`{env}/{userId}/{projectId}/{jobId}/models/{modelId}/model.glb`, etc. —
+   overwrite = idempotent).
+6. Update the record → `SUCCEEDED` with `artifacts` (our keys + `CLOUDFRONT_BASE`
+   URLs). On any thrown terminal error, set `status: FAILED` + `error`.
 
-## Task 3 — Deterministic image selection
+**Tests** (fake `meshyClient` + mocked S3): happy path; **resume-with-existing-
+`meshyTaskId` asserts no second `createMultiImageTask`**; `402`/task-FAILED →
+record `FAILED` (terminal); `429`/`5xx` → retry; artifacts carry CloudFront
+(never Meshy) URLs.
 
-**File (new):** `src/worker/engine/meshy/selectImages.ts`
+### T6 — Owner-facing surface + approval
 
-**Pure function** — no IO:
-
-```ts
-export function selectMeshyImages(
-  manifest: unknown,          // parsed capture_manifest.json
-  maxImages: number,          // env.MESHY_MAX_IMAGES
-): string[]                   // returns manifest imagePath references, deterministic
-```
-
-Selection policy (Meshy wants ≤4 views of the same object from different angles):
-
-1. Read `manifest.photos[]`; keep `verdict !== 'rejected'` entries (manifest only
-   contains accepted/warn anyway).
-2. Spread across angles: bucket by `orientation.yawDegrees` into `maxImages`
-   even yaw ranges (prefer the EYE ring for the primary silhouette; include TOP
-   for the crown). Avoid picking near-duplicate yaws.
-3. Within each bucket, pick the **sharpest** photo — highest
-   `quality.blurScore`.
-4. If fewer buckets are populated than `maxImages`, backfill with the next
-   sharpest unused photos.
-5. **Deterministic:** identical manifest ⇒ identical selection (stable
-   tie-breaks on `photoId`). No randomness.
-
-Return the photos' `imagePath` values (the storage-path references); the engine
-resolves them to S3 keys under `rawPrefix` in Task 4.
-
-**Acceptance:** unit tests over a synthetic manifest assert: correct count,
-angular spread, sharpest-per-bucket, deterministic output, and graceful handling
-of `< maxImages` photos.
+- Surface the latest `SUCCEEDED` model (URL + `source` flag + `approved`) on the
+  **owner** project detail (`GET /projects/:id`) so the user's app can show it.
+  Owner sees only their own project's model; keys/presigned URLs never leak
+  (serve the CloudFront URL).
+- **`POST /admin/projects/:id/models/:modelId/approve`** → `approveModel`.
 
 ---
 
-## Task 4 — `MeshyReconstructionEngine`
+## Client tasks (Flutter)
 
-**File (new):** `src/worker/engine/meshy/meshyReconstructionEngine.ts`
-implementing `ReconstructionEngine`. Keeps the 3-stage contract by distributing
-Meshy's single async task across the stages.
+### C1 — Multi-select + Create Model CTA (Preview gallery)
 
-### `reconstruct(input)` — submit + poll
+In [`preview_gallery_screen.dart`] / [`preview_gallery_notifier.dart`]:
+- Add a **selection mode**: tap-to-select tiles, tracked as a `Set<String>` of
+  `PreviewPhoto.key`. Show a selected count and a checkmark overlay on tiles.
+- A **Create Model** bottom CTA, **enabled only when `3 ≤ selected ≤ 4`** (mirror
+  the backend rule; show a hint otherwise). Staff-only screen already, but gate
+  the CTA on `isStaffProvider` (MODEL_ARTIST+) to be safe.
+- On tap → `POST /admin/projects/:id/model` with the selected keys → navigate to
+  a generation-status view. Map failures to friendly copy only (reuse
+  `failureCopy`).
 
-1. **Resume guard (idempotency):** if
-   `input.priorOutputs.PROCESSING?.meshyTaskId` exists, **do not** create a new
-   task — jump straight to polling that id.
-2. Otherwise: `selectMeshyImages(input.manifest, MESHY_MAX_IMAGES)` → resolve
-   each `imagePath` to an S3 key under `input.rawPrefix` (rawBucket = raw
-   captures) → **presign short-lived GET URLs** (or use CDN URLs if the raw
-   bucket is fronted) → `meshyClient.createMultiImageTask(urls)`.
-3. **Persist `meshyTaskId` before the first await-heavy wait** by returning it in
-   this stage's output as early as possible — call
-   `await input.onProgress(1)` right after creation so a crash post-submit
-   resumes the same task instead of double-charging. (The orchestrator persists
-   stage output on stage completion; `meshyTaskId` must also survive a mid-poll
-   crash — see the resume guard. If the orchestrator does not persist partial
-   output, record the task id via a progress side-channel or a dedicated job
-   field. **Verify this against `captureProcessingPipeline.ts` / `stageTransitions.ts`
-   and choose the mechanism that guarantees the id is durable the moment the
-   task is created.**)
-4. Poll every `MESHY_POLL_INTERVAL_MS` until `SUCCEEDED`/`FAILED`/`CANCELED` or
-   `MESHY_TASK_TIMEOUT_MS`. On **each** poll: `await input.onProgress(task.progress)`
-   (lease renewal + cancel/claim-loss check — let those throw propagate; on
-   cancel, best-effort `cancelTask`).
-5. `status: FAILED` → `NonRetryableJobError('MESHY_TASK_FAILED', task.error?.message)`.
-   Timeout → plain `Error` (retryable).
-6. Return `{ meshyTaskId, modelUrls, thumbnailUrl, expiresAt }`.
+### C2 — Generation status (polling)
 
-### `texture(input)` — pass-through
+- A `ModelGenerationNotifier` (family by `modelId`) that polls
+  `GET /admin/projects/:id/models` (or a status endpoint) on an interval while
+  `QUEUED`/`PROCESSING`, stopping on `SUCCEEDED`/`FAILED`. Backoff + a cap.
+- UI: progress state → on success, a **View 3D Model** CTA; on failure, mapped
+  copy + Retry (which re-opens selection).
 
-Meshy already textures. Emit one or two `onProgress` ticks and return
-`input.priorOutputs.PROCESSING` unchanged (so `optimize` still sees the model
-URLs). Do **not** call Meshy again.
+### C3 — 3D model viewer + Meshy badge
 
-### `optimize(input)` — download + re-host
+- Add `model_viewer_plus` to `pubspec.yaml`. A `ModelViewerScreen` that renders
+  the record's `artifacts.cdnUrls.glb` with orbit controls (and AR where
+  available). Show a **"Created by Meshy AI"** badge driven by `source == 'meshy'`.
+- Handle load/error states (never surface a raw URL/error).
 
-1. Read `modelUrls`/`thumbnailUrl` from `input.priorOutputs.PROCESSING`.
-2. Download each asset (they **expire** — never store Meshy URLs in the DB).
-3. `PutObject` into `BUCKET_ARTIFACTS` under the **deterministic** keys the stub
-   already uses (overwrite semantics = idempotent re-run):
-   - `${prefix}model.glb` (required)
-   - `${prefix}model.usdz` (if Meshy returned usdz)
-   - `${prefix}preview.jpg` (thumbnail)
-   where `prefix` matches the raw bundle's job scope
-   (`{env}/{userId}/{projectId}/{jobId}/`).
-4. Return `OptimizeOutput` whose `artifacts` is a valid `EngineArtifacts`:
-   `glbKey`, `usdzKey?`, `previewImageKey`, and `cdnUrls` built from
-   `CLOUDFRONT_BASE + key`. If no GLB was produced → `NonRetryableJobError`
-   (the orchestrator already guards "no artifacts").
+### C4 — Owner "View 3D Model" + approve
 
-Export a singleton: `export const meshyReconstructionEngine: ReconstructionEngine`.
-
-**Acceptance:** unit tests with a fake `MeshyClient` + mocked S3 cover: happy
-path end-to-end; **resume with existing `meshyTaskId` asserts `createMultiImageTask`
-is NOT called again**; `402`/task-FAILED → `NonRetryableJobError`; `429`/`5xx` →
-plain `Error`; cancel-mid-poll propagates `JobCanceledError`; artifacts carry
-CloudFront (never Meshy) URLs.
+- On the owner's project screen, when a `SUCCEEDED` model exists, show **View 3D
+  Model** (same viewer) with the Meshy badge.
+- Staff get an **Approve** action (calls the approve endpoint) — the "we're
+  satisfied, skip manual creation" gate. Reflect `approved` state in the UI.
 
 ---
 
-## Task 5 — Engine selection (add, don't replace)
+## Better-implementation suggestions (baked into the plan above)
 
-The built-in and Meshy engines both stay in the codebase. A **factory** picks the
-active one from `RECONSTRUCTION_ENGINE`; the worker registers whatever it returns.
-
-**File (new):** `src/worker/engine/engineSelection.ts`
-
-```ts
-import type { ReconstructionEngine } from '@/worker/engine/reconstructionEngine';
-import { stubReconstructionEngine } from '@/worker/engine/reconstructionEngine';
-import { meshyReconstructionEngine } from '@/worker/engine/meshy/meshyReconstructionEngine';
-import { env } from '@/config/env';
-
-/** Resolves the active reconstruction engine from config. Fail-fast on a
- *  misconfigured 'meshy' selection (missing key) — never silently fall back. */
-export function resolveReconstructionEngine(): ReconstructionEngine {
-  switch (env.RECONSTRUCTION_ENGINE) {
-    case 'meshy':
-      if (!env.MESHY_API_KEY) {
-        throw new Error(
-          "RECONSTRUCTION_ENGINE=meshy requires MESHY_API_KEY to be set",
-        );
-      }
-      return meshyReconstructionEngine;
-    case 'builtin':
-    default:
-      return stubReconstructionEngine; // real backend photogrammetry engine slots in here later
-  }
-}
-```
-
-**File:** [`src/worker/index.ts`](../src/worker/index.ts) — in `main()`, before
-`startWorker(...)`:
-
-```ts
-import { setReconstructionEngine } from '@/worker/engine/reconstructionEngine';
-import { resolveReconstructionEngine } from '@/worker/engine/engineSelection';
-
-const engine = resolveReconstructionEngine();
-setReconstructionEngine(engine);
-log('info', 'Reconstruction engine selected', { engine: env.RECONSTRUCTION_ENGINE });
-```
-
-Leave `stubReconstructionEngine` as the module default in `reconstructionEngine.ts`
-(tests and the `builtin` path both rely on it).
-
-**Acceptance:** `RECONSTRUCTION_ENGINE=meshy npm run worker` runs Meshy;
-`RECONSTRUCTION_ENGINE=builtin` (or unset in a keyless deploy) runs the built-in
-engine; `meshy` with no `MESHY_API_KEY` fails fast at startup. Existing
-worker/pipeline suites still pass (they inject their own engine and never touch
-the selector).
+1. **Reuse the worker job queue** (new `MESHY_MODEL_GENERATION` type) instead of
+   blocking the API or building new async — you inherit crash-resume, retries,
+   and lease handling for free. *(chosen)*
+2. **Keep model history** (one record per generation) so artists can iterate and
+   **approve** the best attempt — directly serves the "if satisfied, skip manual"
+   goal. *(chosen)*
+3. **`model_viewer_plus`** for the fastest cross-platform GLB viewer. *(chosen)*
+4. **Reuse existing plumbing**: the export-manifest keys the client already holds,
+   the containment validator, the rate-limit util, the role gate, the standard
+   envelope, and the hashed-id analytics. Almost no new patterns.
+5. **Idempotency-Key + persisted `meshyTaskId`** — the two guards that make
+   double-taps and crash-retries cost **zero** extra credits.
+6. **Per-model artifact prefix** (`…/models/{modelId}/`) keeps generations from
+   overwriting each other and makes history self-cleaning per record.
+7. **Origin flag from day one** (`source`) with a reserved `'manual'` value, so
+   the backend path can later drop in as a peer without a schema change.
 
 ---
 
-## Task 6 — Tests & verification
+## Tests & verification
 
-- **Unit** (Vitest, hermetic — the repo's test stack): Tasks 2, 3, 4 as above.
-  Use `setReconstructionEngine` for injection; mock the Meshy transport and S3.
-- **Regression:** run the full `recapture-api` test suite — nothing that touched
-  the stub should break.
-- **Manual E2E (staging only, documented, not in CI):** one real capture pushed
-  through with a staging `MESHY_API_KEY`. Verify (a) a GLB lands in
-  `BUCKET_ARTIFACTS` under the job prefix, (b) `Job.artifacts.cdnUrls.glb`
-  resolves via CloudFront **after** Meshy's `expiresAt` would have passed,
-  (c) a forced worker kill mid-poll re-claims and resumes the **same** Meshy task
-  (check credits: exactly one generation charged).
-
----
-
-## Constraints & guardrails (do not violate)
-
-- **Additive only** — do not remove, gut, or bypass `stubReconstructionEngine` or
-  the built-in path. Both engines coexist; `RECONSTRUCTION_ENGINE` selects one.
-- Touch **only** the worker/engine/config surface + `.env.example`. No changes to
-  the stage state machine, finalize endpoint, API routes, or the Flutter app.
-- No secrets in code, logs, commits, or test fixtures.
-- No live Meshy/AWS calls in unit tests or CI.
-- Every Meshy generation costs credits — the resume guard (Task 4 step 1/3) is
-  mandatory, not optional.
-- Follow existing code conventions: `@/` path aliases, the worker's `log(...)`
-  logger, `NonRetryableJobError` for terminal failures, `tsx`/`tsc-alias`
-  toolchain. Match surrounding style.
+- **Backend unit** (Vitest, hermetic): `meshyClient` mapping; `projectModelsService`
+  validation (count/containment/outcomes); create-endpoint (role, rate-limit,
+  idempotency, envelope); worker processor (happy/resume/terminal/retry) with a
+  fake client + mocked S3.
+- **Regression:** full `recapture-api` suite green; nothing in the capture
+  pipeline changed.
+- **Client:** widget tests for selection-count gating (CTA disabled outside 3–4)
+  and the status→CTA transitions; the viewer behind an injectable URL.
+- **Manual E2E (staging):** real capture → select 4 → Create Model → GLB lands in
+  `BUCKET_ARTIFACTS` under `…/models/{modelId}/`, record `SUCCEEDED`, owner sees
+  the badged model; a forced worker kill mid-poll resumes the **same** Meshy task
+  (exactly one generation charged).
 
 ---
 
 ## Definition of done
 
-- [ ] `RECONSTRUCTION_ENGINE` + Meshy env vars added (schema + `.env.example`);
-      `builtin` boots keyless, `meshy` fails fast without a key.
-- [ ] `meshyClient.ts` with verified request/response shapes + status→error map + tests.
-- [ ] `selectImages.ts` pure, deterministic, quality/angle-aware + tests.
-- [ ] `meshyReconstructionEngine.ts` — 3-stage mapping, resume-safe, re-hosts to
-      our S3, returns CloudFront artifact URLs + tests.
-- [ ] `engineSelection.ts` factory + wired in `src/worker/index.ts`; **built-in
-      path untouched** and still selectable; stub remains the test default.
-- [ ] Selector tested both ways (builtin → stub, meshy → meshy, meshy+no-key → throws).
-- [ ] Full `recapture-api` suite green.
-- [ ] Manual staging E2E notes recorded (artifacts outlive Meshy expiry; resume
-      charges exactly one generation).
-- [ ] `meshy-integration.md` and `AGENTS.md`/memory updated to state Meshy is a
-      **selectable** engine alongside the built-in path (default `RECONSTRUCTION_ENGINE`).
+- [ ] Env vars added (schema + `.env.example`); boot validates them.
+- [ ] `meshyClient.ts` + status→error mapping + tests.
+- [ ] `ProjectModel` model + `projectModelsService` (count/containment/history/approve) + tests.
+- [ ] `POST /admin/projects/:id/model` (role, rate-limit, Idempotency-Key, enqueue) + `GET …/models` + tests.
+- [ ] `MESHY_MODEL_GENERATION` processor, resume-safe, re-hosts to our S3, CloudFront URLs + tests; registered in `index.ts`.
+- [ ] Owner project detail surfaces the latest `SUCCEEDED` model; approve endpoint.
+- [ ] Preview gallery multi-select (3–4) + Create Model CTA; generation status polling.
+- [ ] `model_viewer_plus` viewer with **"Created by Meshy AI"** badge; owner + staff entry points.
+- [ ] Capture pipeline untouched; full `recapture-api` suite green.
+- [ ] Manual staging E2E notes recorded (badge shows; resume charges one generation).
+- [ ] `meshy-integration.md`, `AGENTS.md`/memory updated to describe the admin-triggered flow.
 
 ---
 
 ## Open items to confirm while implementing (don't guess — verify)
 
-1. **Exact Meshy multi-image endpoint contract** (create + retrieve field names,
-   how images are passed — URLs vs. base64, result URL fields) against the live
-   docs.
-2. **Durable `meshyTaskId` mechanism** — confirm how/when the orchestrator
-   persists stage output, and pick the path that makes the task id durable the
-   instant the task is created (see Task 4 step 3).
-3. **`imagePath` → S3 key resolution** — reconcile the manifest's
-   `recapture/{projectId}/{jobId}/images/{level}/<frame>.jpg` references with the
-   job's `upload.rawPrefix` (`{env}/{userId}/{projectId}/{jobId}/`) so presigning
-   targets the right key. See [`src/utils/s3Keys.ts`](../src/utils/s3Keys.ts).
-4. **Product sign-off** on Meshy fidelity from 4 real capture photos (§2.1 of the
-   design doc) — this gates the whole effort.
+1. **Exact Meshy multi-image contract** (create/retrieve field names; images as
+   URLs vs. base64; result URL + expiry fields) against the live docs.
+2. **`key` → absolute S3 key resolution** — reconcile the export-manifest
+   relative `key` with the job's `upload.rawPrefix`
+   (`{env}/{userId}/{projectId}/{jobId}/`) using the SAME resolution the
+   soft-delete/export path uses. See [`src/utils/s3Keys.ts`](../src/utils/s3Keys.ts)
+   and `adminProjectsService.ts`.
+3. **Owner exposure shape** — confirm how much of the model record the owner
+   endpoint should return (URL + source + approved only; no keys, no actor ids).
+4. **Product sign-off** on Meshy fidelity from 3–4 real capture photos before
+   building the client viewer (§ companion doc §2.1).

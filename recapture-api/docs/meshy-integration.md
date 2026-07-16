@@ -2,17 +2,25 @@
 
 **Status:** Planned · **Owner:** backend · **Last updated:** 2026-07-16
 
-Adds a **Meshy AI** cloud engine as a **second, selectable** reconstruction
-backend — the in-house pipeline stays in place. Meshy generates the 3D model
-from captured photos; we store the resulting model on **our** S3 and keep only
-our (non-expiring) CDN URL in Mongo.
+> ⚠️ **Current design lives in
+> [`meshy-integration-implementation-prompt.md`](./meshy-integration-implementation-prompt.md).**
+> The decided flow is **staff-triggered, on-demand**: a MODEL_ARTIST/ADMIN picks
+> **3–4 photos** in the Preview gallery and taps **Create Model**, which enqueues
+> a **`MESHY_MODEL_GENERATION` worker job**; the result is stored on our S3 and
+> shown to the owner badged **"Created by Meshy AI"**. The capture processing
+> pipeline is **left untouched**.
+>
+> The sections below (`RECONSTRUCTION_ENGINE` selection, the 3-stage engine
+> mapping) were an **earlier exploration** that auto-ran Meshy inside the worker
+> pipeline. They are **superseded** by the prompt, but kept for the reusable
+> mechanics — Meshy client, async polling + lease renewal, idempotent
+> `meshyTaskId` resume, URL-expiry re-hosting, and error mapping all still apply
+> to the new job processor.
 
-A single config switch, `RECONSTRUCTION_ENGINE` (`builtin` | `meshy`), chooses
-which engine the worker runs per deploy. `builtin` is the in-house path (the
-`stub` today, a real photogrammetry engine later); `meshy` is the cloud engine
-described here. **Both engines remain in the codebase** so we can run Meshy in
-production and still fall back to — or later build out — the backend way without
-code changes.
+Adds **Meshy AI** cloud model generation. Meshy generates the 3D model from a few
+captured photos; we store the resulting model on **our** S3 and keep only our
+(non-expiring) CDN URL in Mongo. The in-house pipeline stays in place as the
+fallback.
 
 ---
 
