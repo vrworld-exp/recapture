@@ -9,7 +9,7 @@
 // the two lists can never drift in shape.
 import { Types, type FilterQuery } from 'mongoose';
 import { Project, type IProject, type ProjectStatus } from '@/models/Project';
-import { Job, type IJob, type JobState } from '@/models/Job';
+import { Job, CAPTURE_PROCESSING_JOB_TYPE, type IJob, type JobState } from '@/models/Job';
 import {
   toProjectListItem,
   type ProjectListItem,
@@ -262,8 +262,12 @@ export type SoftDeletePhotosResult =
  * root: non-empty, not absolute, no `.`/`..`/empty segment (traversal), and not
  * already under the reserved deleted/ namespace. Mirrors the upload-urls
  * "key must live under the job's keyPrefix" containment rule.
+ *
+ * Exported because EVERY caller-supplied key must pass this one validator
+ * before it is resolved against a job prefix — the Meshy Create-Model request
+ * (projectModelsService) reuses it rather than growing a second, driftable copy.
  */
-function isContainedRelativeKey(relativeKey: string): boolean {
+export function isContainedRelativeKey(relativeKey: string): boolean {
   if (typeof relativeKey !== 'string' || relativeKey.length === 0) return false;
   if (relativeKey.startsWith('/')) return false;
   if (relativeKey.startsWith(DELETED_KEY_PREFIX)) return false;
@@ -312,10 +316,22 @@ export async function softDeleteProjectPhotos(
   return { outcome: 'DELETED', projectId: project.id as string, jobId: job.id as string, deleted, missing };
 }
 
-/** The project's most recent job whose upload passed the finalize gate. */
-async function findExportableJob(projectId: string): Promise<IJob | null> {
+/**
+ * The project's most recent CAPTURE job whose upload passed the finalize gate.
+ *
+ * The jobType filter is load-bearing, not defensive: a project also owns
+ * MESHY_MODEL_GENERATION jobs (staff "Create Model"), which are newer than the
+ * capture job and pass through the same post-QUEUED states. Without it, the
+ * `createdAt: -1` sort would resolve to a generation job — which has no
+ * `upload` block — and every export / preview-gallery / soft-delete call would
+ * report NOT_EXPORTABLE. `null` matches the field being unset too (the Mongo
+ * null-equality this codebase already relies on for `deletedAt`), so jobs
+ * written before jobType existed still resolve.
+ */
+export async function findExportableJob(projectId: string): Promise<IJob | null> {
   return Job.findOne({
     projectId: new Types.ObjectId(projectId),
+    jobType: { $in: [CAPTURE_PROCESSING_JOB_TYPE, null] },
     state: { $in: [...UPLOAD_FINALIZED_JOB_STATES] },
   })
     .sort({ createdAt: -1 })

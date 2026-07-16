@@ -10,17 +10,21 @@
 // deliberately queue-agnostic so a future BullMQ swap only replaces
 // jobQueue.ts + worker.ts.
 import type { Types } from 'mongoose';
-import type {
-  ExecutableStage,
-  JobState,
-  StageProgress,
-  UploadInfo,
+import {
+  CAPTURE_PROCESSING_JOB_TYPE,
+  MESHY_MODEL_GENERATION_JOB_TYPE,
+  type ExecutableStage,
+  type JobState,
+  type StageProgress,
+  type UploadInfo,
 } from '@/models/types/job.types';
 import type { CaptureSummary, ObjectSize } from '@/models/types/capture.types';
 import type { CaptureFlowVariant } from '@/models/types/captureVariants';
 
 /** jobType every upload-pipeline job carries (the schema default). */
-export const DEFAULT_JOB_TYPE = 'CAPTURE_PROCESSING';
+export const DEFAULT_JOB_TYPE = CAPTURE_PROCESSING_JOB_TYPE;
+
+export { CAPTURE_PROCESSING_JOB_TYPE, MESHY_MODEL_GENERATION_JOB_TYPE };
 
 /** Fallback for job documents created before the worker fields existed. */
 export const DEFAULT_MAX_ATTEMPTS = 3;
@@ -29,8 +33,10 @@ export const DEFAULT_MAX_ATTEMPTS = 3;
  * The lean (POJO) job shape the claim query returns and processors receive.
  * Worker fields are optional because jobs enqueued before this schema
  * extension lack them — consumers must apply the DEFAULT_* fallbacks.
- * There is no `payload` field: the job document itself carries everything a
- * processor needs (upload.rawBucket/rawPrefix/manifestKey, objectSize, …).
+ * CAPTURE_PROCESSING needs no `payload`: the job document itself carries
+ * everything (upload.rawBucket/rawPrefix/manifestKey, objectSize, …). Job types
+ * whose work isn't described by those capture fields (MESHY_MODEL_GENERATION)
+ * carry their input in `payload` instead.
  */
 export interface WorkerJob {
   _id: Types.ObjectId;
@@ -38,6 +44,8 @@ export interface WorkerJob {
   userId?: Types.ObjectId;
   state: JobState;
   jobType?: string;
+  /** Job-type-specific input; unset for CAPTURE_PROCESSING. */
+  payload?: Record<string, unknown>;
   priority?: number;
   attempts?: number;
   maxAttempts?: number;

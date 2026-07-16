@@ -73,6 +73,33 @@ const envSchema = z.object({
   /** Sliding window for the export cap (seconds). */
   ADMIN_EXPORT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // ── Meshy AI model generation (staff-triggered — docs/meshy-integration-*.md) ─
+  /**
+   * Meshy API key — a SECRET (env only, never logged, never shipped to the
+   * client). Optional in this shared schema ON PURPOSE: only the WORKER process
+   * talks to Meshy, so requiring it here would stop the API from booting over a
+   * credential it never uses (and break every existing deployment/dev shell on
+   * upgrade). Presence is enforced where it matters instead — the worker calls
+   * assertMeshyConfigured() at boot (src/worker/engine/meshy/meshyClient.ts) and
+   * fails fast with a clear message.
+   */
+  MESHY_API_KEY: z.string().min(1).optional(),
+  MESHY_BASE_URL: z.string().url().default('https://api.meshy.ai'),
+  /**
+   * How often a running Meshy task is polled (ms). Each poll doubles as the
+   * worker's claim-lease renewal, so this MUST stay well below
+   * WORKER_CLAIM_TIMEOUT_MS or a live generation gets re-claimed mid-flight.
+   */
+  MESHY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  /** Hard cap on total wait for one generation before giving up (ms). */
+  MESHY_TASK_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
+  /** Presigned-GET TTL for the source images handed to Meshy (seconds). */
+  MESHY_SOURCE_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /** Max Create-Model requests one staff user may make per window (credits!). */
+  MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  /** Sliding window for the Create-Model cap (seconds). */
+  MESHY_CREATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /** How often the worker polls for claimable jobs (milliseconds). */
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),

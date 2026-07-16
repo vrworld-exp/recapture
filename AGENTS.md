@@ -120,15 +120,47 @@ do not remove it).
   `req.user.role`, and rejects with a standard-envelope `403 FORBIDDEN`
   (+ `admin_access_denied` analytics).
 - The **`/admin` route group** (`routes/admin.ts`) is staff-only (min role
-  `MODEL_ARTIST`), read-only: cross-user live-projects list/detail + a
-  presigned-GET **export manifest**. Staff DTOs carry an opaque `ownerId` —
-  **never** owner phone/email. The client learns its own role via
-  `GET /auth/me` (also PII-free).
+  `MODEL_ARTIST`): cross-user live-projects list/detail, a presigned-GET
+  **export manifest**, an ADMIN-only photo soft-delete, and the **Meshy model
+  generation** surface (below). Staff DTOs carry an opaque `ownerId` — **never**
+  owner phone/email. The client learns its own role via `GET /auth/me` (also
+  PII-free).
 - Export URLs are presigned S3 GETs with TTL `ADMIN_EXPORT_URL_TTL_SECONDS`
   (default 3600), rate-limited per user via the generic `consumeRateWindow`
   (`ADMIN_EXPORT_MAX_PER_WINDOW`/`ADMIN_EXPORT_WINDOW_SECONDS`). A presigned URL
   is a bearer credential: it may appear ONLY in the export response body —
   never in logs or analytics.
+
+### 3D models: two origins, one shape
+- A model is a **`ProjectModel`** record (`models/ProjectModel.ts`), one per
+  generation attempt (full history — artists regenerate, compare, and `approve`
+  one). Its **`source`** flag is the origin: `'meshy'` (built) or `'manual'`
+  (RESERVED for the in-house pipeline). The client's "Created by Meshy AI" badge
+  reads that flag and nothing else.
+- **Meshy generation is ADDITIVE and human-triggered**, never automatic: staff
+  pick 3–4 Preview-gallery photos → `POST /admin/projects/:id/model` → a
+  **`MESHY_MODEL_GENERATION`** worker job (a peer job type, registered beside
+  `CAPTURE_PROCESSING`). The capture→finalize→processing pipeline and
+  `reconstructionEngine.ts` are **untouched** and remain the fallback. Design:
+  `recapture-api/docs/meshy-integration-implementation-prompt.md`.
+- **Generations cost credits.** Three guards, all load-bearing — do not remove
+  one without replacing it: (1) `Idempotency-Key` on create (unique partial
+  index on `(createdByUserId, idempotencyKey)`, same pattern as `POST /jobs`);
+  (2) `meshyTaskId` persisted the instant the task exists, so a re-claim RESUMES
+  instead of resubmitting; (3) a per-user rate window
+  (`MESHY_CREATE_MAX_PER_WINDOW`). Error routing is the fourth: quota/`402`,
+  bad input, and task-`FAILED` are `NonRetryableJobError` (terminal) so a quota
+  failure can never retry-burn credits.
+- **Meshy's result URLs expire** — the worker re-hosts the GLB/USDZ/thumbnail to
+  `BUCKET_ARTIFACTS` under `…/{jobId}/models/{modelId}/`. Only OUR CloudFront
+  URLs are ever persisted or served. Never store a Meshy URL.
+- **`jobType` is now a real discriminator.** A project owns jobs of more than one
+  type, so any query meaning "the capture job" MUST filter
+  `jobType: CAPTURE_PROCESSING` (`models/types/job.types.ts`) — see
+  `findExportableJob`, where omitting it silently breaks export/preview/delete.
+- **`MESHY_API_KEY` is optional in `config/env.ts` and required at WORKER boot**
+  (`assertMeshyConfigured()`): only the worker calls Meshy, so the API must not
+  fail to boot over a secret it never uses.
 
 ### Config & secrets
 - **All tunables and secrets come from env.** `config/env.ts` validates them with
@@ -195,8 +227,12 @@ do not remove it).
   modify prod code just to make a test pass.
 - **Client:** `flutter test` with Hive temp-dir helpers — already in place under
   `test/` (auth, config, offline, projects, storage).
-- **Backend: NOT YET BUILT.** There is no backend test runner yet. When added,
-  use **Vitest + mongodb-memory-server** (hermetic Mongo), one smoke test first.
+- **Backend:** `npm test` → **Vitest + Supertest + mongodb-memory-server**
+  (hermetic Mongo), suites in `recapture-api/tests/`. Env is injected by
+  `vitest.config.ts` BEFORE the module graph loads (`config/env.ts` validates and
+  freezes env at import — a per-test `process.env` write is too late). External
+  services are always faked: the S3 client is scripted via `vi.spyOn(s3Client,
+  'send')`, and Meshy via `setMeshyClient(...)` — **CI never calls a live API.**
 
 ---
 

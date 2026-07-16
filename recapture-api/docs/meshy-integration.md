@@ -1,21 +1,47 @@
 # Meshy AI Integration — 3D Model Generation
 
-**Status:** Planned · **Owner:** backend · **Last updated:** 2026-07-16
+**Status:** BUILT (staff-triggered flow) · **Owner:** backend · **Last updated:** 2026-07-16
 
-> ⚠️ **Current design lives in
-> [`meshy-integration-implementation-prompt.md`](./meshy-integration-implementation-prompt.md).**
-> The decided flow is **staff-triggered, on-demand**: a MODEL_ARTIST/ADMIN picks
-> **3–4 photos** in the Preview gallery and taps **Create Model**, which enqueues
-> a **`MESHY_MODEL_GENERATION` worker job**; the result is stored on our S3 and
+> ✅ **Built and as-described in
+> [`meshy-integration-implementation-prompt.md`](./meshy-integration-implementation-prompt.md)
+> — read that for the design.** A MODEL_ARTIST/ADMIN picks **3–4 photos** in the
+> Preview gallery and taps **Create Model**, which enqueues a
+> **`MESHY_MODEL_GENERATION` worker job**; the result is re-hosted on our S3 and
 > shown to the owner badged **"Created by Meshy AI"**. The capture processing
-> pipeline is **left untouched**.
+> pipeline is **untouched** and remains the fallback.
 >
-> The sections below (`RECONSTRUCTION_ENGINE` selection, the 3-stage engine
-> mapping) were an **earlier exploration** that auto-ran Meshy inside the worker
-> pipeline. They are **superseded** by the prompt, but kept for the reusable
-> mechanics — Meshy client, async polling + lease renewal, idempotent
-> `meshyTaskId` resume, URL-expiry re-hosting, and error mapping all still apply
-> to the new job processor.
+> **As-built map** (§1–§4 below describe the SUPERSEDED design — see the note
+> there):
+>
+> | Concern | File |
+> | --- | --- |
+> | Meshy transport + status→error mapping | `src/worker/engine/meshy/meshyClient.ts` |
+> | Generation record (history, origin flag, approval) | `src/models/ProjectModel.ts` |
+> | Validation / containment / enqueue / approve | `src/services/projectModelsService.ts` |
+> | Staff endpoints (create / history / approve) | `src/routes/admin.ts` |
+> | Worker processor (resume-safe, re-hosts to our S3) | `src/worker/processors/meshyModelProcessor.ts` |
+> | Owner surface (`model` on `GET /projects/:id`) | `src/routes/projects.ts` |
+> | Client: selection, polling, viewer + badge | `lib/presentation/screens/projects/{preview_gallery,model_generation,model_viewer}_screen.dart` |
+>
+> Two deviations from the prompt, both deliberate:
+> 1. **`MESHY_API_KEY` is optional in `config/env.ts`, required at WORKER boot**
+>    (`assertMeshyConfigured()`). Only the worker calls Meshy; making the API
+>    refuse to boot over a credential it never uses would break the existing
+>    deployment on upgrade for no safety gain.
+> 2. **The enqueue lives in the service, not the route** — AGENTS.md keeps
+>    routers thin (parse, delegate, map), and record+job creation is one
+>    business operation.
+
+---
+
+> ⚠️ **§1–§4 below are SUPERSEDED.** They describe an **earlier exploration**
+> that auto-ran Meshy *inside* the capture pipeline via a `RECONSTRUCTION_ENGINE`
+> selector and a 3-stage engine mapping. **That was not built** — there is no
+> `RECONSTRUCTION_ENGINE` env var, no `engineSelection.ts`, and no
+> `MeshyReconstructionEngine`. The sections are kept because the *mechanics* they
+> work through (polling + lease renewal, idempotent `meshyTaskId` resume,
+> URL-expiry re-hosting, error mapping) are exactly what the new job processor
+> does — §5–§8 remain accurate in spirit and were the basis for it.
 
 Adds **Meshy AI** cloud model generation. Meshy generates the 3D model from a few
 captured photos; we store the resulting model on **our** S3 and keep only our

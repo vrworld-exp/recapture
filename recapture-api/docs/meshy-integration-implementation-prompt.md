@@ -1,4 +1,4 @@
-# Implementation Prompt — Meshy AI On-Demand Model Generation
+# Implementation Prompt — Meshy AI On-Demand Model Generation | ✅
 
 > Hand this whole document to a coding agent (or use it as your own worklist).
 > It is self-contained: context, exact files, signatures, tests, and a
@@ -316,17 +316,50 @@ In [`preview_gallery_screen.dart`] / [`preview_gallery_notifier.dart`]:
 
 ## Definition of done
 
-- [ ] Env vars added (schema + `.env.example`); boot validates them.
-- [ ] `meshyClient.ts` + status→error mapping + tests.
-- [ ] `ProjectModel` model + `projectModelsService` (count/containment/history/approve) + tests.
-- [ ] `POST /admin/projects/:id/model` (role, rate-limit, Idempotency-Key, enqueue) + `GET …/models` + tests.
-- [ ] `MESHY_MODEL_GENERATION` processor, resume-safe, re-hosts to our S3, CloudFront URLs + tests; registered in `index.ts`.
-- [ ] Owner project detail surfaces the latest `SUCCEEDED` model; approve endpoint.
-- [ ] Preview gallery multi-select (3–4) + Create Model CTA; generation status polling.
-- [ ] `model_viewer_plus` viewer with **"Created by Meshy AI"** badge; owner + staff entry points.
-- [ ] Capture pipeline untouched; full `recapture-api` suite green.
-- [ ] Manual staging E2E notes recorded (badge shows; resume charges one generation).
-- [ ] `meshy-integration.md`, `AGENTS.md`/memory updated to describe the admin-triggered flow.
+**Status: BUILT** (2026-07-16) except the two items that need a human/staging.
+
+- [x] Env vars added (schema + `.env.example`); boot validates them. **Deviation:**
+      `MESHY_API_KEY` is `.optional()` in the shared schema and enforced at
+      **worker** boot via `assertMeshyConfigured()` — only the worker calls
+      Meshy, and requiring it in `config/env.ts` would stop the API (and every
+      existing deployment/dev shell) booting over a credential it never uses.
+- [x] `meshyClient.ts` + status→error mapping + tests (`tests/meshy-client.test.ts`).
+      Contract verified against the live docs: `POST /openapi/v1/multi-image-to-3d`
+      with `{ image_urls }` → `{ result: taskId }`.
+- [x] `ProjectModel` model + `projectModelsService` (count/containment/history/approve) + tests.
+- [x] `POST /admin/projects/:id/model` (role, rate-limit, Idempotency-Key, enqueue)
+      + `GET …/models` + tests. **Deviation:** the enqueue lives in the SERVICE,
+      not the route — AGENTS.md keeps routers thin, and record+job creation is one
+      business operation.
+- [x] `MESHY_MODEL_GENERATION` processor, resume-safe, re-hosts to our S3,
+      CloudFront URLs + tests; registered in `index.ts`.
+- [x] Owner project detail surfaces the latest `SUCCEEDED` model; approve endpoint.
+- [x] Preview gallery multi-select (3–4) + Create Model CTA; generation status polling.
+- [x] `model_viewer_plus` viewer with **"Created by Meshy AI"** badge; owner + staff
+      entry points. The owner's entry is the existing **View** button on a
+      COMPLETED project (its `TODO(viewer)` is now resolved).
+- [x] Capture pipeline untouched; full `recapture-api` suite green (301 tests).
+- [ ] **Manual staging E2E notes recorded** (badge shows; resume charges one
+      generation). NOT DONE — needs a real Meshy key + a real capture.
+- [x] `meshy-integration.md`, `AGENTS.md`/memory updated to describe the
+      admin-triggered flow.
+
+### Found while building (not in the original plan)
+
+- **`findExportableJob` would have broken.** It resolved "the project's most
+  recent job in a post-QUEUED state", and a `MESHY_MODEL_GENERATION` job is
+  newer than the capture job and passes through those same states — so it would
+  have won the sort, and (having no `upload` block) turned every export /
+  preview-gallery / soft-delete call into `NOT_EXPORTABLE`. Fixed by filtering
+  on `jobType`; regression-tested in `tests/project-models.test.ts`.
+- **`Job.payload`** was added (`Schema.Types.Mixed`) — `CAPTURE_PROCESSING`
+  describes its work with `upload`/`objectSize`, but a generation job needs
+  `{ modelId }`. The "there is no payload field" note in `workerTypes.ts` was
+  updated rather than left to rot.
+- **Record vs job status.** A retrying job bounces QUEUED↔PROCESSING; the record
+  must not flap with it. The processor only writes `FAILED` when the error is
+  terminal **or** it was the job's last attempt — otherwise the record stays
+  `PROCESSING`, which is the truth while a retry is pending.
 
 ---
 

@@ -17,6 +17,7 @@ import {
   renameProject,
   getProject,
 } from '@/services/projectsService';
+import { latestOwnerModelFor } from '@/services/projectModelsService';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { RESUME_SOURCES } from '@/validation/analyticsSchemas';
@@ -92,6 +93,13 @@ router.get(
  * soft-deleted all return an identical 404 (no existence leak). On a successful,
  * authorized, non-deleted open it emits `project_resumed` — once per open; the
  * backend has no session state, so per-session debounce is the client's job.
+ *
+ * Also carries `model`: the newest finished 3D model for the project, or null.
+ * It rides ALONGSIDE the project DTO rather than inside it — the Project DTO is
+ * identical across GET /projects, POST /projects and the Flutter `Project`
+ * entity by contract (AGENTS.md), so a field that only this endpoint can answer
+ * must not join it. The payload is the owner-safe projection (URL + origin flag
+ * + approved): no S3 keys, no staff actor ids.
  */
 router.get(
   '/:id',
@@ -133,7 +141,11 @@ router.get(
       seconds_since_last_update: secondsSinceLastUpdate,
     });
 
-    res.status(200).json({ status: 'success', project });
+    // Ownership was already proven by getProject(userId, …) above, so this
+    // lookup can be by project alone — an owner only ever reaches their own.
+    const model = await latestOwnerModelFor(project.id);
+
+    res.status(200).json({ status: 'success', project, model });
   })
 );
 

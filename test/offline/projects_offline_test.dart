@@ -33,6 +33,7 @@ import 'package:recapture/domain/entities/offline_action.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
 import 'package:recapture/platform/connectivity_watcher.dart';
+import '../projects/repo_fake_defaults.dart';
 
 // ── Test doubles ──────────────────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ class _Offline implements Exception {
 /// `list`/`create` throw [_Offline]; while true, `create` mints a server id.
 /// Records call counts + create payloads so tests can assert what reached the
 /// network (and prove nothing did while offline).
-class FakeProjectsRepository implements ProjectsRepository {
+class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRepository {
   FakeProjectsRepository({this.online = false, List<Project> remote = const []})
       : _remote = List.of(remote);
 

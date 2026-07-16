@@ -7,6 +7,8 @@ import {
   ObjectSize,
 } from './types/capture.types';
 import {
+  CAPTURE_PROCESSING_JOB_TYPE,
+  MESHY_MODEL_GENERATION_JOB_TYPE,
   JobState,
   StageProgress,
   StageTimestamps,
@@ -197,6 +199,15 @@ export interface IJob extends Document {
   /** Discriminator the worker's processor registry dispatches on. */
   jobType: string;
 
+  /**
+   * Job-type-specific input, for types whose work is NOT described by the
+   * capture fields. CAPTURE_PROCESSING leaves this unset — it carries
+   * everything it needs in `upload`/`objectSize`/`captureVariant`.
+   * MESHY_MODEL_GENERATION uses it for `{ modelId }` (the ProjectModel record
+   * holding the selected keys and the resume-critical meshyTaskId).
+   */
+  payload?: Record<string, unknown>;
+
   /** Claim ordering — higher is picked first (FIFO within a priority). */
   priority: number;
 
@@ -312,7 +323,8 @@ const JobSchema = new Schema<IJob>(
       default: 'CREATED',
       required: true,
     },
-    jobType: { type: String, required: true, default: 'CAPTURE_PROCESSING' },
+    jobType: { type: String, required: true, default: CAPTURE_PROCESSING_JOB_TYPE },
+    payload: { type: Schema.Types.Mixed },
     priority: { type: Number, required: true, default: 0 },
     attempts: { type: Number, required: true, default: 0 },
     maxAttempts: { type: Number, required: true, default: 3 },
@@ -368,6 +380,8 @@ export const Job = model<IJob>('Job', JobSchema);
 
 // Re-export shared types for convenience — controllers/services can import
 // from '../models/Job' instead of reaching into models/types/ directly.
+export { CAPTURE_PROCESSING_JOB_TYPE, MESHY_MODEL_GENERATION_JOB_TYPE };
+
 export type {
   JobState,
   StageProgress,

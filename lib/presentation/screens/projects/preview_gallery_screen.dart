@@ -16,12 +16,14 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/model_generation_notifier.dart';
 import '../../../application/projects/preview_download_service.dart';
 import '../../../application/projects/preview_gallery_notifier.dart';
 import '../../../data/repositories/live_projects_repository.dart';
 import '../../../domain/entities/preview_manifest.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/delete_confirmation_modal.dart';
+import 'model_generation_screen.dart';
 
 class PreviewGalleryScreen extends ConsumerStatefulWidget {
   const PreviewGalleryScreen({super.key, required this.projectId});
@@ -33,9 +35,86 @@ class PreviewGalleryScreen extends ConsumerStatefulWidget {
       _PreviewGalleryScreenState();
 }
 
+/// Selection bounds for a Meshy generation. MIRRORS the server's authority
+/// (projectModelsService MIN/MAX_SELECTED_PHOTOS) — the CTA gate here is a
+/// courtesy so a staff user isn't sent to a guaranteed 400; the backend still
+/// re-checks. Keep the two in sync.
+const int kMinModelPhotos = 3;
+const int kMaxModelPhotos = 4;
+
 class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
   /// Per-key download in-flight guard (mirrors the Live tab's _exportInFlight).
   final Set<String> _downloadInFlight = <String>{};
+
+  /// Selection mode: tapping a tile picks it for model generation instead of
+  /// opening the viewer. Off by default so the browse/download flow is unchanged.
+  bool _selecting = false;
+
+  /// The picked photos, by [PreviewPhoto.key] — the same relative key the
+  /// server resolves against the job prefix.
+  final Set<String> _selected = <String>{};
+
+  bool _creating = false;
+
+  bool get _canCreate =>
+      _selected.length >= kMinModelPhotos && _selected.length <= kMaxModelPhotos;
+
+  void _toggleSelecting() {
+    setState(() {
+      _selecting = !_selecting;
+      if (!_selecting) _selected.clear();
+    });
+  }
+
+  void _toggle(PreviewPhoto photo) {
+    setState(() {
+      if (!_selected.remove(photo.key) && _selected.length < kMaxModelPhotos) {
+        _selected.add(photo.key);
+      }
+    });
+  }
+
+  /// Requests a generation from the current selection and opens the status view.
+  Future<void> _createModel() async {
+    if (_creating || !_canCreate) return;
+    setState(() => _creating = true);
+    try {
+      final model = await ref
+          .read(modelGenerationProvider(widget.projectId).notifier)
+          .createModel(
+            _selected.toList(),
+            // One key per selection attempt: a double-tap or a retried request
+            // resolves to the SAME record server-side instead of paying for a
+            // second generation.
+            idempotencyKey: _idempotencyKeyFor(_selected),
+          );
+      if (!mounted) return;
+      setState(() {
+        _selecting = false;
+        _selected.clear();
+      });
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelGenerationScreen(
+            projectId: widget.projectId,
+            modelId: model.id,
+          ),
+        ),
+      );
+    } catch (e) {
+      _snack(failureCopy(e));
+    } finally {
+      if (mounted) setState(() => _creating = false);
+    }
+  }
+
+  /// A stable key for one (project, selection) pair, so an accidental re-tap of
+  /// the same selection replays rather than re-charges. Choosing a different
+  /// set is a genuinely different request and gets a different key.
+  String _idempotencyKeyFor(Set<String> keys) {
+    final sorted = keys.toList()..sort();
+    return '${widget.projectId}:${sorted.join('|')}'.hashCode.toRadixString(16);
+  }
 
   /// Maps any Preview failure to friendly, mapped-only copy (never a raw
   /// code/URL) — same categories as the Live tab's _showFailure.
@@ -116,6 +195,9 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(previewGalleryProvider(widget.projectId));
+    // The screen is already staff-only, but the CTA spends Meshy credits — gate
+    // it on the role too rather than relying on the route alone.
+    final canCreateModel = ref.watch(isStaffProvider);
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       appBar: AppBar(
@@ -128,8 +210,20 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
           // hardware back / this arrow both return to Projects, never the OS home.
           onPressed: () => navigateBack(context),
         ),
-        title: Text('Preview', style: Theme.of(context).textTheme.titleLarge),
+        title: Text(
+          _selecting ? 'Select photos' : 'Preview',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        actions: [
+          if (canCreateModel && (async.valueOrNull?.files.isNotEmpty ?? false))
+            TextButton(
+              key: const ValueKey('preview_select_toggle'),
+              onPressed: _toggleSelecting,
+              child: Text(_selecting ? 'Cancel' : 'Create Model'),
+            ),
+        ],
       ),
+      bottomNavigationBar: _selecting ? _createModelBar(context) : null,
       body: async.when(
         loading: () => const Center(
           child: CircularProgressIndicator(color: AppColors.mirageRed),
@@ -139,6 +233,44 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
           onRetry: () => ref.invalidate(previewGalleryProvider(widget.projectId)),
         ),
         data: (manifest) => _body(manifest),
+      ),
+    );
+  }
+
+  /// The Create Model CTA + its live selection hint. Disabled outside the 3–4
+  /// bound, with the hint saying WHY rather than leaving a dead button.
+  Widget _createModelBar(BuildContext context) {
+    final n = _selected.length;
+    final hint = switch (n) {
+      < kMinModelPhotos => 'Select $kMinModelPhotos–$kMaxModelPhotos photos '
+          'from different angles ($n selected)',
+      _ => '$n of $kMaxModelPhotos selected',
+    };
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              hint,
+              key: const ValueKey('create_model_hint'),
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: AppColors.textMuted),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            AppButton(
+              key: const ValueKey('create_model_cta'),
+              label: 'Create Model',
+              icon: Icons.auto_awesome,
+              isLoading: _creating,
+              onPressed: _canCreate ? _createModel : null,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -172,10 +304,18 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
                     final photo = manifest.files[index];
+                    final selected = _selected.contains(photo.key);
                     return _PhotoTile(
                       key: ValueKey('preview_tile_${photo.key}'),
                       photo: photo,
-                      onTap: () => _openViewer(manifest, photo),
+                      selectable: _selecting,
+                      selected: selected,
+                      // In selection mode a tap picks instead of opening — the
+                      // grid is the picker, so a second surface would just be
+                      // in the way.
+                      onTap: () => _selecting
+                          ? _toggle(photo)
+                          : _openViewer(manifest, photo),
                     );
                   },
                   childCount: manifest.files.length,
@@ -229,12 +369,21 @@ class _Header extends StatelessWidget {
   }
 }
 
-/// One grid thumbnail with graceful loader/error placeholders.
+/// One grid thumbnail with graceful loader/error placeholders. In selection
+/// mode it also carries the checkmark + dimming that show what is picked.
 class _PhotoTile extends StatelessWidget {
-  const _PhotoTile({super.key, required this.photo, required this.onTap});
+  const _PhotoTile({
+    super.key,
+    required this.photo,
+    required this.onTap,
+    this.selectable = false,
+    this.selected = false,
+  });
 
   final PreviewPhoto photo;
   final VoidCallback onTap;
+  final bool selectable;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -244,12 +393,56 @@ class _PhotoTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.xs),
         child: AspectRatio(
           aspectRatio: 1,
-          child: Image.network(
-            photo.url,
-            fit: BoxFit.cover,
-            loadingBuilder: (context, child, progress) =>
-                progress == null ? child : const _TilePlaceholder(loading: true),
-            errorBuilder: (_, __, ___) => const _TilePlaceholder(loading: false),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.network(
+                photo.url,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, progress) => progress == null
+                    ? child
+                    : const _TilePlaceholder(loading: true),
+                errorBuilder: (_, __, ___) =>
+                    const _TilePlaceholder(loading: false),
+              ),
+              if (selectable)
+                _SelectionOverlay(
+                  key: ValueKey('preview_tile_check_${photo.key}'),
+                  selected: selected,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The selected/unselected affordance drawn over a tile in selection mode.
+class _SelectionOverlay extends StatelessWidget {
+  const _SelectionOverlay({super.key, required this.selected});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: selected
+            ? Border.all(color: AppColors.mirageRed, width: 3)
+            : null,
+        // Unselected tiles recede so the picked set reads at a glance.
+        color: selected ? null : Colors.black.withValues(alpha: 0.35),
+      ),
+      child: Align(
+        alignment: Alignment.topRight,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xs),
+          child: Icon(
+            selected ? Icons.check_circle : Icons.circle_outlined,
+            size: 20,
+            color: selected ? AppColors.mirageRed : Colors.white70,
+            semanticLabel: selected ? 'Selected' : 'Not selected',
           ),
         ),
       ),

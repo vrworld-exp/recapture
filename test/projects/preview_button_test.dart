@@ -17,6 +17,7 @@ import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
 import 'package:recapture/presentation/screens/projects/live_projects_view.dart';
 import 'package:recapture/presentation/widgets/project_card.dart';
+import 'repo_fake_defaults.dart';
 
 Project _project(ProjectStatus status) => Project(
       id: 'proj-123',
@@ -25,7 +26,7 @@ Project _project(ProjectStatus status) => Project(
       updatedAt: DateTime(2026, 7, 1),
     );
 
-class _StubLiveRepo implements LiveProjectsRepository {
+class _StubLiveRepo with FakeModelGenerationDefaults implements LiveProjectsRepository {
   _StubLiveRepo(this._page);
   final LiveProjectsPage _page;
 

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/create_project_options.dart';
 import '../../domain/entities/project.dart';
+import '../../domain/entities/project_model.dart';
 import '../remote/api_client.dart';
 
 /// Data access for the Projects Hub. The interface `ProjectsNotifier` depends
@@ -38,6 +39,14 @@ abstract interface class ProjectsRepository {
   /// Re-queues a failed project for processing (status returns to `processing`).
   /// Backend returns success only. Throws on network failure.
   Future<void> retry(String id);
+
+  /// The project's newest finished 3D model, or null if it has none yet.
+  ///
+  /// Fetched ON DEMAND (one request when the user taps View) rather than being
+  /// carried by `list()`: the Project DTO is identical across GET /projects,
+  /// POST /projects and this entity by contract (AGENTS.md), so the model can't
+  /// join it — and watching it per card would mean an N+1 across the whole list.
+  Future<ProjectModelView?> fetchModel(String id);
 }
 
 /// Concrete [ProjectsRepository] backed by the recapture-api `/projects`
@@ -107,6 +116,14 @@ class RemoteProjectsRepository implements ProjectsRepository {
     // worker/admin concern). Keep the optimistic UI flow alive; the next list
     // refresh reconciles the real status.
     await Future<void>.delayed(const Duration(milliseconds: 300));
+  }
+
+  @override
+  Future<ProjectModelView?> fetchModel(String id) async {
+    final res = await _dio.get<Map<String, dynamic>>('/projects/$id');
+    // `model` rides alongside the project DTO and is null until a generation
+    // finishes — an absent/unparsable model is "none yet", never an error.
+    return ProjectModelView.tryFromOwnerMap(res.data?['model']);
   }
 }
 

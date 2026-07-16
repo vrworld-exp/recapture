@@ -16,6 +16,8 @@ import { CAPTURE_FLOW_VARIANTS } from '@/models/types/captureVariants';
 import { USER_ROLES } from '@/models/User';
 // Same for the project status filter values the admin list accepts.
 import { PROJECT_STATUS_VALUES } from '@/models/Project';
+// And for a generated model's origin flag (meshy | manual).
+import { MODEL_SOURCES } from '@/models/types/projectModel.types';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -54,6 +56,9 @@ export const AnalyticsEvent = {
   PROJECT_EXPORT_GENERATED: 'project_export_generated',
   PROJECT_PHOTOS_DELETED: 'project_photos_deleted',
   ADMIN_ACCESS_DENIED: 'admin_access_denied',
+  // ── Meshy AI model generation (staff-triggered) ───────────────────────────
+  MODEL_GENERATION_REQUESTED: 'model_generation_requested',
+  MODEL_APPROVED: 'model_approved',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -325,6 +330,34 @@ const projectPhotosDeletedProps = z
   })
   .strict();
 
+// Meshy model-generation events. Same PII stance as the rest of /admin: hashed
+// ids and counts only. NEVER a selected key, a presigned source URL, or the
+// Meshy task id — `key_count` is all the selection detail that ships.
+
+/** Staff requested a Meshy generation (POST /admin/projects/:id/model). */
+const modelGenerationRequestedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    job_id_hash: z.string().min(1),
+    model_id_hash: z.string().min(1),
+    source: z.enum(MODEL_SOURCES),
+    key_count: z.number().int().positive(),
+    /** True when an Idempotency-Key replayed an existing record (no new charge). */
+    was_replay: z.boolean(),
+  })
+  .strict();
+
+/** Staff approved a generated model — the "skip manual creation" signal. */
+const modelApprovedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    model_id_hash: z.string().min(1),
+    source: z.enum(MODEL_SOURCES),
+  })
+  .strict();
+
 /** requireRole rejected an authenticated caller (role below the minimum). */
 const adminAccessDeniedProps = z
   .object({
@@ -363,6 +396,8 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PROJECT_EXPORT_GENERATED]: projectExportGeneratedProps,
   [AnalyticsEvent.PROJECT_PHOTOS_DELETED]: projectPhotosDeletedProps,
   [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
+  [AnalyticsEvent.MODEL_GENERATION_REQUESTED]: modelGenerationRequestedProps,
+  [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

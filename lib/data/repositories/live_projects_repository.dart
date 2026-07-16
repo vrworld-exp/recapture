@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/live_project.dart';
+import '../../domain/entities/project_model.dart';
 import '../remote/api_client.dart';
 
 /// Friendly failure buckets for the staff Live-projects surface — the UI
@@ -56,6 +57,24 @@ abstract interface class LiveProjectsRepository {
   /// were deleted vs already missing. Throws [LiveProjectsException]
   /// (forbidden when the account is not ADMIN / notExportable / network / …).
   Future<PreviewDeleteResult> deletePhotos(String projectId, List<String> keys);
+
+  /// Requests a Meshy AI 3D model from the 3–4 selected [keys]. Returns the
+  /// QUEUED record to poll. [idempotencyKey] makes a double-tap resolve to the
+  /// first request instead of a second PAID generation — always pass one.
+  /// Throws [LiveProjectsException].
+  Future<ProjectModelView> createModel(
+    String projectId,
+    List<String> keys, {
+    required String idempotencyKey,
+  });
+
+  /// The project's generation history, newest first. Throws
+  /// [LiveProjectsException].
+  Future<List<ProjectModelView>> listModels(String projectId);
+
+  /// Marks [modelId] approved ("we're satisfied — skip manual creation").
+  /// Throws [LiveProjectsException].
+  Future<ProjectModelView> approveModel(String projectId, String modelId);
 }
 
 /// Outcome of a soft-delete: the keys that were moved out vs those already gone.
@@ -131,6 +150,63 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
         deleted: asStrings(data['deleted']),
         missing: asStrings(data['missing']),
       );
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<ProjectModelView> createModel(
+    String projectId,
+    List<String> keys, {
+    required String idempotencyKey,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/admin/projects/$projectId/model',
+        data: {'keys': keys},
+        // The server's replay guard: without this a retried/double-tapped
+        // request enqueues (and pays for) a second generation.
+        options: Options(headers: {'Idempotency-Key': idempotencyKey}),
+      );
+      final model = ProjectModelView.tryFromStaffMap(res.data?['model']);
+      if (model == null) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return model;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<List<ProjectModelView>> listModels(String projectId) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/admin/projects/$projectId/models',
+      );
+      final models = res.data?['models'];
+      return [
+        if (models is List)
+          for (final m in models)
+            if (ProjectModelView.tryFromStaffMap(m) case final model?) model,
+      ];
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<ProjectModelView> approveModel(String projectId, String modelId) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/admin/projects/$projectId/models/$modelId/approve',
+      );
+      final model = ProjectModelView.tryFromStaffMap(res.data?['model']);
+      if (model == null) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return model;
     } on DioException catch (e) {
       throw _translate(e);
     }

@@ -16,8 +16,9 @@ import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'package:recapture/domain/entities/preview_manifest.dart';
 import 'package:recapture/presentation/screens/projects/preview_gallery_screen.dart';
+import 'repo_fake_defaults.dart';
 
-class _FakeRepo implements LiveProjectsRepository {
+class _FakeRepo with FakeModelGenerationDefaults implements LiveProjectsRepository {
   Map<String, dynamic> exportResult = const {};
   LiveProjectsException? exportFail;
   int exportCalls = 0;
@@ -58,12 +59,21 @@ Map<String, dynamic> _manifest(List<String> keys, {String expiresAt = '2099-01-0
       ],
     };
 
-Widget _app(_FakeRepo repo, _RecordingDownloader dl, {required bool admin}) {
+Widget _app(
+  _FakeRepo repo,
+  _RecordingDownloader dl, {
+  required bool admin,
+  bool staff = true,
+}) {
   return ProviderScope(
     overrides: [
       liveProjectsRepositoryProvider.overrideWithValue(repo),
       previewDownloaderProvider.overrideWithValue(dl),
       isAdminProvider.overrideWithValue(admin),
+      // Required, not optional: the screen's Create Model action watches this,
+      // and the real provider chain reads the role from Hive — unopened in a
+      // widget test, so leaving it un-overridden throws before anything renders.
+      isStaffProvider.overrideWithValue(staff),
     ],
     child: MaterialApp(
       theme: AppTheme.dark,

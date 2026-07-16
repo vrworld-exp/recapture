@@ -19,8 +19,9 @@ import 'package:recapture/domain/entities/create_project_options.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
 import 'package:recapture/domain/upload/upload_failure.dart';
+import '../projects/repo_fake_defaults.dart';
 
-class _CountingProjectsRepository implements ProjectsRepository {
+class _CountingProjectsRepository with FakeProjectModelDefaults implements ProjectsRepository {
   int listCalls = 0;
 
   @override
