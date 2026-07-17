@@ -34,4 +34,15 @@ services:
         value: msxr-model-artifacts
       - key: CLOUDFRONT_BASE_URL
         sync: false
+      # This web service also runs the job loop in-process, so there is no
+      # separate worker service to deploy or pay for. Only valid while every
+      # processor is I/O-bound (the Meshy path is HTTP + sleep); when the
+      # capture pipeline does real CPU work, split it out and set this false.
+      - key: RUN_WORKER_IN_PROCESS
+        value: true
+      # Required BECAUSE of the flag above — the process running the loop is the
+      # one that calls Meshy, and it fails fast at boot without this. Set the
+      # value in the Render dashboard; it is a secret and must not live here.
+      - key: MESHY_API_KEY
+        sync: false
     autoDeploy: true
