@@ -46,3 +46,29 @@ export const adminDeletePhotosBodySchema = z
   .strict();
 
 export type AdminDeletePhotosBody = z.infer<typeof adminDeletePhotosBodySchema>;
+
+/**
+ * Body for POST /admin/projects/:id/model: the RELATIVE export-manifest keys of
+ * the 3–4 photos the staff user picked for Meshy generation.
+ *
+ * The 3–4 bound is asserted HERE only as a cheap shape check — the authority is
+ * projectModelsService (MIN/MAX_SELECTED_PHOTOS), which counts AFTER deduping,
+ * so `[a, a, a, b]` is correctly a 2-photo selection and rejected there rather
+ * than passing this length test. Per-key containment is likewise the service's
+ * job, against the resolved job prefix.
+ */
+export const adminCreateModelBodySchema = z
+  .object({
+    keys: z.array(z.string().min(1).max(1024)).min(3).max(4),
+  })
+  .strict();
+
+export type AdminCreateModelBody = z.infer<typeof adminCreateModelBodySchema>;
+
+/** `:id`/`:modelId` params for the model approve route. */
+export const adminModelIdParamsSchema = z
+  .object({
+    id: z.string().regex(OBJECT_ID_RE, 'Invalid project id'),
+    modelId: z.string().regex(OBJECT_ID_RE, 'Invalid model id'),
+  })
+  .strict();

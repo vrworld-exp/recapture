@@ -12,6 +12,8 @@ import {
   adminListProjectsQuerySchema,
   adminProjectIdParamsSchema,
   adminDeletePhotosBodySchema,
+  adminCreateModelBodySchema,
+  adminModelIdParamsSchema,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
@@ -20,6 +22,15 @@ import {
   buildProjectExport,
   softDeleteProjectPhotos,
 } from '@/services/adminProjectsService';
+import {
+  approveModel,
+  createMeshyModelRequest,
+  latestSucceededModel,
+  listProjectModels,
+  toProjectModelDto,
+  MAX_SELECTED_PHOTOS,
+  MIN_SELECTED_PHOTOS,
+} from '@/services/projectModelsService';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { hashIdentifier } from '@/utils/otp';
@@ -84,7 +95,8 @@ router.get(
 
 /**
  * GET /admin/projects/:id — one project (any owner) + a compact summary of its
- * exportable job. Missing and soft-deleted are an identical 404.
+ * exportable job + the latest SUCCEEDED model, if any. Missing and soft-deleted
+ * are an identical 404.
  */
 router.get(
   '/projects/:id',
@@ -109,7 +121,17 @@ router.get(
       return;
     }
 
-    res.status(200).json({ status: 'success', project: detail.project, job: detail.job });
+    // The latest SUCCEEDED generation, so the staff detail can link straight to
+    // the viewer. Full history stays behind GET /admin/projects/:id/models.
+    const latestModel = await latestSucceededModel(params.data.id);
+    const model = latestModel ? toProjectModelDto(latestModel) : null;
+
+    res.status(200).json({
+      status: 'success',
+      project: detail.project,
+      job: detail.job,
+      model,
+    });
   })
 );
 
@@ -268,6 +290,189 @@ router.delete(
       deleted: result.deleted,
       missing: result.missing,
     });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/model — request a Meshy AI 3D model from 3–4 photos
+ * the staff user picked in the Preview gallery.
+ *
+ * MODEL_ARTIST+ (the router-level gate): generating a model is the artist's job,
+ * unlike the ADMIN-only destructive photo delete above.
+ *
+ * Each call SPENDS CREDITS, so it is guarded three ways: a per-user rate window,
+ * an `Idempotency-Key` replay (a double-tap resolves to the first record instead
+ * of a second paid generation), and — in the worker — a persisted meshyTaskId.
+ * The request only ENQUEUES: Meshy takes minutes, and the API must not block on
+ * it. Analytics carries hashed ids + a count; never a key or a presigned URL.
+ */
+router.post(
+  '/projects/:id/model',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = adminCreateModelBodySchema.safeParse(req.body);
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      const field = issue?.path.join('.') || 'body';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `meshy-create:${userId}`,
+      env.MESHY_CREATE_MAX_PER_WINDOW,
+      env.MESHY_CREATE_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many model generation requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const idempotencyKey = req.get('Idempotency-Key');
+    const result = await createMeshyModelRequest({
+      projectId: params.data.id,
+      keys: body.data.keys,
+      actor: { userId, role: req.user!.role ?? 'MODEL_ARTIST' },
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_EXPORTABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'This project has no finalized upload to generate a model from.',
+      });
+      return;
+    }
+    if (result.outcome === 'INVALID_COUNT') {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: `Select between ${MIN_SELECTED_PHOTOS} and ${MAX_SELECTED_PHOTOS} distinct photos.`,
+        fields: { keys: `must be ${MIN_SELECTED_PHOTOS}–${MAX_SELECTED_PHOTOS} distinct keys` },
+      });
+      return;
+    }
+    if (result.outcome === 'INVALID_KEY') {
+      // Never echo the offending key — it is caller-controlled and would let an
+      // attacker probe the message. Same stance as the soft-delete route's 400.
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: "Each key must live under the job's file set.",
+        fields: { keys: "must be an export-manifest key (no '..' or absolute path)" },
+      });
+      return;
+    }
+
+    const model = toProjectModelDto(result.model);
+    track(AnalyticsEvent.MODEL_GENERATION_REQUESTED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(model.projectId),
+      job_id_hash: hashIdentifier(model.jobId),
+      model_id_hash: hashIdentifier(model.id),
+      source: model.source,
+      key_count: model.selectedKeys.length,
+      was_replay: result.outcome === 'REPLAYED',
+    });
+
+    // A replay is not a new creation — 200 distinguishes it from the 201 that
+    // actually enqueued a generation.
+    res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({ status: 'success', model });
+  })
+);
+
+/**
+ * GET /admin/projects/:id/models — the project's full generation history,
+ * newest first. History (not just the latest) is the point: an artist compares
+ * attempts from different photo selections and approves the best one.
+ */
+router.get(
+  '/projects/:id/models',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const models = await listProjectModels(params.data.id);
+    res.status(200).json({ status: 'success', models: models.map(toProjectModelDto) });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/models/:modelId/approve — the "we're satisfied with
+ * the Meshy result, no manual creation needed" gate. SUCCEEDED records only.
+ */
+router.post(
+  '/projects/:id/models/:modelId/approve',
+  asyncHandler(async (req, res) => {
+    const params = adminModelIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const result = await approveModel(params.data.id, params.data.modelId, {
+      userId,
+      role: req.user!.role ?? 'MODEL_ARTIST',
+    });
+
+    if (result.outcome === 'MODEL_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Model not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_APPROVABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_APPROVABLE',
+        message: 'Only a successfully generated model can be approved.',
+      });
+      return;
+    }
+
+    const model = toProjectModelDto(result.model);
+    track(AnalyticsEvent.MODEL_APPROVED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(model.projectId),
+      model_id_hash: hashIdentifier(model.id),
+      source: model.source,
+    });
+
+    res.status(200).json({ status: 'success', model });
   })
 );
 

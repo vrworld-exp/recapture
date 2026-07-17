@@ -5,6 +5,20 @@
 // implemented in P6 and P7.
 
 /**
+ * jobType discriminators — the worker's processor registry dispatches on these,
+ * and any query that means "the capture job" must filter by CAPTURE_PROCESSING
+ * (a project can now own jobs of more than one type).
+ *
+ * They live here, beside the Job document's other field vocabularies, rather
+ * than in src/worker/: services (which must not import from the worker) need
+ * them too. src/worker/workerTypes.ts re-exports DEFAULT_JOB_TYPE for the
+ * worker's own call sites.
+ */
+export const CAPTURE_PROCESSING_JOB_TYPE = 'CAPTURE_PROCESSING';
+/** Staff-triggered Meshy AI generation — carries `payload.modelId`, no upload. */
+export const MESHY_MODEL_GENERATION_JOB_TYPE = 'MESHY_MODEL_GENERATION';
+
+/**
  * Job processing lifecycle states.
  * Mirrors the state machine described in the ReCapture PRD, plus the
  * queue-internal CLAIMED state the background worker uses between winning the

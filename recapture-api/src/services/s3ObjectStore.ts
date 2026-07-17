@@ -10,6 +10,7 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { s3Client } from '@/config/s3';
@@ -152,6 +153,22 @@ export async function getObjectText(bucket: string, key: string): Promise<Fetche
     if (isNotFound(err)) return { outcome: 'absent' };
     throw err;
   }
+}
+
+/**
+ * Writes [body] to (bucket, key), overwriting any existing object. S3 PutObject
+ * is a full replace, so a re-run with the same deterministic key is idempotent —
+ * which is exactly what makes a retried/resumed worker stage safe to repeat.
+ */
+export async function putObjectBytes(
+  bucket: string,
+  key: string,
+  body: Uint8Array,
+  contentType: string
+): Promise<void> {
+  await s3Client.send(
+    new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType })
+  );
 }
 
 /**
