@@ -331,7 +331,7 @@ void main() {
             theme: AppTheme.dark,
             home: ModelViewerScreen(
               model: model,
-              renderBuilder: (_, glbUrl) => Text('rendering $glbUrl'),
+              renderBuilder: (_, m) => Text('rendering ${m.glbUrl}'),
             ),
           ),
         );

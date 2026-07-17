@@ -80,6 +80,7 @@ class ProjectModelView {
     required this.source,
     required this.status,
     this.glbUrl,
+    this.usdzUrl,
     this.previewUrl,
     this.approved = false,
     this.selectedKeys = const [],
@@ -93,6 +94,10 @@ class ProjectModelView {
 
   /// Our CloudFront GLB URL — non-null exactly when [status] is succeeded.
   final String? glbUrl;
+
+  /// Our CloudFront USDZ URL — iOS AR Quick Look's format. An AR enhancement
+  /// only: Meshy doesn't always produce one, so it never gates [isViewable].
+  final String? usdzUrl;
   final String? previewUrl;
 
   /// Whether staff signed off on this model ("no manual creation needed").
@@ -124,6 +129,7 @@ class ProjectModelView {
       source: ModelSource.parse(raw['source']),
       status: ModelStatus.parse(raw['status']),
       glbUrl: artifacts is Map ? artifacts['glb'] as String? : null,
+      usdzUrl: artifacts is Map ? artifacts['usdz'] as String? : null,
       previewUrl: artifacts is Map ? artifacts['preview'] as String? : null,
       approved: raw['approved'] != null,
       selectedKeys: [
@@ -150,6 +156,7 @@ class ProjectModelView {
       // The owner endpoint only ever returns a SUCCEEDED model.
       status: ModelStatus.succeeded,
       glbUrl: glb,
+      usdzUrl: raw['usdzUrl'] as String?,
       previewUrl: raw['previewUrl'] as String?,
       approved: raw['approved'] == true,
       createdAt: DateTime.tryParse((raw['createdAt'] ?? '').toString()),

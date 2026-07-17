@@ -12,7 +12,6 @@
 // same rule as the Preview gallery / 9F.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:model_viewer_plus/model_viewer_plus.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -20,12 +19,15 @@ import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/model_generation_notifier.dart';
 import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
+import 'model_render_view.dart';
 
-/// Builds the widget that actually renders [glbUrl]. Injectable so tests can
-/// exercise the screen's chrome (badge, approve bar) without a webview
-/// platform — [ModelViewer] drives a real WebView under the hood, which has no
-/// implementation registered in a widget test.
-typedef ModelRenderBuilder = Widget Function(BuildContext context, String glbUrl);
+/// Builds the widget that actually renders [model] (its GLB, plus the USDZ
+/// for iOS AR when present). Injectable so tests can exercise the screen's
+/// chrome (badge, approve bar) without a webview platform — the real renderer
+/// drives a WebView under the hood, which has no implementation registered in
+/// a widget test.
+typedef ModelRenderBuilder = Widget Function(
+    BuildContext context, ProjectModelView model);
 
 class ModelViewerScreen extends StatelessWidget {
   const ModelViewerScreen({
@@ -43,20 +45,13 @@ class ModelViewerScreen extends StatelessWidget {
   /// (the owner's viewer).
   final Future<void> Function()? onApprove;
 
-  /// How the GLB is rendered. Defaults to the real orbit/AR viewer.
+  /// How the model is rendered. Defaults to the real orbit/AR viewer
+  /// ([ModelRenderView]: load/error states + the "View in your space" CTA).
   final ModelRenderBuilder renderBuilder;
 
-  static Widget defaultRenderBuilder(BuildContext context, String glbUrl) {
-    return ModelViewer(
-      key: const ValueKey('model_viewer'),
-      src: glbUrl,
-      alt: 'A 3D model of the captured object',
-      ar: true,
-      autoRotate: true,
-      cameraControls: true,
-      disableZoom: false,
-      backgroundColor: AppColors.bgPrimary,
-    );
+  static Widget defaultRenderBuilder(
+      BuildContext context, ProjectModelView model) {
+    return ModelRenderView(model: model);
   }
 
   @override
@@ -79,7 +74,7 @@ class ModelViewerScreen extends StatelessWidget {
                 Expanded(
                   child: Stack(
                     children: [
-                      Positioned.fill(child: renderBuilder(context, glbUrl)),
+                      Positioned.fill(child: renderBuilder(context, model)),
                       if (model.source.badgeLabel case final label?)
                         Positioned(
                           left: AppSpacing.lg,

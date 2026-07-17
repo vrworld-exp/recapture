@@ -86,7 +86,7 @@ GoRouter _router({void Function(String)? seen}) =>
             return ModelViewerRoute(
               projectId: state.pathParameters['id'] ?? '',
               modelId: state.pathParameters['modelId'] ?? '',
-              renderBuilder: (_, glbUrl) => Text('rendering $glbUrl'),
+              renderBuilder: (_, m) => Text('rendering ${m.glbUrl}'),
             );
           },
         ),
@@ -280,7 +280,7 @@ void main() {
                 builder: (_, state) => ModelViewerRoute(
                   projectId: state.pathParameters['id'] ?? '',
                   modelId: state.pathParameters['modelId'] ?? '',
-                  renderBuilder: (_, glbUrl) => Text('rendering $glbUrl'),
+                  renderBuilder: (_, m) => Text('rendering ${m.glbUrl}'),
                 ),
               ),
             ],
@@ -313,7 +313,7 @@ void main() {
                 builder: (_, state) => ModelViewerRoute(
                   projectId: state.pathParameters['id'] ?? '',
                   modelId: state.pathParameters['modelId'] ?? '',
-                  renderBuilder: (_, glbUrl) => Text('rendering $glbUrl'),
+                  renderBuilder: (_, m) => Text('rendering ${m.glbUrl}'),
                 ),
               ),
             ],

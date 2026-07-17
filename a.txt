@@ -519,6 +519,21 @@ Client (widget + unit):
 
 
 
+///////////// New problems ------------->>>
+
+
+1. Add ar btn that used to show model in ar view, user able to see model in ar view.
+2. While getting 3d model on screen there is not loading animation that tell wait we arr preparing your model.
+3. While creating we jsut getting we are creating he model, how ever i want the the loang animation or ui acc. to the process happing while creating model. So plz update this so Admin able to see that what is going on in backend.
+
+
+
+
+
+
+
+
+
 
 
 
