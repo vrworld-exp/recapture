@@ -18,6 +18,8 @@ import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
+import '../../presentation/screens/projects/model_history_screen.dart';
+import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
@@ -49,6 +51,13 @@ abstract final class AppRoutes {
 
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
+
+  /// Staff-only per-project 3D-model generation history. `:id` = the project id.
+  static const modelHistory = '/admin/projects/:id/models';
+
+  /// Staff-only viewer for ONE generated model, resolved by `:modelId` out of
+  /// the project's history — the model's only persistent entry point.
+  static const modelViewer = '/admin/projects/:id/models/:modelId';
   static const preCapture = '/capture/pre';
   static const permissions = '/capture/permissions';
   static const levelAIntro = '/capture/level-a/intro';
@@ -80,6 +89,8 @@ abstract final class AppRouteNames {
   static const projects = 'projects';
   static const createProject = 'createProject';
   static const previewGallery = 'previewGallery';
+  static const modelHistory = 'modelHistory';
+  static const modelViewer = 'modelViewer';
   static const preCapture = 'preCapture';
   static const permissions = 'permissions';
   static const levelAIntro = 'levelAIntro';
@@ -175,6 +186,32 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (context, state) => FlowBackScope(
           child: PreviewGalleryScreen(
             projectId: state.pathParameters['id'] ?? '',
+          ),
+        ),
+      ),
+      // Staff-only model history + viewer, registered like the Preview gallery
+      // above (pushed, FlowBackScope, id from the path). The viewer is nested
+      // under the history so `:modelId` reads as a record OF that history, and
+      // a back from the viewer lands on it.
+      GoRoute(
+        path: AppRoutes.modelHistory,
+        name: AppRouteNames.modelHistory,
+        builder: (context, state) => FlowBackScope(
+          child: ModelHistoryScreen(
+            projectId: state.pathParameters['id'] ?? '',
+          ),
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.modelViewer,
+        name: AppRouteNames.modelViewer,
+        // Resolves the record by id from the generation history, so a cold
+        // deep-link works exactly like a push from the history (no `extra` to
+        // be missing) and a stale id shows the unavailable state, not a blank.
+        builder: (context, state) => FlowBackScope(
+          child: ModelViewerRoute(
+            projectId: state.pathParameters['id'] ?? '',
+            modelId: state.pathParameters['modelId'] ?? '',
           ),
         ),
       ),

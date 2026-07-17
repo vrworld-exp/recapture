@@ -55,6 +55,24 @@ enum ModelStatus {
   bool get isPending => this == ModelStatus.queued || this == ModelStatus.processing;
 }
 
+/// Why a generation failed. Mirrors ProjectModelDto's `error`.
+///
+/// [message] is SAFE to display: the backend contract is that meshyClient never
+/// interpolates a response body or a presigned URL into one. Staff payload only.
+class ModelError {
+  const ModelError({required this.code, required this.message});
+
+  final String code;
+  final String message;
+
+  static ModelError? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final message = (raw['message'] ?? '').toString();
+    if (message.isEmpty) return null;
+    return ModelError(code: (raw['code'] ?? '').toString(), message: message);
+  }
+}
+
 /// One generation attempt.
 class ProjectModelView {
   const ProjectModelView({
@@ -65,6 +83,8 @@ class ProjectModelView {
     this.previewUrl,
     this.approved = false,
     this.selectedKeys = const [],
+    this.createdAt,
+    this.error,
   });
 
   final String id;
@@ -80,6 +100,15 @@ class ProjectModelView {
 
   /// The photos this attempt used. Staff payload only — empty for an owner.
   final List<String> selectedKeys;
+
+  /// When the attempt was requested — how the history labels its rows (an index
+  /// would renumber itself as new generations land at the head of the list).
+  /// Null when the timestamp is absent or malformed.
+  final DateTime? createdAt;
+
+  /// The failure, for a FAILED record. Staff payload only — the owner endpoint
+  /// never returns a failed attempt, so [tryFromOwnerMap] never parses this.
+  final ModelError? error;
 
   bool get isViewable => status == ModelStatus.succeeded && glbUrl != null;
 
@@ -101,6 +130,10 @@ class ProjectModelView {
         if (raw['selectedKeys'] case final List keys)
           for (final k in keys) k.toString(),
       ],
+      // A malformed timestamp yields null rather than throwing — a history row
+      // that can't be labelled is still worth showing.
+      createdAt: DateTime.tryParse((raw['createdAt'] ?? '').toString()),
+      error: ModelError.tryParse(raw['error']),
     );
   }
 
@@ -119,6 +152,10 @@ class ProjectModelView {
       glbUrl: glb,
       previewUrl: raw['previewUrl'] as String?,
       approved: raw['approved'] == true,
+      createdAt: DateTime.tryParse((raw['createdAt'] ?? '').toString()),
+      // NO `error` here, deliberately: the owner endpoint only ever returns a
+      // SUCCEEDED model, so parsing one would only invite leaking a failure
+      // (and the staff copy that goes with it) onto the owner's surface.
     );
   }
 }

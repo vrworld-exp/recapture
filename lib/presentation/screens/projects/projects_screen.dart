@@ -189,6 +189,27 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     );
   }
 
+  /// Staff-only per-project model history — the persistent way back to a
+  /// generated model once you've left the screen that created it. Pushed, like
+  /// Preview, and likewise unclaimed: pure navigation, and the history screen
+  /// owns its own load/empty/error states.
+  ///
+  /// Shown only for a project with a VIEWABLE model (`modelCount > 0` on the
+  /// Project DTO — one aggregation per list page server-side, never a request
+  /// per card). The count is SUCCEEDED-only by backend contract, so a project
+  /// whose generations all FAILED shows no button; its failures stay visible on
+  /// the generation screen, not here.
+  ///
+  /// The button carries no NUMBER on purpose — the count exists to decide
+  /// whether to render it, and the very next tap shows the full history anyway.
+  void _onModels(Project p) {
+    _logAction('models', p);
+    context.pushNamed(
+      AppRouteNames.modelHistory,
+      pathParameters: {'id': p.id},
+    );
+  }
+
   /// A project has a finalized upload worth previewing (mirrors the backend's
   /// exportable set: PROCESSING/COMPLETED).
   static bool _isExportable(Project p) =>
@@ -366,6 +387,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 onMore: _onMore,
                 onPreview:
                     isStaff && _isExportable(project) ? _onPreview : null,
+                // Also requires a VIEWABLE model: the history has nothing to
+                // show otherwise, and a button that opens an empty screen is
+                // worse than no button. Failed-only projects therefore show no
+                // Models button (see ProjectListItem.modelCount).
+                onModels: isStaff && project.hasViewableModels ? _onModels : null,
               );
             },
           ),

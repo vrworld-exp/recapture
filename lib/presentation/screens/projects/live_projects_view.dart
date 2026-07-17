@@ -175,6 +175,14 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
                   AppRouteNames.previewGallery,
                   pathParameters: {'id': project.id},
                 ),
+                // Null (button hidden) unless the project has a viewable model.
+                // No isStaff check needed: this whole view is already staff-only.
+                onModels: project.hasViewableModels
+                    ? () => context.pushNamed(
+                          AppRouteNames.modelHistory,
+                          pathParameters: {'id': project.id},
+                        )
+                    : null,
               );
             },
           ),
@@ -204,12 +212,18 @@ class _LiveProjectCard extends StatelessWidget {
     required this.isExporting,
     required this.onExport,
     required this.onPreview,
+    this.onModels,
   });
 
   final LiveProject project;
   final bool isExporting;
   final VoidCallback onExport;
   final VoidCallback onPreview;
+
+  /// OPTIONAL "Models" action — the button renders ONLY when this is non-null,
+  /// mirroring ProjectCard.onPreview. The caller passes it only for a project
+  /// with a VIEWABLE model, so the button can never open an empty history.
+  final VoidCallback? onModels;
 
   bool get _exportable =>
       project.status == ProjectStatus.processing ||
@@ -279,6 +293,21 @@ class _LiveProjectCard extends StatelessWidget {
                 ),
               ],
             ),
+            // Own row rather than a third Expanded slot: three labelled+icon
+            // buttons across a phone-width card ellipsize. Rendered only when
+            // the project HAS a viewable model, so the row is rare and the
+            // common card keeps its two-button shape.
+            if (onModels != null) ...[
+              const SizedBox(height: AppSpacing.sm),
+              SizedBox(
+                width: double.infinity,
+                child: AppButton.secondary(
+                  label: 'Models',
+                  icon: Icons.view_in_ar_outlined,
+                  onPressed: onModels,
+                ),
+              ),
+            ],
           ],
         ],
       ),

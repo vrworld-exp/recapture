@@ -42,6 +42,21 @@ class PreviewGalleryScreen extends ConsumerStatefulWidget {
 const int kMinModelPhotos = 3;
 const int kMaxModelPhotos = 4;
 
+/// Maps any staff-surface failure to friendly, mapped-only copy (never a raw
+/// code/URL) — same categories as the Live tab's _showFailure. Top-level so the
+/// model history screen shares this one definition rather than paraphrasing it.
+String failureCopy(Object error) => switch (error) {
+      LiveProjectsException(failure: LiveProjectsFailure.notExportable) =>
+        'This project has no finished upload to preview yet.',
+      LiveProjectsException(failure: LiveProjectsFailure.rateLimited) =>
+        'Preview limit reached — try again later.',
+      LiveProjectsException(failure: LiveProjectsFailure.forbidden) =>
+        'Your account no longer has staff access.',
+      LiveProjectsException(failure: LiveProjectsFailure.network) =>
+        'You’re offline — check your connection and try again.',
+      _ => 'Something went wrong. Please try again.',
+    };
+
 class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
   /// Per-key download in-flight guard (mirrors the Live tab's _exportInFlight).
   final Set<String> _downloadInFlight = <String>{};
@@ -115,20 +130,6 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
     final sorted = keys.toList()..sort();
     return '${widget.projectId}:${sorted.join('|')}'.hashCode.toRadixString(16);
   }
-
-  /// Maps any Preview failure to friendly, mapped-only copy (never a raw
-  /// code/URL) — same categories as the Live tab's _showFailure.
-  static String failureCopy(Object error) => switch (error) {
-        LiveProjectsException(failure: LiveProjectsFailure.notExportable) =>
-          'This project has no finished upload to preview yet.',
-        LiveProjectsException(failure: LiveProjectsFailure.rateLimited) =>
-          'Preview limit reached — try again later.',
-        LiveProjectsException(failure: LiveProjectsFailure.forbidden) =>
-          'Your account no longer has staff access.',
-        LiveProjectsException(failure: LiveProjectsFailure.network) =>
-          'You’re offline — check your connection and try again.',
-        _ => 'Something went wrong. Please try again.',
-      };
 
   void _snack(String message) {
     if (!mounted) return;

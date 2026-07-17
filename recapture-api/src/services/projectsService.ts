@@ -7,6 +7,7 @@ import {
   type CaptureMode,
   type ProjectStatus,
 } from '@/models/Project';
+import { ProjectModel } from '@/models/ProjectModel';
 import { encodeCursor, type ProjectCursor } from '@/utils/cursor';
 import { NotFoundError } from '@/utils/errors';
 import type { CreateProjectInput } from '@/validation/projectSchemas';
@@ -27,6 +28,18 @@ export interface ProjectListItem {
   /** ISO instant of the last status transition; null before the first one. */
   statusUpdatedAt: string | null;
   stats: ProjectStatsDto;
+  /**
+   * How many VIEWABLE (SUCCEEDED) 3D models this project has — drives the
+   * staff-only "Models" button, which must not appear on a project with nothing
+   * to open.
+   *
+   * SUCCEEDED-only on purpose, and that is what makes it safe to carry on the
+   * shared/owner DTO: it reveals nothing an owner cannot already fetch via
+   * `GET /projects/:id`'s `model`. A count of ALL attempts would leak failed
+   * generations and internal curation activity, which `OwnerModelDto`
+   * deliberately hides.
+   */
+  modelCount: number;
   updatedAt: string;
   createdAt: string;
 }
@@ -75,7 +88,13 @@ export async function listProjects(
   const last = page[page.length - 1];
   const nextCursor = hasMore && last ? encodeCursor(last.updatedAt, last.id as string) : null;
 
-  return { items: page.map(toListItem), nextCursor };
+  // One aggregation for the page, not one per row.
+  const counts = await countSucceededModelsByProject(page.map((p) => p._id as Types.ObjectId));
+
+  return {
+    items: page.map((p) => toListItem(p, counts.get(p.id as string) ?? 0)),
+    nextCursor,
+  };
 }
 
 // Client sends lowercase apiValues; the model stores UPPERCASE enums. Explicit
@@ -227,7 +246,13 @@ export async function renameProject(
 
   // No-op: identical name → don't touch updatedAt.
   if (project.name === name) {
-    return { outcome: 'RENAMED', project: toListItem(project), wasChanged: false };
+    return {
+      outcome: 'RENAMED',
+      // A real count, not 0 — the client replaces its cached item with this DTO,
+      // and a zero here would make the staff Models button vanish on rename.
+      project: toListItem(project, await countSucceededModelsFor(project._id as Types.ObjectId)),
+      wasChanged: false,
+    };
   }
 
   // Re-scope the update on owner + not-deleted so a soft-delete that landed
@@ -243,7 +268,11 @@ export async function renameProject(
     return { outcome: 'NOT_FOUND' };
   }
 
-  return { outcome: 'RENAMED', project: toListItem(updated), wasChanged: true };
+  return {
+    outcome: 'RENAMED',
+    project: toListItem(updated, await countSucceededModelsFor(updated._id as Types.ObjectId)),
+    wasChanged: true,
+  };
 }
 
 /**
@@ -262,7 +291,38 @@ export async function getProject(
     deletedAt: null,
   }).exec();
 
-  return project ? toListItem(project) : null;
+  return project
+    ? toListItem(project, await countSucceededModelsFor(project._id as Types.ObjectId))
+    : null;
+}
+
+/**
+ * Viewable-model counts for a PAGE of projects, as `projectId → count`.
+ *
+ * One aggregation for the whole page — never one query per project, which would
+ * make the Hub list N+1 as generations spread across projects. Ids absent from
+ * the result have no SUCCEEDED model; callers default them to 0.
+ *
+ * Queries `ProjectModel` directly rather than calling projectModelsService:
+ * that service imports adminProjectsService, which imports THIS file, so going
+ * through it would close an import cycle.
+ */
+export async function countSucceededModelsByProject(
+  projectIds: Types.ObjectId[]
+): Promise<Map<string, number>> {
+  if (projectIds.length === 0) return new Map();
+
+  const rows = await ProjectModel.aggregate<{ _id: Types.ObjectId; count: number }>([
+    { $match: { projectId: { $in: projectIds }, status: 'SUCCEEDED' } },
+    { $group: { _id: '$projectId', count: { $sum: 1 } } },
+  ]).exec();
+
+  return new Map(rows.map((r) => [r._id.toHexString(), r.count]));
+}
+
+/** Viewable-model count for ONE project — the single-document paths. */
+export async function countSucceededModelsFor(projectId: Types.ObjectId): Promise<number> {
+  return ProjectModel.countDocuments({ projectId, status: 'SUCCEEDED' }).exec();
 }
 
 /**
@@ -270,8 +330,13 @@ export async function getProject(
  * /admin list all serialize through here so the shapes can never drift
  * (AGENTS.md: one Project DTO by contract). Exported for the admin service,
  * which layers `ownerId` on top.
+ *
+ * `modelCount` is a PARAMETER rather than something read off `p`: it lives in
+ * its own collection, and this mapper stays synchronous and pure. Callers that
+ * genuinely cannot have models yet (create) pass 0; every other caller must
+ * supply a real count, or the staff Models button silently disappears.
  */
-export function toProjectListItem(p: IProject): ProjectListItem {
+export function toProjectListItem(p: IProject, modelCount = 0): ProjectListItem {
   return {
     id: p.id as string,
     name: p.name,
@@ -282,6 +347,7 @@ export function toProjectListItem(p: IProject): ProjectListItem {
       warnings: p.stats?.warnings ?? 0,
       lastCaptureAt: p.stats?.lastCaptureAt ? p.stats.lastCaptureAt.toISOString() : null,
     },
+    modelCount,
     updatedAt: p.updatedAt.toISOString(),
     createdAt: p.createdAt.toISOString(),
   };
