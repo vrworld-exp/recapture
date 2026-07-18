@@ -55,42 +55,52 @@ void main() {
       expect(find.byKey(const ValueKey('model_loading')), findsNothing);
     });
 
-    testWidgets('AR CTA appears only when the page reports canActivateAR',
+    testWidgets('the AR CTA is ALWAYS visible once the model is ready — '
+        'with canActivateAR it launches silently, without it the tap explains',
         (tester) async {
+      // Supported: no guidance snackbar on tap.
       await tester.pumpWidget(app());
       key.currentState!.handleEvent('loaded:ar');
       await tester.pump();
 
       expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
-      expect(find.text('View in your space'), findsOneWidget);
+      expect(find.text('View in AR'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+      await tester.pump();
+      expect(find.textContaining('AR isn’t available'), findsNothing);
     });
 
-    testWidgets('no canActivateAR → no CTA, the orbit viewer is the floor',
-        (tester) async {
+    testWidgets('no canActivateAR → the CTA still shows, and the tap gives '
+        'guidance instead of a silent dead button', (tester) async {
       await tester.pumpWidget(app());
       key.currentState!.handleEvent('loaded');
       await tester.pump();
 
-      expect(find.byKey(const ValueKey('model_ar_cta')), findsNothing);
+      expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+      await tester.pump();
+      expect(find.textContaining('AR isn’t available'), findsOneWidget);
     });
 
-    testWidgets('a LATE ar signal (after loaded) still surfaces the CTA — '
-        'canActivateAR resolving after the load event must not lose the button',
+    testWidgets('a LATE ar signal (after loaded) upgrades the CTA — '
+        'canActivateAR resolving after the load event must not lose AR',
         (tester) async {
       await tester.pumpWidget(app());
       key.currentState!.handleEvent('loaded');
       await tester.pump();
-      expect(find.byKey(const ValueKey('model_ar_cta')), findsNothing);
 
       key.currentState!.handleEvent('ar');
       await tester.pump();
 
-      expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
+      // Now a real launch: no guidance snackbar.
+      await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+      await tester.pump();
+      expect(find.textContaining('AR isn’t available'), findsNothing);
     });
 
     testWidgets('an EARLY ar signal (before loaded) is kept: no CTA while '
-        'loading, CTA once loaded — and `loaded` must not reset it',
-        (tester) async {
+        'loading, launch-capable CTA once loaded', (tester) async {
       await tester.pumpWidget(app());
       key.currentState!.handleEvent('ar');
       await tester.pump();
@@ -104,7 +114,9 @@ void main() {
       await tester.pump();
 
       expect(find.byKey(const ValueKey('model_loading')), findsNothing);
-      expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+      await tester.pump();
+      expect(find.textContaining('AR isn’t available'), findsNothing);
     });
 
     testWidgets('an ar signal does not defuse the loading fallback timer',
@@ -117,14 +129,18 @@ void main() {
       await tester.pump(ModelRenderViewState.loadingFallback);
 
       // The fallback still uncovers the viewer, and the earlier AR signal
-      // survives into the ready phase.
+      // survives into the ready phase (tap launches, no guidance).
       expect(find.byKey(const ValueKey('model_loading')), findsNothing);
-      expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+      await tester.pump();
+      expect(find.textContaining('AR isn’t available'), findsNothing);
     });
 
     testWidgets('retry resets AR availability for the fresh attempt',
         (tester) async {
       await tester.pumpWidget(app());
+      key.currentState!.handleEvent('loaded:ar');
+      await tester.pump();
       key.currentState!.handleEvent('error');
       await tester.pump();
 
@@ -133,8 +149,11 @@ void main() {
       key.currentState!.handleEvent('loaded');
       await tester.pump();
 
-      // The new attempt reported plain `loaded` — no stale CTA.
-      expect(find.byKey(const ValueKey('model_ar_cta')), findsNothing);
+      // The new attempt reported plain `loaded` — the stale availability is
+      // gone, so the tap explains rather than firing a broken activateAR.
+      await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+      await tester.pump();
+      expect(find.textContaining('AR isn’t available'), findsOneWidget);
     });
 
     testWidgets('no load signal → the fallback uncovers the viewer instead of '

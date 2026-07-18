@@ -6,10 +6,13 @@
 // lifecycle the webview would otherwise swallow: a loading skin until the
 // model's `load` event, mapped copy + retry on `error` (the URL and raw error
 // NEVER reach the screen — same rule as the Preview gallery / 9F), and a
-// "View in your space" CTA gated on the element's own `canActivateAR` signal
-// (the exact signal model-viewer uses for its built-in AR button, so the CTA
-// can never be a dead button — no USDZ on iOS or an unsupported device report
-// false and the orbit viewer stays as the graceful floor).
+// "View in AR" CTA that is ALWAYS visible once the model is ready (product
+// call 2026-07-18: an invisible AR entry point read as "there is no AR").
+// What the element's own `canActivateAR` signal gates now is the BEHAVIOR,
+// not the visibility: supported devices launch AR (the exact signal
+// model-viewer's built-in AR button uses), unsupported ones (no USDZ on iOS,
+// no ARCore, a desktop browser) get one line of mapped guidance instead of a
+// silent dead tap.
 //
 // AR scope is Scene Viewer (Android intent) + Quick Look (iOS `iosSrc`), both
 // driven entirely by model_viewer_plus — no native AR plugin.
@@ -21,9 +24,9 @@
 // (model_viewer_load_probe.dart) that watches the element's own `loaded` and
 // `canActivateAR` properties — which is what lets the loading skin AND the AR
 // CTA work on web too (mobile browsers: Scene Viewer / Quick Look; desktop
-// reports no AR and the CTA stays hidden). The error body remains mobile-only
-// (no error signal on web), and a fallback timer guarantees the skin can
-// never cover a working viewer forever.
+// reports no AR and the CTA falls back to guidance). The error body remains
+// mobile-only (no error signal on web), and a fallback timer guarantees the
+// skin can never cover a working viewer forever.
 //
 // AR TIMING: `canActivateAR` is resolved on model-viewer's own schedule,
 // independent of the model fetch — sampling it once at the `load` event can
@@ -222,6 +225,18 @@ class ModelRenderViewState extends State<ModelRenderView> {
     _runJs?.call("document.querySelector('model-viewer').activateAR();");
   }
 
+  /// Tap on the AR CTA while the page reports no AR support: one line of
+  /// guidance instead of a silent nothing. Mapped copy only — the reason
+  /// (no ARCore, no USDZ, desktop) is never surfaced raw.
+  void _explainArUnavailable() {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(kIsWeb
+          ? 'AR isn’t available in this browser — open this model on your '
+              'phone to see it in your space.'
+          : 'AR isn’t available on this device.'),
+    ));
+  }
+
   Widget _viewer(String glbUrl) {
     if (widget.viewerOverride case final override?) return override;
     final usdzUrl = widget.model.usdzUrl;
@@ -312,30 +327,46 @@ class ModelRenderViewState extends State<ModelRenderView> {
               ),
             ),
           ),
-        if (_phase == _RenderPhase.ready && _arAvailable)
+        if (_phase == _RenderPhase.ready)
           Positioned(
             left: 0,
             right: 0,
             bottom: AppSpacing.xl,
-            child: Center(child: _ArCta(onPressed: _activateAr)),
+            child: Center(
+              child: _ArCta(
+                available: _arAvailable,
+                onPressed:
+                    _arAvailable ? _activateAr : _explainArUnavailable,
+              ),
+            ),
           ),
       ],
     );
   }
 }
 
-/// The "View in your space" affordance. Only ever built when the page
-/// reported `canActivateAR`, so it cannot render as a dead button.
+/// The "View in AR" affordance — always shown once the model is ready so the
+/// AR entry point is discoverable everywhere. [available] mirrors the page's
+/// `canActivateAR`: true renders the full-strength CTA and launches AR;
+/// false renders it muted and the tap explains instead of doing nothing.
 class _ArCta extends StatelessWidget {
-  const _ArCta({required this.onPressed});
+  const _ArCta({required this.available, required this.onPressed});
 
+  final bool available;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
+    // AR-ready gets the app's primary-CTA treatment (mirage red) so the
+    // button reads over the near-black viewer; unavailable stays a muted
+    // surface pill — present and explaining, but not shouting.
+    final foreground =
+        available ? AppColors.textPrimary : AppColors.textMuted;
     return Material(
       key: const ValueKey('model_ar_cta'),
-      color: AppColors.surface2.withValues(alpha: 0.92),
+      color: available
+          ? AppColors.mirageRed
+          : AppColors.surface2.withValues(alpha: 0.92),
       borderRadius: BorderRadius.circular(AppRadius.lg),
       child: InkWell(
         onTap: onPressed,
@@ -348,15 +379,14 @@ class _ArCta extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.view_in_ar,
-                  size: 18, color: AppColors.textPrimary),
+              Icon(Icons.view_in_ar, size: 18, color: foreground),
               const SizedBox(width: AppSpacing.sm),
               Text(
-                'View in your space',
+                'View in AR',
                 style: Theme.of(context)
                     .textTheme
                     .bodyMedium
-                    ?.copyWith(color: AppColors.textPrimary),
+                    ?.copyWith(color: foreground),
               ),
             ],
           ),
