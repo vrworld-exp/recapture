@@ -11,6 +11,8 @@ import { Types, type FilterQuery } from 'mongoose';
 import { Project, type IProject, type ProjectStatus } from '@/models/Project';
 import { Job, CAPTURE_PROCESSING_JOB_TYPE, type IJob, type JobState } from '@/models/Job';
 import {
+  countSucceededModelsByProject,
+  countSucceededModelsFor,
   toProjectListItem,
   type ProjectListItem,
 } from '@/services/projectsService';
@@ -92,7 +94,13 @@ export async function listAllCapturedProjects(
   const last = page[page.length - 1];
   const nextCursor = hasMore && last ? encodeCursor(last.updatedAt, last.id as string) : null;
 
-  return { items: page.map(toAdminItem), nextCursor };
+  // One aggregation for the page, not one per row.
+  const counts = await countSucceededModelsByProject(page.map((p) => p._id as Types.ObjectId));
+
+  return {
+    items: page.map((p) => toAdminItem(p, counts.get(p.id as string) ?? 0)),
+    nextCursor,
+  };
 }
 
 /** Compact summary of the exportable job shown on the staff detail view. */
@@ -125,7 +133,7 @@ export async function getAdminProjectDetail(
 
   const job = await findExportableJob(projectId);
   return {
-    project: toAdminItem(project),
+    project: toAdminItem(project, await countSucceededModelsFor(project._id as Types.ObjectId)),
     job: job
       ? {
           id: job.id as string,
@@ -338,6 +346,6 @@ export async function findExportableJob(projectId: string): Promise<IJob | null>
     .exec();
 }
 
-function toAdminItem(p: IProject): AdminProjectListItem {
-  return { ...toProjectListItem(p), ownerId: p.userId.toHexString() };
+function toAdminItem(p: IProject, modelCount = 0): AdminProjectListItem {
+  return { ...toProjectListItem(p, modelCount), ownerId: p.userId.toHexString() };
 }

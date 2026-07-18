@@ -101,6 +101,24 @@ const envSchema = z.object({
   MESHY_CREATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
+  /**
+   * Run the worker loop INSIDE the API process (src/index.ts), instead of as a
+   * separate `npm run worker` service.
+   *
+   * Exists so a single-service deployment (one Render instance, one bill) can
+   * process jobs at all. Safe ONLY while every registered processor is
+   * I/O-bound: the Meshy path is HTTP + sleep and never occupies the event
+   * loop, so it cannot delay API requests. captureProcessingProcessor's
+   * pipeline is a stub today — when it becomes real (CPU-bound photogrammetry),
+   * this MUST go back to false and a dedicated worker service.
+   *
+   * Defaults to false so `npm run worker`, tests, and existing deployments are
+   * completely unaffected. Only the deployed web service opts in.
+   */
+  RUN_WORKER_IN_PROCESS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   /** How often the worker polls for claimable jobs (milliseconds). */
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
   /**

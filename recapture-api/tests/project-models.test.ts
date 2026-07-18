@@ -466,3 +466,83 @@ describe('GET /projects/:id — the owner projection', () => {
     expect(theirs.status).toBe(404);
   });
 });
+
+describe('modelCount on the Project DTO', () => {
+  it('counts SUCCEEDED models only, on BOTH the owner list and the admin list', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id);
+    const { job } = await makeFinalizedJob(owner.id, project.id as string);
+
+    // One of each terminal/pending state — only the SUCCEEDED pair may count.
+    for (const status of ['SUCCEEDED', 'SUCCEEDED', 'FAILED', 'QUEUED', 'PROCESSING']) {
+      await ProjectModel.create({
+        projectId: project._id,
+        jobId: job._id,
+        source: 'meshy',
+        status,
+        selectedKeys: KEYS,
+        createdByUserId: new Types.ObjectId(artist.id),
+        createdByRole: 'MODEL_ARTIST',
+      });
+    }
+
+    // Owner list (My projects tab) — staff read their own projects through this.
+    const ownerRes = await request(app).get('/projects').set(owner.auth);
+    expect(ownerRes.status).toBe(200);
+    expect(ownerRes.body.items[0].modelCount).toBe(2);
+
+    // Admin list (Live projects tab).
+    const adminRes = await request(app).get('/admin/projects').set(artist.auth);
+    expect(adminRes.status).toBe(200);
+    const row = adminRes.body.items.find(
+      (i: { id: string }) => i.id === (project.id as string)
+    );
+    expect(row.modelCount).toBe(2);
+  });
+
+  it('is 0 for a project whose generations all FAILED — the Models button must not show', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id);
+    const { job } = await makeFinalizedJob(owner.id, project.id as string);
+
+    await ProjectModel.create({
+      projectId: project._id,
+      jobId: job._id,
+      source: 'meshy',
+      status: 'FAILED',
+      selectedKeys: KEYS,
+      createdByUserId: new Types.ObjectId(artist.id),
+      createdByRole: 'MODEL_ARTIST',
+      error: { code: 'MESHY_GENERATION_FAILED', message: 'nope' },
+    });
+
+    const res = await request(app).get('/projects').set(owner.auth);
+    expect(res.body.items[0].modelCount).toBe(0);
+  });
+
+  it('survives a rename — the DTO must not report a stale 0 and hide the button', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id);
+    const { job } = await makeFinalizedJob(owner.id, project.id as string);
+    await ProjectModel.create({
+      projectId: project._id,
+      jobId: job._id,
+      source: 'meshy',
+      status: 'SUCCEEDED',
+      selectedKeys: KEYS,
+      createdByUserId: new Types.ObjectId(artist.id),
+      createdByRole: 'MODEL_ARTIST',
+    });
+
+    const res = await request(app)
+      .patch(`/projects/${project.id}`)
+      .set(owner.auth)
+      .send({ name: 'Renamed' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.project.modelCount).toBe(1);
+  });
+});
