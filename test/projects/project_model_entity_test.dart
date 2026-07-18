@@ -46,6 +46,42 @@ void main() {
     });
   });
 
+  group('tryFromStaffMap — progress (live worker sub-status)', () {
+    test('parses phase + percent', () {
+      final model = ProjectModelView.tryFromStaffMap({
+        'id': 'm1',
+        'source': 'meshy',
+        'status': 'PROCESSING',
+        'progress': {'phase': 'GENERATING', 'percent': 42},
+      });
+
+      expect(model?.progress?.phase, ModelProgressPhase.generating);
+      expect(model?.progress?.percent, 42);
+    });
+
+    test('absent progress → null (older backend / QUEUED record)', () {
+      final model = ProjectModelView.tryFromStaffMap({
+        'id': 'm1',
+        'source': 'meshy',
+        'status': 'PROCESSING',
+      });
+
+      expect(model?.progress, isNull);
+    });
+
+    test('unknown phase and out-of-range percent degrade, never throw', () {
+      final model = ProjectModelView.tryFromStaffMap({
+        'id': 'm1',
+        'source': 'meshy',
+        'status': 'PROCESSING',
+        'progress': {'phase': 'SOMETHING_NEW', 'percent': 250},
+      });
+
+      expect(model?.progress?.phase, ModelProgressPhase.unknown);
+      expect(model?.progress?.percent, 100);
+    });
+  });
+
   group('tryFromOwnerMap — flat usdzUrl', () {
     test('parses usdzUrl alongside glbUrl', () {
       final model = ProjectModelView.tryFromOwnerMap({

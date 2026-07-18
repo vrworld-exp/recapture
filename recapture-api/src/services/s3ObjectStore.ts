@@ -203,6 +203,25 @@ export async function deleteObject(bucket: string, key: string): Promise<void> {
 }
 
 /**
+ * PERMANENTLY deletes every object under [prefix] (admin hard-delete). Lists
+ * first — continuation tokens included — then deletes one by one; per-job
+ * volumes are small (≤ ~120 objects), so sequential deletes are fine and keep
+ * this on the same primitives the rest of the store uses. Returns the number
+ * of objects deleted. Idempotent: an empty prefix deletes nothing and returns 0.
+ *
+ * A THROW mid-way leaves the remainder in place — callers must treat a failure
+ * as retryable (delete-object is idempotent) rather than assume the prefix is
+ * gone.
+ */
+export async function deleteObjectsUnderPrefix(bucket: string, prefix: string): Promise<number> {
+  const objects = await listObjectsUnderPrefix(bucket, prefix);
+  for (const object of objects) {
+    await deleteObject(bucket, object.key);
+  }
+  return objects.length;
+}
+
+/**
  * "Soft delete" one object: copy it to [destKey], then delete the original — an
  * S3 has no native move, so this is the two-step equivalent. Returns:
  *   - 'moved'   — the source existed and is now only at destKey.

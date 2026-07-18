@@ -53,6 +53,10 @@ dependencies:
   # under the hood; renders the CloudFront glbUrl with orbit controls + AR.
   model_viewer_plus: ^1.9.3
 
+  # Typed DOM interop (web builds only) — the model-viewer load probe reads the
+  # injected element's `loaded` state, since no JS channel exists on web.
+  web: ^1.1.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

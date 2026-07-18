@@ -11,7 +11,7 @@ import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'repo_fake_defaults.dart';
 
-class _FakeRepo with FakeModelGenerationDefaults implements LiveProjectsRepository {
+class _FakeRepo with FakeModelGenerationDefaults, FakeAdminDeleteDefaults implements LiveProjectsRepository {
   Map<String, dynamic> exportResult = const {};
   LiveProjectsException? exportFail;
   int exportCalls = 0;

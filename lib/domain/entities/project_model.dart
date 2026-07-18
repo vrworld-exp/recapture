@@ -55,6 +55,50 @@ enum ModelStatus {
   bool get isPending => this == ModelStatus.queued || this == ModelStatus.processing;
 }
 
+/// What the backend worker is doing RIGHT NOW inside a PROCESSING record.
+/// Mirrors ProjectModelDto's `progress.phase`. Display-only.
+enum ModelProgressPhase {
+  /// Presigning the selected photos / submitting the Meshy task.
+  preparing,
+  /// Meshy is building the model — [ModelProgress.percent] is Meshy's own 0–100.
+  generating,
+  /// Downloading Meshy's results and re-hosting them on our S3.
+  finalizing,
+  /// A phase this build does not know (server ahead of the app). Renders as a
+  /// generic "working…" step rather than crashing or hiding progress.
+  unknown;
+
+  static ModelProgressPhase parse(Object? raw) => switch (raw.toString()) {
+        'PREPARING' => ModelProgressPhase.preparing,
+        'GENERATING' => ModelProgressPhase.generating,
+        'FINALIZING' => ModelProgressPhase.finalizing,
+        _ => ModelProgressPhase.unknown,
+      };
+}
+
+/// Live sub-status of a pending generation — the staff progress UI's data.
+/// Staff payload only, and OPTIONAL: an older backend (or a record written
+/// before the field existed) simply has none, and the UI falls back to the
+/// phase-less copy it showed before.
+class ModelProgress {
+  const ModelProgress({required this.phase, required this.percent});
+
+  final ModelProgressPhase phase;
+
+  /// 0–100 within [phase]; clamped so a malformed payload can't overflow a
+  /// progress bar.
+  final int percent;
+
+  static ModelProgress? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final percent = raw['percent'];
+    return ModelProgress(
+      phase: ModelProgressPhase.parse(raw['phase']),
+      percent: percent is num ? percent.round().clamp(0, 100) : 0,
+    );
+  }
+}
+
 /// Why a generation failed. Mirrors ProjectModelDto's `error`.
 ///
 /// [message] is SAFE to display: the backend contract is that meshyClient never
@@ -86,6 +130,7 @@ class ProjectModelView {
     this.selectedKeys = const [],
     this.createdAt,
     this.error,
+    this.progress,
   });
 
   final String id;
@@ -115,6 +160,11 @@ class ProjectModelView {
   /// never returns a failed attempt, so [tryFromOwnerMap] never parses this.
   final ModelError? error;
 
+  /// Live worker sub-status while [status] is pending. Staff payload only, and
+  /// null whenever the backend hasn't reported one (older server, QUEUED record,
+  /// terminal record) — the UI must always have a phase-less fallback.
+  final ModelProgress? progress;
+
   bool get isViewable => status == ModelStatus.succeeded && glbUrl != null;
 
   /// Parses the STAFF shape (`/admin/projects/:id/models` items), where the
@@ -140,6 +190,7 @@ class ProjectModelView {
       // that can't be labelled is still worth showing.
       createdAt: DateTime.tryParse((raw['createdAt'] ?? '').toString()),
       error: ModelError.tryParse(raw['error']),
+      progress: ModelProgress.tryParse(raw['progress']),
     );
   }
 

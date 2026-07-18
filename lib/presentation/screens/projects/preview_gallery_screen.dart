@@ -58,6 +58,14 @@ String failureCopy(Object error) => switch (error) {
     };
 
 class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
+  /// Sizing-only override for the app-bar CTA: everything visual (fill,
+  /// border, radius, text style, disabled states) still resolves from the
+  /// elevated/outlined button themes, so this can never drift off-theme.
+  static final ButtonStyle _appBarCompact = ElevatedButton.styleFrom(
+    minimumSize: const Size(0, 36),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+  );
+
   /// Per-key download in-flight guard (mirrors the Live tab's _exportInFlight).
   final Set<String> _downloadInFlight = <String>{};
 
@@ -217,10 +225,29 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
         ),
         actions: [
           if (canCreateModel && (async.valueOrNull?.files.isNotEmpty ?? false))
-            TextButton(
-              key: const ValueKey('preview_select_toggle'),
-              onPressed: _toggleSelecting,
-              child: Text(_selecting ? 'Cancel' : 'Create Model'),
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.md),
+              child: Center(
+                // Same design language as every other CTA (AppButton primary /
+                // secondary), just compacted for an app-bar slot: colors,
+                // shape and typography come from the button THEMES; only the
+                // sizing is overridden (AppButton itself can't sit here — its
+                // theme minimumSize is infinite-width × 48).
+                child: _selecting
+                    ? OutlinedButton(
+                        key: const ValueKey('preview_select_toggle'),
+                        style: _appBarCompact,
+                        onPressed: _toggleSelecting,
+                        child: const Text('Cancel'),
+                      )
+                    : ElevatedButton.icon(
+                        key: const ValueKey('preview_select_toggle'),
+                        style: _appBarCompact,
+                        onPressed: _toggleSelecting,
+                        icon: const Icon(Icons.auto_awesome, size: 16),
+                        label: const Text('Create Model'),
+                      ),
+              ),
             ),
         ],
       ),

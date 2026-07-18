@@ -23,7 +23,9 @@ import 'package:recapture/presentation/screens/projects/model_generation_screen.
 import 'package:recapture/presentation/screens/projects/model_viewer_screen.dart';
 import 'package:recapture/presentation/screens/projects/preview_gallery_screen.dart';
 
-class _FakeRepo implements LiveProjectsRepository {
+import 'repo_fake_defaults.dart';
+
+class _FakeRepo with FakeAdminDeleteDefaults implements LiveProjectsRepository {
   _FakeRepo({this.models = const []});
 
   Map<String, dynamic> exportResult = const {};
@@ -269,6 +271,28 @@ void main() {
       expect(find.byKey(const ValueKey('view_model_cta')), findsNothing);
     });
 
+    testWidgets('a PROCESSING record with live progress shows the percent',
+        (tester) async {
+      final repo = _FakeRepo(models: [
+        const ProjectModelView(
+          id: 'm1',
+          source: ModelSource.meshy,
+          status: ModelStatus.processing,
+          progress: ModelProgress(
+            phase: ModelProgressPhase.generating,
+            percent: 42,
+          ),
+        ),
+      ]);
+      await tester.pumpWidget(app(repo));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('model_gen_percent')), findsOneWidget);
+      expect(find.text('42%'), findsOneWidget);
+      // The timeline names the step that is running right now.
+      expect(find.text('Generating 3D model'), findsOneWidget);
+    });
+
     testWidgets('a SUCCEEDED record offers View 3D Model', (tester) async {
       final repo = _FakeRepo(models: [
         const ProjectModelView(
@@ -327,6 +351,9 @@ void main() {
     // The real renderer is a WebView, which has no platform implementation in a
     // widget test — inject a stand-in so the screen's own chrome is testable.
     Widget app(ProjectModelView model) => ProviderScope(
+          // The screen's Export action watches the role — without this
+          // override the real userRoleProvider chain would open Hive.
+          overrides: [isStaffProvider.overrideWithValue(false)],
           child: MaterialApp(
             theme: AppTheme.dark,
             home: ModelViewerScreen(

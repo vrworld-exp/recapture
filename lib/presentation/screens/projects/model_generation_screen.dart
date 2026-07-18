@@ -83,20 +83,13 @@ class ModelGenerationScreen extends ConsumerWidget {
                 headline: 'Starting…',
                 detail: 'Setting up your model generation.',
               ),
-            ModelStatus.queued => const _Pending(
-                key: ValueKey('model_gen_pending'),
-                headline: 'Queued',
-                detail:
-                    'Your model is waiting to start. This usually takes a few '
-                    'minutes — you can leave this screen and come back.',
-              ),
-            ModelStatus.processing => const _Pending(
-                key: ValueKey('model_gen_pending'),
-                headline: 'Generating your model…',
-                detail:
-                    'Meshy AI is building the 3D model from your photos. This '
-                    'usually takes a few minutes — you can leave this screen '
-                    'and come back.',
+            // One live timeline for both pending states: the step that is
+            // active mirrors what the backend worker is doing right now.
+            ModelStatus.queued ||
+            ModelStatus.processing =>
+              _LiveProgress(
+                key: const ValueKey('model_gen_pending'),
+                model: model!,
               ),
             ModelStatus.succeeded => _Succeeded(
                 key: const ValueKey('model_gen_succeeded'),
@@ -137,6 +130,193 @@ class _Pending extends StatelessWidget {
               .textTheme
               .bodySmall
               ?.copyWith(color: AppColors.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+/// The four backend steps of one generation, in order. The active one mirrors
+/// the record's live [ModelProgress]; a record with none (QUEUED, or an older
+/// backend that doesn't report progress) still renders — the timeline just
+/// stays on its best-known step with an indeterminate bar.
+enum _GenStep {
+  queued('Queued', 'Waiting for the processing worker to pick this up.'),
+  preparing('Preparing photos', 'Sending your selected photos to Meshy AI.'),
+  generating('Generating 3D model',
+      'Meshy AI is building the 3D model from your photos.'),
+  finalizing('Saving model', 'Downloading the result into ReCapture storage.');
+
+  const _GenStep(this.label, this.detail);
+
+  final String label;
+  final String detail;
+}
+
+/// Live "what is the backend doing" view for a QUEUED/PROCESSING record:
+/// an overall progress bar plus a step timeline, driven by the `progress`
+/// field the worker publishes while it runs.
+class _LiveProgress extends StatelessWidget {
+  const _LiveProgress({super.key, required this.model});
+
+  final ProjectModelView model;
+
+  _GenStep get _active {
+    if (model.status == ModelStatus.queued) return _GenStep.queued;
+    return switch (model.progress?.phase) {
+      ModelProgressPhase.preparing => _GenStep.preparing,
+      ModelProgressPhase.finalizing => _GenStep.finalizing,
+      // GENERATING, an unknown phase, and no progress at all (older backend or
+      // a just-claimed job) all land on the long middle step.
+      _ => _GenStep.generating,
+    };
+  }
+
+  /// Overall 0–1 across the whole run, so the bar only ever moves forward:
+  /// queued/preparing are the thin head, Meshy's own 0–100 fills the long
+  /// middle, finalizing is the tail. Null → indeterminate (we know the phase
+  /// is underway but have no number for it yet).
+  double? get _overall {
+    final percent = model.progress?.percent;
+    return switch (_active) {
+      _GenStep.queued => 0.03,
+      _GenStep.preparing => 0.08,
+      _GenStep.generating =>
+        percent == null ? null : 0.10 + 0.80 * (percent / 100),
+      _GenStep.finalizing => 0.95,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final active = _active;
+    final overall = _overall;
+    final percent = model.progress?.percent;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                active == _GenStep.generating && percent != null
+                    ? 'Generating your model…'
+                    : '${active.label}…',
+                style: text.titleMedium,
+              ),
+            ),
+            if (active == _GenStep.generating && percent != null)
+              Text(
+                '$percent%',
+                key: const ValueKey('model_gen_percent'),
+                style: text.titleMedium?.copyWith(color: AppColors.mirageRed),
+              ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.md),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          // Animate toward each new overall value so poll updates glide instead
+          // of jumping; an indeterminate bar keeps its own built-in motion.
+          child: overall == null
+              ? const LinearProgressIndicator(
+                  minHeight: 6,
+                  color: AppColors.mirageRed,
+                  backgroundColor: AppColors.surface2,
+                )
+              : TweenAnimationBuilder<double>(
+                  tween: Tween(end: overall),
+                  duration: const Duration(milliseconds: 600),
+                  curve: Curves.easeOut,
+                  builder: (_, value, __) => LinearProgressIndicator(
+                    value: value,
+                    minHeight: 6,
+                    color: AppColors.mirageRed,
+                    backgroundColor: AppColors.surface2,
+                  ),
+                ),
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        for (final step in _GenStep.values) ...[
+          _StepRow(
+            step: step,
+            state: step.index < active.index
+                ? _StepState.done
+                : step == active
+                    ? _StepState.active
+                    : _StepState.upcoming,
+          ),
+          if (step != _GenStep.values.last)
+            const SizedBox(height: AppSpacing.md),
+        ],
+        const SizedBox(height: AppSpacing.xl),
+        Text(
+          'This usually takes a few minutes — you can leave this screen and '
+          'come back.',
+          textAlign: TextAlign.center,
+          style: text.bodySmall?.copyWith(color: AppColors.textMuted),
+        ),
+      ],
+    );
+  }
+}
+
+enum _StepState { done, active, upcoming }
+
+/// One timeline row: a state icon, the step's name, and — for the step that is
+/// running right now — one line of "what the backend is doing".
+class _StepRow extends StatelessWidget {
+  const _StepRow({required this.step, required this.state});
+
+  final _GenStep step;
+  final _StepState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 20,
+          height: 20,
+          child: switch (state) {
+            _StepState.done => const Icon(Icons.check_circle,
+                size: 18, color: AppColors.mirageRed),
+            _StepState.active => const Padding(
+                padding: EdgeInsets.all(2),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.mirageRed,
+                ),
+              ),
+            _StepState.upcoming => const Icon(Icons.circle_outlined,
+                size: 18, color: AppColors.textMuted),
+          },
+        ),
+        const SizedBox(width: AppSpacing.md),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                step.label,
+                style: state == _StepState.upcoming
+                    ? text.bodyMedium?.copyWith(color: AppColors.textMuted)
+                    : text.bodyMedium,
+              ),
+              if (state == _StepState.active) ...[
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  step.detail,
+                  style: text.bodySmall?.copyWith(color: AppColors.textMuted),
+                ),
+              ],
+            ],
+          ),
         ),
       ],
     );

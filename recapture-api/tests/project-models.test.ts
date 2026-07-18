@@ -355,6 +355,40 @@ describe('GET /admin/projects/:id/models + approve', () => {
     expect(res.body.models.map((m: { id: string }) => m.id)).toEqual([newer.id, older.id]);
   });
 
+  it('exposes the worker\'s live progress on a PROCESSING record only', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id);
+    const { job } = await makeFinalizedJob(owner.id, project.id as string);
+
+    const base = {
+      projectId: project._id,
+      jobId: job._id,
+      source: 'meshy' as const,
+      selectedKeys: KEYS,
+      createdByUserId: new Types.ObjectId(artist.id),
+      createdByRole: 'MODEL_ARTIST' as const,
+    };
+    // What the worker writes mid-generation (meshyModelProcessor.reportProgress).
+    const pending = await ProjectModel.create({
+      ...base,
+      status: 'PROCESSING',
+      progress: { phase: 'GENERATING', percent: 42 },
+    });
+    // A record from before the progress field existed must still serialize.
+    const legacy = await ProjectModel.create({ ...base, status: 'PROCESSING' });
+
+    const res = await request(app).get(`/admin/projects/${project.id}/models`).set(artist.auth);
+
+    expect(res.status).toBe(200);
+    const byId = new Map(
+      (res.body.models as { id: string; progress?: unknown }[]).map((m) => [m.id, m])
+    );
+    expect(byId.get(pending.id)?.progress).toEqual({ phase: 'GENERATING', percent: 42 });
+    expect(byId.get(legacy.id)).toBeDefined();
+    expect(byId.get(legacy.id)?.progress).toBeUndefined();
+  });
+
   it('approves a SUCCEEDED model and refuses a FAILED one', async () => {
     const owner = await makeUser('USER');
     const artist = await makeUser('MODEL_ARTIST');

@@ -21,7 +21,7 @@ LiveProject _lp(String id) => LiveProject(
       totalPhotos: 36,
     );
 
-class _ScriptedLiveRepo with FakeModelGenerationDefaults implements LiveProjectsRepository {
+class _ScriptedLiveRepo with FakeModelGenerationDefaults, FakeAdminDeleteDefaults implements LiveProjectsRepository {
   /// Pages keyed by cursor (null key = first page).
   final Map<String?, LiveProjectsPage> pages = {};
   LiveProjectsException? failWith;

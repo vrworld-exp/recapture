@@ -19,15 +19,17 @@ import '../../data/repositories/live_projects_repository.dart';
 import '../../domain/entities/project_model.dart';
 
 /// Poll cadence. Starts short (a fast generation feels instant) and backs off
-/// toward [_maxInterval] so a long one costs a handful of requests, not hundreds.
+/// toward [_maxInterval]. Capped at 10s (not higher): each poll now carries the
+/// record's live `progress`, and a progress bar that only moves every 20s+
+/// reads as frozen.
 const _initialInterval = Duration(seconds: 3);
-const _maxInterval = Duration(seconds: 20);
+const _maxInterval = Duration(seconds: 10);
 
 /// Hard stop. At this cadence the cap covers well past the backend's
 /// MESHY_TASK_TIMEOUT_MS (10 min), after which the worker itself gives up and
 /// the record turns FAILED — so a still-pending record here means something is
 /// wrong and polling forever would not fix it.
-const _maxPolls = 60;
+const _maxPolls = 120;
 
 class ModelGenerationNotifier
     extends FamilyAsyncNotifier<List<ProjectModelView>, String> {

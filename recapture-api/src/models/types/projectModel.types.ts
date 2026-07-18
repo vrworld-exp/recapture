@@ -23,6 +23,25 @@ export type ModelSource = (typeof MODEL_SOURCES)[number];
 export const MODEL_STATUSES = ['QUEUED', 'PROCESSING', 'SUCCEEDED', 'FAILED'] as const;
 export type ModelStatus = (typeof MODEL_STATUSES)[number];
 
+/**
+ * What the worker is doing RIGHT NOW inside a PROCESSING record — the staff
+ * screen's live "what is going on" line. Purely informational: no processor
+ * logic ever branches on it, and a missing/stale value must never be treated
+ * as an error (progress writes are best-effort).
+ *   PREPARING  — presigning source photos / submitting the Meshy task;
+ *   GENERATING — Meshy is building the model (percent = Meshy's own 0–100);
+ *   FINALIZING — downloading results and re-hosting them on our S3.
+ */
+export const MODEL_PROGRESS_PHASES = ['PREPARING', 'GENERATING', 'FINALIZING'] as const;
+export type ModelProgressPhase = (typeof MODEL_PROGRESS_PHASES)[number];
+
+/** Live sub-status of a PROCESSING generation. Cleared on terminal states. */
+export interface ModelProgress {
+  phase: ModelProgressPhase;
+  /** 0–100 within the current phase (Meshy's own number while GENERATING). */
+  percent: number;
+}
+
 /** CDN URLs for a generated model. Always OUR CloudFront — never Meshy's. */
 export interface ModelCdnUrls {
   glb: string;

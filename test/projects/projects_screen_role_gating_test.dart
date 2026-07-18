@@ -55,6 +55,9 @@ Widget _app({required bool isStaff}) {
       projectsProvider.overrideWith(_FakeProjectsNotifier.new),
       liveProjectsProvider.overrideWith(_FakeLiveProjectsNotifier.new),
       isStaffProvider.overrideWithValue(isStaff),
+      // The Live tab reads the admin flag for its delete affordance; without
+      // this override the real userRoleProvider chain would open Hive.
+      isAdminProvider.overrideWithValue(false),
     ],
     child: const MaterialApp(home: ProjectsScreen()),
   );

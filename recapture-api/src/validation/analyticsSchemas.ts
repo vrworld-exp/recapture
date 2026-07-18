@@ -18,6 +18,8 @@ import { USER_ROLES } from '@/models/User';
 import { PROJECT_STATUS_VALUES } from '@/models/Project';
 // And for a generated model's origin flag (meshy | manual).
 import { MODEL_SOURCES } from '@/models/types/projectModel.types';
+// And for the admin project-delete mode (SOFT | HARD) — the route's enum.
+import { ADMIN_DELETE_MODES } from '@/validation/adminSchemas';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -55,6 +57,7 @@ export const AnalyticsEvent = {
   ADMIN_PROJECTS_LISTED: 'admin_projects_listed',
   PROJECT_EXPORT_GENERATED: 'project_export_generated',
   PROJECT_PHOTOS_DELETED: 'project_photos_deleted',
+  ADMIN_PROJECT_DELETED: 'admin_project_deleted',
   ADMIN_ACCESS_DENIED: 'admin_access_denied',
   // ── Meshy AI model generation (staff-triggered) ───────────────────────────
   MODEL_GENERATION_REQUESTED: 'model_generation_requested',
@@ -330,6 +333,22 @@ const projectPhotosDeletedProps = z
   })
   .strict();
 
+/** ADMIN deleted a whole project (DELETE /admin/projects/:id) — the curation
+ * path for bad captures. Hashed ids only; `mode` says SOFT (recoverable flag)
+ * vs HARD (storage + records purged). The count fields are mode-specific. */
+const adminProjectDeletedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    owner_id_hash: z.string().min(1),
+    mode: z.enum(ADMIN_DELETE_MODES),
+    /** SOFT only: the flag was already set (idempotent replay). */
+    was_already_deleted: z.boolean().optional(),
+    /** HARD only: S3 objects removed across both buckets. */
+    objects_deleted: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
 // Meshy model-generation events. Same PII stance as the rest of /admin: hashed
 // ids and counts only. NEVER a selected key, a presigned source URL, or the
 // Meshy task id — `key_count` is all the selection detail that ships.
@@ -395,6 +414,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.ADMIN_PROJECTS_LISTED]: adminProjectsListedProps,
   [AnalyticsEvent.PROJECT_EXPORT_GENERATED]: projectExportGeneratedProps,
   [AnalyticsEvent.PROJECT_PHOTOS_DELETED]: projectPhotosDeletedProps,
+  [AnalyticsEvent.ADMIN_PROJECT_DELETED]: adminProjectDeletedProps,
   [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
   [AnalyticsEvent.MODEL_GENERATION_REQUESTED]: modelGenerationRequestedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,

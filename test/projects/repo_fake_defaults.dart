@@ -8,6 +8,8 @@
 // file with an identical throwing stub. A fake mixes these in and overrides
 // only what its test actually drives — so the next repository addition touches
 // this file, not seven others.
+import 'package:recapture/data/repositories/live_projects_repository.dart'
+    show AdminDeleteMode;
 import 'package:recapture/domain/entities/project_model.dart';
 
 /// Model-generation members of `LiveProjectsRepository`.
@@ -23,6 +25,16 @@ mixin FakeModelGenerationDefaults {
       throw UnimplementedError('not used here');
 
   Future<ProjectModelView> approveModel(String projectId, String modelId) async =>
+      throw UnimplementedError('not used here');
+}
+
+/// ADMIN curation members of `LiveProjectsRepository`.
+mixin FakeAdminDeleteDefaults {
+  Future<void> deleteProject(
+    String projectId, {
+    required AdminDeleteMode mode,
+    required String confirmName,
+  }) async =>
       throw UnimplementedError('not used here');
 }
 

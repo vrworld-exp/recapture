@@ -183,7 +183,19 @@ class _ModelRow extends StatelessWidget {
   /// reason one succeeded where another didn't.
   static String _detail(ProjectModelView model) {
     if (model.error case final error?) return error.message;
-    if (model.status.isPending) return 'Generating — this takes a few minutes.';
+    if (model.status.isPending) {
+      // Surface the worker's live phase when the backend reports one, so the
+      // history row tells staff what is actually happening right now.
+      return switch (model.progress?.phase) {
+        ModelProgressPhase.preparing => 'Preparing photos…',
+        ModelProgressPhase.generating =>
+          'Generating 3D model · ${model.progress!.percent}%',
+        ModelProgressPhase.finalizing => 'Saving the model…',
+        ModelProgressPhase.unknown ||
+        null =>
+          'Generating — this takes a few minutes.',
+      };
+    }
     final n = model.selectedKeys.length;
     if (n == 0) return '';
     return n == 1 ? '1 photo' : '$n photos';

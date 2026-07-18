@@ -14,7 +14,11 @@ import { Types } from 'mongoose';
 import { Project } from '@/models/Project';
 import { Job, MESHY_MODEL_GENERATION_JOB_TYPE } from '@/models/Job';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
-import type { ModelSource, ModelStatus } from '@/models/types/projectModel.types';
+import type {
+  ModelProgressPhase,
+  ModelSource,
+  ModelStatus,
+} from '@/models/types/projectModel.types';
 import type { UserRole } from '@/models/User';
 import { findExportableJob, isContainedRelativeKey } from '@/services/adminProjectsService';
 
@@ -43,6 +47,12 @@ export interface ProjectModelDto {
   source: ModelSource;
   status: ModelStatus;
   selectedKeys: string[];
+  /**
+   * Live worker sub-status for a PROCESSING record — drives the staff progress
+   * UI ("Generating 3D model · 45%"). Absent on terminal records and on records
+   * written before this field existed, so clients must treat it as optional.
+   */
+  progress?: { phase: ModelProgressPhase; percent: number };
   artifacts?: { glb: string; usdz?: string; preview?: string };
   approved?: { at: string };
   error?: { code: string; message: string };
@@ -75,6 +85,11 @@ export function toProjectModelDto(record: IProjectModel): ProjectModelDto {
     source: record.source,
     status: record.status,
     selectedKeys: record.selectedKeys,
+    // Only meaningful while pending: a terminal record's progress is cleared by
+    // the worker, and clients ignore it for terminal statuses regardless.
+    ...(record.progress
+      ? { progress: { phase: record.progress.phase, percent: record.progress.percent } }
+      : {}),
     // Only our CloudFront URLs ever leave this service — never an S3 key and
     // never a (long-expired) Meshy URL.
     ...(record.artifacts

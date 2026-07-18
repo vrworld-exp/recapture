@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/domain/entities/project_model.dart';
 import 'package:recapture/presentation/screens/projects/model_render_view.dart';
 import 'package:recapture/presentation/screens/projects/model_viewer_screen.dart';
@@ -73,6 +74,81 @@ void main() {
       expect(find.byKey(const ValueKey('model_ar_cta')), findsNothing);
     });
 
+    testWidgets('a LATE ar signal (after loaded) still surfaces the CTA — '
+        'canActivateAR resolving after the load event must not lose the button',
+        (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('loaded');
+      await tester.pump();
+      expect(find.byKey(const ValueKey('model_ar_cta')), findsNothing);
+
+      key.currentState!.handleEvent('ar');
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
+    });
+
+    testWidgets('an EARLY ar signal (before loaded) is kept: no CTA while '
+        'loading, CTA once loaded — and `loaded` must not reset it',
+        (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('ar');
+      await tester.pump();
+
+      // Still loading — the CTA never floats over the loading skin, and the
+      // ar message must NOT have consumed the load wait.
+      expect(find.byKey(const ValueKey('model_loading')), findsOneWidget);
+      expect(find.byKey(const ValueKey('model_ar_cta')), findsNothing);
+
+      key.currentState!.handleEvent('loaded');
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('model_loading')), findsNothing);
+      expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
+    });
+
+    testWidgets('an ar signal does not defuse the loading fallback timer',
+        (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('ar');
+      await tester.pump();
+      expect(find.byKey(const ValueKey('model_loading')), findsOneWidget);
+
+      await tester.pump(ModelRenderViewState.loadingFallback);
+
+      // The fallback still uncovers the viewer, and the earlier AR signal
+      // survives into the ready phase.
+      expect(find.byKey(const ValueKey('model_loading')), findsNothing);
+      expect(find.byKey(const ValueKey('model_ar_cta')), findsOneWidget);
+    });
+
+    testWidgets('retry resets AR availability for the fresh attempt',
+        (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('error');
+      await tester.pump();
+
+      await tester.tap(find.byKey(const ValueKey('model_retry_cta')));
+      await tester.pump();
+      key.currentState!.handleEvent('loaded');
+      await tester.pump();
+
+      // The new attempt reported plain `loaded` — no stale CTA.
+      expect(find.byKey(const ValueKey('model_ar_cta')), findsNothing);
+    });
+
+    testWidgets('no load signal → the fallback uncovers the viewer instead of '
+        'blocking it forever, and it is NOT treated as an error',
+        (tester) async {
+      await tester.pumpWidget(app());
+      expect(find.byKey(const ValueKey('model_loading')), findsOneWidget);
+
+      await tester.pump(ModelRenderViewState.loadingFallback);
+
+      expect(find.byKey(const ValueKey('model_loading')), findsNothing);
+      expect(find.textContaining('couldn’t load'), findsNothing);
+    });
+
     testWidgets('a failed load shows mapped copy — never the URL — and retry '
         'returns to loading', (tester) async {
       await tester.pumpWidget(app());
@@ -116,6 +192,9 @@ void main() {
         (tester) async {
       ProjectModelView? received;
       await tester.pumpWidget(ProviderScope(
+        // The screen's Export action watches the role — without this override
+        // the real userRoleProvider chain would open Hive.
+        overrides: [isStaffProvider.overrideWithValue(false)],
         child: MaterialApp(
           theme: AppTheme.dark,
           home: ModelViewerScreen(
@@ -135,6 +214,7 @@ void main() {
     testWidgets('approve bar: staff (onApprove set) sees it, owner does not',
         (tester) async {
       Widget screen({Future<void> Function()? onApprove}) => ProviderScope(
+            overrides: [isStaffProvider.overrideWithValue(false)],
             child: MaterialApp(
               theme: AppTheme.dark,
               home: ModelViewerScreen(

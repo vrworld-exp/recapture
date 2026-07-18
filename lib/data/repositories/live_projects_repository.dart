@@ -16,6 +16,13 @@ enum LiveProjectsFailure {
   /// 409 NOT_EXPORTABLE — the project has no finalized upload to export.
   notExportable,
 
+  /// 404 — the project is gone (already hard-deleted, or never existed).
+  notFound,
+
+  /// 422 CONFIRMATION_REQUIRED — the typed project name didn't match; the
+  /// server refused without touching anything.
+  confirmationMismatch,
+
   /// 429 — export generation rate limit; [LiveProjectsException.retryAfterSeconds]
   /// may say when to retry.
   rateLimited,
@@ -75,6 +82,32 @@ abstract interface class LiveProjectsRepository {
   /// Marks [modelId] approved ("we're satisfied — skip manual creation").
   /// Throws [LiveProjectsException].
   Future<ProjectModelView> approveModel(String projectId, String modelId);
+
+  /// ADMIN-only: deletes [projectId] — [AdminDeleteMode.soft] hides it
+  /// (recoverable), [AdminDeleteMode.hard] permanently erases the project,
+  /// its photos and its models. [confirmName] must echo the project's exact
+  /// name; the server independently enforces it (confirmationMismatch).
+  /// Throws [LiveProjectsException] (forbidden / notFound /
+  /// confirmationMismatch / network / …).
+  Future<void> deleteProject(
+    String projectId, {
+    required AdminDeleteMode mode,
+    required String confirmName,
+  });
+}
+
+/// How an admin project delete behaves — mirrors the backend's SOFT/HARD enum.
+enum AdminDeleteMode {
+  /// Flag-only: hidden from every list, every byte kept, restorable by the team.
+  soft('SOFT'),
+
+  /// Permanently erases the project, its photos, and its 3D models.
+  hard('HARD');
+
+  const AdminDeleteMode(this.wire);
+
+  /// The exact value the API expects.
+  final String wire;
 }
 
 /// Outcome of a soft-delete: the keys that were moved out vs those already gone.
@@ -212,6 +245,22 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
     }
   }
 
+  @override
+  Future<void> deleteProject(
+    String projectId, {
+    required AdminDeleteMode mode,
+    required String confirmName,
+  }) async {
+    try {
+      await _dio.delete<Map<String, dynamic>>(
+        '/admin/projects/$projectId',
+        data: {'mode': mode.wire, 'confirmName': confirmName},
+      );
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
   static LiveProjectsException _translate(DioException e) {
     final status = e.response?.statusCode;
     if (status == null) {
@@ -220,10 +269,16 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
     if (status == 403) {
       return const LiveProjectsException(LiveProjectsFailure.forbidden);
     }
+    if (status == 404) {
+      return const LiveProjectsException(LiveProjectsFailure.notFound);
+    }
     final body = e.response?.data;
     final code = body is Map ? body['code'] : null;
     if (status == 409 && code == 'NOT_EXPORTABLE') {
       return const LiveProjectsException(LiveProjectsFailure.notExportable);
+    }
+    if (status == 422 && code == 'CONFIRMATION_REQUIRED') {
+      return const LiveProjectsException(LiveProjectsFailure.confirmationMismatch);
     }
     if (status == 429) {
       final retryAfter = body is Map ? body['retryAfter'] : null;

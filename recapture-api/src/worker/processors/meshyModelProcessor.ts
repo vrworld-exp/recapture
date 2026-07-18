@@ -27,7 +27,7 @@ import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
 import { Job } from '@/models/Job';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
-import type { ModelArtifacts } from '@/models/types/projectModel.types';
+import type { ModelArtifacts, ModelProgressPhase } from '@/models/types/projectModel.types';
 import { presignObjectGetUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import {
   getMeshyClient,
@@ -48,6 +48,42 @@ import {
  * (and makes a record's storage self-contained). */
 function modelArtifactPrefix(rawPrefix: string, modelId: string): string {
   return `${rawPrefix}models/${modelId}/`;
+}
+
+/**
+ * Publishes "what the worker is doing right now" onto the record, for the staff
+ * progress UI (the admin app polls the models list while a record is pending).
+ *
+ * STRICTLY BEST-EFFORT: display data must never fail or delay a paid
+ * generation, so errors are swallowed and the write is fenced on
+ * `status: 'PROCESSING'` — it can never resurrect a record that has already
+ * reached a terminal state.
+ */
+async function reportProgress(
+  record: IProjectModel,
+  phase: ModelProgressPhase,
+  percent: number
+): Promise<void> {
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  try {
+    await ProjectModel.updateOne(
+      { _id: record._id, status: 'PROCESSING' },
+      { $set: { progress: { phase, percent: clamped } } }
+    ).exec();
+  } catch {
+    // Ignored by design — the next tick (or the terminal status) supersedes it.
+  }
+}
+
+/** Removes the live progress once the record is terminal — SUCCEEDED/FAILED
+ * carry their own truth and a stale "FINALIZING 100%" would only confuse. */
+async function clearProgress(record: IProjectModel): Promise<void> {
+  try {
+    await ProjectModel.updateOne({ _id: record._id }, { $unset: { progress: 1 } }).exec();
+  } catch {
+    // Best-effort for the same reason as reportProgress; clients ignore
+    // `progress` on terminal statuses anyway.
+  }
 }
 
 export const meshyModelProcessor: JobProcessor = async (job) => {
@@ -87,15 +123,18 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
   // stage this job type uses — Meshy is one async task, not three stages.
   await enterStage(job._id, claimedBy, 'PROCESSING');
   await setStatus(record, 'PROCESSING');
+  await reportProgress(record, 'PREPARING', 0);
 
   try {
     const task = await submitOrResume(job, record, rawBucket, rawPrefix, claimedBy);
+    await reportProgress(record, 'FINALIZING', 100);
     const artifacts = await rehostArtifacts(task, record, rawPrefix);
 
     record.status = 'SUCCEEDED';
     record.artifacts = artifacts;
     record.error = undefined;
     await record.save();
+    await clearProgress(record);
 
     log('info', 'Meshy model generated', {
       jobId: job._id,
@@ -129,7 +168,7 @@ async function submitOrResume(
       jobId: job._id,
       modelId: record.id,
     });
-    return pollToCompletion(job, record.meshyTaskId, claimedBy);
+    return pollToCompletion(job, record, record.meshyTaskId, claimedBy);
   }
 
   // Presigned GETs let Meshy fetch straight from our private raw bucket. They
@@ -152,7 +191,7 @@ async function submitOrResume(
     modelId: record.id,
     imageCount: imageUrls.length,
   });
-  return pollToCompletion(job, taskId, claimedBy);
+  return pollToCompletion(job, record, taskId, claimedBy);
 }
 
 /**
@@ -167,6 +206,7 @@ async function submitOrResume(
  */
 async function pollToCompletion(
   job: WorkerJob,
+  record: IProjectModel,
   taskId: string,
   claimedBy: string
 ): Promise<MeshyTask> {
@@ -175,6 +215,9 @@ async function pollToCompletion(
 
   for (;;) {
     const task = await client.getTask(taskId);
+    // Publish Meshy's own percent for the staff UI — even on the terminal
+    // tick, so the record never shows a stale early number.
+    await reportProgress(record, 'GENERATING', task.progress);
 
     if (task.status === 'SUCCEEDED') return task;
     if (task.status === 'FAILED') {
@@ -318,6 +361,7 @@ async function failRecordIfTerminal(
     message: err instanceof Error ? err.message : 'Model generation failed.',
   };
   await record.save();
+  await clearProgress(record);
 }
 
 async function setStatus(record: IProjectModel, status: IProjectModel['status']): Promise<void> {

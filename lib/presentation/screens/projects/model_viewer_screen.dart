@@ -10,12 +10,19 @@
 // results), so it is safe to hold for the life of the screen. It is still a
 // URL we never surface on screen: a load failure shows mapped copy only, the
 // same rule as the Preview gallery / 9F.
+//
+// The app-bar Export action is gated INSIDE the screen on isStaffProvider
+// (ADMIN + MODEL_ARTIST) rather than at each call site — the owner's push in
+// projects_screen and any future caller are covered for free, and the owner
+// can never see it. Delivery goes through the modelExporterProvider seam
+// (platform-split, tests inject a fake).
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/model_export_service.dart';
 import '../../../application/projects/model_generation_notifier.dart';
 import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
@@ -64,6 +71,11 @@ class ModelViewerScreen extends StatelessWidget {
         elevation: 0,
         iconTheme: const IconThemeData(color: AppColors.textSecondary),
         title: Text(title, style: Theme.of(context).textTheme.titleLarge),
+        actions: [
+          // Staff-only (gated inside the button); nothing to export without
+          // a GLB, so the unavailable body gets no dead action.
+          if (glbUrl != null) _ExportButton(model: model),
+        ],
       ),
       body: glbUrl == null
           // Defensive: the CTA is only shown for a viewable model, so this is a
@@ -97,6 +109,121 @@ class ModelViewerScreen extends StatelessWidget {
                   ),
               ],
             ),
+    );
+  }
+}
+
+/// The app-bar "Export model" action: saves the model file into the user's
+/// system via the [modelExporterProvider] seam. Visible ONLY to staff
+/// (ADMIN / MODEL_ARTIST) — watched here, not passed in, so every caller of
+/// [ModelViewerScreen] is gated identically and the owner never sees it.
+/// With both formats available it asks which one; a GLB-only model exports
+/// straight away.
+class _ExportButton extends ConsumerStatefulWidget {
+  const _ExportButton({required this.model});
+
+  final ProjectModelView model;
+
+  @override
+  ConsumerState<_ExportButton> createState() => _ExportButtonState();
+}
+
+class _ExportButtonState extends ConsumerState<_ExportButton> {
+  bool _busy = false;
+
+  ModelExportFile _file(String url, String ext, String mimeType) =>
+      ModelExportFile(
+        url: url,
+        fileName: 'recapture-model-${widget.model.id}.$ext',
+        mimeType: mimeType,
+      );
+
+  Future<void> _export(ModelExportFile file) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(modelExporterProvider).export(file);
+    } catch (_) {
+      // Mapped copy only — never the URL or the raw error (gallery/9F rule).
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Couldn’t export this model. Please try again.'),
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _onPressed() async {
+    final glbUrl = widget.model.glbUrl;
+    if (glbUrl == null) return; // never built without one; defensive.
+    final glb = _file(glbUrl, 'glb', 'model/gltf-binary');
+
+    final usdzUrl = widget.model.usdzUrl;
+    if (usdzUrl == null) {
+      await _export(glb);
+      return;
+    }
+    final choice = await showModalBottomSheet<ModelExportFile>(
+      context: context,
+      backgroundColor: AppColors.surface1,
+      barrierColor: AppColors.scrim,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: Text(
+                'Export model',
+                style: Theme.of(sheetContext).textTheme.titleMedium,
+              ),
+            ),
+            ListTile(
+              key: const ValueKey('model_export_glb'),
+              leading: const Icon(Icons.view_in_ar_outlined,
+                  color: AppColors.textSecondary),
+              title: const Text('GLB'),
+              subtitle: const Text('Universal 3D format — Blender, Unity, web'),
+              onTap: () => Navigator.of(sheetContext).pop(glb),
+            ),
+            ListTile(
+              key: const ValueKey('model_export_usdz'),
+              leading: const Icon(Icons.phone_iphone,
+                  color: AppColors.textSecondary),
+              title: const Text('USDZ'),
+              subtitle: const Text('Apple AR format — Quick Look on iPhone/iPad'),
+              onTap: () => Navigator.of(sheetContext)
+                  .pop(_file(usdzUrl, 'usdz', 'model/vnd.usdz+zip')),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+          ],
+        ),
+      ),
+    );
+    if (choice != null) await _export(choice);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!ref.watch(isStaffProvider)) return const SizedBox.shrink();
+    return IconButton(
+      key: const ValueKey('model_export_btn'),
+      tooltip: 'Export model',
+      onPressed: _busy ? null : _onPressed,
+      icon: _busy
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: AppColors.textSecondary),
+            )
+          : const Icon(Icons.download_outlined),
     );
   }
 }

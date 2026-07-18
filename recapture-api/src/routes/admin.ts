@@ -1,9 +1,10 @@
 // src/routes/admin.ts
 //
-// Staff-only route group (mounted at /admin): cross-user live-project browse +
-// presigned-URL export for model artists. Every route runs requireAuth →
-// requireRole('MODEL_ARTIST') — ADMIN passes by role inheritance. Standard
-// envelope throughout; read-only.
+// Staff-only route group (mounted at /admin): cross-user live-project browse,
+// presigned-URL export, Meshy model generation, and ADMIN-only curation
+// (photo soft-delete, project soft/hard delete). Every route runs requireAuth →
+// requireRole('MODEL_ARTIST') — ADMIN passes by role inheritance; destructive
+// routes add their own requireRole('ADMIN'). Standard envelope throughout.
 import { Router } from 'express';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
@@ -12,6 +13,7 @@ import {
   adminListProjectsQuerySchema,
   adminProjectIdParamsSchema,
   adminDeletePhotosBodySchema,
+  adminDeleteProjectBodySchema,
   adminCreateModelBodySchema,
   adminModelIdParamsSchema,
 } from '@/validation/adminSchemas';
@@ -21,6 +23,7 @@ import {
   getAdminProjectDetail,
   buildProjectExport,
   softDeleteProjectPhotos,
+  adminDeleteProject,
 } from '@/services/adminProjectsService';
 import {
   approveModel,
@@ -289,6 +292,84 @@ router.delete(
       status: 'success',
       deleted: result.deleted,
       missing: result.missing,
+    });
+  })
+);
+
+/**
+ * DELETE /admin/projects/:id — delete a live project (staff curation of bad
+ * captures). ADMIN-ONLY, like the photo soft-delete above.
+ *
+ * Body: `{ mode: 'SOFT' | 'HARD', confirmName }`. SOFT flags `deletedAt`
+ * (hidden everywhere, recoverable); HARD permanently erases the project, its
+ * jobs, model records, and every S3 object under them. `confirmName` must echo
+ * the project's exact name for BOTH modes — enforced server-side with the same
+ * 422 CONFIRMATION_REQUIRED contract as the owner delete route, so the client
+ * dialog can share copy. Analytics carries hashed ids + the mode only.
+ */
+router.delete(
+  '/projects/:id',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = adminDeleteProjectBodySchema.safeParse(req.body);
+    if (!body.success) {
+      res.status(422).json({
+        status: 'error',
+        code: 'CONFIRMATION_REQUIRED',
+        message: 'Confirmation does not match the project name.',
+      });
+      return;
+    }
+
+    const result = await adminDeleteProject(params.data.id, body.data.mode, body.data.confirmName);
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Project not found.',
+      });
+      return;
+    }
+    if (result.outcome === 'CONFIRMATION_MISMATCH') {
+      res.status(422).json({
+        status: 'error',
+        code: 'CONFIRMATION_REQUIRED',
+        message: 'Confirmation does not match the project name.',
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.ADMIN_PROJECT_DELETED, {
+      actor_id_hash: hashIdentifier(req.user!.userId),
+      project_id_hash: hashIdentifier(result.projectId),
+      owner_id_hash: hashIdentifier(result.ownerId),
+      mode: body.data.mode,
+      ...(result.outcome === 'SOFT_DELETED'
+        ? { was_already_deleted: result.wasAlreadyDeleted }
+        : { objects_deleted: result.objectsDeleted }),
+    });
+
+    res.status(200).json({
+      status: 'success',
+      mode: body.data.mode,
+      projectId: result.projectId,
+      ...(result.outcome === 'SOFT_DELETED'
+        ? { wasAlreadyDeleted: result.wasAlreadyDeleted }
+        : {
+            objectsDeleted: result.objectsDeleted,
+            jobsDeleted: result.jobsDeleted,
+            modelsDeleted: result.modelsDeleted,
+          }),
     });
   })
 );
