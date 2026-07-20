@@ -47,6 +47,36 @@ abstract interface class ProjectsRepository {
   /// POST /projects and this entity by contract (AGENTS.md), so the model can't
   /// join it — and watching it per card would mean an N+1 across the whole list.
   Future<ProjectModelView?> fetchModel(String id);
+
+  /// The project's model situation in ONE request: the finished model it has
+  /// (if any) AND the generation it is waiting on (if any).
+  ///
+  /// Both, not either. Automatic generation means a project can hold a good
+  /// model while a newer run is in flight, and the owner must keep seeing the
+  /// former — so a caller that collapsed these into one nullable value would
+  /// blank the screen every time a regenerate started.
+  Future<OwnerModelState> fetchModelState(String id);
+}
+
+/// What `GET /projects/:id` says about a project's 3D model, as the owner sees
+/// it. Both fields are independently nullable — see [ProjectsRepository.fetchModelState].
+class OwnerModelState {
+  const OwnerModelState({this.model, this.generation});
+
+  /// The newest FINISHED model, or null if there has never been one.
+  final ProjectModelView? model;
+
+  /// The run currently in flight or most recently failed, or null.
+  final OwnerGenerationView? generation;
+
+  /// Whether something is happening that the user should be told about.
+  bool get isGenerating => generation?.isPending ?? false;
+
+  /// A finished model exists and can be opened.
+  bool get hasViewableModel => model?.isViewable ?? false;
+
+  /// Nothing to show and nothing coming — the pre-generation empty state.
+  bool get isEmpty => model == null && generation == null;
 }
 
 /// Concrete [ProjectsRepository] backed by the recapture-api `/projects`
@@ -124,6 +154,19 @@ class RemoteProjectsRepository implements ProjectsRepository {
     // `model` rides alongside the project DTO and is null until a generation
     // finishes — an absent/unparsable model is "none yet", never an error.
     return ProjectModelView.tryFromOwnerMap(res.data?['model']);
+  }
+
+  @override
+  Future<OwnerModelState> fetchModelState(String id) async {
+    final res = await _dio.get<Map<String, dynamic>>('/projects/$id');
+    // Both keys are optional and independently absent: `model` until a
+    // generation has ever finished, `generation` when none is in flight. An
+    // unparsable value is "none", never an error — this drives a status
+    // surface, and a malformed field must not dead-end the user's tap.
+    return OwnerModelState(
+      model: ProjectModelView.tryFromOwnerMap(res.data?['model']),
+      generation: OwnerGenerationView.tryParse(res.data?['generation']),
+    );
   }
 }
 

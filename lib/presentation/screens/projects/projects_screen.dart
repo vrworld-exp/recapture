@@ -19,6 +19,7 @@ import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
 import 'live_projects_view.dart';
+import 'model_building_screen.dart';
 import 'model_viewer_screen.dart';
 
 /// Which list the (staff-only) segmented control shows. Non-staff users never
@@ -160,12 +161,27 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     if (!_claim(p)) return;
     _logAction('view', p);
     try {
-      final model = await ref.read(projectsRepositoryProvider).fetchModel(p.id);
+      final state = await ref.read(projectsRepositoryProvider).fetchModelState(p.id);
       if (!mounted) return;
-      if (model != null && model.isViewable) {
+      if (state.hasViewableModel) {
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (_) => ModelViewerScreen(model: model, title: p.name),
+            builder: (_) => ModelViewerScreen(model: state.model!, title: p.name),
+          ),
+        );
+        return;
+      }
+      // A model is being built for this project that the user never asked for.
+      // Sending them to the generic "model ready" placeholder here would be a
+      // lie; the building screen explains the wait and watches it finish.
+      if (state.generation != null) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ModelBuildingScreen(
+              projectId: p.id,
+              projectName: p.name,
+              onRegenerate: _regenerateHandlerFor(p),
+            ),
           ),
         );
         return;
@@ -176,6 +192,27 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     }
     if (!mounted) return;
     context.goNamed(AppRouteNames.modelReady);
+  }
+
+  /// The "try different photos" action for the model-building screen, or null
+  /// when this user has no such path.
+  ///
+  /// Regeneration goes through the Preview gallery → Prepare-Images, which is a
+  /// STAFF surface (it exposes every captured photo and the model-input upload
+  /// route). So the CTA exists for staff and is simply absent for an owner —
+  /// absent rather than present-and-refusing, because a button that always
+  /// errors is worse than no button.
+  ///
+  /// TODO(product): decide whether owners should get a regenerate path of their
+  /// own. Auto-generation makes this the natural "I don't like it" escape
+  /// hatch, but opening Prepare-Images to owners means widening a staff-only
+  /// surface — a deliberate decision, not a wiring detail.
+  VoidCallback? _regenerateHandlerFor(Project p) {
+    if (!ref.read(isStaffProvider)) return null;
+    return () => context.pushNamed(
+          AppRouteNames.previewGallery,
+          pathParameters: {'id': p.id},
+        );
   }
 
   /// Staff-only per-project Preview (My-projects surface). Pushed so hardware

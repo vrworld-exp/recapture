@@ -12,6 +12,8 @@ import 'dart:typed_data';
 
 import 'package:recapture/data/repositories/live_projects_repository.dart'
     show AdminDeleteMode, ModelImageUploadSlot;
+import 'package:recapture/data/repositories/projects_repository.dart'
+    show OwnerModelState;
 import 'package:recapture/domain/entities/project_model.dart';
 
 /// Model-generation members of `LiveProjectsRepository`.
@@ -55,6 +57,12 @@ mixin FakeAdminDeleteDefaults {
 }
 
 /// Model members of `ProjectsRepository` (the owner-facing surface).
+///
+/// Both default to "this project has no model and nothing is being generated"
+/// — the state every pre-existing test was written against, so mixing this in
+/// keeps their behaviour identical.
 mixin FakeProjectModelDefaults {
   Future<ProjectModelView?> fetchModel(String id) async => null;
+
+  Future<OwnerModelState> fetchModelState(String id) async => const OwnerModelState();
 }
