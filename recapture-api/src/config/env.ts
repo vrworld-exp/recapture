@@ -100,6 +100,28 @@ const envSchema = z.object({
   /** Sliding window for the Create-Model cap (seconds). */
   MESHY_CREATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // ── Automatic model generation (docs/auto-model-generation-*.md) ───────────
+  /**
+   * The HARD gate on generating a model automatically when a capture finishes.
+   *
+   * Defaults to FALSE: auto-generation spends Meshy credits with no human in
+   * the loop, so it ships dark and is enabled deliberately per environment. The
+   * remote-config flag is the LIVE switch on top of this (both must be on) —
+   * this one cannot be flipped without a deploy, which is the point.
+   */
+  AUTO_MODEL_GENERATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+  /** Auto-generations one user may accrue per rolling 24h — the spend ceiling. */
+  AUTO_MODEL_MAX_PER_USER_PER_DAY: z.coerce.number().int().positive().default(10),
+  /**
+   * Sharpness floor (variance of Laplacian) for an auto-selected photo. Matches
+   * the client's REJECT threshold, so a frame the capture UI would have thrown
+   * away is never chosen here either.
+   */
+  AUTO_MODEL_MIN_BLUR_SCORE: z.coerce.number().nonnegative().default(40),
+
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /**
    * Run the worker loop INSIDE the API process (src/index.ts), instead of as a

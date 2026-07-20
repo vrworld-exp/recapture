@@ -17,7 +17,10 @@ import {
   renameProject,
   getProject,
 } from '@/services/projectsService';
-import { latestOwnerModelFor } from '@/services/projectModelsService';
+import {
+  latestOwnerModelFor,
+  pendingOwnerGenerationFor,
+} from '@/services/projectModelsService';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { RESUME_SOURCES } from '@/validation/analyticsSchemas';
@@ -143,9 +146,15 @@ router.get(
 
     // Ownership was already proven by getProject(userId, …) above, so this
     // lookup can be by project alone — an owner only ever reaches their own.
-    const model = await latestOwnerModelFor(project.id);
+    // Two independent facts, deliberately not collapsed into one: the model the
+    // owner HAS, and the generation they are WAITING on. A regenerate in flight
+    // must not blank out the model already on screen.
+    const [model, generation] = await Promise.all([
+      latestOwnerModelFor(project.id),
+      pendingOwnerGenerationFor(project.id),
+    ]);
 
-    res.status(200).json({ status: 'success', project, model });
+    res.status(200).json({ status: 'success', project, model, generation });
   })
 );
 

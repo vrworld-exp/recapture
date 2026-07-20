@@ -20,6 +20,10 @@ import {
   DEFAULT_CAPTURE_FLOW_VARIANT,
   ringsForVariant,
 } from '@/models/types/captureVariants';
+import {
+  maybeAutoGenerateModel,
+  type AutoGenerationOutcome,
+} from '@/services/autoModelGenerationService';
 import { validateCaptureManifest } from '@/services/manifestValidationService';
 import { countObjectsUnderPrefix, getObjectText } from '@/services/s3ObjectStore';
 import { runCaptureProcessing } from '@/worker/processors/captureProcessingPipeline';
@@ -104,5 +108,37 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
     manifest: parsedManifest,
     filesVerified,
   });
-  return { validated: true, filesVerified, ...pipelineResult };
+
+  // ── Automatic model generation. STRICTLY LAST, and strictly best-effort.
+  //
+  // The capture has succeeded and its artifacts are durable by this point. A
+  // generation that could not be selected or enqueued is a retryable
+  // inconvenience — never a reason to fail a good capture and make the user
+  // re-shoot 48 photos. So every error here is swallowed after logging, and the
+  // outcome rides along in the job result for observability.
+  //
+  // Placed here rather than at finalize because the manifest is ALREADY parsed
+  // and validated and the object count already verified; selecting at finalize
+  // would re-fetch and re-validate the same document purely to pick photos.
+  let autoGeneration: AutoGenerationOutcome | undefined;
+  try {
+    autoGeneration = await maybeAutoGenerateModel({ job, manifest: parsedManifest });
+    log('info', 'Auto model generation decision', {
+      jobId: job._id,
+      projectId: job.projectId,
+      ...autoGeneration,
+    });
+  } catch (err: unknown) {
+    log('error', 'Auto model generation threw — capture job is unaffected', {
+      jobId: job._id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return {
+    validated: true,
+    filesVerified,
+    ...pipelineResult,
+    ...(autoGeneration ? { autoGeneration } : {}),
+  };
 };
