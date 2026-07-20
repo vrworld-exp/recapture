@@ -136,6 +136,26 @@ function sanitizeContentDispositionFilename(name: string): string {
   return name.replace(/["\\\s]/g, '_');
 }
 
+/**
+ * Presigns a PUT URL for one object. Same local-SigV4 economics as
+ * {@link presignObjectGetUrl} — cheap to mint in parallel. The Content-Type is
+ * part of the signature, so the uploader can only ever store an object of the
+ * declared type. The URL is a WRITE bearer credential for that exact key until
+ * [expiresInSeconds]: NEVER log it.
+ */
+export async function presignObjectPutUrl(
+  bucket: string,
+  key: string,
+  expiresInSeconds: number,
+  contentType: string
+): Promise<string> {
+  return getSignedUrl(
+    s3Client,
+    new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType }),
+    { expiresIn: expiresInSeconds }
+  );
+}
+
 /** Result of fetching a text object: absent (404) or its body string. */
 export type FetchedObject = { outcome: 'absent' } | { outcome: 'ok'; body: string };
 
@@ -200,6 +220,25 @@ export async function copyObject(
  */
 export async function deleteObject(bucket: string, key: string): Promise<void> {
   await s3Client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+/**
+ * PERMANENTLY deletes every object under [prefix] (admin hard-delete). Lists
+ * first — continuation tokens included — then deletes one by one; per-job
+ * volumes are small (≤ ~120 objects), so sequential deletes are fine and keep
+ * this on the same primitives the rest of the store uses. Returns the number
+ * of objects deleted. Idempotent: an empty prefix deletes nothing and returns 0.
+ *
+ * A THROW mid-way leaves the remainder in place — callers must treat a failure
+ * as retryable (delete-object is idempotent) rather than assume the prefix is
+ * gone.
+ */
+export async function deleteObjectsUnderPrefix(bucket: string, prefix: string): Promise<number> {
+  const objects = await listObjectsUnderPrefix(bucket, prefix);
+  for (const object of objects) {
+    await deleteObject(bucket, object.key);
+  }
+  return objects.length;
 }
 
 /**

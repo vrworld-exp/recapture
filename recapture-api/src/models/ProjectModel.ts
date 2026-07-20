@@ -12,12 +12,14 @@
 import { Schema, model, Document, Types } from 'mongoose';
 import { USER_ROLES, type UserRole } from '@/models/User';
 import {
+  MODEL_PROGRESS_PHASES,
   MODEL_SOURCES,
   MODEL_STATUSES,
   type ModelApproval,
   type ModelArtifacts,
   type ModelCdnUrls,
   type ModelError,
+  type ModelProgress,
   type ModelSource,
   type ModelStatus,
 } from '@/models/types/projectModel.types';
@@ -37,6 +39,12 @@ export interface IProjectModel extends Document {
    * resumes polling this task instead of submitting a second one. Never a URL.
    */
   meshyTaskId?: string;
+  /**
+   * Live sub-status while PROCESSING — what the worker is doing right now, for
+   * the staff progress UI. Best-effort (a missed write never fails the job)
+   * and cleared when the record reaches a terminal status.
+   */
+  progress?: ModelProgress;
   /** Populated on SUCCEEDED — our S3 keys + CloudFront URLs only. */
   artifacts?: ModelArtifacts;
   /** The "we're satisfied, skip manual creation" gate. SUCCEEDED records only. */
@@ -45,10 +53,22 @@ export interface IProjectModel extends Document {
   error?: ModelError;
   /** Client-supplied Idempotency-Key — unique per actor when present. */
   idempotencyKey?: string;
-  /** The staff actor who requested the generation. */
+  /**
+   * Who the generation is attributed to. For a staff "Create Model" tap this is
+   * the staff actor; for an AUTOMATIC generation there is no actor, so it is the
+   * project OWNER — the person whose capture caused the spend. That keeps the
+   * audit trail truthful and gives the per-user daily cap a real subject.
+   */
   createdByUserId: Types.ObjectId;
   /** Their role at request time — audit trail (ADMIN vs MODEL_ARTIST). */
   createdByRole: UserRole;
+  /**
+   * True when the worker started this generation itself after a capture
+   * finished, rather than a human requesting it. Drives the owner-facing
+   * "AI generated" badge and the regenerate affordance, and distinguishes a
+   * system spend from a staff spend in any later cost audit.
+   */
+  createdBySystem?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -80,6 +100,14 @@ const ModelApprovalSchema = new Schema<ModelApproval>(
   { _id: false }
 );
 
+const ModelProgressSchema = new Schema<ModelProgress>(
+  {
+    phase: { type: String, enum: MODEL_PROGRESS_PHASES, required: true },
+    percent: { type: Number, required: true, min: 0, max: 100 },
+  },
+  { _id: false }
+);
+
 const ModelErrorSchema = new Schema<ModelError>(
   {
     code: { type: String, required: true },
@@ -96,12 +124,14 @@ const ProjectModelSchema = new Schema<IProjectModel>(
     status: { type: String, enum: MODEL_STATUSES, required: true, default: 'QUEUED' },
     selectedKeys: { type: [String], required: true },
     meshyTaskId: { type: String },
+    progress: { type: ModelProgressSchema },
     artifacts: { type: ModelArtifactsSchema },
     approved: { type: ModelApprovalSchema },
     error: { type: ModelErrorSchema },
     idempotencyKey: { type: String, maxlength: 128 },
     createdByUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     createdByRole: { type: String, enum: USER_ROLES, required: true },
+    createdBySystem: { type: Boolean },
   },
   { timestamps: true }
 );
@@ -123,12 +153,14 @@ ProjectModelSchema.index(
 export const ProjectModel = model<IProjectModel>('ProjectModel', ProjectModelSchema);
 
 export {
+  MODEL_PROGRESS_PHASES,
   MODEL_SOURCES,
   MODEL_STATUSES,
   type ModelApproval,
   type ModelArtifacts,
   type ModelCdnUrls,
   type ModelError,
+  type ModelProgress,
   type ModelSource,
   type ModelStatus,
 };

@@ -1,0 +1,335 @@
+// tests/auto-photo-selection.test.ts
+//
+// Unit tests for the PURE auto photo selector. No DB, no S3, no mocks — the
+// whole point of the service being pure is that its quality can be pinned down
+// with plain data.
+//
+// The load-bearing test in this file is "spread beats raw sharpness": it is the
+// one property that stops the selector handing Meshy four near-identical frames.
+import { describe, expect, it } from 'vitest';
+import {
+  AUTO_TARGET_PHOTOS,
+  DEFAULT_MIN_BLUR_SCORE,
+  selectPhotosForAutoGeneration,
+  toRelativeImageKey,
+} from '@/services/autoPhotoSelectionService';
+
+/** One manifest photo entry, shaped exactly as the mobile builder emits it. */
+function photo(opts: {
+  file: string;
+  ring?: string;
+  segmentIndex?: number | null;
+  blurScore?: number | null;
+  yawDegrees?: number | null;
+  verdict?: string;
+  imagePath?: string;
+}) {
+  const ring = opts.ring ?? 'EYE';
+  return {
+    photoId: opts.file,
+    ringName: ring,
+    levelCode: ring === 'EYE' ? 'A' : ring === 'TOP' ? 'B' : 'C',
+    segmentIndex: opts.segmentIndex ?? null,
+    verdict: opts.verdict ?? 'accepted',
+    captureTimestampNs: 1,
+    // `in` rather than `??` — an explicitly null blurScore is a real manifest
+    // case (metadata gap) and must survive to the service, not default to 100.
+    quality: { blurScore: 'blurScore' in opts ? opts.blurScore : 100, meanLuminance: 128 },
+    orientation: { yawDegrees: opts.yawDegrees ?? null, pitchDegrees: 90 },
+    imagePath: opts.imagePath ?? `images/${ring}/${opts.file}`,
+    metadata: null,
+  };
+}
+
+/** Default ring size — the shipping 16-per-ring count (shot-counts-48). */
+const SEGMENTS_PER_RING = 16;
+
+function manifest(photos: ReturnType<typeof photo>[], segmentCount = SEGMENTS_PER_RING) {
+  return {
+    manifestVersion: '1.0',
+    // The authoritative ring size the selector reads — see segmentCountFor.
+    config: { segmentCounts: { A: segmentCount, B: segmentCount, C: segmentCount } },
+    photos,
+    summary: { totalPhotos: photos.length },
+  };
+}
+
+/** A well-spread, sharp 16-per-ring EYE capture — the happy path. */
+function goodCapture() {
+  return manifest(
+    Array.from({ length: 16 }, (_, i) =>
+      photo({ file: `eye_${String(i).padStart(4, '0')}.jpg`, segmentIndex: i, blurScore: 100 })
+    )
+  );
+}
+
+describe('toRelativeImageKey', () => {
+  it('passes through a bundle-relative path unchanged (the packer manifest)', () => {
+    expect(toRelativeImageKey('images/EYE/eye_0001.jpg')).toBe('images/EYE/eye_0001.jpg');
+  });
+
+  it('strips the device prefix off an assembler-style storage path', () => {
+    expect(toRelativeImageKey('recapture/proj123/job456/images/EYE/frame_9.jpg')).toBe(
+      'images/EYE/frame_9.jpg'
+    );
+  });
+
+  it('normalizes leading slashes and backslashes', () => {
+    expect(toRelativeImageKey('/images/TOP/top_0002.jpg')).toBe('images/TOP/top_0002.jpg');
+    expect(toRelativeImageKey('recapture\\p\\j\\images\\LOW\\low_1.jpg')).toBe(
+      'images/LOW/low_1.jpg'
+    );
+  });
+
+  it('returns null for a path with no images/ segment rather than guessing', () => {
+    expect(toRelativeImageKey('capture_manifest.json')).toBeNull();
+    expect(toRelativeImageKey('')).toBeNull();
+  });
+});
+
+describe('selectPhotosForAutoGeneration', () => {
+  it('selects the target count from a good capture', () => {
+    const result = selectPhotosForAutoGeneration(goodCapture());
+
+    expect(result.outcome).toBe('SELECTED');
+    if (result.outcome !== 'SELECTED') return;
+    expect(result.keys).toHaveLength(AUTO_TARGET_PHOTOS);
+    expect(new Set(result.keys).size).toBe(AUTO_TARGET_PHOTOS); // no duplicates
+  });
+
+  it('spreads the selection across all four yaw quadrants', () => {
+    const result = selectPhotosForAutoGeneration(goodCapture());
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    // 16 segments → quadrants are segments 0-3, 4-7, 8-11, 12-15.
+    const quadrants = result.keys.map((key) => {
+      const index = Number(/eye_(\d+)\.jpg$/.exec(key)![1]);
+      return Math.floor(index / 4);
+    });
+    expect(new Set(quadrants).size).toBe(4);
+  });
+
+  // ── THE LOAD-BEARING TEST ────────────────────────────────────────────────
+  // Four very sharp photos clustered in one quadrant, and mediocre-but-usable
+  // photos everywhere else. Naive "top 4 by sharpness" picks the cluster and
+  // gives Meshy one viewpoint four times.
+  it('prefers angular spread over raw sharpness', () => {
+    const photos = [
+      // Segments 0-3 (quadrant 0) — by far the sharpest.
+      ...Array.from({ length: 4 }, (_, i) =>
+        photo({ file: `sharp_${i}.jpg`, segmentIndex: i, blurScore: 900 })
+      ),
+      // One usable photo in each of the other three quadrants.
+      photo({ file: 'other_a.jpg', segmentIndex: 5, blurScore: 60 }),
+      photo({ file: 'other_b.jpg', segmentIndex: 9, blurScore: 60 }),
+      photo({ file: 'other_c.jpg', segmentIndex: 13, blurScore: 60 }),
+    ];
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    expect(result.keys).toHaveLength(4);
+    // Exactly ONE of the sharp cluster — not all four.
+    expect(result.keys.filter((k) => k.includes('sharp_'))).toHaveLength(1);
+    for (const file of ['other_a.jpg', 'other_b.jpg', 'other_c.jpg']) {
+      expect(result.keys.some((k) => k.endsWith(file))).toBe(true);
+    }
+  });
+
+  it('picks the sharpest photo WITHIN a quadrant', () => {
+    const photos = [
+      photo({ file: 'dull.jpg', segmentIndex: 0, blurScore: 50 }),
+      photo({ file: 'sharpest.jpg', segmentIndex: 1, blurScore: 400 }),
+      photo({ file: 'mid.jpg', segmentIndex: 2, blurScore: 120 }),
+      photo({ file: 'q1.jpg', segmentIndex: 4, blurScore: 100 }),
+      photo({ file: 'q2.jpg', segmentIndex: 8, blurScore: 100 }),
+      photo({ file: 'q3.jpg', segmentIndex: 12, blurScore: 100 }),
+    ];
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    expect(result.keys.some((k) => k.endsWith('sharpest.jpg'))).toBe(true);
+    expect(result.keys.some((k) => k.endsWith('dull.jpg'))).toBe(false);
+  });
+
+  it('backfills from the most distant quadrant when coverage is partial', () => {
+    // Only quadrants 0 and 2 are covered (a half-circle capture), 3 photos each.
+    const photos = [
+      ...Array.from({ length: 3 }, (_, i) =>
+        photo({ file: `near_${i}.jpg`, segmentIndex: i, blurScore: 100 - i })
+      ),
+      ...Array.from({ length: 3 }, (_, i) =>
+        photo({ file: `far_${i}.jpg`, segmentIndex: 8 + i, blurScore: 100 - i })
+      ),
+    ];
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    expect(result.keys).toHaveLength(4);
+    // Balanced 2/2 across the two covered quadrants, not 1/3.
+    expect(result.keys.filter((k) => k.includes('near_'))).toHaveLength(2);
+    expect(result.keys.filter((k) => k.includes('far_'))).toHaveLength(2);
+  });
+
+  it('falls back to yawDegrees when segmentIndex is absent', () => {
+    const photos = [0, 90, 180, 270].map((yaw) =>
+      photo({ file: `yaw_${yaw}.jpg`, segmentIndex: null, yawDegrees: yaw, blurScore: 100 })
+    );
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    expect(result.keys).toHaveLength(4);
+  });
+
+  it('prefers the EYE ring over TOP/LOW', () => {
+    const photos = [
+      ...Array.from({ length: 4 }, (_, i) =>
+        photo({ file: `eye_${i}.jpg`, segmentIndex: i * 4, blurScore: 100 })
+      ),
+      ...Array.from({ length: 4 }, (_, i) =>
+        photo({ file: `top_${i}.jpg`, ring: 'TOP', segmentIndex: i * 4, blurScore: 900 })
+      ),
+    ];
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    // Every pick is EYE, despite TOP being far sharper.
+    expect(result.keys.every((k) => k.includes('/EYE/'))).toBe(true);
+  });
+
+  it('falls back beyond EYE when the EYE ring is too small', () => {
+    const photos = [
+      photo({ file: 'eye_0.jpg', segmentIndex: 0, blurScore: 100 }),
+      ...Array.from({ length: 4 }, (_, i) =>
+        photo({ file: `top_${i}.jpg`, ring: 'TOP', segmentIndex: i * 4, blurScore: 100 })
+      ),
+    ];
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    expect(result.outcome).toBe('SELECTED');
+  });
+
+  it('drops keys that do not exist in the bucket listing', () => {
+    const photos = Array.from({ length: 8 }, (_, i) =>
+      photo({ file: `eye_${i}.jpg`, segmentIndex: i * 2, blurScore: 100 })
+    );
+    // Only 4 of the 8 photos actually landed in S3.
+    const availableKeys = [0, 2, 4, 6].map((i) => `images/EYE/eye_${i}.jpg`);
+    const result = selectPhotosForAutoGeneration(manifest(photos), { availableKeys });
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    expect(result.keys.every((k) => availableKeys.includes(k))).toBe(true);
+  });
+
+  it('avoids exposure-warned photos when enough clean ones exist', () => {
+    const photos = [
+      ...Array.from({ length: 4 }, (_, i) =>
+        photo({ file: `clean_${i}.jpg`, segmentIndex: i * 4, blurScore: 100 })
+      ),
+      ...Array.from({ length: 4 }, (_, i) =>
+        photo({
+          file: `warned_${i}.jpg`,
+          segmentIndex: i * 4 + 1,
+          blurScore: 900,
+          verdict: 'warn',
+        })
+      ),
+    ];
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    expect(result.keys.every((k) => k.includes('clean_'))).toBe(true);
+  });
+
+  it('uses warned photos rather than declining when there is nothing else', () => {
+    const photos = Array.from({ length: 4 }, (_, i) =>
+      photo({ file: `warned_${i}.jpg`, segmentIndex: i * 4, blurScore: 100, verdict: 'warn' })
+    );
+    expect(selectPhotosForAutoGeneration(manifest(photos)).outcome).toBe('SELECTED');
+  });
+
+  it('still selects when every photo is slightly soft (relaxes the floor)', () => {
+    const photos = Array.from({ length: 4 }, (_, i) =>
+      photo({
+        file: `soft_${i}.jpg`,
+        segmentIndex: i * 4,
+        blurScore: DEFAULT_MIN_BLUR_SCORE - 10,
+      })
+    );
+    // A whole capture being soft is still the best we have — better than
+    // declining a capture the user believes succeeded.
+    expect(selectPhotosForAutoGeneration(manifest(photos)).outcome).toBe('SELECTED');
+  });
+
+  // ── Declines: the money-saving paths ──────────────────────────────────────
+
+  // REGRESSION: segment indices only mean something relative to the ring size
+  // they were assigned in. Six photos at segments 0–1 of a 16-segment ring are
+  // a narrow arc; a selector that infers the ring size from the photos present
+  // concludes "a 2-segment ring" and maps them to OPPOSITE sides of the object,
+  // paying for a model built from one viewpoint. The ring size must come from
+  // the manifest config.
+  it('declines a single-viewpoint capture however sharp it is', () => {
+    const photos = Array.from({ length: 6 }, (_, i) =>
+      photo({ file: `same_${i}.jpg`, segmentIndex: i % 2, blurScore: 900 })
+    );
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+
+    expect(result).toEqual({ outcome: 'DECLINED', reason: 'INSUFFICIENT_SPREAD' });
+  });
+
+  it('falls back to yaw when the manifest carries no segment config', () => {
+    // Pre-config manifests exist; a fabricated ring size would be worse than
+    // using the absolute orientation the photos already carry.
+    const photos = [0, 90, 180, 270].map((yaw, i) =>
+      photo({ file: `p_${i}.jpg`, segmentIndex: i, yawDegrees: yaw, blurScore: 100 })
+    );
+    const withoutConfig = { manifestVersion: '1.0', photos };
+    const result = selectPhotosForAutoGeneration(withoutConfig);
+
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+    expect(result.keys).toHaveLength(4);
+  });
+
+  it('declines when too few photos are usable', () => {
+    const result = selectPhotosForAutoGeneration(
+      manifest([photo({ file: 'only.jpg', segmentIndex: 0, blurScore: 100 })])
+    );
+    expect(result.outcome).toBe('DECLINED');
+  });
+
+  it('declines when no photo carries a blur score', () => {
+    const photos = Array.from({ length: 4 }, (_, i) =>
+      photo({ file: `x_${i}.jpg`, segmentIndex: i * 4, blurScore: null })
+    );
+    expect(selectPhotosForAutoGeneration(manifest(photos))).toEqual({
+      outcome: 'DECLINED',
+      reason: 'NO_USABLE_PHOTOS',
+    });
+  });
+
+  it('declines when no imagePath resolves to a relative key', () => {
+    const photos = Array.from({ length: 4 }, (_, i) =>
+      photo({ file: `x_${i}.jpg`, segmentIndex: i * 4, imagePath: 'nowhere.jpg' })
+    );
+    expect(selectPhotosForAutoGeneration(manifest(photos))).toEqual({
+      outcome: 'DECLINED',
+      reason: 'NO_USABLE_PHOTOS',
+    });
+  });
+
+  it('declines an unreadable manifest instead of throwing', () => {
+    for (const bad of [undefined, null, 42, 'nope', {}, { photos: 'not-an-array' }]) {
+      expect(selectPhotosForAutoGeneration(bad)).toEqual({
+        outcome: 'DECLINED',
+        reason: 'MANIFEST_UNREADABLE',
+      });
+    }
+  });
+
+  it('is deterministic — the same manifest yields the same keys', () => {
+    const fixture = goodCapture();
+    const a = selectPhotosForAutoGeneration(fixture);
+    const b = selectPhotosForAutoGeneration(fixture);
+    expect(a).toEqual(b);
+  });
+});

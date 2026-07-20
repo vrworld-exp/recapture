@@ -1,9 +1,10 @@
 // src/routes/admin.ts
 //
-// Staff-only route group (mounted at /admin): cross-user live-project browse +
-// presigned-URL export for model artists. Every route runs requireAuth →
-// requireRole('MODEL_ARTIST') — ADMIN passes by role inheritance. Standard
-// envelope throughout; read-only.
+// Staff-only route group (mounted at /admin): cross-user live-project browse,
+// presigned-URL export, Meshy model generation, and ADMIN-only curation
+// (photo soft-delete, project soft/hard delete). Every route runs requireAuth →
+// requireRole('MODEL_ARTIST') — ADMIN passes by role inheritance; destructive
+// routes add their own requireRole('ADMIN'). Standard envelope throughout.
 import { Router } from 'express';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
@@ -12,8 +13,10 @@ import {
   adminListProjectsQuerySchema,
   adminProjectIdParamsSchema,
   adminDeletePhotosBodySchema,
+  adminDeleteProjectBodySchema,
   adminCreateModelBodySchema,
   adminModelIdParamsSchema,
+  adminModelImageUploadsBodySchema,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
@@ -21,10 +24,12 @@ import {
   getAdminProjectDetail,
   buildProjectExport,
   softDeleteProjectPhotos,
+  adminDeleteProject,
 } from '@/services/adminProjectsService';
 import {
   approveModel,
   createMeshyModelRequest,
+  createModelImageUploadUrls,
   latestSucceededModel,
   listProjectModels,
   toProjectModelDto,
@@ -294,6 +299,84 @@ router.delete(
 );
 
 /**
+ * DELETE /admin/projects/:id — delete a live project (staff curation of bad
+ * captures). ADMIN-ONLY, like the photo soft-delete above.
+ *
+ * Body: `{ mode: 'SOFT' | 'HARD', confirmName }`. SOFT flags `deletedAt`
+ * (hidden everywhere, recoverable); HARD permanently erases the project, its
+ * jobs, model records, and every S3 object under them. `confirmName` must echo
+ * the project's exact name for BOTH modes — enforced server-side with the same
+ * 422 CONFIRMATION_REQUIRED contract as the owner delete route, so the client
+ * dialog can share copy. Analytics carries hashed ids + the mode only.
+ */
+router.delete(
+  '/projects/:id',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = adminDeleteProjectBodySchema.safeParse(req.body);
+    if (!body.success) {
+      res.status(422).json({
+        status: 'error',
+        code: 'CONFIRMATION_REQUIRED',
+        message: 'Confirmation does not match the project name.',
+      });
+      return;
+    }
+
+    const result = await adminDeleteProject(params.data.id, body.data.mode, body.data.confirmName);
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Project not found.',
+      });
+      return;
+    }
+    if (result.outcome === 'CONFIRMATION_MISMATCH') {
+      res.status(422).json({
+        status: 'error',
+        code: 'CONFIRMATION_REQUIRED',
+        message: 'Confirmation does not match the project name.',
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.ADMIN_PROJECT_DELETED, {
+      actor_id_hash: hashIdentifier(req.user!.userId),
+      project_id_hash: hashIdentifier(result.projectId),
+      owner_id_hash: hashIdentifier(result.ownerId),
+      mode: body.data.mode,
+      ...(result.outcome === 'SOFT_DELETED'
+        ? { was_already_deleted: result.wasAlreadyDeleted }
+        : { objects_deleted: result.objectsDeleted }),
+    });
+
+    res.status(200).json({
+      status: 'success',
+      mode: body.data.mode,
+      projectId: result.projectId,
+      ...(result.outcome === 'SOFT_DELETED'
+        ? { wasAlreadyDeleted: result.wasAlreadyDeleted }
+        : {
+            objectsDeleted: result.objectsDeleted,
+            jobsDeleted: result.jobsDeleted,
+            modelsDeleted: result.modelsDeleted,
+          }),
+    });
+  })
+);
+
+/**
  * POST /admin/projects/:id/model — request a Meshy AI 3D model from 3–4 photos
  * the staff user picked in the Preview gallery.
  *
@@ -402,6 +485,90 @@ router.post(
     // A replay is not a new creation — 200 distinguishes it from the 201 that
     // actually enqueued a generation.
     res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({ status: 'success', model });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/model-images/upload-urls — presigned PUT slots for
+ * EDITED copies of selected photos (the Prepare-Images screen: polygon crop /
+ * background removal / lighting), uploaded before Create-Model so a generation
+ * runs on cleaned-up inputs while the original captures stay untouched.
+ *
+ * MODEL_ARTIST+ like Create-Model itself. Stateless and cheap (local presigns,
+ * no credits, no DB writes) — so the rate window is its own generous cap, and
+ * the credit guards remain on POST /model. The response's `uploads[].url`
+ * values are WRITE bearer credentials: the ONLY place they may appear — never
+ * in logs or analytics.
+ */
+router.post(
+  '/projects/:id/model-images/upload-urls',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = adminModelImageUploadsBodySchema.safeParse(req.body);
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      const field = issue?.path.join('.') || 'body';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `model-image-uploads:${userId}`,
+      env.MODEL_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.MODEL_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await createModelImageUploadUrls(params.data.id, body.data.count);
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_EXPORTABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'This project has no finalized upload to generate a model from.',
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(result.projectId),
+      job_id_hash: hashIdentifier(result.jobId),
+      file_count: result.uploads.length,
+      ttl_seconds: env.MODEL_IMAGE_UPLOAD_URL_TTL_SECONDS,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      uploads: result.uploads,
+      expiresAt: result.expiresAt,
+    });
   })
 );
 

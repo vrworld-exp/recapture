@@ -99,6 +99,40 @@ const envSchema = z.object({
   MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
   /** Sliding window for the Create-Model cap (seconds). */
   MESHY_CREATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * Presigned-PUT TTL for staff-EDITED model-input images (seconds). Short on
+   * purpose: the Prepare-Images screen exports and uploads immediately after
+   * requesting the slots — 15 min covers a slow connection with margin.
+   */
+  MODEL_IMAGE_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /** Max model-image upload-urls requests per staff user per window. Cheap
+   * (presigns only, no credits), so bounded generously — the credit guards
+   * stay on Create-Model itself. */
+  MODEL_IMAGE_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(60),
+  /** Sliding window for the model-image upload-urls cap (seconds). */
+  MODEL_IMAGE_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // ── Automatic model generation (docs/auto-model-generation-*.md) ───────────
+  /**
+   * The HARD gate on generating a model automatically when a capture finishes.
+   *
+   * Defaults to FALSE: auto-generation spends Meshy credits with no human in
+   * the loop, so it ships dark and is enabled deliberately per environment. The
+   * remote-config flag is the LIVE switch on top of this (both must be on) —
+   * this one cannot be flipped without a deploy, which is the point.
+   */
+  AUTO_MODEL_GENERATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+  /** Auto-generations one user may accrue per rolling 24h — the spend ceiling. */
+  AUTO_MODEL_MAX_PER_USER_PER_DAY: z.coerce.number().int().positive().default(10),
+  /**
+   * Sharpness floor (variance of Laplacian) for an auto-selected photo. Matches
+   * the client's REJECT threshold, so a frame the capture UI would have thrown
+   * away is never chosen here either.
+   */
+  AUTO_MODEL_MIN_BLUR_SCORE: z.coerce.number().nonnegative().default(40),
 
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /**

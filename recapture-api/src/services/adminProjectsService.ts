@@ -1,8 +1,9 @@
 // src/services/adminProjectsService.ts
 //
-// Cross-user "live projects" reads for staff (min role MODEL_ARTIST) — the
-// browse/detail/export surface behind /admin. Read-only by design: nothing in
-// here mutates a project or job.
+// Cross-user "live projects" surface for staff (min role MODEL_ARTIST) — the
+// browse/detail/export operations behind /admin. Reads throughout, plus two
+// ADMIN-only curation mutations: the photo soft-delete and the project
+// soft/hard delete (both confirmation-gated at the route).
 //
 // PII stance (v1): staff see an OPAQUE `ownerId` — never the owner's phone or
 // email. The DTO is the exact owner-facing Project DTO plus that ownerId, so
@@ -16,11 +17,15 @@ import {
   toProjectListItem,
   type ProjectListItem,
 } from '@/services/projectsService';
+import { ProjectModel } from '@/models/ProjectModel';
 import {
+  deleteObjectsUnderPrefix,
   listObjectsUnderPrefix,
   moveObject,
   presignObjectGetUrl,
 } from '@/services/s3ObjectStore';
+import { BUCKET_ARTIFACTS } from '@/config/s3';
+import type { AdminDeleteMode } from '@/validation/adminSchemas';
 import { encodeCursor, type ProjectCursor } from '@/utils/cursor';
 import { env } from '@/config/env';
 
@@ -183,6 +188,23 @@ export type BuildExportResult =
  */
 export const DELETED_KEY_PREFIX = 'deleted/';
 
+/**
+ * The reserved sub-prefix under a job root where staff-edited Meshy INPUT
+ * copies live (`{rawPrefix}model-input/{sessionId}/photo_{n}.jpg`) — uploaded
+ * by the Prepare-Images screen via presigned PUTs, then selected by relative
+ * key exactly like a captured photo. Kept UNDER the job root so the existing
+ * Create-Model containment, worker presigning, and hard-delete purge all work
+ * on them unchanged, but EXCLUDED from:
+ *   • the export manifest (below) — the Preview gallery shows the capture set,
+ *     never session-scoped edit artifacts, and
+ *   • the capture processor's object-count re-verification
+ *     (captureProcessingProcessor) — these objects appear AFTER finalize
+ *     verified the count, and must not fail a re-claimed capture job.
+ * Finalize itself needs no exclusion: it only counts for CREATED/UPLOADING
+ * jobs, and this namespace can only be written to an upload-FINALIZED job.
+ */
+export const MODEL_INPUT_KEY_PREFIX = 'model-input/';
+
 /** A job-root object key stripped to its export-relative form. */
 function toRelativeKey(absoluteKey: string, rawPrefix: string): string {
   return absoluteKey.startsWith(rawPrefix) ? absoluteKey.slice(rawPrefix.length) : absoluteKey;
@@ -210,12 +232,16 @@ export async function buildProjectExport(projectId: string): Promise<BuildExport
   if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
 
   const { rawBucket, rawPrefix } = job.upload;
-  // Soft-deleted objects live under `{rawPrefix}deleted/` — list everything,
-  // then drop that namespace so a curated-away photo never reappears in the
-  // export (and `fileCount` reflects the post-curation truth vs expectedFileCount).
-  const objects = (await listObjectsUnderPrefix(rawBucket, rawPrefix)).filter(
-    (object) => !toRelativeKey(object.key, rawPrefix).startsWith(DELETED_KEY_PREFIX)
-  );
+  // Reserved namespaces are dropped from the listing: `deleted/` (a curated-away
+  // photo never reappears in the export, and `fileCount` reflects the
+  // post-curation truth vs expectedFileCount) and `model-input/` (staff-edited
+  // Meshy input copies are session artifacts, not part of the capture set).
+  const objects = (await listObjectsUnderPrefix(rawBucket, rawPrefix)).filter((object) => {
+    const relative = toRelativeKey(object.key, rawPrefix);
+    return (
+      !relative.startsWith(DELETED_KEY_PREFIX) && !relative.startsWith(MODEL_INPUT_KEY_PREFIX)
+    );
+  });
 
   const ttlSeconds = env.ADMIN_EXPORT_URL_TTL_SECONDS;
   const generatedAt = new Date();
@@ -322,6 +348,110 @@ export async function softDeleteProjectPhotos(
   }
 
   return { outcome: 'DELETED', projectId: project.id as string, jobId: job.id as string, deleted, missing };
+}
+
+export type AdminDeleteProjectResult =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  /** `confirmName` did not equal the stored name — nothing was touched. */
+  | { outcome: 'CONFIRMATION_MISMATCH' }
+  | {
+      outcome: 'SOFT_DELETED';
+      projectId: string;
+      ownerId: string;
+      /** True when the project was already soft-deleted (idempotent replay). */
+      wasAlreadyDeleted: boolean;
+    }
+  | {
+      outcome: 'HARD_DELETED';
+      projectId: string;
+      ownerId: string;
+      objectsDeleted: number;
+      jobsDeleted: number;
+      modelsDeleted: number;
+    };
+
+/**
+ * ADMIN project delete — the "bad capture" curation tool. Two modes:
+ *
+ * SOFT flips `deletedAt` exactly like the owner's own delete: the project
+ * disappears from every list (owner AND staff — both filter `deletedAt: null`)
+ * but every byte stays; the team can restore it by clearing the flag. The flip
+ * is a conditional update on `deletedAt: null`, so a concurrent owner delete
+ * loses gracefully and the original timestamp is never overwritten. Repeats
+ * are idempotent.
+ *
+ * HARD erases the project FOR REAL: every S3 object under each capture job's
+ * rawPrefix (raw photos, the deleted/ soft-delete namespace, the manifest) AND
+ * the same prefix in the artifacts bucket (re-hosted Meshy models live under
+ * `{rawPrefix}models/{modelId}/` there), then the ProjectModel records, the
+ * jobs, and finally the project document itself. Deliberate order: storage
+ * first, the project row LAST — a crash mid-way leaves a visible project whose
+ * hard delete can simply be retried (every step is idempotent), never an
+ * invisible orphan paying for storage. A hard delete of an already-soft-deleted
+ * project is allowed (soft first, purge later is the expected workflow).
+ *
+ * In BOTH modes `confirmName` must equal the stored name — the same
+ * server-enforced confirmation as the owner route. A worker mid-generation on
+ * one of the deleted jobs loses its fenced writes and goes silent (its Meshy
+ * task is best-effort canceled by the processor's claim-loss path); that is an
+ * accepted race for an explicit admin purge.
+ */
+export async function adminDeleteProject(
+  projectId: string,
+  mode: AdminDeleteMode,
+  confirmName: string
+): Promise<AdminDeleteProjectResult> {
+  // No deletedAt filter: soft-delete replays idempotently, and hard delete
+  // must be able to purge a project that was soft-deleted first.
+  const project = await Project.findOne({ _id: new Types.ObjectId(projectId) }).exec();
+  if (!project) return { outcome: 'PROJECT_NOT_FOUND' };
+  if (confirmName !== project.name) return { outcome: 'CONFIRMATION_MISMATCH' };
+
+  const id = project.id as string;
+  const ownerId = project.userId.toHexString();
+
+  if (mode === 'SOFT') {
+    if (project.deletedAt) {
+      return { outcome: 'SOFT_DELETED', projectId: id, ownerId, wasAlreadyDeleted: true };
+    }
+    const updated = await Project.findOneAndUpdate(
+      { _id: project._id, deletedAt: null },
+      { $set: { deletedAt: new Date() } },
+      { new: true }
+    ).exec();
+    // A lost race means someone else soft-deleted it first — same end state.
+    return {
+      outcome: 'SOFT_DELETED',
+      projectId: id,
+      ownerId,
+      wasAlreadyDeleted: updated === null,
+    };
+  }
+
+  // HARD. Every job (capture AND generation) is fetched — only capture jobs
+  // carry an `upload` block, and its rawPrefix is the storage root both
+  // buckets share for this job's objects.
+  const jobs = await Job.find({ projectId: project._id }).exec();
+  let objectsDeleted = 0;
+  for (const job of jobs) {
+    if (!job.upload) continue;
+    const { rawBucket, rawPrefix } = job.upload;
+    objectsDeleted += await deleteObjectsUnderPrefix(rawBucket, rawPrefix);
+    objectsDeleted += await deleteObjectsUnderPrefix(BUCKET_ARTIFACTS, rawPrefix);
+  }
+
+  const models = await ProjectModel.deleteMany({ projectId: project._id }).exec();
+  const deletedJobs = await Job.deleteMany({ projectId: project._id }).exec();
+  await Project.deleteOne({ _id: project._id }).exec();
+
+  return {
+    outcome: 'HARD_DELETED',
+    projectId: id,
+    ownerId,
+    objectsDeleted,
+    jobsDeleted: deletedJobs.deletedCount ?? 0,
+    modelsDeleted: models.deletedCount ?? 0,
+  };
 }
 
 /**

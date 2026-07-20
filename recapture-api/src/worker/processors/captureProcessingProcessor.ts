@@ -20,8 +20,13 @@ import {
   DEFAULT_CAPTURE_FLOW_VARIANT,
   ringsForVariant,
 } from '@/models/types/captureVariants';
+import {
+  maybeAutoGenerateModel,
+  type AutoGenerationOutcome,
+} from '@/services/autoModelGenerationService';
 import { validateCaptureManifest } from '@/services/manifestValidationService';
-import { countObjectsUnderPrefix, getObjectText } from '@/services/s3ObjectStore';
+import { MODEL_INPUT_KEY_PREFIX } from '@/services/adminProjectsService';
+import { getObjectText, listObjectsUnderPrefix } from '@/services/s3ObjectStore';
 import { runCaptureProcessing } from '@/worker/processors/captureProcessingPipeline';
 import { log } from '@/worker/workerLog';
 import { NonRetryableJobError, type JobProcessor } from '@/worker/workerTypes';
@@ -50,7 +55,14 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
   // ── Validate 2: the S3-listed object count under the job's prefix still
   // matches expectedFilesCount exactly (manifest included, same semantics as
   // finalize) — an object deleted since enqueue must not reach the pipeline.
-  const filesVerified = await countObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix);
+  // The reserved `model-input/` namespace (staff-edited Meshy input copies,
+  // written AFTER finalize verified the count) is excluded from the count:
+  // those objects are additive session artifacts and must not fail a
+  // re-claimed capture job.
+  const modelInputPrefix = `${upload.rawPrefix}${MODEL_INPUT_KEY_PREFIX}`;
+  const filesVerified = (
+    await listObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix)
+  ).filter((object) => !object.key.startsWith(modelInputPrefix)).length;
   if (filesVerified !== upload.expectedFilesCount) {
     throw new NonRetryableJobError(
       'FILE_COUNT_MISMATCH',
@@ -104,5 +116,37 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
     manifest: parsedManifest,
     filesVerified,
   });
-  return { validated: true, filesVerified, ...pipelineResult };
+
+  // ── Automatic model generation. STRICTLY LAST, and strictly best-effort.
+  //
+  // The capture has succeeded and its artifacts are durable by this point. A
+  // generation that could not be selected or enqueued is a retryable
+  // inconvenience — never a reason to fail a good capture and make the user
+  // re-shoot 48 photos. So every error here is swallowed after logging, and the
+  // outcome rides along in the job result for observability.
+  //
+  // Placed here rather than at finalize because the manifest is ALREADY parsed
+  // and validated and the object count already verified; selecting at finalize
+  // would re-fetch and re-validate the same document purely to pick photos.
+  let autoGeneration: AutoGenerationOutcome | undefined;
+  try {
+    autoGeneration = await maybeAutoGenerateModel({ job, manifest: parsedManifest });
+    log('info', 'Auto model generation decision', {
+      jobId: job._id,
+      projectId: job.projectId,
+      ...autoGeneration,
+    });
+  } catch (err: unknown) {
+    log('error', 'Auto model generation threw — capture job is unaffected', {
+      jobId: job._id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return {
+    validated: true,
+    filesVerified,
+    ...pipelineResult,
+    ...(autoGeneration ? { autoGeneration } : {}),
+  };
 };

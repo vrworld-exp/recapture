@@ -139,7 +139,7 @@ export async function sendOtp(input: SendOtpInput): Promise<SendOtpResult> {
     } else {
       await sendEmail(input.email, code);
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
 
     console.error('OTP dispatch failed:', e);
 

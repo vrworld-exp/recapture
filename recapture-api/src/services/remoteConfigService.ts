@@ -21,6 +21,31 @@ export interface RemoteConfigResult {
  * Reject-to-defaults policy: a partially-valid stored config is treated as
  * invalid (no field-level merge) to keep the served payload predictable.
  */
+/**
+ * Reads a SERVER-SIDE operational flag off the same config document.
+ *
+ * Deliberately NOT part of `remoteConfigSchema`: that schema is the client wire
+ * payload — `.strict()`, reject-to-defaults, and documented as free of internal
+ * fields. Adding an ops flag there would put a server switch on the wire and,
+ * worse, a malformed value would fail validation and silently drop the WHOLE
+ * config to defaults. Instead the flag rides on the store document (which is
+ * `strict: false`) and is read directly here; `getRemoteConfig` picks only its
+ * named fields, so the served payload is unaffected by anything added this way.
+ *
+ * Ops flip it with a one-line update to the `client_configs` document — no
+ * deploy, no app release.
+ *
+ * THROWS on a store failure. Unlike the client path (which must never 5xx),
+ * callers here are gating real spending and must decide their own fallback;
+ * silently returning `false` or `true` would make an outage look like a
+ * decision.
+ */
+export async function getServerFlag(key: string): Promise<boolean | undefined> {
+  const doc = await ClientConfig.findOne().sort({ updatedAt: -1 }).lean().exec();
+  const value = (doc as Record<string, unknown> | null)?.[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
 export async function getRemoteConfig(): Promise<RemoteConfigResult> {
   try {
     // Single global config; newest wins if more than one exists.
