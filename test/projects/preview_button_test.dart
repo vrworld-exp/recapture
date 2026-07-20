@@ -11,12 +11,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/app/theme/app_theme.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
 import 'package:recapture/presentation/screens/projects/live_projects_view.dart';
 import 'package:recapture/presentation/widgets/project_card.dart';
+import 'repo_fake_defaults.dart';
 
 Project _project(ProjectStatus status) => Project(
       id: 'proj-123',
@@ -25,7 +27,12 @@ Project _project(ProjectStatus status) => Project(
       updatedAt: DateTime(2026, 7, 1),
     );
 
-class _StubLiveRepo implements LiveProjectsRepository {
+class _StubLiveRepo
+    with
+        FakeModelGenerationDefaults,
+        FakeAdminDeleteDefaults,
+        FakeModelImageUploadDefaults
+    implements LiveProjectsRepository {
   _StubLiveRepo(this._page);
   final LiveProjectsPage _page;
 
@@ -122,7 +129,12 @@ void main() {
     );
 
     await tester.pumpWidget(ProviderScope(
-      overrides: [liveProjectsRepositoryProvider.overrideWithValue(repo)],
+      overrides: [
+        liveProjectsRepositoryProvider.overrideWithValue(repo),
+        // The Live tab reads the admin flag for its delete affordance; without
+        // this override the real userRoleProvider chain would open Hive.
+        isAdminProvider.overrideWithValue(false),
+      ],
       child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
     ));
     // Resolve the async list() load without waiting for the loading spinner to

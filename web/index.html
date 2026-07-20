@@ -31,6 +31,12 @@
 
   <title>recapture</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- model_viewer_plus (3D model viewer): on web the package strips the
+       <script> from its own HTML template and requires the <model-viewer>
+       custom element to be registered here instead — without this line the
+       viewer renders an inert blank element. -->
+  <script type="module" src="assets/packages/model_viewer_plus/assets/model-viewer.min.js" defer></script>
 </head>
 <body>
   <!--

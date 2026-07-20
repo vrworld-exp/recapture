@@ -8,6 +8,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
+import '../../../data/repositories/projects_repository.dart';
 import '../../../domain/entities/project.dart';
 import '../../../domain/entities/project_status.dart';
 import '../../../utils/analytics.dart';
@@ -18,6 +19,7 @@ import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
 import 'live_projects_view.dart';
+import 'model_viewer_screen.dart';
 
 /// Which list the (staff-only) segmented control shows. Non-staff users never
 /// see the control and always get [mine].
@@ -148,10 +150,31 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     context.goNamed(AppRouteNames.preCapture, extra: p.id);
   }
 
-  void _onView(Project p) {
+  /// Opens the project's finished 3D model when it has one.
+  ///
+  /// The model is fetched HERE, on tap, rather than watched per card: the
+  /// projects list DTO doesn't carry it (see ProjectsRepository.fetchModel), and
+  /// one request per completed card would be an N+1 across the whole list.
+  /// Projects without a generated model keep the previous behaviour exactly.
+  Future<void> _onView(Project p) async {
     if (!_claim(p)) return;
     _logAction('view', p);
-    // TODO(viewer): route to the project detail/viewer for p.id once it exists.
+    try {
+      final model = await ref.read(projectsRepositoryProvider).fetchModel(p.id);
+      if (!mounted) return;
+      if (model != null && model.isViewable) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ModelViewerScreen(model: model, title: p.name),
+          ),
+        );
+        return;
+      }
+    } catch (_) {
+      // Offline / server hiccup: fall through to the existing destination
+      // rather than dead-ending the tap on an error.
+    }
+    if (!mounted) return;
     context.goNamed(AppRouteNames.modelReady);
   }
 
@@ -162,6 +185,27 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     _logAction('preview', p);
     context.pushNamed(
       AppRouteNames.previewGallery,
+      pathParameters: {'id': p.id},
+    );
+  }
+
+  /// Staff-only per-project model history — the persistent way back to a
+  /// generated model once you've left the screen that created it. Pushed, like
+  /// Preview, and likewise unclaimed: pure navigation, and the history screen
+  /// owns its own load/empty/error states.
+  ///
+  /// Shown only for a project with a VIEWABLE model (`modelCount > 0` on the
+  /// Project DTO — one aggregation per list page server-side, never a request
+  /// per card). The count is SUCCEEDED-only by backend contract, so a project
+  /// whose generations all FAILED shows no button; its failures stay visible on
+  /// the generation screen, not here.
+  ///
+  /// The button carries no NUMBER on purpose — the count exists to decide
+  /// whether to render it, and the very next tap shows the full history anyway.
+  void _onModels(Project p) {
+    _logAction('models', p);
+    context.pushNamed(
+      AppRouteNames.modelHistory,
       pathParameters: {'id': p.id},
     );
   }
@@ -343,6 +387,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 onMore: _onMore,
                 onPreview:
                     isStaff && _isExportable(project) ? _onPreview : null,
+                // Also requires a VIEWABLE model: the history has nothing to
+                // show otherwise, and a button that opens an empty screen is
+                // worse than no button. Failed-only projects therefore show no
+                // Models button (see ProjectListItem.modelCount).
+                onModels: isStaff && project.hasViewableModels ? _onModels : null,
               );
             },
           ),

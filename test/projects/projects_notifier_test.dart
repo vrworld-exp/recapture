@@ -13,6 +13,7 @@ import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/create_project_options.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
+import 'repo_fake_defaults.dart';
 
 Project _p(String id, {String? name, ProjectStatus status = ProjectStatus.draft}) {
   return Project(
@@ -24,7 +25,7 @@ Project _p(String id, {String? name, ProjectStatus status = ProjectStatus.draft}
 }
 
 /// Controllable in-memory projects repository.
-class FakeProjectsRepository implements ProjectsRepository {
+class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRepository {
   FakeProjectsRepository(this.seed);
 
   List<Project> seed;

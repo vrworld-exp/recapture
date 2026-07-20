@@ -99,6 +99,18 @@ const envSchema = z.object({
   MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
   /** Sliding window for the Create-Model cap (seconds). */
   MESHY_CREATE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * Presigned-PUT TTL for staff-EDITED model-input images (seconds). Short on
+   * purpose: the Prepare-Images screen exports and uploads immediately after
+   * requesting the slots — 15 min covers a slow connection with margin.
+   */
+  MODEL_IMAGE_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /** Max model-image upload-urls requests per staff user per window. Cheap
+   * (presigns only, no credits), so bounded generously — the credit guards
+   * stay on Create-Model itself. */
+  MODEL_IMAGE_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(60),
+  /** Sliding window for the model-image upload-urls cap (seconds). */
+  MODEL_IMAGE_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // ── Automatic model generation (docs/auto-model-generation-*.md) ───────────
   /**

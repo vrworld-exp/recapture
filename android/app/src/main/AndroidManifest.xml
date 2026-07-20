@@ -81,7 +81,7 @@
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="false"
         android:hardwareAccelerated="true"
-        android:usesCleartextTraffic="false">
+        android:networkSecurityConfig="@xml/network_security_config">
 
         <!-- Main Activity -->
         <activity
@@ -135,6 +135,18 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />
             <data android:mimeType="text/plain" />
+        </intent>
+
+        <!-- Google Scene Viewer AR (model_viewer_plus): the 3D model viewer's
+             "View in your space" launches an ACTION_VIEW intent into the Google
+             app. Android 11+ package-visibility rules require declaring the
+             target here or the intent silently fails to resolve. Scene Viewer
+             itself handles ARCore capability/install — no AR SDK is bundled. -->
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <package android:name="com.google.ar.core" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
         </intent>
     </queries>
 

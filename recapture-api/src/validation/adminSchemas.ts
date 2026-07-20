@@ -48,6 +48,28 @@ export const adminDeletePhotosBodySchema = z
 export type AdminDeletePhotosBody = z.infer<typeof adminDeletePhotosBodySchema>;
 
 /**
+ * How an admin project delete behaves. SOFT = flag `deletedAt` (hidden from
+ * every list, recoverable by the team); HARD = permanently erase the project,
+ * its jobs, its model records and every S3 object they own.
+ */
+export const ADMIN_DELETE_MODES = ['SOFT', 'HARD'] as const;
+export type AdminDeleteMode = (typeof ADMIN_DELETE_MODES)[number];
+
+/**
+ * Body for DELETE /admin/projects/:id. `confirmName` must echo the project's
+ * exact name for BOTH modes — the server-side confirmation the owner delete
+ * route already enforces; deleting someone ELSE'S capture deserves no less.
+ */
+export const adminDeleteProjectBodySchema = z
+  .object({
+    mode: z.enum(ADMIN_DELETE_MODES),
+    confirmName: z.string().min(1).max(200),
+  })
+  .strict();
+
+export type AdminDeleteProjectBody = z.infer<typeof adminDeleteProjectBodySchema>;
+
+/**
  * Body for POST /admin/projects/:id/model: the RELATIVE export-manifest keys of
  * the 3–4 photos the staff user picked for Meshy generation.
  *
@@ -64,6 +86,20 @@ export const adminCreateModelBodySchema = z
   .strict();
 
 export type AdminCreateModelBody = z.infer<typeof adminCreateModelBodySchema>;
+
+/**
+ * Body for POST /admin/projects/:id/model-images/upload-urls: how many edited
+ * model-input images the Prepare-Images screen will upload. Bounded by the
+ * Meshy selection ceiling — a prep session never needs more slots than photos
+ * a generation can consume.
+ */
+export const adminModelImageUploadsBodySchema = z
+  .object({
+    count: z.number().int().min(1).max(4),
+  })
+  .strict();
+
+export type AdminModelImageUploadsBody = z.infer<typeof adminModelImageUploadsBodySchema>;
 
 /** `:id`/`:modelId` params for the model approve route. */
 export const adminModelIdParamsSchema = z

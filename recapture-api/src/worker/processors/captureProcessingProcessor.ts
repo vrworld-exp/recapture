@@ -25,7 +25,8 @@ import {
   type AutoGenerationOutcome,
 } from '@/services/autoModelGenerationService';
 import { validateCaptureManifest } from '@/services/manifestValidationService';
-import { countObjectsUnderPrefix, getObjectText } from '@/services/s3ObjectStore';
+import { MODEL_INPUT_KEY_PREFIX } from '@/services/adminProjectsService';
+import { getObjectText, listObjectsUnderPrefix } from '@/services/s3ObjectStore';
 import { runCaptureProcessing } from '@/worker/processors/captureProcessingPipeline';
 import { log } from '@/worker/workerLog';
 import { NonRetryableJobError, type JobProcessor } from '@/worker/workerTypes';
@@ -54,7 +55,14 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
   // ── Validate 2: the S3-listed object count under the job's prefix still
   // matches expectedFilesCount exactly (manifest included, same semantics as
   // finalize) — an object deleted since enqueue must not reach the pipeline.
-  const filesVerified = await countObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix);
+  // The reserved `model-input/` namespace (staff-edited Meshy input copies,
+  // written AFTER finalize verified the count) is excluded from the count:
+  // those objects are additive session artifacts and must not fail a
+  // re-claimed capture job.
+  const modelInputPrefix = `${upload.rawPrefix}${MODEL_INPUT_KEY_PREFIX}`;
+  const filesVerified = (
+    await listObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix)
+  ).filter((object) => !object.key.startsWith(modelInputPrefix)).length;
   if (filesVerified !== upload.expectedFilesCount) {
     throw new NonRetryableJobError(
       'FILE_COUNT_MISMATCH',

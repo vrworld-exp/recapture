@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/live_projects_notifier.dart';
 import '../../../application/projects/project_export_service.dart';
 import '../../../data/repositories/live_projects_repository.dart';
@@ -16,6 +17,7 @@ import '../../../utils/extensions.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_status_pill.dart';
+import 'admin_delete_project_dialog.dart';
 
 /// Staff-only "Live projects" tab body: every user's captured
 /// (upload-finalized) project, newest first, with a per-project Export action
@@ -34,6 +36,9 @@ class LiveProjectsView extends ConsumerStatefulWidget {
 class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
   /// Per-project in-flight guard so a double-tap can't fire two exports.
   final Set<String> _exportInFlight = <String>{};
+
+  /// Same guard for the admin delete — one confirmation flow per project.
+  final Set<String> _deleteInFlight = <String>{};
 
   final ScrollController _scroll = ScrollController();
 
@@ -82,12 +87,45 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
     }
   }
 
+  /// The ADMIN delete flow: mode + typed-name confirmation, then the API call.
+  /// Success removes the row (the notifier trims it locally) — soft or hard,
+  /// the project is out of the live set either way.
+  Future<void> _delete(LiveProject project) async {
+    if (_deleteInFlight.contains(project.id)) return;
+    final mode = await showAdminDeleteProjectDialog(
+      context,
+      projectName: project.name,
+    );
+    if (mode == null || !mounted) return;
+
+    setState(() => _deleteInFlight.add(project.id));
+    try {
+      await ref.read(liveProjectsProvider.notifier).deleteProject(
+            project.id,
+            mode: mode,
+            confirmName: project.name,
+          );
+      if (!mounted) return;
+      _snack(mode == AdminDeleteMode.hard
+          ? 'Project permanently deleted.'
+          : 'Project deleted — the team can restore it if needed.');
+    } catch (e) {
+      _showFailure(e);
+    } finally {
+      if (mounted) setState(() => _deleteInFlight.remove(project.id));
+    }
+  }
+
   /// Friendly, mapped-only failure copy (no raw codes/URLs — same rule as 9F).
   void _showFailure(Object error) {
     if (!mounted) return;
     final message = switch (error) {
       LiveProjectsException(failure: LiveProjectsFailure.notExportable) =>
         'This project has no finished upload to export yet.',
+      LiveProjectsException(failure: LiveProjectsFailure.confirmationMismatch) =>
+        'The name you typed doesn’t match this project.',
+      LiveProjectsException(failure: LiveProjectsFailure.notFound) =>
+        'This project no longer exists — pull to refresh.',
       LiveProjectsException(
         failure: LiveProjectsFailure.rateLimited,
         retryAfterSeconds: final retry
@@ -118,6 +156,9 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(liveProjectsProvider);
+    // Delete is ADMIN-only, mirroring the backend's requireRole('ADMIN') on
+    // DELETE /admin/projects/:id. MODEL_ARTIST sees no affordance at all.
+    final isAdmin = ref.watch(isAdminProvider);
     return async.when(
       loading: () => const Center(
         child: CircularProgressIndicator(color: AppColors.mirageRed),
@@ -175,6 +216,17 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
                   AppRouteNames.previewGallery,
                   pathParameters: {'id': project.id},
                 ),
+                // Null (button hidden) unless the project has a viewable model.
+                // No isStaff check needed: this whole view is already staff-only.
+                onModels: project.hasViewableModels
+                    ? () => context.pushNamed(
+                          AppRouteNames.modelHistory,
+                          pathParameters: {'id': project.id},
+                        )
+                    : null,
+                // Null (affordance hidden) for MODEL_ARTIST — delete is the
+                // ADMIN curation tool for bad captures.
+                onDelete: isAdmin ? () => _delete(project) : null,
               );
             },
           ),
@@ -204,12 +256,23 @@ class _LiveProjectCard extends StatelessWidget {
     required this.isExporting,
     required this.onExport,
     required this.onPreview,
+    this.onModels,
+    this.onDelete,
   });
 
   final LiveProject project;
   final bool isExporting;
   final VoidCallback onExport;
   final VoidCallback onPreview;
+
+  /// OPTIONAL "Models" action — the button renders ONLY when this is non-null,
+  /// mirroring ProjectCard.onPreview. The caller passes it only for a project
+  /// with a VIEWABLE model, so the button can never open an empty history.
+  final VoidCallback? onModels;
+
+  /// OPTIONAL delete action — non-null for ADMIN only (same null-hides-it
+  /// pattern as [onModels]); opens the soft/hard confirmation dialog.
+  final VoidCallback? onDelete;
 
   bool get _exportable =>
       project.status == ProjectStatus.processing ||
@@ -250,6 +313,19 @@ class _LiveProjectCard extends StatelessWidget {
               ),
               const SizedBox(width: AppSpacing.sm),
               AppStatusPill(status: project.status),
+              if (onDelete != null) ...[
+                const SizedBox(width: AppSpacing.xs),
+                IconButton(
+                  key: ValueKey('live_delete_${project.id}'),
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  color: AppColors.textMuted,
+                  tooltip: 'Delete project',
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 32, minHeight: 32),
+                  onPressed: onDelete,
+                ),
+              ],
             ],
           ),
           if (_exportable) ...[
@@ -279,6 +355,21 @@ class _LiveProjectCard extends StatelessWidget {
                 ),
               ],
             ),
+            // Own row rather than a third Expanded slot: three labelled+icon
+            // buttons across a phone-width card ellipsize. Rendered only when
+            // the project HAS a viewable model, so the row is rare and the
+            // common card keeps its two-button shape.
+            if (onModels != null) ...[
+              const SizedBox(height: AppSpacing.sm),
+              SizedBox(
+                width: double.infinity,
+                child: AppButton.secondary(
+                  label: 'Models',
+                  icon: Icons.view_in_ar_outlined,
+                  onPressed: onModels,
+                ),
+              ),
+            ],
           ],
         ],
       ),

@@ -20,6 +20,7 @@ class ProjectCard extends StatelessWidget {
     required this.onRetry,
     required this.onMore,
     this.onPreview,
+    this.onModels,
     this.isActionInFlight = false,
   });
 
@@ -37,6 +38,17 @@ class ProjectCard extends StatelessWidget {
   /// My-projects card is byte-for-byte unchanged for regular users. The screen
   /// passes it only for staff on an exportable project.
   final ValueChanged<Project>? onPreview;
+
+  /// OPTIONAL staff-only "Models" action, opening the project's 3D-model
+  /// generation history. Null for every non-staff caller (default) — same
+  /// null-means-hidden rule as [onPreview], so the shared card is unchanged for
+  /// regular users.
+  ///
+  /// Deliberately ONE button rather than one per model: the history grows
+  /// without bound (a project regenerated eight times would crowd this
+  /// fixed-height card with eight buttons), and a list has room to show the
+  /// timestamp, status, photo count and approval that a button cannot.
+  final ValueChanged<Project>? onModels;
 
   /// When true the action button shows a loading state and is disabled
   /// (per-project in-flight guard owned by the screen).
@@ -98,7 +110,10 @@ class ProjectCard extends StatelessWidget {
   List<Widget> _buildActionArea(BuildContext context) {
     final action = project.status.cardAction;
     final showPreview = onPreview != null;
-    if (action == ProjectCardAction.none && !showPreview) return const [];
+    final showModels = onModels != null;
+    if (action == ProjectCardAction.none && !showPreview && !showModels) {
+      return const [];
+    }
 
     final trailing = <Widget>[
       if (showPreview)
@@ -107,6 +122,13 @@ class ProjectCard extends StatelessWidget {
           icon: Icons.photo_library_outlined,
           isFullWidth: false,
           onPressed: () => onPreview!(project),
+        ),
+      if (showModels)
+        AppButton.secondary(
+          label: 'Models',
+          icon: Icons.view_in_ar_outlined,
+          isFullWidth: false,
+          onPressed: () => onModels!(project),
         ),
       if (action != ProjectCardAction.none) _buildAction(context, action),
     ];

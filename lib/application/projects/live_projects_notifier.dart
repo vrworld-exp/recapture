@@ -79,6 +79,26 @@ class LiveProjectsNotifier extends AsyncNotifier<LiveProjectsState> {
       LiveProjectsState(items: page.items, nextCursor: page.nextCursor),
     );
   }
+
+  /// ADMIN delete (soft or hard). On success the row is removed locally —
+  /// both modes take the project out of the live set, so no refetch is needed
+  /// (the cursor stays valid: removing an item can't skip rows). Failures
+  /// rethrow untouched for the screen's mapped copy.
+  Future<void> deleteProject(
+    String projectId, {
+    required AdminDeleteMode mode,
+    required String confirmName,
+  }) async {
+    await _repo.deleteProject(projectId, mode: mode, confirmName: confirmName);
+    final current = state.valueOrNull;
+    if (current == null) return;
+    state = AsyncData(current.copyWith(
+      items: [
+        for (final p in current.items)
+          if (p.id != projectId) p,
+      ],
+    ));
+  }
 }
 
 /// The staff Live projects list. Only watched from staff-gated UI — the
