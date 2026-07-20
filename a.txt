@@ -534,6 +534,7 @@ Client (widget + unit):
 
 6. Admin able to delete the live projects too, Because if not good capture we'll delete that, Here we can ask to admin for hard delete and soft delete thing. ✅
 
+7. Crop img then, send to generate the 3d is not working fine. But direction get changed so no need work more on this.
 
 
 
