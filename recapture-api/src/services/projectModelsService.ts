@@ -10,6 +10,7 @@
 //
 // Returns typed result unions the route maps to HTTP (no Express types here),
 // per the AGENTS.md routes → services → models layering.
+import { randomUUID } from 'node:crypto';
 import { Types } from 'mongoose';
 import { Project } from '@/models/Project';
 import { Job, MESHY_MODEL_GENERATION_JOB_TYPE } from '@/models/Job';
@@ -20,7 +21,13 @@ import type {
   ModelStatus,
 } from '@/models/types/projectModel.types';
 import type { UserRole } from '@/models/User';
-import { findExportableJob, isContainedRelativeKey } from '@/services/adminProjectsService';
+import {
+  findExportableJob,
+  isContainedRelativeKey,
+  MODEL_INPUT_KEY_PREFIX,
+} from '@/services/adminProjectsService';
+import { presignObjectPutUrl } from '@/services/s3ObjectStore';
+import { env } from '@/config/env';
 
 /**
  * Meshy Multi-Image to 3D accepts 1–4 images. We require a MINIMUM of 3: with
@@ -231,6 +238,80 @@ export async function createMeshyModelRequest(
 
 function isDuplicateKeyError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
+}
+
+// ── Edited model-input uploads (the client's "Prepare Images" screen) ────────
+
+/** One presigned upload slot for an edited model-input image. */
+export interface ModelImageUploadSlot {
+  /** Job-root-RELATIVE key — pass this to Create-Model exactly like a
+   * capture-photo key. Always under the reserved `model-input/` namespace. */
+  key: string;
+  /** Presigned PUT URL (Content-Type locked to image/jpeg). A WRITE bearer
+   * credential — may appear ONLY in the route response, never in logs. */
+  url: string;
+}
+
+export type CreateModelImageUploadsResult =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  | { outcome: 'NOT_EXPORTABLE' }
+  | {
+      outcome: 'CREATED';
+      projectId: string;
+      jobId: string;
+      uploads: ModelImageUploadSlot[];
+      expiresAt: string;
+    };
+
+/**
+ * Presigns PUT slots for staff-EDITED copies of selected photos (crop /
+ * background removal / lighting), so a Meshy generation can run on cleaned-up
+ * inputs while the original captures stay untouched.
+ *
+ * The keys land under the exportable job's own prefix — in the reserved
+ * `model-input/` namespace — so the EXISTING Create-Model containment check,
+ * the worker's presigned-GET resolution, and the admin hard-delete purge all
+ * apply to them with no special casing. Each call mints a fresh session id;
+ * nothing is recorded in the DB (an abandoned session leaves only a few small
+ * orphaned objects, purged with the project).
+ *
+ * Stateless like the capture upload-urls route: re-requesting is cheap and
+ * idempotent in effect (new keys, no side effects), so it needs no
+ * Idempotency-Key — the credit guards live on Create-Model, not here.
+ */
+export async function createModelImageUploadUrls(
+  projectId: string,
+  count: number
+): Promise<CreateModelImageUploadsResult> {
+  const project = await Project.findOne({
+    _id: new Types.ObjectId(projectId),
+    deletedAt: null,
+  }).exec();
+  if (!project) return { outcome: 'PROJECT_NOT_FOUND' };
+
+  const job = await findExportableJob(projectId);
+  if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
+
+  const { rawBucket, rawPrefix } = job.upload;
+  const ttlSeconds = env.MODEL_IMAGE_UPLOAD_URL_TTL_SECONDS;
+  const sessionId = randomUUID();
+  const uploads = await Promise.all(
+    Array.from({ length: count }, async (_, index) => {
+      const key = `${MODEL_INPUT_KEY_PREFIX}${sessionId}/photo_${index + 1}.jpg`;
+      return {
+        key,
+        url: await presignObjectPutUrl(rawBucket, `${rawPrefix}${key}`, ttlSeconds, 'image/jpeg'),
+      };
+    })
+  );
+
+  return {
+    outcome: 'CREATED',
+    projectId: project.id as string,
+    jobId: job.id as string,
+    uploads,
+    expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+  };
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────────

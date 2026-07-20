@@ -188,6 +188,23 @@ export type BuildExportResult =
  */
 export const DELETED_KEY_PREFIX = 'deleted/';
 
+/**
+ * The reserved sub-prefix under a job root where staff-edited Meshy INPUT
+ * copies live (`{rawPrefix}model-input/{sessionId}/photo_{n}.jpg`) — uploaded
+ * by the Prepare-Images screen via presigned PUTs, then selected by relative
+ * key exactly like a captured photo. Kept UNDER the job root so the existing
+ * Create-Model containment, worker presigning, and hard-delete purge all work
+ * on them unchanged, but EXCLUDED from:
+ *   • the export manifest (below) — the Preview gallery shows the capture set,
+ *     never session-scoped edit artifacts, and
+ *   • the capture processor's object-count re-verification
+ *     (captureProcessingProcessor) — these objects appear AFTER finalize
+ *     verified the count, and must not fail a re-claimed capture job.
+ * Finalize itself needs no exclusion: it only counts for CREATED/UPLOADING
+ * jobs, and this namespace can only be written to an upload-FINALIZED job.
+ */
+export const MODEL_INPUT_KEY_PREFIX = 'model-input/';
+
 /** A job-root object key stripped to its export-relative form. */
 function toRelativeKey(absoluteKey: string, rawPrefix: string): string {
   return absoluteKey.startsWith(rawPrefix) ? absoluteKey.slice(rawPrefix.length) : absoluteKey;
@@ -215,12 +232,16 @@ export async function buildProjectExport(projectId: string): Promise<BuildExport
   if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
 
   const { rawBucket, rawPrefix } = job.upload;
-  // Soft-deleted objects live under `{rawPrefix}deleted/` — list everything,
-  // then drop that namespace so a curated-away photo never reappears in the
-  // export (and `fileCount` reflects the post-curation truth vs expectedFileCount).
-  const objects = (await listObjectsUnderPrefix(rawBucket, rawPrefix)).filter(
-    (object) => !toRelativeKey(object.key, rawPrefix).startsWith(DELETED_KEY_PREFIX)
-  );
+  // Reserved namespaces are dropped from the listing: `deleted/` (a curated-away
+  // photo never reappears in the export, and `fileCount` reflects the
+  // post-curation truth vs expectedFileCount) and `model-input/` (staff-edited
+  // Meshy input copies are session artifacts, not part of the capture set).
+  const objects = (await listObjectsUnderPrefix(rawBucket, rawPrefix)).filter((object) => {
+    const relative = toRelativeKey(object.key, rawPrefix);
+    return (
+      !relative.startsWith(DELETED_KEY_PREFIX) && !relative.startsWith(MODEL_INPUT_KEY_PREFIX)
+    );
+  });
 
   const ttlSeconds = env.ADMIN_EXPORT_URL_TTL_SECONDS;
   const generatedAt = new Date();

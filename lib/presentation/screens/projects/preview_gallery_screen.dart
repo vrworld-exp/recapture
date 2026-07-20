@@ -16,13 +16,14 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
-import '../../../application/projects/model_generation_notifier.dart';
 import '../../../application/projects/preview_download_service.dart';
 import '../../../application/projects/preview_gallery_notifier.dart';
 import '../../../data/repositories/live_projects_repository.dart';
 import '../../../domain/entities/preview_manifest.dart';
+import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/delete_confirmation_modal.dart';
+import 'image_prep_screen.dart';
 import 'model_generation_screen.dart';
 
 class PreviewGalleryScreen extends ConsumerStatefulWidget {
@@ -77,10 +78,9 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
   /// server resolves against the job prefix.
   final Set<String> _selected = <String>{};
 
-  bool _creating = false;
-
   bool get _canCreate =>
-      _selected.length >= kMinModelPhotos && _selected.length <= kMaxModelPhotos;
+      _selected.length >= kMinModelPhotos &&
+      _selected.length <= kMaxModelPhotos;
 
   void _toggleSelecting() {
     setState(() {
@@ -97,46 +97,42 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
     });
   }
 
-  /// Requests a generation from the current selection and opens the status view.
+  /// Opens the Prepare-Images step for the current selection. That screen owns
+  /// export/upload and the Create-Model request itself (same idempotency
+  /// contract as before); it pops with the created record, and THIS screen
+  /// opens the status view — backing out of prep keeps the selection intact.
   Future<void> _createModel() async {
-    if (_creating || !_canCreate) return;
-    setState(() => _creating = true);
-    try {
-      final model = await ref
-          .read(modelGenerationProvider(widget.projectId).notifier)
-          .createModel(
-            _selected.toList(),
-            // One key per selection attempt: a double-tap or a retried request
-            // resolves to the SAME record server-side instead of paying for a
-            // second generation.
-            idempotencyKey: _idempotencyKeyFor(_selected),
-          );
-      if (!mounted) return;
-      setState(() {
-        _selecting = false;
-        _selected.clear();
-      });
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ModelGenerationScreen(
-            projectId: widget.projectId,
-            modelId: model.id,
-          ),
-        ),
-      );
-    } catch (e) {
-      _snack(failureCopy(e));
-    } finally {
-      if (mounted) setState(() => _creating = false);
-    }
-  }
+    if (!_canCreate) return;
+    final manifest =
+        ref.read(previewGalleryProvider(widget.projectId)).valueOrNull;
+    if (manifest == null) return;
+    final photos = [
+      for (final photo in manifest.files)
+        if (_selected.contains(photo.key)) photo,
+    ];
 
-  /// A stable key for one (project, selection) pair, so an accidental re-tap of
-  /// the same selection replays rather than re-charges. Choosing a different
-  /// set is a genuinely different request and gets a different key.
-  String _idempotencyKeyFor(Set<String> keys) {
-    final sorted = keys.toList()..sort();
-    return '${widget.projectId}:${sorted.join('|')}'.hashCode.toRadixString(16);
+    final model = await Navigator.of(context).push<ProjectModelView>(
+      MaterialPageRoute<ProjectModelView>(
+        builder: (_) => ImagePrepScreen(
+          projectId: widget.projectId,
+          photos: photos,
+        ),
+      ),
+    );
+    if (model == null || !mounted) return;
+
+    setState(() {
+      _selecting = false;
+      _selected.clear();
+    });
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ModelGenerationScreen(
+          projectId: widget.projectId,
+          modelId: model.id,
+        ),
+      ),
+    );
   }
 
   void _snack(String message) {
@@ -258,7 +254,8 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
         ),
         error: (error, __) => _PreviewErrorView(
           message: failureCopy(error),
-          onRetry: () => ref.invalidate(previewGalleryProvider(widget.projectId)),
+          onRetry: () =>
+              ref.invalidate(previewGalleryProvider(widget.projectId)),
         ),
         data: (manifest) => _body(manifest),
       ),
@@ -294,7 +291,6 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
               key: const ValueKey('create_model_cta'),
               label: 'Create Model',
               icon: Icons.auto_awesome,
-              isLoading: _creating,
               onPressed: _canCreate ? _createModel : null,
             ),
           ],
@@ -323,8 +319,7 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
             SliverPadding(
               padding: const EdgeInsets.all(AppSpacing.lg),
               sliver: SliverGrid(
-                gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 3,
                   mainAxisSpacing: AppSpacing.sm,
                   crossAxisSpacing: AppSpacing.sm,
@@ -456,9 +451,8 @@ class _SelectionOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        border: selected
-            ? Border.all(color: AppColors.mirageRed, width: 3)
-            : null,
+        border:
+            selected ? Border.all(color: AppColors.mirageRed, width: 3) : null,
         // Unselected tiles recede so the picked set reads at a glance.
         color: selected ? null : Colors.black.withValues(alpha: 0.35),
       ),

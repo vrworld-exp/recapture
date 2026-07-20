@@ -62,6 +62,7 @@ export const AnalyticsEvent = {
   // ── Meshy AI model generation (staff-triggered) ───────────────────────────
   MODEL_GENERATION_REQUESTED: 'model_generation_requested',
   MODEL_APPROVED: 'model_approved',
+  MODEL_IMAGE_UPLOADS_GENERATED: 'model_image_uploads_generated',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -367,6 +368,19 @@ const modelGenerationRequestedProps = z
   })
   .strict();
 
+/** Staff requested presigned PUT slots for EDITED model-input images
+ * (POST /admin/projects/:id/model-images/upload-urls). Ids hashed, counts only —
+ * NEVER a key or presigned URL. */
+const modelImageUploadsGeneratedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    job_id_hash: z.string().min(1),
+    file_count: z.number().int().positive(),
+    ttl_seconds: z.number().int().positive(),
+  })
+  .strict();
+
 /** Staff approved a generated model — the "skip manual creation" signal. */
 const modelApprovedProps = z
   .object({
@@ -418,6 +432,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
   [AnalyticsEvent.MODEL_GENERATION_REQUESTED]: modelGenerationRequestedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,
+  [AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED]: modelImageUploadsGeneratedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

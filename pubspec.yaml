@@ -49,6 +49,11 @@ dependencies:
   json_annotation: ^4.9.0
   share_plus: ^13.2.0
 
+  # Pure-Dart image processing — the Prepare-Images export pass (polygon crop
+  # with white fill, lighting bake, rotate, JPEG re-encode) before Meshy
+  # generation. Pure Dart on purpose: no native plugin, works on every target.
+  image: ^4.2.0
+
   # 3D model viewer (GLB) for generated models — model-viewer web component
   # under the hood; renders the CloudFront glbUrl with orbit controls + AR.
   model_viewer_plus: ^1.9.3

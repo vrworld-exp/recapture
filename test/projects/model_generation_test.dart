@@ -9,11 +9,15 @@
 //
 // Hermetic: fake repo, no network. Images/ModelViewer are never loaded — taps
 // hit the GestureDetector/button, which exist regardless of network state.
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image/image.dart' as img;
 import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
+import 'package:recapture/application/projects/image_prep_image_loader.dart';
 import 'package:recapture/application/projects/preview_download_service.dart';
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
@@ -25,7 +29,9 @@ import 'package:recapture/presentation/screens/projects/preview_gallery_screen.d
 
 import 'repo_fake_defaults.dart';
 
-class _FakeRepo with FakeAdminDeleteDefaults implements LiveProjectsRepository {
+class _FakeRepo
+    with FakeAdminDeleteDefaults, FakeModelImageUploadDefaults
+    implements LiveProjectsRepository {
   _FakeRepo({this.models = const []});
 
   Map<String, dynamic> exportResult = const {};
@@ -77,12 +83,24 @@ class _NoopDownloader implements PreviewDownloader {
   Future<void> download(PreviewPhoto photo) async {}
 }
 
+/// Prepare-Images sits between selection and the create request now — feed it
+/// a real (tiny) PNG so it can read dimensions and enable Generate.
+class _FakePrepLoader implements PrepImageLoader {
+  static final Uint8List _png = Uint8List.fromList(
+    img.encodePng(img.Image(width: 8, height: 6, numChannels: 3)),
+  );
+
+  @override
+  Future<Uint8List> load(PreviewPhoto photo) async => _png;
+}
+
 Map<String, dynamic> _manifest(List<String> keys) => {
       'expiresAt': '2099-01-01T00:00:00.000Z',
       'fileCount': keys.length,
       'expectedFileCount': keys.length,
       'files': [
-        for (final k in keys) {'key': k, 'url': 'https://signed/$k', 'size': 100},
+        for (final k in keys)
+          {'key': k, 'url': 'https://signed/$k', 'size': 100},
       ],
     };
 
@@ -95,6 +113,7 @@ Widget _gallery(_FakeRepo repo, {bool staff = true, int instance = 0}) =>
       overrides: [
         liveProjectsRepositoryProvider.overrideWithValue(repo),
         previewDownloaderProvider.overrideWithValue(_NoopDownloader()),
+        prepImageLoaderProvider.overrideWithValue(_FakePrepLoader()),
         isStaffProvider.overrideWithValue(staff),
         isAdminProvider.overrideWithValue(false),
       ],
@@ -124,14 +143,19 @@ Future<void> _select(WidgetTester tester, List<String> keys, int n) async {
   }
 }
 
-/// Taps Create Model and lets the request + navigation resolve.
+/// Taps Create Model — which now opens Prepare-Images — then taps Generate
+/// there without editing anything, and lets the request + navigation resolve.
 ///
 /// Deliberately NOT pumpAndSettle: a successful create pushes the generation
 /// status screen, whose progress indicator animates forever — settling would
 /// time out rather than tell us anything.
 Future<void> _tapCreate(WidgetTester tester) async {
   await tester.tap(find.byKey(const ValueKey('create_model_cta')));
-  for (var i = 0; i < 4; i++) {
+  // Prepare-Images push + photo loads. Safe to settle: nothing loops once
+  // the (fake) loads land.
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+  for (var i = 0; i < 6; i++) {
     await tester.pump(const Duration(milliseconds: 50));
   }
 }
@@ -256,7 +280,8 @@ void main() {
           ),
         );
 
-    testWidgets('a PROCESSING record shows progress, not a CTA', (tester) async {
+    testWidgets('a PROCESSING record shows progress, not a CTA',
+        (tester) async {
       final repo = _FakeRepo(models: [
         const ProjectModelView(
           id: 'm1',
@@ -309,7 +334,8 @@ void main() {
       expect(find.byKey(const ValueKey('model_gen_pending')), findsNothing);
     });
 
-    testWidgets('a FAILED record shows mapped copy + a way back', (tester) async {
+    testWidgets('a FAILED record shows mapped copy + a way back',
+        (tester) async {
       final repo = _FakeRepo(models: [
         const ProjectModelView(
           id: 'm1',
@@ -324,7 +350,8 @@ void main() {
       expect(find.text('Choose photos again'), findsOneWidget);
     });
 
-    testWidgets('follows ITS OWN record, not merely the newest', (tester) async {
+    testWidgets('follows ITS OWN record, not merely the newest',
+        (tester) async {
       // A regenerate is in flight (m2, newest) while m1 already succeeded — the
       // screen was opened for m1 and must keep showing m1.
       final repo = _FakeRepo(models: [
@@ -363,7 +390,8 @@ void main() {
           ),
         );
 
-    testWidgets('a meshy model is badged "Created by Meshy AI"', (tester) async {
+    testWidgets('a meshy model is badged "Created by Meshy AI"',
+        (tester) async {
       await tester.pumpWidget(app(const ProjectModelView(
         id: 'm1',
         source: ModelSource.meshy,

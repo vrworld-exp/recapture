@@ -28,7 +28,9 @@ LiveProject _lp() => LiveProject(
       totalPhotos: 48,
     );
 
-class _FakeRepo with FakeModelGenerationDefaults implements LiveProjectsRepository {
+class _FakeRepo
+    with FakeModelGenerationDefaults, FakeModelImageUploadDefaults
+    implements LiveProjectsRepository {
   /// (projectId, wire mode, confirmName) per deleteProject call.
   final List<(String, String, String)> deletes = [];
   LiveProjectsException? deleteFailure;

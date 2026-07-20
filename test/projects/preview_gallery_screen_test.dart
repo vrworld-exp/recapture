@@ -18,7 +18,12 @@ import 'package:recapture/domain/entities/preview_manifest.dart';
 import 'package:recapture/presentation/screens/projects/preview_gallery_screen.dart';
 import 'repo_fake_defaults.dart';
 
-class _FakeRepo with FakeModelGenerationDefaults, FakeAdminDeleteDefaults implements LiveProjectsRepository {
+class _FakeRepo
+    with
+        FakeModelGenerationDefaults,
+        FakeAdminDeleteDefaults,
+        FakeModelImageUploadDefaults
+    implements LiveProjectsRepository {
   Map<String, dynamic> exportResult = const {};
   LiveProjectsException? exportFail;
   int exportCalls = 0;

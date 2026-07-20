@@ -16,6 +16,7 @@ import {
   adminDeleteProjectBodySchema,
   adminCreateModelBodySchema,
   adminModelIdParamsSchema,
+  adminModelImageUploadsBodySchema,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
@@ -28,6 +29,7 @@ import {
 import {
   approveModel,
   createMeshyModelRequest,
+  createModelImageUploadUrls,
   latestSucceededModel,
   listProjectModels,
   toProjectModelDto,
@@ -483,6 +485,90 @@ router.post(
     // A replay is not a new creation — 200 distinguishes it from the 201 that
     // actually enqueued a generation.
     res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({ status: 'success', model });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/model-images/upload-urls — presigned PUT slots for
+ * EDITED copies of selected photos (the Prepare-Images screen: polygon crop /
+ * background removal / lighting), uploaded before Create-Model so a generation
+ * runs on cleaned-up inputs while the original captures stay untouched.
+ *
+ * MODEL_ARTIST+ like Create-Model itself. Stateless and cheap (local presigns,
+ * no credits, no DB writes) — so the rate window is its own generous cap, and
+ * the credit guards remain on POST /model. The response's `uploads[].url`
+ * values are WRITE bearer credentials: the ONLY place they may appear — never
+ * in logs or analytics.
+ */
+router.post(
+  '/projects/:id/model-images/upload-urls',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = adminModelImageUploadsBodySchema.safeParse(req.body);
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      const field = issue?.path.join('.') || 'body';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `model-image-uploads:${userId}`,
+      env.MODEL_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.MODEL_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await createModelImageUploadUrls(params.data.id, body.data.count);
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_EXPORTABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'This project has no finalized upload to generate a model from.',
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(result.projectId),
+      job_id_hash: hashIdentifier(result.jobId),
+      file_count: result.uploads.length,
+      ttl_seconds: env.MODEL_IMAGE_UPLOAD_URL_TTL_SECONDS,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      uploads: result.uploads,
+      expiresAt: result.expiresAt,
+    });
   })
 );
 

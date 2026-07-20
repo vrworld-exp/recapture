@@ -87,6 +87,20 @@ export const adminCreateModelBodySchema = z
 
 export type AdminCreateModelBody = z.infer<typeof adminCreateModelBodySchema>;
 
+/**
+ * Body for POST /admin/projects/:id/model-images/upload-urls: how many edited
+ * model-input images the Prepare-Images screen will upload. Bounded by the
+ * Meshy selection ceiling — a prep session never needs more slots than photos
+ * a generation can consume.
+ */
+export const adminModelImageUploadsBodySchema = z
+  .object({
+    count: z.number().int().min(1).max(4),
+  })
+  .strict();
+
+export type AdminModelImageUploadsBody = z.infer<typeof adminModelImageUploadsBodySchema>;
+
 /** `:id`/`:modelId` params for the model approve route. */
 export const adminModelIdParamsSchema = z
   .object({

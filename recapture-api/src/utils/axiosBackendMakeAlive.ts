@@ -1,4 +1,4 @@
-import axios, { AxiosError, type AxiosResponse } from 'axios';
+import axios, { type AxiosResponse } from 'axios';
 
 interface HealthResponse { ok: boolean; }
 

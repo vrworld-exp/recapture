@@ -27,7 +27,12 @@ Project _project(ProjectStatus status) => Project(
       updatedAt: DateTime(2026, 7, 1),
     );
 
-class _StubLiveRepo with FakeModelGenerationDefaults, FakeAdminDeleteDefaults implements LiveProjectsRepository {
+class _StubLiveRepo
+    with
+        FakeModelGenerationDefaults,
+        FakeAdminDeleteDefaults,
+        FakeModelImageUploadDefaults
+    implements LiveProjectsRepository {
   _StubLiveRepo(this._page);
   final LiveProjectsPage _page;
 

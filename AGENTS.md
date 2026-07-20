@@ -154,6 +154,18 @@ do not remove it).
 - **Meshy's result URLs expire** — the worker re-hosts the GLB/USDZ/thumbnail to
   `BUCKET_ARTIFACTS` under `…/{jobId}/models/{modelId}/`. Only OUR CloudFront
   URLs are ever persisted or served. Never store a Meshy URL.
+- **Prepare-Images (edited model inputs).** Before Create-Model the client's
+  ImagePrepScreen lets staff crop/relight COPIES of the selected photos. Edited
+  JPEGs are PUT via `POST /admin/projects/:id/model-images/upload-urls`
+  (presigned, staff-only, stateless — no credits, no DB writes) into the
+  exportable job's **reserved `model-input/` namespace** under `rawPrefix`,
+  then selected by relative key like any capture photo. That namespace is a
+  sibling of `deleted/`: excluded from the export manifest AND from the
+  capture processor's object-count re-verification (finalize needs no
+  exclusion — it only counts for CREATED/UPLOADING jobs, and this namespace is
+  only writable post-finalize). Original captures are never modified; the
+  admin hard-delete purge covers the namespace for free (it lives under
+  `rawPrefix`).
 - **`jobType` is now a real discriminator.** A project owns jobs of more than one
   type, so any query meaning "the capture job" MUST filter
   `jobType: CAPTURE_PROCESSING` (`models/types/job.types.ts`) — see

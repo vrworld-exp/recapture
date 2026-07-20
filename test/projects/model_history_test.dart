@@ -28,7 +28,12 @@ import 'package:recapture/presentation/screens/projects/model_viewer_screen.dart
 import 'package:recapture/presentation/widgets/project_card.dart';
 import 'repo_fake_defaults.dart';
 
-class _FakeRepo with FakeModelGenerationDefaults, FakeAdminDeleteDefaults implements LiveProjectsRepository {
+class _FakeRepo
+    with
+        FakeModelGenerationDefaults,
+        FakeAdminDeleteDefaults,
+        FakeModelImageUploadDefaults
+    implements LiveProjectsRepository {
   _FakeRepo(this.models);
 
   List<ProjectModelView> models;

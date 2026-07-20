@@ -1,4 +1,6 @@
 // lib/data/repositories/live_projects_repository.dart
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -75,6 +77,19 @@ abstract interface class LiveProjectsRepository {
     required String idempotencyKey,
   });
 
+  /// Presigned PUT slots for [count] EDITED model-input copies (the
+  /// Prepare-Images screen). Each slot's key is job-root-relative and is
+  /// accepted by [createModel] exactly like a captured photo's key. Throws
+  /// [LiveProjectsException] (notExportable / rateLimited / …).
+  Future<List<ModelImageUploadSlot>> requestModelImageUploads(
+    String projectId,
+    int count,
+  );
+
+  /// PUTs one edited JPEG to its presigned [slot]. Throws
+  /// [LiveProjectsException] (network / server).
+  Future<void> uploadModelImage(ModelImageUploadSlot slot, Uint8List bytes);
+
   /// The project's generation history, newest first. Throws
   /// [LiveProjectsException].
   Future<List<ProjectModelView>> listModels(String projectId);
@@ -110,6 +125,26 @@ enum AdminDeleteMode {
   final String wire;
 }
 
+/// One presigned upload slot for an edited model-input image, as
+/// `POST /admin/projects/:id/model-images/upload-urls` returns it. [url] is a
+/// WRITE bearer credential (short TTL) — never logged; [key] is job-root
+/// relative and is what Create-Model consumes.
+class ModelImageUploadSlot {
+  const ModelImageUploadSlot({required this.key, required this.url});
+
+  final String key;
+  final String url;
+
+  /// Defensive parse — a malformed row fails the whole request upstream.
+  static ModelImageUploadSlot? tryFromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final key = (raw['key'] ?? '').toString();
+    final url = (raw['url'] ?? '').toString();
+    if (key.isEmpty || url.isEmpty) return null;
+    return ModelImageUploadSlot(key: key, url: url);
+  }
+}
+
 /// Outcome of a soft-delete: the keys that were moved out vs those already gone.
 class PreviewDeleteResult {
   const PreviewDeleteResult({required this.deleted, required this.missing});
@@ -141,7 +176,8 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
             for (final item in items)
               if (item is Map<String, dynamic>) LiveProject.fromMap(item),
         ],
-        nextCursor: data['nextCursor'] is String ? data['nextCursor'] as String : null,
+        nextCursor:
+            data['nextCursor'] is String ? data['nextCursor'] as String : null,
       );
     } on DioException catch (e) {
       throw _translate(e);
@@ -213,6 +249,63 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
   }
 
   @override
+  Future<List<ModelImageUploadSlot>> requestModelImageUploads(
+    String projectId,
+    int count,
+  ) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/admin/projects/$projectId/model-images/upload-urls',
+        data: {'count': count},
+      );
+      final uploads = res.data?['uploads'];
+      final slots = [
+        if (uploads is List)
+          for (final u in uploads)
+            if (ModelImageUploadSlot.tryFromMap(u) case final slot?) slot,
+      ];
+      // A partial slot list would strand an edited image with nowhere to go —
+      // treat it as a server fault rather than uploading a subset.
+      if (slots.length != count) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return slots;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<void> uploadModelImage(
+      ModelImageUploadSlot slot, Uint8List bytes) async {
+    // BARE Dio: the presigned URL carries its own SigV4 auth in the query, and
+    // the app client's Authorization header / baseUrl would corrupt the
+    // request (same reasoning as the preview download's byte fetch).
+    final http = Dio();
+    try {
+      await http.put<void>(
+        slot.url,
+        data: Stream.fromIterable([bytes]),
+        options: Options(
+          // Content-Type is part of the presigned signature — must match the
+          // server's declared image/jpeg exactly.
+          contentType: 'image/jpeg',
+          headers: {Headers.contentLengthHeader: bytes.length},
+          validateStatus: (status) =>
+              status != null && status >= 200 && status < 300,
+        ),
+      );
+    } on DioException catch (e) {
+      // S3 failures don't speak our envelope: anything with a response is a
+      // server-side refusal (expired presign, signature mismatch), the rest is
+      // transport.
+      throw LiveProjectsException(e.response == null
+          ? LiveProjectsFailure.network
+          : LiveProjectsFailure.server);
+    }
+  }
+
+  @override
   Future<List<ProjectModelView>> listModels(String projectId) async {
     try {
       final res = await _dio.get<Map<String, dynamic>>(
@@ -230,7 +323,8 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
   }
 
   @override
-  Future<ProjectModelView> approveModel(String projectId, String modelId) async {
+  Future<ProjectModelView> approveModel(
+      String projectId, String modelId) async {
     try {
       final res = await _dio.post<Map<String, dynamic>>(
         '/admin/projects/$projectId/models/$modelId/approve',
@@ -278,7 +372,8 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
       return const LiveProjectsException(LiveProjectsFailure.notExportable);
     }
     if (status == 422 && code == 'CONFIRMATION_REQUIRED') {
-      return const LiveProjectsException(LiveProjectsFailure.confirmationMismatch);
+      return const LiveProjectsException(
+          LiveProjectsFailure.confirmationMismatch);
     }
     if (status == 429) {
       final retryAfter = body is Map ? body['retryAfter'] : null;

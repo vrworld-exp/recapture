@@ -136,6 +136,26 @@ function sanitizeContentDispositionFilename(name: string): string {
   return name.replace(/["\\\s]/g, '_');
 }
 
+/**
+ * Presigns a PUT URL for one object. Same local-SigV4 economics as
+ * {@link presignObjectGetUrl} — cheap to mint in parallel. The Content-Type is
+ * part of the signature, so the uploader can only ever store an object of the
+ * declared type. The URL is a WRITE bearer credential for that exact key until
+ * [expiresInSeconds]: NEVER log it.
+ */
+export async function presignObjectPutUrl(
+  bucket: string,
+  key: string,
+  expiresInSeconds: number,
+  contentType: string
+): Promise<string> {
+  return getSignedUrl(
+    s3Client,
+    new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType }),
+    { expiresIn: expiresInSeconds }
+  );
+}
+
 /** Result of fetching a text object: absent (404) or its body string. */
 export type FetchedObject = { outcome: 'absent' } | { outcome: 'ok'; body: string };
 
