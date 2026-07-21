@@ -20,7 +20,7 @@ import 'dart:math' as math;
 
 /// The tilt ceiling returned by [cameraTiltDegrees]. A physically perfect 180°
 /// is clamped just below it so the `maxDegrees`-EXCLUSIVE [PitchBand] contract
-/// (`high` = [120, 180)) still admits it — this is the ONE place that clamp
+/// (`high` = [110, 180)) still admits it — this is the ONE place that clamp
 /// happens.
 const double kCameraTiltMaxDegrees = 179.999;
 

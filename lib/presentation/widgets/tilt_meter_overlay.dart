@@ -64,8 +64,10 @@ class TiltMeterOverlay extends ConsumerStatefulWidget {
   /// Displayable gauge range (degrees), clamped — the needle never overflows it.
   /// When null (the default), the range is DERIVED from the resolved band via
   /// [tiltGaugeRangeForBand] so the gauge auto-tunes to whatever band the level
-  /// configures (Eye Ring [60,120), Top Ring [120,180), Bottom Ring [0,60) on
-  /// the 0–180° camera-tilt scale). Provide both to pin a fixed range.
+  /// configures (Eye Ring [40,110), Top Ring [110,180), Bottom Ring [0,40) on
+  /// the 0–180° camera-tilt scale). The bands are UNEQUAL and the eye band is
+  /// not symmetric about 90° — the range is derived, never assumed centred.
+  /// Provide both to pin a fixed range.
   final double? gaugeMinDeg;
   final double? gaugeMaxDeg;
 
@@ -103,7 +105,7 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
       return TiltTarget.fromBand(config.pitchBands.first);
     }
     // Last-resort floor: the bundled `mid` band on the 0–180° camera-tilt scale.
-    return const TiltTarget(minDegrees: 60, maxDegrees: 120, bandId: 'mid');
+    return const TiltTarget(minDegrees: 40, maxDegrees: 110, bandId: 'mid');
   }
 
   void _onSample(TiltSample sample) {

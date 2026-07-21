@@ -17,7 +17,7 @@ void main() {
         () {
       // q = (0,0,0,1): device frame == world frame, so the camera (−Z body)
       // points along −Z world (straight down). acos(−(−1)) = 180°, clamped to
-      // 179.999 so the max-exclusive `high` [120, 180) band still admits it.
+      // 179.999 so the max-exclusive `high` [110, 180) band still admits it.
       final t = cameraTiltDegrees(qx: 0, qy: 0, qz: 0, qw: 1);
       expect(t, closeTo(kCameraTiltMaxDegrees, 1e-9));
       expect(t, lessThan(180.0));

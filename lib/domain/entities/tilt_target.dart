@@ -58,9 +58,11 @@ class TiltTarget {
 /// the out-of-band "tilt up / tilt down" excursions, scaled to the band's own
 /// span. This is what makes the indicator *tuned* per band and *adaptive*: the
 /// zone re-centres and re-scales to whatever band the level configures — Eye Ring
-/// ('mid' [60,120) → [0,180]), Top Ring ('high' [120,180) → [60,240]), Bottom
-/// Ring ('low' [0,60) → [-60,120]) — with no hardcoded bounds (the needle
-/// clamps to the gauge ends).
+/// ('mid' [40,110) → [-30,180]), Top Ring ('high' [110,180) → [40,250]),
+/// Bottom Ring ('low' [0,40) → [-40,80]) — with no hardcoded bounds (the
+/// needle clamps to the gauge ends). The bands are unequal (40/70/70) and the
+/// eye band is not symmetric about 90°, so the margin scales per band rather
+/// than assuming a shared span.
 ///
 /// The margin is ~one band span on each side (so an out-of-band excursion is
 /// always visible), floored at [minMargin] so a very narrow band still gets

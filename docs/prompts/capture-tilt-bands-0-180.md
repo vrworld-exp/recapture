@@ -3,6 +3,13 @@
 
 # Task: 0–180° Camera-Tilt Bands per Capture Level (BOTTOM=up, EYE=straight, TOP=down)
 
+> **SUPERSEDED (band numbers only), 2026-07-21.** The band BOUNDARIES in the
+> table below are no longer current — they were retuned to
+> `low [0,40)` / `mid [40,110)` / `high [110,180)` by
+> [capture-tilt-bands-retune-40-110.md](./capture-tilt-bands-retune-40-110.md).
+> Everything else in this document (the 0–180° scale, the level→band mapping,
+> the quaternion derivation) still stands.
+
 > Touches BOTH codebases: the Flutter client (repo root) and `recapture-api/`
 > (remote-config defaults + schema must move in lockstep with the client
 > defaults, §5). No native Kotlin/Swift changes are required — the smoothed

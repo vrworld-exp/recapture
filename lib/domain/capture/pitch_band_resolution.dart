@@ -15,8 +15,9 @@ import '../entities/capture_config.dart';
 /// Sane physical range (degrees) a band must lie within — the 0–180°
 /// CAMERA-TILT scale (angle between the back camera's aim and world-up; see
 /// `camera_tilt.dart`): bands tile [0, 180] (see `sanitizeCaptureConfig`) —
-/// BOTTOM ring `low` [0,60), EYE ring `mid` [60,120), TOP ring `high`
-/// [120,180). Override/remote/default all validate against it.
+/// BOTTOM ring `low` [0,40), EYE ring `mid` [40,110), TOP ring `high`
+/// [110,180). Override/remote/default all validate against it. The bands are
+/// unequal by design (40/70/70); only the VALIDITY window is [0, 180].
 const double kPitchBandMinDegrees = 0;
 const double kPitchBandMaxDegrees = 180;
 

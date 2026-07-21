@@ -103,18 +103,20 @@ function variantSegmentsBlock(variant: CaptureFlowVariant): Record<string, numbe
  * defaults can never silently diverge from the server's own capture rules.
  */
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
-  // Version 3: guided-capture per-ring counts raised to 16×3 / 24×2 (48 total;
-  // bumped so client ETag/304 caches roll over to the new payload). Version 2
-  // was the 0–180° camera-tilt band scale.
-  version: 3,
+  // Version 4: tilt bands retuned from equal thirds to 0–40 / 40–110 / 110–180
+  // (bumped so client ETag/304 caches roll over to the new payload). Version 3
+  // was the 16×3 / 24×2 per-ring counts; version 2 was the 0–180° band scale.
+  version: 4,
   // LOW/EYE/TOP guided-capture rings as camera-tilt bands tiling [0, 180]:
-  // BOTTOM ring `low` (tilt up) / EYE ring `mid` (hold straight) / TOP ring
-  // `high` (tilt down). Mirrors the client's bundled defaults; legacy per-band
-  // `segments` retained (real counts come from guided_capture_variant_segments).
+  // BOTTOM ring `low` (tilt up) [0,40) / EYE ring `mid` (hold straight)
+  // [40,110) / TOP ring `high` (tilt down) [110,180). Deliberately UNEQUAL
+  // (40/70/70) — the eye band is not centred on the horizon. Mirrors the
+  // client's bundled defaults; legacy per-band `segments` retained (real counts
+  // come from guided_capture_variant_segments).
   pitchBands: [
-    { id: 'low', minDegrees: 0, maxDegrees: 60, segments: 12 },
-    { id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10 },
-    { id: 'high', minDegrees: 120, maxDegrees: 180, segments: 8 },
+    { id: 'low', minDegrees: 0, maxDegrees: 40, segments: 12 },
+    { id: 'mid', minDegrees: 40, maxDegrees: 110, segments: 10 },
+    { id: 'high', minDegrees: 110, maxDegrees: 180, segments: 8 },
   ],
   thresholds: bySizeApiKey(MIN_PHOTOS_PER_RING_BY_SIZE),
   segmentCounts: bySizeApiKey(SEGMENT_COUNT_BY_SIZE),

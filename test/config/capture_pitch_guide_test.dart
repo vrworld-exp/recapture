@@ -9,9 +9,9 @@ import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/capture_pitch_guide.dart';
 
 void main() {
-  // Bundled defaults: low [0,60), mid [60,120), high [120,180).
+  // Bundled defaults: low [0,40), mid [40,110), high [110,180).
   const config = CaptureConfig.bundledDefault;
-  const mid = PitchBand(id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10);
+  const mid = PitchBand(id: 'mid', minDegrees: 40, maxDegrees: 110, segments: 10);
 
   group('CapturePitchGuide.isInBand', () {
     test('tilt inside the band is true', () {
@@ -19,15 +19,15 @@ void main() {
     });
 
     test('lower bound is inclusive', () {
-      expect(CapturePitchGuide.isInBand(mid, 60), isTrue);
+      expect(CapturePitchGuide.isInBand(mid, 40), isTrue);
     });
 
     test('upper bound is exclusive', () {
-      expect(CapturePitchGuide.isInBand(mid, 120), isFalse);
+      expect(CapturePitchGuide.isInBand(mid, 110), isFalse);
     });
 
     test('outside the band is false', () {
-      expect(CapturePitchGuide.isInBand(mid, 59.999), isFalse);
+      expect(CapturePitchGuide.isInBand(mid, 39.999), isFalse);
       expect(CapturePitchGuide.isInBand(mid, 150), isFalse);
     });
 
@@ -41,17 +41,33 @@ void main() {
   group('CapturePitchGuide.activeBand (bundled bands)', () {
     test('band membership sweep across the 0–180° scale', () {
       expect(CapturePitchGuide.activeBand(config, 0)?.id, 'low');
-      expect(CapturePitchGuide.activeBand(config, 59.9)?.id, 'low');
-      expect(CapturePitchGuide.activeBand(config, 60)?.id, 'mid');
-      expect(CapturePitchGuide.activeBand(config, 119.9)?.id, 'mid');
-      expect(CapturePitchGuide.activeBand(config, 120)?.id, 'high');
+      expect(CapturePitchGuide.activeBand(config, 39.9)?.id, 'low');
+      expect(CapturePitchGuide.activeBand(config, 40)?.id, 'mid');
+      expect(CapturePitchGuide.activeBand(config, 90)?.id, 'mid');
+      expect(CapturePitchGuide.activeBand(config, 109.9)?.id, 'mid');
+      expect(CapturePitchGuide.activeBand(config, 110)?.id, 'high');
       expect(CapturePitchGuide.activeBand(config, 179.999)?.id, 'high');
+    });
+
+    test('new band edges land in exactly ONE band each (no gap, no overlap)',
+        () {
+      // The retuned boundaries: 40 and 110. Each probe must match exactly one
+      // bundled band — this is the tiling contract, asserted at the seams.
+      for (final tilt in <double>[39.999, 40.0, 109.999, 110.0]) {
+        final hits =
+            config.pitchBands.where((b) => CapturePitchGuide.isInBand(b, tilt));
+        expect(hits, hasLength(1), reason: 'tilt $tilt matched ${hits.length}');
+      }
+      expect(CapturePitchGuide.activeBand(config, 39.999)?.id, 'low');
+      expect(CapturePitchGuide.activeBand(config, 40.0)?.id, 'mid');
+      expect(CapturePitchGuide.activeBand(config, 109.999)?.id, 'mid');
+      expect(CapturePitchGuide.activeBand(config, 110.0)?.id, 'high');
     });
 
     test('a physically perfect 180° (clamped by the tilt primitive) → high',
         () {
       // The identity pose yields exactly 180°, which cameraTiltDegrees clamps
-      // to 179.999 so the max-EXCLUSIVE high band [120, 180) still admits it.
+      // to 179.999 so the max-EXCLUSIVE high band [110, 180) still admits it.
       final flatScreenUp = cameraTiltDegrees(qx: 0, qy: 0, qz: 0, qw: 1);
       expect(CapturePitchGuide.activeBand(config, flatScreenUp)?.id, 'high');
     });

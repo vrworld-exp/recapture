@@ -374,15 +374,18 @@ class CaptureConfig {
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
   // Bands tile the full 0–180° camera-tilt scale: BOTTOM ring (C, `low`, tilt
-  // up) / EYE ring (A, `mid`, hold straight) / TOP ring (B, `high`, tilt
-  // down). Legacy per-band `segments` retained — real counts come from
+  // up) [0,40) / EYE ring (A, `mid`, hold straight) [40,110) / TOP ring (B,
+  // `high`, tilt down) [110,180). Retuned 2026-07-21 from equal thirds — the
+  // bands are deliberately UNEQUAL (40/70/70) and the eye band is NOT centred
+  // on the horizon (90° sits 20° below its upper edge). Legacy per-band
+  // `segments` retained — real counts come from
   // `guided_capture_variant_segments` via [effectiveSegmentsFor].
   static const CaptureConfig bundledDefault = CaptureConfig(
-    version: 2,
+    version: 4,
     pitchBands: [
-      PitchBand(id: 'low', minDegrees: 0, maxDegrees: 60, segments: 12),
-      PitchBand(id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10),
-      PitchBand(id: 'high', minDegrees: 120, maxDegrees: 180, segments: 8),
+      PitchBand(id: 'low', minDegrees: 0, maxDegrees: 40, segments: 12),
+      PitchBand(id: 'mid', minDegrees: 40, maxDegrees: 110, segments: 10),
+      PitchBand(id: 'high', minDegrees: 110, maxDegrees: 180, segments: 8),
     ],
     thresholds: CaptureThresholds(
       minSharpness: 0.45,

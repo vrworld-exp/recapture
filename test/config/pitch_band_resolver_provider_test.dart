@@ -53,11 +53,11 @@ void main() {
   });
 
   group('resolvedPitchBandProvider', () {
-    test('no override → bundled/remote config value (Level C low = [0,60))', () {
+    test('no override → bundled/remote config value (Level C low = [0,40))', () {
       final c = _container();
       final low = c.read(resolvedPitchBandProvider('low'));
       expect(low.minDegrees, 0);
-      expect(low.maxDegrees, 60);
+      expect(low.maxDegrees, 40);
     });
 
     test('override wins over a valid config value', () {
@@ -79,7 +79,7 @@ void main() {
           .setOverride(_band('low', 40, 10)); // min > max
       final low = c.read(resolvedPitchBandProvider('low'));
 
-      expect(low.maxDegrees, 60); // fell through to config default
+      expect(low.maxDegrees, 40); // fell through to config default
       final fb = events.where((e) => e.name == 'pitch_band_fallback').toList();
       expect(fb, hasLength(1));
       expect(fb.first.props['band_id'], 'low');
@@ -95,7 +95,7 @@ void main() {
       final held = c.read(resolvedPitchBandProvider('low'));
       c.read(pitchBandOverrideProvider.notifier).setOverride(_band('low', 9, 19));
       expect(held.minDegrees, 0); // the snapshot we captured earlier is stable
-      expect(held.maxDegrees, 60);
+      expect(held.maxDegrees, 40);
     });
   });
 }

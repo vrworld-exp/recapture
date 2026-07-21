@@ -14,7 +14,7 @@
 // external "down = negative" mental model): degrees are the 0–180° CAMERA TILT
 // (0 = camera at the sky, 90 = horizon, 180 = at the ground). The Top Ring is
 // the HIGH band: `pitchBandIdForLevel(CaptureLevel.b) == 'high'`, and the
-// bundled `high` band is [120, 180) — the top slice of the 0–180 scale the
+// bundled `high` band is [110, 180) — the top slice of the 0–180 scale the
 // bands tile. So the "above the subject" Top Ring pass is encoded as a high
 // tilt band, reached by tilting the phone DOWN toward the object (the
 // indicator's "Tilt down" guidance while below the band). The acceptance
@@ -32,7 +32,7 @@ import 'package:recapture/domain/entities/capture_pitch_guide.dart';
 void main() {
   // The Top Ring band, resolved through the REAL production path: the single
   // level→band-id map + the band resolver over the live config. Reading from the
-  // source of truth (not a hardcoded [120,180) duplicate) means the boundary tests
+  // source of truth (not a hardcoded [110,180) duplicate) means the boundary tests
   // track an INTENTIONAL config change and fail on an UNINTENTIONAL one.
   const config = CaptureConfig.bundledDefault;
   final topRingBandId = pitchBandIdForLevel(CaptureLevel.b);
@@ -74,9 +74,15 @@ void main() {
     // a deliberate retune), this asserts the exact edges so an UNINTENDED nudge —
     // even by 1° — fails here. A deliberate retune updates these two numbers on
     // purpose; that conscious edit is the point of the tripwire.
-    test('high band is exactly [120, 180)', () {
-      expect(topRing.minDegrees, 120);
+    test('high band is exactly [110, 180)', () {
+      // Retuned 2026-07-21 from [120, 180).
+      expect(topRing.minDegrees, 110);
       expect(topRing.maxDegrees, 180);
+    });
+
+    test('boundary: 109.999 is NOT in `high`, 110.0 is', () {
+      expect(accepted(109.999), isFalse);
+      expect(accepted(110.0), isTrue);
     });
   });
 

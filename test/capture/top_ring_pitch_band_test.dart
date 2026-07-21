@@ -12,7 +12,7 @@
 //      it with head/foot room.
 //   3. TiltMeterOverlay(levelBandId:) — the indicator's below/in/above guidance
 //      tracks the LEVEL's band, not a hardcoded one (tuned for Top Ring
-//      [120,180), and a custom band proves the generalization). Below the band
+//      [110,180), and a custom band proves the generalization). Below the band
 //      (aimed too far up) → "Tilt down"; above it → "Tilt up".
 import 'dart:async';
 import 'dart:math' as math;
@@ -66,19 +66,19 @@ void main() {
     TiltTarget band(double min, double max) =>
         TiltTarget(minDegrees: min, maxDegrees: max, bandId: 'b');
 
-    test('Top Ring [120,180) frames to [60,240] (one span head/foot room)', () {
+    test('a [120,180) band frames to [60,240] (one span head/foot room)', () {
       final r = tiltGaugeRangeForBand(band(120, 180));
       expect(r.min, 60);
       expect(r.max, 240);
     });
 
-    test('Eye Ring [60,120) frames to [0,180]', () {
+    test('a [60,120) band frames to [0,180]', () {
       final r = tiltGaugeRangeForBand(band(60, 120));
       expect(r.min, 0);
       expect(r.max, 180);
     });
 
-    test('Bottom Ring [0,60) frames to [-60,120] (needle clamps at the ends)',
+    test('a [0,60) band frames to [-60,120] (needle clamps at the ends)',
         () {
       final r = tiltGaugeRangeForBand(band(0, 60));
       expect(r.min, -60);
@@ -124,20 +124,20 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
     }
 
-    testWidgets('Top Ring (high [120,180)): 100 → tilt down (aim at the top)',
+    testWidgets('Top Ring (high [110,180)): 100 → tilt down (aim at the top)',
         (tester) async {
-      await pumpTilt(tester, bandId: 'high', tilt: 100); // below 120
+      await pumpTilt(tester, bandId: 'high', tilt: 100); // below 110
       expect(find.text('Tilt down'), findsOneWidget);
     });
 
-    testWidgets('Top Ring (high [120,180)): 150 → ready', (tester) async {
-      await pumpTilt(tester, bandId: 'high', tilt: 150); // inside [120,180)
+    testWidgets('Top Ring (high [110,180)): 150 → ready', (tester) async {
+      await pumpTilt(tester, bandId: 'high', tilt: 150); // inside [110,180)
       expect(find.text('Hold steady'), findsOneWidget);
     });
 
-    testWidgets('Eye Ring (mid [60,120)): 130 → tilt up (aimed too far down)',
+    testWidgets('Eye Ring (mid [40,110)): 130 → tilt up (aimed too far down)',
         (tester) async {
-      await pumpTilt(tester, bandId: 'mid', tilt: 130); // above 120
+      await pumpTilt(tester, bandId: 'mid', tilt: 130); // above 110
       expect(find.text('Tilt up'), findsOneWidget);
     });
 
@@ -148,7 +148,7 @@ void main() {
       // indicator reads the LEVEL band, not a hardcoded one.
       await pumpTilt(tester, bandId: 'mid', tilt: 100);
       expect(find.text('Hold steady'), findsOneWidget,
-          reason: '100° is inside the Eye Ring [60,120)');
+          reason: '100° is inside the Eye Ring [40,110)');
     });
 
     testWidgets('generalizes to a custom server-style band [20,50): 70 → tilt up',
@@ -211,7 +211,7 @@ void main() {
       );
       await tester.pump();
 
-      source.add(_atTilt(100)); // below the Top Ring band [120,180)
+      source.add(_atTilt(100)); // below the Top Ring band [110,180)
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
