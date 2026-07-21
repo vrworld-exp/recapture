@@ -476,6 +476,34 @@ export async function findExportableJob(projectId: string): Promise<IJob | null>
     .exec();
 }
 
+/**
+ * ONE named capture job, subject to the same exportability rules as
+ * {@link findExportableJob} — same jobType filter, same finalized-state list —
+ * but pinned to an explicit id instead of "the project's newest".
+ *
+ * This exists for the AUTOMATIC generation path, which is acting on one
+ * specific job (the one whose manifest it just selected photos from) and must
+ * not re-resolve to whatever is newest. A user who recaptures while the first
+ * capture is still processing would otherwise have job A's photo keys presigned
+ * under job B's prefix — every URL 404s, or worse, Meshy is handed a different
+ * capture's photos and returns a plausible model of the wrong object.
+ *
+ * [projectId] is part of the query, not an assertion: a job id belonging to
+ * another project must resolve to null, never to a cross-project export.
+ */
+export async function findExportableJobById(
+  projectId: string,
+  jobId: Types.ObjectId | string
+): Promise<IJob | null> {
+  if (!Types.ObjectId.isValid(jobId)) return null;
+  return Job.findOne({
+    _id: new Types.ObjectId(jobId),
+    projectId: new Types.ObjectId(projectId),
+    jobType: { $in: [CAPTURE_PROCESSING_JOB_TYPE, null] },
+    state: { $in: [...UPLOAD_FINALIZED_JOB_STATES] },
+  }).exec();
+}
+
 function toAdminItem(p: IProject, modelCount = 0): AdminProjectListItem {
   return { ...toProjectListItem(p, modelCount), ownerId: p.userId.toHexString() };
 }

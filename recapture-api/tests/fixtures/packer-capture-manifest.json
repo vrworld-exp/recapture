@@ -1,0 +1,934 @@
+{
+  "manifestVersion": "1.0",
+  "projectId": "proj_fixture",
+  "jobId": "job_fixture",
+  "captureSessionId": "sess_fixture",
+  "flowVariant": "with_bottom",
+  "device": {
+    "platform": "android",
+    "intrinsics": {}
+  },
+  "config": {
+    "configVersion": 2,
+    "thresholds": {
+      "minSharpness": 0.45,
+      "minCoveragePct": 80.0,
+      "maxTiltDeltaDeg": 12.0
+    },
+    "completionThresholds": {},
+    "uploadMinShots": {},
+    "segmentCounts": {
+      "A": 16,
+      "B": 8,
+      "C": 12
+    }
+  },
+  "levels": [
+    {
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "pitchBand": {
+        "minDegrees": 60.0,
+        "maxDegrees": 120.0
+      },
+      "segmentCount": 16,
+      "filledCount": 16,
+      "coveragePct": 100,
+      "complete": true,
+      "photoCount": 16,
+      "warningCount": 0,
+      "photoIds": [
+        "eye0",
+        "eye1",
+        "eye2",
+        "eye3",
+        "eye4",
+        "eye5",
+        "eye6",
+        "eye7",
+        "eye8",
+        "eye9",
+        "eye10",
+        "eye11",
+        "eye12",
+        "eye13",
+        "eye14",
+        "eye15"
+      ]
+    },
+    {
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "pitchBand": {
+        "minDegrees": 120.0,
+        "maxDegrees": 180.0
+      },
+      "segmentCount": 8,
+      "filledCount": 8,
+      "coveragePct": 100,
+      "complete": true,
+      "photoCount": 8,
+      "warningCount": 0,
+      "photoIds": [
+        "top0",
+        "top1",
+        "top2",
+        "top3",
+        "top4",
+        "top5",
+        "top6",
+        "top7"
+      ]
+    },
+    {
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "pitchBand": {
+        "minDegrees": 0.0,
+        "maxDegrees": 60.0
+      },
+      "segmentCount": 12,
+      "filledCount": 12,
+      "coveragePct": 100,
+      "complete": true,
+      "photoCount": 12,
+      "warningCount": 0,
+      "photoIds": [
+        "low0",
+        "low1",
+        "low2",
+        "low3",
+        "low4",
+        "low5",
+        "low6",
+        "low7",
+        "low8",
+        "low9",
+        "low10",
+        "low11"
+      ]
+    }
+  ],
+  "photos": [
+    {
+      "photoId": "eye0",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 0,
+      "verdict": "accepted",
+      "captureTimestampNs": 1000,
+      "quality": {
+        "blurScore": 85.0,
+        "meanLuminance": 110.0
+      },
+      "orientation": {
+        "yawDegrees": 0.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0001.jpg",
+      "sidecarPath": null,
+      "checksum": "93b885adfe0da089cdf634904fd59f71",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye1",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 1,
+      "verdict": "accepted",
+      "captureTimestampNs": 1001,
+      "quality": {
+        "blurScore": 102.5,
+        "meanLuminance": 111.0
+      },
+      "orientation": {
+        "yawDegrees": 22.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0002.jpg",
+      "sidecarPath": null,
+      "checksum": "55a54008ad1ba589aa210d2629c1df41",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye2",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 2,
+      "verdict": "accepted",
+      "captureTimestampNs": 1002,
+      "quality": {
+        "blurScore": 120.0,
+        "meanLuminance": 112.0
+      },
+      "orientation": {
+        "yawDegrees": 45.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0003.jpg",
+      "sidecarPath": null,
+      "checksum": "9e688c58a5487b8eaf69c9e1005ad0bf",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye3",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 3,
+      "verdict": "accepted",
+      "captureTimestampNs": 1003,
+      "quality": {
+        "blurScore": 137.5,
+        "meanLuminance": 113.0
+      },
+      "orientation": {
+        "yawDegrees": 67.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0004.jpg",
+      "sidecarPath": null,
+      "checksum": "8666683506aacd900bbd5a74ac4edf68",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye4",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 4,
+      "verdict": "accepted",
+      "captureTimestampNs": 1004,
+      "quality": {
+        "blurScore": 155.0,
+        "meanLuminance": 114.0
+      },
+      "orientation": {
+        "yawDegrees": 90.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0005.jpg",
+      "sidecarPath": null,
+      "checksum": "ec7f7e7bb43742ce868145f71d37b53c",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye5",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 5,
+      "verdict": "accepted",
+      "captureTimestampNs": 1005,
+      "quality": {
+        "blurScore": 85.0,
+        "meanLuminance": 115.0
+      },
+      "orientation": {
+        "yawDegrees": 112.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0006.jpg",
+      "sidecarPath": null,
+      "checksum": "8bb6c17838643f9691cc6a4de6c51709",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye6",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 6,
+      "verdict": "accepted",
+      "captureTimestampNs": 1006,
+      "quality": {
+        "blurScore": 102.5,
+        "meanLuminance": 116.0
+      },
+      "orientation": {
+        "yawDegrees": 135.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0007.jpg",
+      "sidecarPath": null,
+      "checksum": "06eca1b437c7904cc3ce6546c8110110",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye7",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 7,
+      "verdict": "accepted",
+      "captureTimestampNs": 1007,
+      "quality": {
+        "blurScore": 120.0,
+        "meanLuminance": 110.0
+      },
+      "orientation": {
+        "yawDegrees": 157.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0008.jpg",
+      "sidecarPath": null,
+      "checksum": "89e74e640b8c46257a29de0616794d5d",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye8",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 8,
+      "verdict": "accepted",
+      "captureTimestampNs": 1008,
+      "quality": {
+        "blurScore": 137.5,
+        "meanLuminance": 111.0
+      },
+      "orientation": {
+        "yawDegrees": 180.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0009.jpg",
+      "sidecarPath": null,
+      "checksum": "e2ba905bf306f46faca223d3cb20e2cf",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye9",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 9,
+      "verdict": "accepted",
+      "captureTimestampNs": 1009,
+      "quality": {
+        "blurScore": 155.0,
+        "meanLuminance": 112.0
+      },
+      "orientation": {
+        "yawDegrees": 202.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0010.jpg",
+      "sidecarPath": null,
+      "checksum": "5e732a1878be2342dbfeff5fe3ca5aa3",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye10",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 10,
+      "verdict": "accepted",
+      "captureTimestampNs": 1010,
+      "quality": {
+        "blurScore": 85.0,
+        "meanLuminance": 113.0
+      },
+      "orientation": {
+        "yawDegrees": 225.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0011.jpg",
+      "sidecarPath": null,
+      "checksum": "68b329da9893e34099c7d8ad5cb9c940",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye11",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 11,
+      "verdict": "accepted",
+      "captureTimestampNs": 1011,
+      "quality": {
+        "blurScore": 102.5,
+        "meanLuminance": 114.0
+      },
+      "orientation": {
+        "yawDegrees": 247.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0012.jpg",
+      "sidecarPath": null,
+      "checksum": "13c8ffd977013703a701cf8e11deac65",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye12",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 12,
+      "verdict": "accepted",
+      "captureTimestampNs": 1012,
+      "quality": {
+        "blurScore": 120.0,
+        "meanLuminance": 115.0
+      },
+      "orientation": {
+        "yawDegrees": 270.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0013.jpg",
+      "sidecarPath": null,
+      "checksum": "58c89562f58fd276f592420068db8c09",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye13",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 13,
+      "verdict": "accepted",
+      "captureTimestampNs": 1013,
+      "quality": {
+        "blurScore": 137.5,
+        "meanLuminance": 116.0
+      },
+      "orientation": {
+        "yawDegrees": 292.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0014.jpg",
+      "sidecarPath": null,
+      "checksum": "dcb9be2f604e5df91deb9659bed4748d",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye14",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 14,
+      "verdict": "accepted",
+      "captureTimestampNs": 1014,
+      "quality": {
+        "blurScore": 155.0,
+        "meanLuminance": 110.0
+      },
+      "orientation": {
+        "yawDegrees": 315.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0015.jpg",
+      "sidecarPath": null,
+      "checksum": "4dedb2240a1e0f038dcdc8b3de92264c",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "eye15",
+      "levelCode": "A",
+      "levelId": "mid",
+      "ringName": "EYE",
+      "segmentIndex": 15,
+      "verdict": "accepted",
+      "captureTimestampNs": 1015,
+      "quality": {
+        "blurScore": 85.0,
+        "meanLuminance": 111.0
+      },
+      "orientation": {
+        "yawDegrees": 337.5,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/EYE/eye_0016.jpg",
+      "sidecarPath": null,
+      "checksum": "d838691e5d4ad06879ca721442e883d4",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top0",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 0,
+      "verdict": "accepted",
+      "captureTimestampNs": 1000,
+      "quality": {
+        "blurScore": 70.0,
+        "meanLuminance": 110.0
+      },
+      "orientation": {
+        "yawDegrees": 0.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0001.jpg",
+      "sidecarPath": null,
+      "checksum": "93b885adfe0da089cdf634904fd59f71",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top1",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 1,
+      "verdict": "accepted",
+      "captureTimestampNs": 1001,
+      "quality": {
+        "blurScore": 87.5,
+        "meanLuminance": 111.0
+      },
+      "orientation": {
+        "yawDegrees": 45.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0002.jpg",
+      "sidecarPath": null,
+      "checksum": "55a54008ad1ba589aa210d2629c1df41",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top2",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 2,
+      "verdict": "accepted",
+      "captureTimestampNs": 1002,
+      "quality": {
+        "blurScore": 105.0,
+        "meanLuminance": 112.0
+      },
+      "orientation": {
+        "yawDegrees": 90.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0003.jpg",
+      "sidecarPath": null,
+      "checksum": "9e688c58a5487b8eaf69c9e1005ad0bf",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top3",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 3,
+      "verdict": "accepted",
+      "captureTimestampNs": 1003,
+      "quality": {
+        "blurScore": 122.5,
+        "meanLuminance": 113.0
+      },
+      "orientation": {
+        "yawDegrees": 135.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0004.jpg",
+      "sidecarPath": null,
+      "checksum": "8666683506aacd900bbd5a74ac4edf68",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top4",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 4,
+      "verdict": "accepted",
+      "captureTimestampNs": 1004,
+      "quality": {
+        "blurScore": 140.0,
+        "meanLuminance": 114.0
+      },
+      "orientation": {
+        "yawDegrees": 180.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0005.jpg",
+      "sidecarPath": null,
+      "checksum": "ec7f7e7bb43742ce868145f71d37b53c",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top5",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 5,
+      "verdict": "accepted",
+      "captureTimestampNs": 1005,
+      "quality": {
+        "blurScore": 70.0,
+        "meanLuminance": 115.0
+      },
+      "orientation": {
+        "yawDegrees": 225.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0006.jpg",
+      "sidecarPath": null,
+      "checksum": "8bb6c17838643f9691cc6a4de6c51709",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top6",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 6,
+      "verdict": "accepted",
+      "captureTimestampNs": 1006,
+      "quality": {
+        "blurScore": 87.5,
+        "meanLuminance": 116.0
+      },
+      "orientation": {
+        "yawDegrees": 270.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0007.jpg",
+      "sidecarPath": null,
+      "checksum": "06eca1b437c7904cc3ce6546c8110110",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "top7",
+      "levelCode": "B",
+      "levelId": "high",
+      "ringName": "TOP",
+      "segmentIndex": 7,
+      "verdict": "accepted",
+      "captureTimestampNs": 1007,
+      "quality": {
+        "blurScore": 105.0,
+        "meanLuminance": 110.0
+      },
+      "orientation": {
+        "yawDegrees": 315.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/TOP/top_0008.jpg",
+      "sidecarPath": null,
+      "checksum": "89e74e640b8c46257a29de0616794d5d",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low0",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 0,
+      "verdict": "accepted",
+      "captureTimestampNs": 1000,
+      "quality": {
+        "blurScore": 62.0,
+        "meanLuminance": 110.0
+      },
+      "orientation": {
+        "yawDegrees": 0.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0001.jpg",
+      "sidecarPath": null,
+      "checksum": "93b885adfe0da089cdf634904fd59f71",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low1",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 1,
+      "verdict": "accepted",
+      "captureTimestampNs": 1001,
+      "quality": {
+        "blurScore": 79.5,
+        "meanLuminance": 111.0
+      },
+      "orientation": {
+        "yawDegrees": 30.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0002.jpg",
+      "sidecarPath": null,
+      "checksum": "55a54008ad1ba589aa210d2629c1df41",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low2",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 2,
+      "verdict": "accepted",
+      "captureTimestampNs": 1002,
+      "quality": {
+        "blurScore": 97.0,
+        "meanLuminance": 112.0
+      },
+      "orientation": {
+        "yawDegrees": 60.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0003.jpg",
+      "sidecarPath": null,
+      "checksum": "9e688c58a5487b8eaf69c9e1005ad0bf",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low3",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 3,
+      "verdict": "accepted",
+      "captureTimestampNs": 1003,
+      "quality": {
+        "blurScore": 114.5,
+        "meanLuminance": 113.0
+      },
+      "orientation": {
+        "yawDegrees": 90.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0004.jpg",
+      "sidecarPath": null,
+      "checksum": "8666683506aacd900bbd5a74ac4edf68",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low4",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 4,
+      "verdict": "accepted",
+      "captureTimestampNs": 1004,
+      "quality": {
+        "blurScore": 132.0,
+        "meanLuminance": 114.0
+      },
+      "orientation": {
+        "yawDegrees": 120.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0005.jpg",
+      "sidecarPath": null,
+      "checksum": "ec7f7e7bb43742ce868145f71d37b53c",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low5",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 5,
+      "verdict": "accepted",
+      "captureTimestampNs": 1005,
+      "quality": {
+        "blurScore": 62.0,
+        "meanLuminance": 115.0
+      },
+      "orientation": {
+        "yawDegrees": 150.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0006.jpg",
+      "sidecarPath": null,
+      "checksum": "8bb6c17838643f9691cc6a4de6c51709",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low6",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 6,
+      "verdict": "accepted",
+      "captureTimestampNs": 1006,
+      "quality": {
+        "blurScore": 79.5,
+        "meanLuminance": 116.0
+      },
+      "orientation": {
+        "yawDegrees": 180.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0007.jpg",
+      "sidecarPath": null,
+      "checksum": "06eca1b437c7904cc3ce6546c8110110",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low7",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 7,
+      "verdict": "accepted",
+      "captureTimestampNs": 1007,
+      "quality": {
+        "blurScore": 97.0,
+        "meanLuminance": 110.0
+      },
+      "orientation": {
+        "yawDegrees": 210.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0008.jpg",
+      "sidecarPath": null,
+      "checksum": "89e74e640b8c46257a29de0616794d5d",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low8",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 8,
+      "verdict": "accepted",
+      "captureTimestampNs": 1008,
+      "quality": {
+        "blurScore": 114.5,
+        "meanLuminance": 111.0
+      },
+      "orientation": {
+        "yawDegrees": 240.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0009.jpg",
+      "sidecarPath": null,
+      "checksum": "e2ba905bf306f46faca223d3cb20e2cf",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low9",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 9,
+      "verdict": "accepted",
+      "captureTimestampNs": 1009,
+      "quality": {
+        "blurScore": 132.0,
+        "meanLuminance": 112.0
+      },
+      "orientation": {
+        "yawDegrees": 270.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0010.jpg",
+      "sidecarPath": null,
+      "checksum": "5e732a1878be2342dbfeff5fe3ca5aa3",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low10",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 10,
+      "verdict": "accepted",
+      "captureTimestampNs": 1010,
+      "quality": {
+        "blurScore": 62.0,
+        "meanLuminance": 113.0
+      },
+      "orientation": {
+        "yawDegrees": 300.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0011.jpg",
+      "sidecarPath": null,
+      "checksum": "68b329da9893e34099c7d8ad5cb9c940",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    },
+    {
+      "photoId": "low11",
+      "levelCode": "C",
+      "levelId": "low",
+      "ringName": "LOW",
+      "segmentIndex": 11,
+      "verdict": "accepted",
+      "captureTimestampNs": 1011,
+      "quality": {
+        "blurScore": 79.5,
+        "meanLuminance": 114.0
+      },
+      "orientation": {
+        "yawDegrees": 330.0,
+        "pitchDegrees": 90.0
+      },
+      "imagePath": "images/LOW/low_0012.jpg",
+      "sidecarPath": null,
+      "checksum": "13c8ffd977013703a701cf8e11deac65",
+      "checksumAlgorithm": "md5",
+      "metadata": null
+    }
+  ],
+  "summary": {
+    "totalPhotos": 36,
+    "warningsCount": 0,
+    "overallComplete": true,
+    "levels": {
+      "EYE": {
+        "photos": 16,
+        "coverage": 100,
+        "segmentCount": 16,
+        "warnings": 0
+      },
+      "TOP": {
+        "photos": 8,
+        "coverage": 100,
+        "segmentCount": 8,
+        "warnings": 0
+      },
+      "LOW": {
+        "photos": 12,
+        "coverage": 100,
+        "segmentCount": 12,
+        "warnings": 0
+      }
+    }
+  }
+}

@@ -153,6 +153,13 @@ class CaptureBundlePacker {
             BundleSourceImage(
               sourcePath: rec.framePath,
               captureTimestampNs: rec.sensorTimestampNs,
+              // Quality + orientation ride ALL the way to the manifest: the
+              // backend's automatic model generation skips any photo without a
+              // finite blurScore, so dropping these here declines every capture.
+              blurScore: rec.blurScore,
+              meanLuminance: rec.meanLuminance,
+              yawDegrees: rec.yawDegrees,
+              pitchDegrees: rec.pitchDegrees,
               segmentIndex: rec.segmentIndex,
               warned: warnedPaths.contains(rec.framePath),
             ),
@@ -243,6 +250,10 @@ class CaptureBundlePacker {
           verdict: img.warned ? 'warn' : 'accepted',
           captureTimestampNs: img.captureTimestampNs,
           segmentIndex: img.segmentIndex,
+          blurScore: img.blurScore,
+          meanLuminance: img.meanLuminance,
+          yawDegrees: img.yawDegrees,
+          pitchDegrees: img.pitchDegrees,
           metadata: meta,
           checksumMd5: checksum,
         ));

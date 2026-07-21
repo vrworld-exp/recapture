@@ -4,10 +4,23 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/domain/upload/capture_bundle.dart';
 
-BundleSourceImage _src(String path, {int? seg, int ts = 0, bool warned = false}) =>
+BundleSourceImage _src(
+  String path, {
+  int? seg,
+  int ts = 0,
+  bool warned = false,
+  double blur = 100,
+  double luma = 128,
+  double yaw = 0,
+  double pitch = 90,
+}) =>
     BundleSourceImage(
       sourcePath: path,
       captureTimestampNs: ts,
+      blurScore: blur,
+      meanLuminance: luma,
+      yawDegrees: yaw,
+      pitchDegrees: pitch,
       segmentIndex: seg,
       warned: warned,
     );
@@ -135,6 +148,34 @@ void main() {
         ]),
       ]);
       expect(plan.single.warned, isTrue);
+    });
+
+    test('quality + orientation are carried through unchanged', () {
+      // These four are what the backend's automatic photo selection ranks on;
+      // a planner that drops them silently declines every real capture.
+      final plan = planBundleImages([
+        BundleLevelSources(levelCode: 'A', levelId: 'mid', images: [
+          _src('/s/a1.jpg', seg: 0, blur: 132.5, luma: 118.25, yaw: 12.5, pitch: 88.5),
+          _src('/s/a2.jpg', seg: 1, blur: 61, luma: 90, yaw: 190.75, pitch: 91),
+        ]),
+      ]);
+      expect(plan.map((p) => p.blurScore).toList(), [132.5, 61]);
+      expect(plan.map((p) => p.meanLuminance).toList(), [118.25, 90]);
+      expect(plan.map((p) => p.yawDegrees).toList(), [12.5, 190.75]);
+      expect(plan.map((p) => p.pitchDegrees).toList(), [88.5, 91]);
+    });
+
+    test('dedupe keeps the SURVIVING record\'s quality, not the collapsed one\'s',
+        () {
+      final plan = planBundleImages([
+        BundleLevelSources(levelCode: 'A', levelId: 'mid', images: [
+          _src('/s/original.jpg', seg: 5, ts: 50, blur: 10, yaw: 5),
+          _src('/s/retake.jpg', seg: 5, ts: 200, blur: 150, yaw: 275),
+        ]),
+      ]);
+      expect(plan.single.sourcePath, '/s/retake.jpg');
+      expect(plan.single.blurScore, 150);
+      expect(plan.single.yawDegrees, 275);
     });
 
     test('empty level yields no images', () {
