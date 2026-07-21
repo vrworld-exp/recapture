@@ -16,6 +16,7 @@ import { Job, MESHY_MODEL_GENERATION_JOB_TYPE } from '@/models/Job';
 import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
 import { buildJobKeyPrefix } from '@/utils/s3Keys';
+import { findExportableJob } from '@/services/adminProjectsService';
 import {
   AUTO_MODEL_FLAG_KEY,
   autoGenerationIdempotencyKey,
@@ -108,6 +109,46 @@ async function makeCaptureJob() {
   return { job, project, ownerId };
 }
 
+/**
+ * Adds a SECOND, strictly newer finalized capture job to the same project —
+ * the user who recaptured while the first capture was still processing.
+ * createdAt is stamped through the raw driver so mongoose timestamps cannot
+ * overwrite it and the ordering is unambiguous.
+ */
+async function addNewerCaptureJob(
+  project: { _id: Types.ObjectId; id: string },
+  ownerId: Types.ObjectId
+) {
+  const jobId = new Types.ObjectId();
+  const prefix = buildJobKeyPrefix({
+    userId: ownerId.toHexString(),
+    projectId: project.id,
+    jobId: jobId.toHexString(),
+  });
+  const job = await Job.create({
+    _id: jobId,
+    projectId: project._id,
+    userId: ownerId,
+    state: 'PROCESSING',
+    objectSize: 'MEDIUM',
+    queuedAt: new Date(),
+    upload: {
+      uploadMethod: 'S3_PRESIGNED_MULTIPART',
+      expectedFilesCount: 49,
+      uploadedFilesCount: 49,
+      checksumAlgo: 'md5',
+      rawBucket: 'recapture-test-raw',
+      rawPrefix: prefix,
+      manifestKey: `${prefix}capture_manifest.json`,
+    },
+  });
+  await Job.collection.updateOne(
+    { _id: jobId },
+    { $set: { createdAt: new Date(Date.now() + 60_000) } }
+  );
+  return job;
+}
+
 /** Sets (or clears) the live kill switch on the ops config document. */
 async function setKillSwitch(value: boolean | undefined): Promise<void> {
   await ClientConfig.deleteMany({});
@@ -137,6 +178,55 @@ describe('maybeAutoGenerateModel', () => {
     const queued = await Job.findOne({ jobType: MESHY_MODEL_GENERATION_JOB_TYPE }).exec();
     expect(queued?.state).toBe('QUEUED');
     expect((queued?.payload as { modelId?: string })?.modelId).toBe(result.modelId);
+  });
+
+  // ── Job identity: the generation belongs to the TRIGGERING job ────────────
+  //
+  // REGRESSION. createMeshyModelRequest used to ignore its caller's job and
+  // re-resolve the project's NEWEST exportable one. The Meshy processor
+  // presigns the selected keys against whatever job the record points at, so a
+  // user recapturing while the first capture was still processing got job A's
+  // keys signed under job B's prefix — dead URLs, or another capture's photos
+  // and a plausible model of the wrong object.
+  //
+  // A one-job fixture cannot see this: the triggering job IS the newest. That
+  // is exactly how the bug survived a green suite, so the second job below is
+  // the entire point of this test.
+  it('pins the record to the triggering job, not the project newest', async () => {
+    const { job, project, ownerId } = await makeCaptureJob();
+    const newer = await addNewerCaptureJob(project, ownerId);
+
+    // Control: the OLD resolution really would have picked the other job.
+    const newestExportable = await findExportableJob(project.id as string);
+    expect(newestExportable?._id.toHexString()).toBe(newer._id.toHexString());
+
+    const result = await maybeAutoGenerateModel({ job: job as never, manifest: goodManifest() });
+
+    expect(result.outcome).toBe('ENQUEUED');
+    if (result.outcome !== 'ENQUEUED') return;
+    const record = await ProjectModel.findById(result.modelId).exec();
+    expect(record?.jobId.toHexString()).toBe(job._id.toHexString());
+    expect(record?.jobId.toHexString()).not.toBe(newer._id.toHexString());
+  });
+
+  it('selects keys that exist under the TRIGGERING job prefix', async () => {
+    // The cheap live-verification check, run hermetically: every selected key
+    // is relative, so it only resolves correctly when presigned against the
+    // job the record points at.
+    const { job, project, ownerId } = await makeCaptureJob();
+    await addNewerCaptureJob(project, ownerId);
+    const manifest = goodManifest();
+
+    const result = await maybeAutoGenerateModel({ job: job as never, manifest });
+
+    if (result.outcome !== 'ENQUEUED') throw new Error('expected ENQUEUED');
+    const record = await ProjectModel.findById(result.modelId).exec();
+    const manifestKeys = manifest.photos.map((p) => p.imagePath);
+    for (const key of record!.selectedKeys) {
+      expect(manifestKeys).toContain(key);
+    }
+    const pinned = await Job.findById(record!.jobId).exec();
+    expect(pinned?.upload?.rawPrefix).toBe(job.upload?.rawPrefix);
   });
 
   // ── Guard 1: the kill switches ────────────────────────────────────────────

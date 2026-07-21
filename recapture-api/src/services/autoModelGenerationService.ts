@@ -151,6 +151,13 @@ export async function maybeAutoGenerateModel(
   // idempotency replay. A second create path here would drift from it.
   const result = await createMeshyModelRequest({
     projectId,
+    // PIN the generation to the job we just selected from. Without this the
+    // service re-resolves the project's NEWEST exportable job, so a user who
+    // recaptures while this capture is still processing gets these keys
+    // presigned under the other job's prefix — dead URLs at best, another
+    // capture's photos at worst. The automatic path always knows its job; it
+    // should never be guessing.
+    jobId: job._id,
     keys: selection.keys,
     // No human asked for this, so it is attributed to the project OWNER — whose
     // capture caused the spend, and whose daily cap it counts against.

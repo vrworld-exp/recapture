@@ -22,6 +22,7 @@ import { ProjectModel } from '@/models/ProjectModel';
 import { RateWindow } from '@/models/RateWindow';
 import { buildJobKeyPrefix } from '@/utils/s3Keys';
 import { buildProjectExport } from '@/services/adminProjectsService';
+import { createMeshyModelRequest } from '@/services/projectModelsService';
 
 const app = createApp();
 let mongod: MongoMemoryServer;
@@ -315,6 +316,98 @@ describe('a generation job must not shadow the capture job', () => {
     const result = await buildProjectExport(project.id as string);
 
     expect(result.outcome).toBe('EXPORTED');
+  });
+});
+
+describe('createMeshyModelRequest — which capture job the keys resolve against', () => {
+  /** A second finalized capture job, unambiguously newer than the first. */
+  async function makeNewerFinalizedJob(ownerId: string, projectId: string) {
+    const { job, prefix } = await makeFinalizedJob(ownerId, projectId);
+    await Job.collection.updateOne(
+      { _id: job._id },
+      { $set: { createdAt: new Date(Date.now() + 60_000) } }
+    );
+    return { job, prefix };
+  }
+
+  it('with NO jobId, still resolves the NEWEST exportable job (staff path unchanged)', async () => {
+    // The staff surface curates a project's current state at request time, so
+    // "newest" is the intended rule there — B4 must not have shifted it.
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id);
+    await makeFinalizedJob(owner.id, project.id as string);
+    const { job: newer } = await makeNewerFinalizedJob(owner.id, project.id as string);
+
+    const result = await createMeshyModelRequest({
+      projectId: project.id as string,
+      keys: KEYS,
+      actor: { userId: artist.id, role: 'MODEL_ARTIST' },
+    });
+
+    expect(result.outcome).toBe('CREATED');
+    if (result.outcome !== 'CREATED') return;
+    expect(result.model.jobId.toHexString()).toBe(newer._id.toHexString());
+  });
+
+  it('with a jobId, pins to THAT job even when a newer one exists', async () => {
+    const owner = await makeUser('USER');
+    const project = await makeProject(owner.id);
+    const { job: older } = await makeFinalizedJob(owner.id, project.id as string);
+    const { job: newer } = await makeNewerFinalizedJob(owner.id, project.id as string);
+
+    const result = await createMeshyModelRequest({
+      projectId: project.id as string,
+      keys: KEYS,
+      actor: { userId: owner.id, role: 'USER' },
+      jobId: older._id,
+    });
+
+    expect(result.outcome).toBe('CREATED');
+    if (result.outcome !== 'CREATED') return;
+    expect(result.model.jobId.toHexString()).toBe(older._id.toHexString());
+    expect(result.model.jobId.toHexString()).not.toBe(newer._id.toHexString());
+  });
+
+  it('NOT_EXPORTABLE when the named job has no upload block', async () => {
+    const owner = await makeUser('USER');
+    const project = await makeProject(owner.id);
+    await makeFinalizedJob(owner.id, project.id as string); // a valid newer-or-equal job exists
+    const noUpload = await Job.create({
+      projectId: project._id,
+      userId: new Types.ObjectId(owner.id),
+      state: 'PROCESSING',
+      objectSize: 'MEDIUM',
+    });
+
+    const result = await createMeshyModelRequest({
+      projectId: project.id as string,
+      keys: KEYS,
+      actor: { userId: owner.id, role: 'USER' },
+      jobId: noUpload._id,
+    });
+
+    // Explicitly NOT a silent fallback to the exportable job — the caller named
+    // a job, and that job cannot serve the keys.
+    expect(result).toEqual({ outcome: 'NOT_EXPORTABLE' });
+    expect(await ProjectModel.countDocuments({})).toBe(0);
+  });
+
+  it('NOT_EXPORTABLE when the named job belongs to another project', async () => {
+    const owner = await makeUser('USER');
+    const mine = await makeProject(owner.id);
+    const theirs = await makeProject(owner.id);
+    await makeFinalizedJob(owner.id, mine.id as string);
+    const { job: foreign } = await makeFinalizedJob(owner.id, theirs.id as string);
+
+    const result = await createMeshyModelRequest({
+      projectId: mine.id as string,
+      keys: KEYS,
+      actor: { userId: owner.id, role: 'USER' },
+      jobId: foreign._id,
+    });
+
+    expect(result).toEqual({ outcome: 'NOT_EXPORTABLE' });
   });
 });
 

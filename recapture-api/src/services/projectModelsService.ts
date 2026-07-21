@@ -23,6 +23,7 @@ import type {
 import type { UserRole } from '@/models/User';
 import {
   findExportableJob,
+  findExportableJobById,
   isContainedRelativeKey,
   MODEL_INPUT_KEY_PREFIX,
 } from '@/services/adminProjectsService';
@@ -178,6 +179,17 @@ export interface CreateMeshyModelRequestInput {
   idempotencyKey?: string;
   /** True when the worker started this itself (no human asked). */
   createdBySystem?: boolean;
+  /**
+   * The capture job these keys came from, PINNING the generation to it.
+   *
+   * Omit it and the newest exportable job is resolved instead — which is what
+   * the staff surfaces want, because a human is curating the project's current
+   * state at request time. The AUTOMATIC path must always supply it: it is
+   * acting on one specific job, and a project that gains a newer finalized
+   * capture mid-flight would otherwise have these keys presigned under the
+   * wrong prefix (see findExportableJobById).
+   */
+  jobId?: Types.ObjectId | string;
 }
 
 export type CreateMeshyModelResult =
@@ -201,9 +213,10 @@ export type CreateMeshyModelResult =
  * leaves a QUEUED record with no job — visible and re-requestable — which is
  * strictly better than a job whose record does not exist yet.
  *
- * The keys are resolved against the SAME exportable job the export and
- * soft-delete paths use, and validated with the SAME containment rule, so a
- * caller can only ever select photos it can already see.
+ * The keys are resolved against an exportable job — the caller's own when it
+ * passes [CreateMeshyModelRequestInput.jobId], otherwise the same newest-job
+ * rule the export and soft-delete paths use — and validated with the SAME
+ * containment rule, so a caller can only ever select photos it can already see.
  */
 export async function createMeshyModelRequest(
   input: CreateMeshyModelRequestInput
@@ -216,7 +229,11 @@ export async function createMeshyModelRequest(
   }).exec();
   if (!project) return { outcome: 'PROJECT_NOT_FOUND' };
 
-  const job = await findExportableJob(projectId);
+  // An explicit jobId pins the generation to the caller's OWN job; without one
+  // the newest exportable job is resolved, unchanged, for the staff path.
+  const job = input.jobId
+    ? await findExportableJobById(projectId, input.jobId)
+    : await findExportableJob(projectId);
   if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
 
   // Dedupe before counting: selecting the same photo twice is a 2-photo

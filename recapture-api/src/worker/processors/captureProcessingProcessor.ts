@@ -60,9 +60,17 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
   // those objects are additive session artifacts and must not fail a
   // re-claimed capture job.
   const modelInputPrefix = `${upload.rawPrefix}${MODEL_INPUT_KEY_PREFIX}`;
-  const filesVerified = (
+  const bundleObjects = (
     await listObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix)
-  ).filter((object) => !object.key.startsWith(modelInputPrefix)).length;
+  ).filter((object) => !object.key.startsWith(modelInputPrefix));
+  const filesVerified = bundleObjects.length;
+  // The SAME listing, re-expressed as keys RELATIVE to rawPrefix
+  // (`images/EYE/eye_0001.jpg`) — the shape the auto-selection compares its
+  // manifest-derived keys against. Absolute bucket keys here would match
+  // nothing and silently drop every candidate.
+  const availableKeys = bundleObjects
+    .filter((object) => object.key.startsWith(upload.rawPrefix))
+    .map((object) => object.key.slice(upload.rawPrefix.length));
   if (filesVerified !== upload.expectedFilesCount) {
     throw new NonRetryableJobError(
       'FILE_COUNT_MISMATCH',
@@ -130,7 +138,13 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
   // would re-fetch and re-validate the same document purely to pick photos.
   let autoGeneration: AutoGenerationOutcome | undefined;
   try {
-    autoGeneration = await maybeAutoGenerateModel({ job, manifest: parsedManifest });
+    // availableKeys is what stops a manifest entry whose object never landed
+    // from becoming a presigned URL that 404s — and burning a paid generation.
+    autoGeneration = await maybeAutoGenerateModel({
+      job,
+      manifest: parsedManifest,
+      availableKeys,
+    });
     log('info', 'Auto model generation decision', {
       jobId: job._id,
       projectId: job.projectId,
