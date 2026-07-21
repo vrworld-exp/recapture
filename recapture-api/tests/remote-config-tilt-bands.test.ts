@@ -1,7 +1,7 @@
 // tests/remote-config-tilt-bands.test.ts
 //
-// GET /remote-config — the 0–180° camera-tilt pitch bands (BOTTOM=low [0,60) /
-// EYE=mid [60,120) / TOP=high [120,180]) and their wire shape. The band
+// GET /remote-config — the 0–180° camera-tilt pitch bands (BOTTOM=low [0,40) /
+// EYE=mid [40,110) / TOP=high [110,180]) and their wire shape. The band
 // entries use the CLIENT's exact keys (`id`/`minDegrees`/`maxDegrees`/
 // `segments`) so `CaptureConfig.fromMap` parses the payload with no mapping
 // layer — this file is the cross-codebase contract test for that shape.
@@ -38,9 +38,9 @@ afterEach(async () => {
 // Asserted as LITERAL numbers on purpose — this is the cross-codebase contract
 // with the client's bundled `CaptureConfig` defaults, not a derived value.
 const EXPECTED_PITCH_BANDS = [
-  { id: 'low', minDegrees: 0, maxDegrees: 60, segments: 12 },
-  { id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10 },
-  { id: 'high', minDegrees: 120, maxDegrees: 180, segments: 8 },
+  { id: 'low', minDegrees: 0, maxDegrees: 40, segments: 12 },
+  { id: 'mid', minDegrees: 40, maxDegrees: 110, segments: 10 },
+  { id: 'high', minDegrees: 110, maxDegrees: 180, segments: 8 },
 ];
 
 describe('remoteConfigSchema — 0–180° tilt bands', () => {
@@ -62,7 +62,7 @@ describe('remoteConfigSchema — 0–180° tilt bands', () => {
   it('accepts degrees up to 180 (the old ≤90 assumption is gone)', () => {
     const cfg = {
       ...DEFAULT_REMOTE_CONFIG,
-      pitchBands: [{ id: 'high', minDegrees: 120, maxDegrees: 180, segments: 8 }],
+      pitchBands: [{ id: 'high', minDegrees: 110, maxDegrees: 180, segments: 8 }],
     };
     expect(remoteConfigSchema.safeParse(cfg).success).toBe(true);
   });
@@ -70,7 +70,7 @@ describe('remoteConfigSchema — 0–180° tilt bands', () => {
   it('rejects degrees outside [0, 180] and the legacy {min,max,label} shape', () => {
     const over = {
       ...DEFAULT_REMOTE_CONFIG,
-      pitchBands: [{ id: 'high', minDegrees: 120, maxDegrees: 181, segments: 8 }],
+      pitchBands: [{ id: 'high', minDegrees: 110, maxDegrees: 181, segments: 8 }],
     };
     expect(remoteConfigSchema.safeParse(over).success).toBe(false);
 

@@ -88,6 +88,23 @@ export const adminCreateModelBodySchema = z
 export type AdminCreateModelBody = z.infer<typeof adminCreateModelBodySchema>;
 
 /**
+ * Body for POST /admin/projects/:id/model/auto — the "Generate 3D model"
+ * button, where the SERVER picks the photos.
+ *
+ * No keys: choosing them is the whole point. `force` is the staff-only
+ * escape hatch that mints a fresh idempotency key so a second press pays for a
+ * second generation; without it a repeat press replays the existing record,
+ * which is what keeps the button from being a hole in the budget.
+ */
+export const adminAutoModelBodySchema = z
+  .object({
+    force: z.boolean().optional(),
+  })
+  .strict();
+
+export type AdminAutoModelBody = z.infer<typeof adminAutoModelBodySchema>;
+
+/**
  * Body for POST /admin/projects/:id/model-images/upload-urls: how many edited
  * model-input images the Prepare-Images screen will upload. Bounded by the
  * Meshy selection ceiling — a prep session never needs more slots than photos

@@ -25,7 +25,12 @@ import { env } from '@/config/env';
 import { ProjectModel } from '@/models/ProjectModel';
 import { getServerFlag } from '@/services/remoteConfigService';
 import { selectPhotosForAutoGeneration } from '@/services/autoPhotoSelectionService';
-import { createMeshyModelRequest } from '@/services/projectModelsService';
+import {
+  countServerSelectedGenerationsInLast24h,
+  createMeshyModelRequest,
+  persistGenerationTrace,
+  toStoredSelection,
+} from '@/services/projectModelsService';
 import type { WorkerJob } from '@/worker/workerTypes';
 
 /** Remote-config key for the live kill switch (see maybeAutoGenerateModel). */
@@ -122,12 +127,11 @@ export async function maybeAutoGenerateModel(
   // ── Guard 3: the owner's rolling 24h ceiling. Protects against a stuck
   // client that keeps finalizing, and bounds the blast radius of any bug that
   // makes captures complete in a loop.
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const recentCount = await ProjectModel.countDocuments({
-    createdByUserId: new Types.ObjectId(userId),
-    createdBySystem: true,
-    createdAt: { $gte: since },
-  }).exec();
+  //
+  // Counts button-triggered generations too: the "Generate 3D model" button
+  // runs this same selector and spends from the same budget, so the two share
+  // ONE pool rather than each getting a full ceiling of their own.
+  const recentCount = await countServerSelectedGenerationsInLast24h(userId);
   if (recentCount >= env.AUTO_MODEL_MAX_PER_USER_PER_DAY) {
     return {
       outcome: 'SKIPPED',
@@ -167,13 +171,41 @@ export async function maybeAutoGenerateModel(
   });
 
   switch (result.outcome) {
-    case 'CREATED':
+    case 'CREATED': {
+      const modelId = result.model.id as string;
+      // The same trace the button writes, so a generation can be explained
+      // months later regardless of which path started it — and so the two
+      // paths cannot quietly drift into producing different diagnostics.
+      // Best-effort by construction (persistGenerationTrace swallows): the
+      // credits are already committed and a lost debug artifact must not fail
+      // a queued generation.
+      await persistGenerationTrace(modelId, {
+        steps: [
+          {
+            step: 'SELECT_PHOTOS',
+            status: 'OK',
+            detail: selection.reason,
+            at: new Date().toISOString(),
+            durationMs: 0,
+          },
+          {
+            step: 'ENQUEUE',
+            status: 'OK',
+            detail: `${selection.keys.length} photos queued for generation`,
+            at: new Date().toISOString(),
+            durationMs: 0,
+          },
+        ],
+        ...(selection.trace ? { selection: toStoredSelection(selection.trace) } : {}),
+        requestedBy: 'AUTO',
+      });
       return {
         outcome: 'ENQUEUED',
-        modelId: result.model.id as string,
+        modelId,
         keyCount: selection.keys.length,
         reason: selection.reason,
       };
+    }
     // The index caught a concurrent worker — the winner's generation stands and
     // we deliberately do NOT enqueue a second one.
     case 'REPLAYED':

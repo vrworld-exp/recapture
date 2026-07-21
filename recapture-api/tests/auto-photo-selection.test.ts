@@ -332,7 +332,13 @@ describe('selectPhotosForAutoGeneration', () => {
     );
     const result = selectPhotosForAutoGeneration(manifest(photos));
 
-    expect(result).toEqual({ outcome: 'DECLINED', reason: 'INSUFFICIENT_SPREAD' });
+    expect(result.outcome).toBe('DECLINED');
+    if (result.outcome !== 'DECLINED') throw new Error('expected DECLINED');
+    expect(result.reason).toBe('INSUFFICIENT_SPREAD');
+    // The trace is what makes the refusal reviewable: six perfectly sharp
+    // photos, all landing in one quadrant.
+    expect(result.trace?.quadrantHistogram.filter((n) => n > 0)).toHaveLength(1);
+    expect(result.trace?.belowBlurFloor).toBe(0);
   });
 
   it('falls back to yaw when the manifest carries no segment config', () => {
@@ -359,29 +365,61 @@ describe('selectPhotosForAutoGeneration', () => {
     const photos = Array.from({ length: 4 }, (_, i) =>
       photo({ file: `x_${i}.jpg`, segmentIndex: i * 4, blurScore: null })
     );
-    expect(selectPhotosForAutoGeneration(manifest(photos))).toEqual({
-      outcome: 'DECLINED',
-      reason: 'NO_USABLE_PHOTOS',
-    });
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+    if (result.outcome !== 'DECLINED') throw new Error('expected DECLINED');
+    expect(result.reason).toBe('NO_USABLE_PHOTOS');
+    // THE diagnostic for captures packed before the manifest carried quality:
+    // without this counter the decline is indistinguishable from a real bug in
+    // the selector.
+    expect(result.trace?.droppedNoBlurScore).toBe(4);
+    expect(result.trace?.droppedUnresolvableKey).toBe(0);
   });
 
   it('declines when no imagePath resolves to a relative key', () => {
     const photos = Array.from({ length: 4 }, (_, i) =>
       photo({ file: `x_${i}.jpg`, segmentIndex: i * 4, imagePath: 'nowhere.jpg' })
     );
-    expect(selectPhotosForAutoGeneration(manifest(photos))).toEqual({
-      outcome: 'DECLINED',
-      reason: 'NO_USABLE_PHOTOS',
-    });
+    const result = selectPhotosForAutoGeneration(manifest(photos));
+    if (result.outcome !== 'DECLINED') throw new Error('expected DECLINED');
+    expect(result.reason).toBe('NO_USABLE_PHOTOS');
+    // Same reason code as the no-blur-score case above, entirely different
+    // bug — the counters are what tell them apart.
+    expect(result.trace?.droppedUnresolvableKey).toBe(4);
+    expect(result.trace?.droppedNoBlurScore).toBe(0);
+  });
+
+  it('declines when the objects are missing from the bucket', () => {
+    const photos = [0, 4, 8, 12].map((segmentIndex, i) =>
+      photo({ file: `p_${i}.jpg`, segmentIndex, blurScore: 100 })
+    );
+    const result = selectPhotosForAutoGeneration(manifest(photos), { availableKeys: [] });
+    if (result.outcome !== 'DECLINED') throw new Error('expected DECLINED');
+    expect(result.reason).toBe('NO_USABLE_PHOTOS');
+    expect(result.trace?.droppedMissingObject).toBe(4);
   });
 
   it('declines an unreadable manifest instead of throwing', () => {
     for (const bad of [undefined, null, 42, 'nope', {}, { photos: 'not-an-array' }]) {
-      expect(selectPhotosForAutoGeneration(bad)).toEqual({
-        outcome: 'DECLINED',
-        reason: 'MANIFEST_UNREADABLE',
-      });
+      const result = selectPhotosForAutoGeneration(bad);
+      if (result.outcome !== 'DECLINED') throw new Error('expected DECLINED');
+      expect(result.reason).toBe('MANIFEST_UNREADABLE');
+      // A trace of all zeroes is itself the finding: nothing was ever weighed.
+      expect(result.trace?.photosInManifest).toBe(0);
     }
+  });
+
+  it('traces WHY the chosen photos were chosen on a successful selection', () => {
+    const result = selectPhotosForAutoGeneration(goodCapture());
+    if (result.outcome !== 'SELECTED') throw new Error('expected SELECTED');
+
+    const trace = result.trace;
+    if (!trace) throw new Error('expected a trace');
+    expect(trace.ringUsed).toBe('EYE');
+    expect(trace.segmentCountUsed).toBe(16);
+    // Every chosen photo is accounted for, with the two facts that decided it.
+    expect(trace.chosen.map((c) => c.key)).toEqual(result.keys);
+    expect(trace.chosen.every((c) => c.blurScore > 0)).toBe(true);
+    expect(new Set(trace.chosen.map((c) => c.quadrant)).size).toBe(4);
   });
 
   it('is deterministic — the same manifest yields the same keys', () => {

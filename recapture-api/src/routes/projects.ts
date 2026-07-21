@@ -18,9 +18,17 @@ import {
   getProject,
 } from '@/services/projectsService';
 import {
+  findProjectModelById,
   latestOwnerModelFor,
   pendingOwnerGenerationFor,
+  MIN_SELECTED_PHOTOS,
 } from '@/services/projectModelsService';
+import {
+  generateModelOnDemand,
+  GenerationInfrastructureError,
+} from '@/services/onDemandModelGenerationService';
+import { consumeRateWindow } from '@/utils/rateLimit';
+import { env } from '@/config/env';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { RESUME_SOURCES } from '@/validation/analyticsSchemas';
@@ -202,6 +210,165 @@ router.post(
     res.status(201).json({ status: 'success', project });
   })
 );
+
+/**
+ * POST /projects/:id/model — the OWNER-facing "Generate 3D model" request.
+ *
+ * Same server-side selection as the staff button, with every internal fact
+ * stripped: no steps, no selector trace, no key names, no phase vocabulary, no
+ * hint that Meshy exists. An owner learns only that a model is being made, or
+ * one plain reason it cannot be.
+ *
+ * Gated by MANUAL_MODEL_GENERATION_ENABLED like the staff route. Phase 1 ships
+ * with no client entry point pointing here (owner regenerate rights are a
+ * separate product decision) — this is the plumbing, so enabling it later is a
+ * gate flip rather than a backend change.
+ */
+router.post(
+  '/:id/model',
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    // Ownership is proven the same way every other owner route proves it, and
+    // a project that is missing, not-owned, or soft-deleted is one identical
+    // 404 — no existence leak.
+    const userId = req.user!.userId;
+    const project = await getProject(userId, params.data.id);
+    if (!project) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+
+    const rate = await consumeRateWindow(
+      `meshy-create:${userId}`,
+      env.MESHY_CREATE_MAX_PER_WINDOW,
+      env.MESHY_CREATE_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    let result;
+    try {
+      // Owners never get `force`: an unbounded "pay again" loop behind a button
+      // is exactly what the idempotent default exists to prevent.
+      result = await generateModelOnDemand({
+        projectId: project.id,
+        actor: { userId, role: 'USER' },
+      });
+    } catch (err: unknown) {
+      if (err instanceof GenerationInfrastructureError) {
+        // The steps ride along on the error for staff; the owner gets none.
+        res.status(502).json({
+          status: 'error',
+          code: 'GENERATION_UNAVAILABLE',
+          message: "We couldn't start this right now. Please try again.",
+        });
+        return;
+      }
+      throw err;
+    }
+
+    if (result.outcome === 'BLOCKED') {
+      if (result.reason === 'PROJECT_NOT_FOUND') {
+        res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+        return;
+      }
+      res.status(result.reason === 'NOT_EXPORTABLE' ? 422 : 409).json({
+        status: 'error',
+        code: OWNER_BLOCK_CODES[result.reason],
+        message: OWNER_BLOCK_MESSAGES[result.reason],
+      });
+      return;
+    }
+
+    if (result.outcome === 'DECLINED') {
+      track(AnalyticsEvent.MODEL_GENERATION_DECLINED, {
+        actor_id_hash: hashIdentifier(userId),
+        project_id_hash: hashIdentifier(project.id),
+        trigger: 'manual_button',
+        reason: result.reason,
+        pool_size: result.trace.poolSize,
+        dropped_no_blur: result.trace.droppedNoBlurScore,
+        quadrants_filled: result.trace.quadrantHistogram.filter((n) => n > 0).length,
+      });
+      // Mapped copy only. The reason CODE stays out of the body too: it is a
+      // rule id from our selector, and it would only invite the client to
+      // branch on internals instead of on the message we chose.
+      res.status(422).json({
+        status: 'error',
+        code: 'NOT_SELECTABLE',
+        message: OWNER_DECLINE_MESSAGES[result.reason],
+      });
+      return;
+    }
+
+    // Read the record back for the truthful job id and selection size rather
+    // than approximating them — an analytics field that lies is worse than one
+    // that is missing.
+    const record = await findProjectModelById(result.modelId);
+    track(AnalyticsEvent.MODEL_GENERATION_REQUESTED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(project.id),
+      job_id_hash: hashIdentifier(record?.jobId.toHexString() ?? 'unknown'),
+      model_id_hash: hashIdentifier(result.modelId),
+      source: 'meshy',
+      key_count: record?.selectedKeys.length ?? MIN_SELECTED_PHOTOS,
+      was_replay: result.outcome === 'REPLAYED',
+      trigger: 'manual_button',
+      actor_role: 'USER',
+      forced: false,
+    });
+
+    // 202: the request is accepted and queued; the model itself takes minutes
+    // and arrives through the polling the project detail already drives.
+    const generation = await pendingOwnerGenerationFor(project.id);
+    res.status(202).json({ status: 'success', generation });
+  })
+);
+
+/** Owner-safe error codes for a blocked generation — never the internal reason. */
+const OWNER_BLOCK_CODES: Record<'DISABLED' | 'USER_CAP_REACHED' | 'NOT_EXPORTABLE', string> = {
+  DISABLED: 'GENERATION_UNAVAILABLE',
+  USER_CAP_REACHED: 'DAILY_LIMIT_REACHED',
+  NOT_EXPORTABLE: 'NOT_READY',
+};
+
+const OWNER_BLOCK_MESSAGES: Record<'DISABLED' | 'USER_CAP_REACHED' | 'NOT_EXPORTABLE', string> = {
+  DISABLED: '3D model creation is not available right now.',
+  USER_CAP_REACHED: "You've reached today's limit for creating 3D models. Try again tomorrow.",
+  NOT_EXPORTABLE: 'Finish uploading this capture before creating a 3D model.',
+};
+
+/**
+ * The decline copy an owner sees. Each one says what to DO about it — an owner
+ * cannot act on "INSUFFICIENT_SPREAD", but they can act on "walk all the way
+ * around the object".
+ */
+const OWNER_DECLINE_MESSAGES: Record<
+  'MANIFEST_UNREADABLE' | 'NO_USABLE_PHOTOS' | 'INSUFFICIENT_SPREAD',
+  string
+> = {
+  MANIFEST_UNREADABLE: "We couldn't read this capture. Please capture it again.",
+  NO_USABLE_PHOTOS:
+    'The photos in this capture are too blurry to build a 3D model. Try capturing again in better light, holding the phone steady.',
+  INSUFFICIENT_SPREAD:
+    'This capture only shows one side of the object. Walk all the way around it and capture again.',
+};
 
 /**
  * PATCH /projects/:id — rename a project owned by the authenticated user.

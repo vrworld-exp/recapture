@@ -134,6 +134,32 @@ const envSchema = z.object({
    */
   AUTO_MODEL_MIN_BLUR_SCORE: z.coerce.number().nonnegative().default(40),
 
+  // ── On-demand model generation (docs/prompts/on-demand-model-generation.md) ─
+  /**
+   * The gate on the HUMAN-triggered "Generate 3D model" button, which runs the
+   * same server-side photo selection as the automatic path.
+   *
+   * DELIBERATELY SEPARATE from AUTO_MODEL_GENERATION_ENABLED. Sharing one flag
+   * would make the button dead until automatic generation is enabled — and
+   * enabling that also turns on unattended per-capture spend, which is exactly
+   * the risk this button exists to de-risk. The button is how the selector gets
+   * exercised against real captures, one deliberate press at a time, BEFORE the
+   * automatic trigger is ever switched on.
+   */
+  MANUAL_MODEL_GENERATION_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+  /**
+   * Button-triggered generations one OWNER may accrue per rolling 24h.
+   *
+   * Counted against the SAME ceiling as automatic ones — it is the same money,
+   * and a per-source cap would just be two ways to spend twice as much.
+   */
+  MANUAL_MODEL_MAX_PER_USER_PER_DAY: z.coerce.number().int().positive().default(5),
+  /** The same ceiling for MODEL_ARTIST/ADMIN actors: higher, never exempt. */
+  MANUAL_MODEL_MAX_PER_STAFF_PER_DAY: z.coerce.number().int().positive().default(25),
+
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /**
    * Run the worker loop INSIDE the API process (src/index.ts), instead of as a

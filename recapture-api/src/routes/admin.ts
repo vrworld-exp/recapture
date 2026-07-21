@@ -15,6 +15,7 @@ import {
   adminDeletePhotosBodySchema,
   adminDeleteProjectBodySchema,
   adminCreateModelBodySchema,
+  adminAutoModelBodySchema,
   adminModelIdParamsSchema,
   adminModelImageUploadsBodySchema,
 } from '@/validation/adminSchemas';
@@ -30,12 +31,17 @@ import {
   approveModel,
   createMeshyModelRequest,
   createModelImageUploadUrls,
+  findProjectModelById,
   latestSucceededModel,
   listProjectModels,
   toProjectModelDto,
   MAX_SELECTED_PHOTOS,
   MIN_SELECTED_PHOTOS,
 } from '@/services/projectModelsService';
+import {
+  generateModelOnDemand,
+  GenerationInfrastructureError,
+} from '@/services/onDemandModelGenerationService';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { hashIdentifier } from '@/utils/otp';
@@ -485,6 +491,170 @@ router.post(
     // A replay is not a new creation — 200 distinguishes it from the 201 that
     // actually enqueued a generation.
     res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({ status: 'success', model });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/model/auto — the "Generate 3D model" button: run the
+ * SERVER-side photo selection for this project and enqueue the generation.
+ *
+ * Same pipeline as automatic generation, triggered by a person. It is
+ * deliberately a SEPARATE route from the explicit-keys POST /model above rather
+ * than a mode flag on it: that route's contract is used by Prepare-Images and
+ * is covered by tests, and coupling two independent flows through one body
+ * shape helps nobody.
+ *
+ * Shares the `meshy-create:{userId}` rate window with the explicit-keys route —
+ * one ceiling on "generations this staff user can start", however they start
+ * them. Beyond that the ceilings are the service's: idempotent repeat presses,
+ * and a rolling 24h cap shared with automatic generations.
+ *
+ * Responds with the full step trace. Steps 1–6 all happen INSIDE this request,
+ * in well under a second, so there is nothing to stream: the client renders an
+ * already-ticked checklist and then polls for the slow (worker) half.
+ */
+router.post(
+  '/projects/:id/model/auto',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = adminAutoModelBodySchema.safeParse(req.body ?? {});
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      const field = issue?.path.join('.') || 'body';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const actorRole = req.user!.role ?? 'MODEL_ARTIST';
+    const rate = await consumeRateWindow(
+      `meshy-create:${userId}`,
+      env.MESHY_CREATE_MAX_PER_WINDOW,
+      env.MESHY_CREATE_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many model generation requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const forced = body.data.force === true;
+    let result;
+    try {
+      result = await generateModelOnDemand({
+        projectId: params.data.id,
+        actor: { userId, role: actorRole },
+        force: forced,
+      });
+    } catch (err: unknown) {
+      // Infrastructure, not a business refusal — and the steps decided so far
+      // are the diagnosis ("which step were we on when S3 stopped answering").
+      if (err instanceof GenerationInfrastructureError) {
+        res.status(502).json({
+          status: 'error',
+          code: 'GENERATION_UNAVAILABLE',
+          message: 'Could not read this capture right now. Please try again.',
+          steps: err.steps,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    if (result.outcome === 'BLOCKED') {
+      if (result.reason === 'PROJECT_NOT_FOUND') {
+        res.status(404).json({
+          status: 'error',
+          code: 'NOT_FOUND',
+          message: 'Project not found.',
+          steps: result.steps,
+        });
+        return;
+      }
+      if (result.reason === 'NOT_EXPORTABLE') {
+        res.status(422).json({
+          status: 'error',
+          code: 'NOT_EXPORTABLE',
+          message: 'This project has no finalized capture to generate a model from.',
+          steps: result.steps,
+        });
+        return;
+      }
+      res.status(409).json({
+        status: 'error',
+        code: result.reason,
+        message:
+          result.reason === 'DISABLED'
+            ? 'On-demand model generation is switched off.'
+            : 'Daily model generation limit reached. Try again tomorrow.',
+        steps: result.steps,
+      });
+      return;
+    }
+
+    if (result.outcome === 'DECLINED') {
+      // The counters behind the refusal — the payload that says whether a
+      // real-world decline is a bad capture or a threshold that needs moving.
+      track(AnalyticsEvent.MODEL_GENERATION_DECLINED, {
+        actor_id_hash: hashIdentifier(userId),
+        project_id_hash: hashIdentifier(params.data.id),
+        trigger: 'manual_button',
+        reason: result.reason,
+        pool_size: result.trace.poolSize,
+        dropped_no_blur: result.trace.droppedNoBlurScore,
+        quadrants_filled: result.trace.quadrantHistogram.filter((n) => n > 0).length,
+      });
+      res.status(422).json({
+        status: 'error',
+        code: 'NOT_SELECTABLE',
+        message: 'These photos cannot support a 3D model.',
+        reason: result.reason,
+        steps: result.steps,
+        trace: result.trace,
+      });
+      return;
+    }
+
+    const record = await findProjectModelById(result.modelId);
+    const model = record ? toProjectModelDto(record) : null;
+    track(AnalyticsEvent.MODEL_GENERATION_REQUESTED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(params.data.id),
+      job_id_hash: hashIdentifier(model?.jobId ?? 'unknown'),
+      model_id_hash: hashIdentifier(result.modelId),
+      source: 'meshy',
+      key_count: model?.selectedKeys.length ?? MIN_SELECTED_PHOTOS,
+      was_replay: result.outcome === 'REPLAYED',
+      trigger: 'manual_button',
+      actor_role: actorRole,
+      forced,
+    });
+
+    // A replay is not a new creation — 200 distinguishes it from the 201 that
+    // actually enqueued (and paid for) a generation.
+    res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({
+      status: 'success',
+      model,
+      steps: result.steps,
+      ...(result.outcome === 'ENQUEUED' ? { trace: result.trace } : {}),
+    });
   })
 );
 
