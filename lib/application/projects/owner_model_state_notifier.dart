@@ -48,6 +48,16 @@ class OwnerModelStateNotifier extends FamilyAsyncNotifier<OwnerModelState, Strin
 
   bool get isPolling => _timer != null;
 
+  /// The poll cap ran out while a generation was still pending.
+  ///
+  /// Exposed because a silent stop is indistinguishable from a frozen screen:
+  /// the UI has to be able to say "we've stopped checking" rather than showing
+  /// a spinner that will never resolve. Readable on the final rebuild — the
+  /// last poll updates state, and the reschedule it declines to make is what
+  /// sets this.
+  bool get pollsExhausted =>
+      _polls >= _maxPolls && (state.valueOrNull?.isGenerating ?? false);
+
   void _stop() {
     _timer?.cancel();
     _timer = null;

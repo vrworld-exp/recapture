@@ -22,7 +22,8 @@ class _FakeRepo
     with
         FakeModelGenerationDefaults,
         FakeAdminDeleteDefaults,
-        FakeModelImageUploadDefaults
+        FakeModelImageUploadDefaults,
+        FakeAutoGenerationDefaults
     implements LiveProjectsRepository {
   Map<String, dynamic> exportResult = const {};
   LiveProjectsException? exportFail;

@@ -29,7 +29,9 @@ LiveProject _lp() => LiveProject(
     );
 
 class _FakeRepo
-    with FakeModelGenerationDefaults, FakeModelImageUploadDefaults
+    with FakeModelGenerationDefaults,
+        FakeModelImageUploadDefaults,
+        FakeAutoGenerationDefaults
     implements LiveProjectsRepository {
   /// (projectId, wire mode, confirmName) per deleteProject call.
   final List<(String, String, String)> deletes = [];

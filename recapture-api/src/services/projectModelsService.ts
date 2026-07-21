@@ -16,6 +16,7 @@ import { Project } from '@/models/Project';
 import { Job, MESHY_MODEL_GENERATION_JOB_TYPE } from '@/models/Job';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
 import type {
+  ModelGenerationTrace,
   ModelProgressPhase,
   ModelSource,
   ModelStatus,
@@ -64,6 +65,15 @@ export interface ProjectModelDto {
   artifacts?: { glb: string; usdz?: string; preview?: string };
   approved?: { at: string };
   error?: { code: string; message: string };
+  /**
+   * How this generation was DECIDED — the synchronous request steps and the
+   * photo selector's counters. Absent on every record written before the trace
+   * existed, so clients must default it to nothing.
+   *
+   * STAFF-ONLY: it names our S3 key layout and our pipeline internals. It is on
+   * this DTO and deliberately on NEITHER owner DTO.
+   */
+  generationTrace?: ModelGenerationTrace;
   createdAt: string;
   updatedAt: string;
 }
@@ -145,6 +155,25 @@ export function toProjectModelDto(record: IProjectModel): ProjectModelDto {
       : {}),
     ...(record.approved ? { approved: { at: record.approved.at.toISOString() } } : {}),
     ...(record.error ? { error: { code: record.error.code, message: record.error.message } } : {}),
+    // Mongoose hands back a sub-document; flatten it so the wire payload is
+    // plain JSON and no internal document machinery leaks into the response.
+    ...(record.generationTrace
+      ? {
+          generationTrace: {
+            steps: record.generationTrace.steps.map((s) => ({
+              step: s.step,
+              status: s.status,
+              ...(s.detail ? { detail: s.detail } : {}),
+              at: s.at,
+              durationMs: s.durationMs,
+            })),
+            ...(record.generationTrace.selection
+              ? { selection: record.generationTrace.selection }
+              : {}),
+            requestedBy: record.generationTrace.requestedBy,
+          },
+        }
+      : {}),
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
@@ -179,6 +208,14 @@ export interface CreateMeshyModelRequestInput {
   idempotencyKey?: string;
   /** True when the worker started this itself (no human asked). */
   createdBySystem?: boolean;
+  /**
+   * True when a person pressed "Generate 3D model" and the SERVER selected the
+   * photos. Distinct from `createdBySystem` (a human DID ask) and from a plain
+   * staff request (a human picked the photos by hand) — it is what lets the
+   * shared 24h ceiling count automatic and button-triggered spends together
+   * while leaving hand-curated staff selections to their own rate window.
+   */
+  createdByManualButton?: boolean;
   /**
    * The capture job these keys came from, PINNING the generation to it.
    *
@@ -257,6 +294,7 @@ export async function createMeshyModelRequest(
       createdByUserId: new Types.ObjectId(actor.userId),
       createdByRole: actor.role,
       ...(input.createdBySystem ? { createdBySystem: true } : {}),
+      ...(input.createdByManualButton ? { createdByManualButton: true } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
     });
   } catch (err: unknown) {
@@ -291,6 +329,52 @@ export async function createMeshyModelRequest(
   }
 
   return { outcome: 'CREATED', model: record };
+}
+
+/**
+ * How many SERVER-SELECTED generations one actor has accrued in the rolling 24h
+ * window — automatic and "Generate 3D model" button presses counted together.
+ *
+ * ONE pool on purpose: it is the same money, and a per-source cap would just be
+ * two ways to spend twice as much. Hand-curated staff selections are excluded —
+ * those already have their own rate window, and a human choosing the photos is
+ * a different risk from the selector choosing them unattended.
+ */
+export async function countServerSelectedGenerationsInLast24h(userId: string): Promise<number> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  return ProjectModel.countDocuments({
+    createdByUserId: new Types.ObjectId(userId),
+    createdAt: { $gte: since },
+    $or: [{ createdBySystem: true }, { createdByManualButton: true }],
+  }).exec();
+}
+
+/**
+ * Writes the decision trace onto a record AFTER the enqueue, so the ENQUEUE
+ * step is itself part of it.
+ *
+ * BEST-EFFORT: by this point the generation is queued and the credits are
+ * committed. Losing a debug artifact must never turn a successful, paid request
+ * into an error the caller retries — which would pay again.
+ */
+export async function persistGenerationTrace(
+  modelId: string,
+  trace: ModelGenerationTrace
+): Promise<void> {
+  try {
+    await ProjectModel.updateOne(
+      { _id: new Types.ObjectId(modelId) },
+      { $set: { generationTrace: trace } }
+    ).exec();
+  } catch {
+    // Swallowed deliberately — see the doc comment.
+  }
+}
+
+/** Widens the selector's trace into the loose shape the Mixed sub-doc stores,
+ * so a counter added later is persisted rather than silently stripped. */
+export function toStoredSelection(trace: object): Record<string, unknown> {
+  return { ...trace } as Record<string, unknown>;
 }
 
 function isDuplicateKeyError(err: unknown): boolean {
@@ -372,6 +456,12 @@ export async function createModelImageUploadUrls(
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────────
+
+/** One generation record by id, or null. */
+export async function findProjectModelById(modelId: string): Promise<IProjectModel | null> {
+  if (!Types.ObjectId.isValid(modelId)) return null;
+  return ProjectModel.findById(new Types.ObjectId(modelId)).exec();
+}
 
 /** A project's full generation history, newest first (the staff compare view). */
 export async function listProjectModels(projectId: string): Promise<IProjectModel[]> {

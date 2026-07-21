@@ -11,7 +11,7 @@
 import 'dart:typed_data';
 
 import 'package:recapture/data/repositories/live_projects_repository.dart'
-    show AdminDeleteMode, ModelImageUploadSlot;
+    show AdminDeleteMode, AutoGenerationRequest, ModelImageUploadSlot;
 import 'package:recapture/data/repositories/projects_repository.dart'
     show OwnerModelState;
 import 'package:recapture/domain/entities/project_model.dart';
@@ -30,6 +30,21 @@ mixin FakeModelGenerationDefaults {
 
   Future<ProjectModelView> approveModel(
           String projectId, String modelId) async =>
+      throw UnimplementedError('not used here');
+}
+
+/// The SERVER-selected generation member of `LiveProjectsRepository` (the
+/// "Generate 3D model" button).
+///
+/// Its own mixin rather than part of [FakeModelGenerationDefaults]: several
+/// fakes implement the hand-picked create/list/approve members themselves and
+/// so cannot mix that one in, but none of them drive this button. Two mixins
+/// cannot both supply the same member, so it lives alone.
+mixin FakeAutoGenerationDefaults {
+  Future<AutoGenerationRequest> autoGenerateModel(
+    String projectId, {
+    bool force = false,
+  }) async =>
       throw UnimplementedError('not used here');
 }
 

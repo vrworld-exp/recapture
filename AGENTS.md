@@ -154,6 +154,28 @@ do not remove it).
 - **Meshy's result URLs expire** — the worker re-hosts the GLB/USDZ/thumbnail to
   `BUCKET_ARTIFACTS` under `…/{jobId}/models/{modelId}/`. Only OUR CloudFront
   URLs are ever persisted or served. Never store a Meshy URL.
+- **Server-selected generation has TWO triggers and TWO flags.** Besides the
+  hand-picked staff path above, `autoPhotoSelectionService.ts` can choose the
+  3–4 photos itself (spread first, sharpness second; declining is a feature).
+  That selector is reached from two places, gated independently **on purpose**:
+  `AUTO_MODEL_GENERATION_ENABLED` (the capture processor, unattended, per
+  capture) and `MANUAL_MODEL_GENERATION_ENABLED` (the "Generate 3D model"
+  button — `POST /admin/projects/:id/model/auto`, and the owner-facing
+  `POST /projects/:id/model` whose client entry point is not wired yet). One
+  shared flag would make the button dead until unattended spend was switched
+  on, which is exactly backwards: the button is how the selector gets exercised
+  on real captures before that. Both count against ONE rolling 24h ceiling
+  (`countServerSelectedGenerationsInLast24h` — `createdBySystem` OR
+  `createdByManualButton`); hand-picked staff selections are excluded and keep
+  their own rate window. Live kill switches are the `autoModelGenerationEnabled`
+  / `manualModelGenerationEnabled` fields on the `client_configs` document, read
+  via `getServerFlag` and deliberately NOT in `remoteConfigSchema`.
+- **Every generation persists a `generationTrace`** on its `ProjectModel`: the
+  six synchronous request steps and the selector's counters. Those steps all
+  run INSIDE one sub-second request and arrive complete in the response — there
+  is no streaming and nothing to poll (the minutes-long half is `progress`).
+  The trace is **staff-only**: it is on `ProjectModelDto` and on NEITHER owner
+  DTO, because it names our S3 key layout and our pipeline's internals.
 - **Prepare-Images (edited model inputs).** Before Create-Model the client's
   ImagePrepScreen lets staff crop/relight COPIES of the selected photos. Edited
   JPEGs are PUT via `POST /admin/projects/:id/model-images/upload-urls`

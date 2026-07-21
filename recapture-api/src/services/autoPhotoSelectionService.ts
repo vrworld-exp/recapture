@@ -48,6 +48,50 @@ export type AutoSelectionDeclineReason =
   /** Usable photos exist, but they all look at the object from one side. */
   | 'INSUFFICIENT_SPREAD';
 
+/**
+ * The STRUCTURED account of how a selection reached its answer — every count
+ * that was weighed, and what was finally chosen.
+ *
+ * Exists because the interesting question is never "did it pick photos" but
+ * "why THOSE four, and why not the others". A decline in particular is
+ * uninterpretable without it: `NO_USABLE_PHOTOS` could mean the manifest paths
+ * were unresolvable, the objects were missing from S3, or (most likely on a
+ * capture recorded before the packer threaded quality through) that not one
+ * photo carried a blurScore. Those are three completely different bugs and the
+ * counters below are what tells them apart.
+ *
+ * Staff-facing only — it names our key layout. Never put it in an owner payload.
+ */
+export interface AutoSelectionTrace {
+  /** Which pool the EYE-preference rule settled on. */
+  ringUsed: 'EYE' | 'ALL';
+  photosInManifest: number;
+  poolSize: number;
+  /** `imagePath` that toRelativeImageKey refused (no `images/` segment). */
+  droppedUnresolvableKey: number;
+  /** Resolved, but no such object under the job prefix (availableKeys). */
+  droppedMissingObject: number;
+  /**
+   * No `quality.blurScore` at all. Expected to be LARGE on captures packed
+   * before 2026-07-21 — the packer did not thread blurScore into the manifest
+   * until then, so those captures decline 100% and this is the diagnostic.
+   */
+  droppedNoBlurScore: number;
+  /** Candidates scoring under the floor (counted even when the floor was
+   * relaxed because too few would have survived it). */
+  belowBlurFloor: number;
+  /** Exposure-warned candidates the clean-frames preference actually removed. */
+  warnedExcluded: number;
+  minBlurScoreUsed: number;
+  /** From manifest.config.segmentCounts; null = fell back to absolute yaw. */
+  segmentCountUsed: number | null;
+  /** How the usable candidates distributed across the four yaw quadrants. */
+  quadrantHistogram: [number, number, number, number];
+  /** Usable candidates with no resolvable position on the circle. */
+  unplacedCount: number;
+  chosen: Array<{ key: string; blurScore: number; quadrant: number | null }>;
+}
+
 export type AutoSelectionResult =
   | {
       outcome: 'SELECTED';
@@ -55,8 +99,16 @@ export type AutoSelectionResult =
       keys: string[];
       /** Human-readable trace for the worker log (never contains a URL). */
       reason: string;
+      /** Structured counters behind `reason`. Optional on the type so existing
+       * callers (and records written before it existed) stay valid. */
+      trace?: AutoSelectionTrace;
     }
-  | { outcome: 'DECLINED'; reason: AutoSelectionDeclineReason };
+  | {
+      outcome: 'DECLINED';
+      reason: AutoSelectionDeclineReason;
+      /** Populated as far as the rules got before refusing. */
+      trace?: AutoSelectionTrace;
+    };
 
 export interface AutoSelectionOptions {
   /** Sharpness floor; defaults to DEFAULT_MIN_BLUR_SCORE. */
@@ -230,10 +282,20 @@ export function selectPhotosForAutoGeneration(
   manifest: unknown,
   opts: AutoSelectionOptions = {}
 ): AutoSelectionResult {
-  const parsed = manifestSchema.safeParse(manifest);
-  if (!parsed.success) return { outcome: 'DECLINED', reason: 'MANIFEST_UNREADABLE' };
-
   const minBlurScore = opts.minBlurScore ?? DEFAULT_MIN_BLUR_SCORE;
+
+  const parsed = manifestSchema.safeParse(manifest);
+  if (!parsed.success) {
+    // Nothing was weighed, so the trace is all zeroes — which is itself the
+    // finding: the document never reached the rules.
+    return {
+      outcome: 'DECLINED',
+      reason: 'MANIFEST_UNREADABLE',
+      trace: emptyTrace(minBlurScore),
+    };
+  }
+
+
   const targetCount = Math.min(
     Math.max(opts.targetCount ?? AUTO_TARGET_PHOTOS, AUTO_MIN_PHOTOS),
     AUTO_TARGET_PHOTOS
@@ -249,15 +311,43 @@ export function selectPhotosForAutoGeneration(
 
   const segmentCount = segmentCountFor(parsed.data, pool);
 
+  // Every drop is counted, not just skipped: the counts are the whole
+  // difference between "the selector is broken" and "this capture's manifest
+  // never carried sharpness" — see AutoSelectionTrace.droppedNoBlurScore.
+  const trace: AutoSelectionTrace = {
+    ringUsed: pool === eyePhotos ? 'EYE' : 'ALL',
+    photosInManifest: allPhotos.length,
+    poolSize: pool.length,
+    droppedUnresolvableKey: 0,
+    droppedMissingObject: 0,
+    droppedNoBlurScore: 0,
+    belowBlurFloor: 0,
+    warnedExcluded: 0,
+    minBlurScoreUsed: minBlurScore,
+    segmentCountUsed: segmentCount,
+    quadrantHistogram: [0, 0, 0, 0],
+    unplacedCount: 0,
+    chosen: [],
+  };
+
   const candidates: Candidate[] = [];
   for (const photo of pool) {
     const relativeKey = photo.imagePath ? toRelativeImageKey(photo.imagePath) : null;
     // Unresolvable path, or an object that isn't actually in the bucket.
-    if (!relativeKey) continue;
-    if (available && !available.has(relativeKey)) continue;
+    if (!relativeKey) {
+      trace.droppedUnresolvableKey += 1;
+      continue;
+    }
+    if (available && !available.has(relativeKey)) {
+      trace.droppedMissingObject += 1;
+      continue;
+    }
 
     const blurScore = photo.quality?.blurScore;
-    if (typeof blurScore !== 'number' || !Number.isFinite(blurScore)) continue;
+    if (typeof blurScore !== 'number' || !Number.isFinite(blurScore)) {
+      trace.droppedNoBlurScore += 1;
+      continue;
+    }
 
     candidates.push({
       relativeKey,
@@ -266,20 +356,29 @@ export function selectPhotosForAutoGeneration(
       warned: photo.verdict === 'warn',
     });
   }
-  if (candidates.length === 0) return { outcome: 'DECLINED', reason: 'NO_USABLE_PHOTOS' };
+  if (candidates.length === 0) {
+    return { outcome: 'DECLINED', reason: 'NO_USABLE_PHOTOS', trace };
+  }
 
   // ── Quality floor. Applied only while it leaves enough photos to work with:
   // a capture where everything is slightly soft should still yield the best of
   // what it has, rather than declining on a technicality.
   const sharp = candidates.filter((c) => c.blurScore >= minBlurScore);
   const qualified = sharp.length >= AUTO_MIN_PHOTOS ? sharp : candidates;
+  // Counted even when the floor was RELAXED (qualified === candidates): "how
+  // soft was this capture" is the tuning question, and it is invisible if the
+  // count only exists when the filter happened to bite.
+  trace.belowBlurFloor = candidates.length - sharp.length;
 
   // Prefer clean frames over exposure-warned ones, on the same "only if enough
   // remain" basis.
   const clean = qualified.filter((c) => !c.warned);
   const usable = clean.length >= AUTO_MIN_PHOTOS ? clean : qualified;
+  trace.warnedExcluded = qualified.length - usable.length;
 
-  if (usable.length < AUTO_MIN_PHOTOS) return { outcome: 'DECLINED', reason: 'NO_USABLE_PHOTOS' };
+  if (usable.length < AUTO_MIN_PHOTOS) {
+    return { outcome: 'DECLINED', reason: 'NO_USABLE_PHOTOS', trace };
+  }
 
   // ── Bucket by quadrant, sharpest first within each.
   const byQuadrant = new Map<number, Candidate[]>();
@@ -298,10 +397,17 @@ export function selectPhotosForAutoGeneration(
   }
   unplaced.sort((a, b) => b.blurScore - a.blurScore);
 
+  // Snapshot the spread BEFORE selection drains the buckets — the histogram is
+  // the picture of what the capture covered, not of what is left over.
+  for (const [quadrant, bucket] of byQuadrant) {
+    trace.quadrantHistogram[quadrant] = bucket.length;
+  }
+  trace.unplacedCount = unplaced.length;
+
   // A capture that only ever looked at one side of the object cannot produce a
   // model worth paying for, however sharp those photos are.
   if (byQuadrant.size < 2 && unplaced.length === 0) {
-    return { outcome: 'DECLINED', reason: 'INSUFFICIENT_SPREAD' };
+    return { outcome: 'DECLINED', reason: 'INSUFFICIENT_SPREAD', trace };
   }
 
   // ── Pass 1: the sharpest photo from each filled quadrant, in quadrant order
@@ -329,8 +435,14 @@ export function selectPhotosForAutoGeneration(
     selected.push(unplaced.shift()!);
   }
 
+  trace.chosen = selected.map((c) => ({
+    key: c.relativeKey,
+    blurScore: c.blurScore,
+    quadrant: c.quadrant,
+  }));
+
   if (selected.length < AUTO_MIN_PHOTOS) {
-    return { outcome: 'DECLINED', reason: 'INSUFFICIENT_SPREAD' };
+    return { outcome: 'DECLINED', reason: 'INSUFFICIENT_SPREAD', trace };
   }
 
   return {
@@ -339,6 +451,26 @@ export function selectPhotosForAutoGeneration(
     reason:
       `${selected.length} photos from ${new Set(selected.map((c) => c.quadrant)).size} ` +
       `of ${QUADRANT_COUNT} yaw quadrants (pool=${pool.length}, usable=${usable.length})`,
+    trace,
+  };
+}
+
+/** The trace for a manifest that never parsed — zeroes, deliberately. */
+function emptyTrace(minBlurScore: number): AutoSelectionTrace {
+  return {
+    ringUsed: 'ALL',
+    photosInManifest: 0,
+    poolSize: 0,
+    droppedUnresolvableKey: 0,
+    droppedMissingObject: 0,
+    droppedNoBlurScore: 0,
+    belowBlurFloor: 0,
+    warnedExcluded: 0,
+    minBlurScoreUsed: minBlurScore,
+    segmentCountUsed: null,
+    quadrantHistogram: [0, 0, 0, 0],
+    unplacedCount: 0,
+    chosen: [],
   };
 }
 

@@ -72,3 +72,74 @@ export interface ModelError {
   code: string;
   message: string;
 }
+
+// ── Generation trace ─────────────────────────────────────────────────────────
+// The record of how a generation was DECIDED — everything that happened inside
+// the request, before the worker ever ran. Distinct from `progress`, which is
+// the worker's live sub-status: these steps are all over in well under a second
+// and are never watched, only read back afterwards.
+
+/**
+ * The synchronous steps between "someone asked for a model" and "a job is
+ * queued". Ordered as they run.
+ */
+export const GENERATION_STEP_NAMES = [
+  /** Find the newest exportable CAPTURE job for the project. */
+  'RESOLVE_JOB',
+  /** Fetch + parse capture_manifest.json from S3. */
+  'LOAD_MANIFEST',
+  /** List the keys actually present under the job prefix. */
+  'LIST_OBJECTS',
+  /** Run the photo selector — quadrant spread, blur floor, backfill. */
+  'SELECT_PHOTOS',
+  /** Kill switch, per-job dedupe, rolling 24h ceiling. */
+  'GUARDS',
+  /** Insert the ProjectModel record and enqueue the worker job. */
+  'ENQUEUE',
+] as const;
+export type GenerationStepName = (typeof GENERATION_STEP_NAMES)[number];
+
+export const GENERATION_STEP_STATUSES = ['OK', 'SKIPPED', 'FAILED'] as const;
+export type GenerationStepStatus = (typeof GENERATION_STEP_STATUSES)[number];
+
+/** One decided step. STAFF-SAFE only — see `detail`. */
+export interface GenerationStep {
+  step: GenerationStepName;
+  status: GenerationStepStatus;
+  /**
+   * One-liner for the staff/dev trace. MAY carry relative keys and counts.
+   * NEVER a presigned URL — a presigned URL is a bearer credential and this
+   * string is persisted, logged, and rendered.
+   */
+  detail?: string;
+  /** ISO timestamp the step completed. */
+  at: string;
+  durationMs: number;
+}
+
+/** Who asked for the generation — the button, or the capture pipeline. */
+export const GENERATION_REQUESTED_BY = ['AUTO', 'MANUAL'] as const;
+export type GenerationRequestedBy = (typeof GENERATION_REQUESTED_BY)[number];
+
+/**
+ * PERSISTED on the model record rather than returned only in the response.
+ *
+ * The failure most worth explaining is the one reported an hour later, from a
+ * screen that has long since closed; a response-only trace is gone by then. It
+ * also lets the progress screen recover the "why these photos" answer after an
+ * app restart.
+ *
+ * STAFF-ONLY. It names our S3 key layout and our pipeline's internals — never
+ * serialize it into an owner-facing payload.
+ */
+export interface ModelGenerationTrace {
+  steps: GenerationStep[];
+  /**
+   * The selector's structured counters (AutoSelectionTrace). Stored loosely
+   * because it is a DEBUG artifact whose fields change as the thresholds are
+   * tuned — a strict sub-schema would silently strip any field added later,
+   * destroying exactly the diagnostic the trace exists to preserve.
+   */
+  selection?: Record<string, unknown>;
+  requestedBy: GenerationRequestedBy;
+}

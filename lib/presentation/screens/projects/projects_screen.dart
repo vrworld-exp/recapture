@@ -7,6 +7,7 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/model_generation_request_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
 import '../../../data/repositories/projects_repository.dart';
 import '../../../domain/entities/project.dart';
@@ -213,6 +214,41 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
           AppRouteNames.previewGallery,
           pathParameters: {'id': p.id},
         );
+  }
+
+  /// Staff-only "Generate 3D model": the SERVER picks the photos and starts a
+  /// generation, then this pushes the screen that explains what it decided and
+  /// watches the build.
+  ///
+  /// The screen is pushed FIRST and the request is awaited there rather than
+  /// here, because the most valuable outcome is a REFUSAL: a snackbar can say
+  /// "couldn't build a model" but it cannot show which rule refused and with
+  /// what numbers. Every outcome — enqueued, replayed, declined, failed — gets
+  /// the same full screen.
+  Future<void> _onGenerate(Project p) async {
+    if (!_claim(p)) return;
+    _logAction('generate', p);
+    // Fire-and-render: the notifier holds the result, so the screen shows the
+    // in-flight state and then the trace without this having to await.
+    final pending =
+        ref.read(modelGenerationRequestProvider(p.id).notifier).request();
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelBuildingScreen(
+            projectId: p.id,
+            projectName: p.name,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
+    } finally {
+      // Let the request settle before releasing the per-project claim, so a
+      // second press cannot start a second (paid) generation while the first
+      // is still in flight.
+      await pending;
+      _release(p);
+    }
   }
 
   /// Staff-only per-project Preview (My-projects surface). Pushed so hardware
@@ -429,6 +465,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 // worse than no button. Failed-only projects therefore show no
                 // Models button (see ProjectListItem.modelCount).
                 onModels: isStaff && project.hasViewableModels ? _onModels : null,
+                // Phase 1 is staff-only. Also requires a FINALIZED capture:
+                // without one the server always answers NOT_EXPORTABLE, and a
+                // button that can only ever error is worse than no button.
+                onGenerate:
+                    isStaff && _isExportable(project) ? _onGenerate : null,
               );
             },
           ),

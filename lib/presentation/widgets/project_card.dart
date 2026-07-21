@@ -21,6 +21,7 @@ class ProjectCard extends StatelessWidget {
     required this.onMore,
     this.onPreview,
     this.onModels,
+    this.onGenerate,
     this.isActionInFlight = false,
   });
 
@@ -49,6 +50,14 @@ class ProjectCard extends StatelessWidget {
   /// fixed-height card with eight buttons), and a list has room to show the
   /// timestamp, status, photo count and approval that a button cannot.
   final ValueChanged<Project>? onModels;
+
+  /// OPTIONAL staff-only "Generate" action: ask the server to pick photos
+  /// itself and build a 3D model. Same null-means-hidden rule as [onPreview].
+  ///
+  /// The caller passes it only for a project with a FINALIZED capture — a
+  /// project without one would always be refused, and a button that always
+  /// errors is worse than no button.
+  final ValueChanged<Project>? onGenerate;
 
   /// When true the action button shows a loading state and is disabled
   /// (per-project in-flight guard owned by the screen).
@@ -111,7 +120,11 @@ class ProjectCard extends StatelessWidget {
     final action = project.status.cardAction;
     final showPreview = onPreview != null;
     final showModels = onModels != null;
-    if (action == ProjectCardAction.none && !showPreview && !showModels) {
+    final showGenerate = onGenerate != null;
+    if (action == ProjectCardAction.none &&
+        !showPreview &&
+        !showModels &&
+        !showGenerate) {
       return const [];
     }
 
@@ -148,6 +161,21 @@ class ProjectCard extends StatelessWidget {
           ],
         ],
       ),
+      // Its OWN full-width row rather than a fourth slot above: three labelled
+      // buttons across a phone-width card already ellipsize, and this one is a
+      // deliberate, credit-spending action that should not be squeezed into an
+      // abbreviation. Same treatment the Live card gives its Models button.
+      if (showGenerate) ...[
+        const SizedBox(height: AppSpacing.sm),
+        SizedBox(
+          width: double.infinity,
+          child: AppButton.secondary(
+            label: 'Generate 3D model',
+            icon: Icons.auto_awesome_outlined,
+            onPressed: () => onGenerate!(project),
+          ),
+        ),
+      ],
     ];
   }
 

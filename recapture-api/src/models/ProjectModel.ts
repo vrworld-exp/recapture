@@ -12,13 +12,21 @@
 import { Schema, model, Document, Types } from 'mongoose';
 import { USER_ROLES, type UserRole } from '@/models/User';
 import {
+  GENERATION_REQUESTED_BY,
+  GENERATION_STEP_NAMES,
+  GENERATION_STEP_STATUSES,
   MODEL_PROGRESS_PHASES,
   MODEL_SOURCES,
   MODEL_STATUSES,
+  type GenerationRequestedBy,
+  type GenerationStep,
+  type GenerationStepName,
+  type GenerationStepStatus,
   type ModelApproval,
   type ModelArtifacts,
   type ModelCdnUrls,
   type ModelError,
+  type ModelGenerationTrace,
   type ModelProgress,
   type ModelSource,
   type ModelStatus,
@@ -69,6 +77,22 @@ export interface IProjectModel extends Document {
    * system spend from a staff spend in any later cost audit.
    */
   createdBySystem?: boolean;
+  /**
+   * True when a person pressed "Generate 3D model" and the SERVER picked the
+   * photos — as opposed to a staff selection made by hand in the gallery.
+   *
+   * Separate from `createdBySystem` because the two answer different questions:
+   * that one is "was a human involved at all" (it drives the owner-facing
+   * preview badge), this one is "did the automatic selector choose the input".
+   * The 24h ceiling counts BOTH — it is the same money either way.
+   */
+  createdByManualButton?: boolean;
+  /**
+   * How this generation was decided: the synchronous steps and the selector's
+   * counters. Optional on purpose — every record predates it, so readers must
+   * treat it as absent by default. STAFF-ONLY (see ModelGenerationTrace).
+   */
+  generationTrace?: ModelGenerationTrace;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -116,6 +140,29 @@ const ModelErrorSchema = new Schema<ModelError>(
   { _id: false }
 );
 
+const GenerationStepSchema = new Schema<GenerationStep>(
+  {
+    step: { type: String, enum: GENERATION_STEP_NAMES, required: true },
+    status: { type: String, enum: GENERATION_STEP_STATUSES, required: true },
+    detail: { type: String },
+    at: { type: String, required: true },
+    durationMs: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
+const ModelGenerationTraceSchema = new Schema<ModelGenerationTrace>(
+  {
+    steps: { type: [GenerationStepSchema], required: true },
+    // Mixed, NOT a sub-schema: the selector's counters are a debug artifact that
+    // gains fields as the thresholds are tuned, and a strict sub-schema would
+    // silently drop each new one. See ModelGenerationTrace.selection.
+    selection: { type: Schema.Types.Mixed },
+    requestedBy: { type: String, enum: GENERATION_REQUESTED_BY, required: true },
+  },
+  { _id: false }
+);
+
 const ProjectModelSchema = new Schema<IProjectModel>(
   {
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
@@ -132,6 +179,8 @@ const ProjectModelSchema = new Schema<IProjectModel>(
     createdByUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     createdByRole: { type: String, enum: USER_ROLES, required: true },
     createdBySystem: { type: Boolean },
+    createdByManualButton: { type: Boolean },
+    generationTrace: { type: ModelGenerationTraceSchema },
   },
   { timestamps: true }
 );
@@ -150,12 +199,24 @@ ProjectModelSchema.index(
   { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true } } }
 );
 
+// The spend ceiling: "this actor's server-selected generations in the last 24h",
+// counted before every automatic AND button-triggered generation.
+ProjectModelSchema.index({ createdByUserId: 1, createdAt: -1 });
+
 export const ProjectModel = model<IProjectModel>('ProjectModel', ProjectModelSchema);
 
 export {
+  GENERATION_REQUESTED_BY,
+  GENERATION_STEP_NAMES,
+  GENERATION_STEP_STATUSES,
   MODEL_PROGRESS_PHASES,
   MODEL_SOURCES,
   MODEL_STATUSES,
+  type GenerationRequestedBy,
+  type GenerationStep,
+  type GenerationStepName,
+  type GenerationStepStatus,
+  type ModelGenerationTrace,
   type ModelApproval,
   type ModelArtifacts,
   type ModelCdnUrls,

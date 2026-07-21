@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/generation_trace.dart';
 import '../../domain/entities/live_project.dart';
 import '../../domain/entities/project_model.dart';
 import '../remote/api_client.dart';
@@ -28,6 +29,14 @@ enum LiveProjectsFailure {
   /// 429 — export generation rate limit; [LiveProjectsException.retryAfterSeconds]
   /// may say when to retry.
   rateLimited,
+
+  /// 409 DISABLED — server-side model generation is switched off (env gate or
+  /// the live kill switch). Not a caller mistake, and not retryable by them.
+  generationDisabled,
+
+  /// 409 USER_CAP_REACHED — the rolling 24h ceiling that automatic and
+  /// button-triggered generations share. Retryable tomorrow, not now.
+  dailyLimitReached,
 
   /// Transport-level failure (offline, timeout).
   network,
@@ -75,6 +84,21 @@ abstract interface class LiveProjectsRepository {
     String projectId,
     List<String> keys, {
     required String idempotencyKey,
+  });
+
+  /// Runs the SERVER-side photo selection for [projectId] and enqueues the
+  /// generation — the "Generate 3D model" button.
+  ///
+  /// Repeat calls are idempotent by default (the second returns the existing
+  /// record rather than paying again); [force] mints a fresh key and
+  /// deliberately pays for a second generation, and is staff-only server-side.
+  ///
+  /// A REFUSAL BY THE SELECTOR IS A RESULT, NOT AN EXCEPTION: it carries the
+  /// counters that say why, and those are the whole point of the feature.
+  /// Everything else (403/404/409/429/network) throws [LiveProjectsException].
+  Future<AutoGenerationRequest> autoGenerateModel(
+    String projectId, {
+    bool force = false,
   });
 
   /// Presigned PUT slots for [count] EDITED model-input copies (the
@@ -143,6 +167,50 @@ class ModelImageUploadSlot {
     if (key.isEmpty || url.isEmpty) return null;
     return ModelImageUploadSlot(key: key, url: url);
   }
+}
+
+/// What the server did with a "Generate 3D model" press.
+enum AutoGenerationOutcome {
+  /// A new generation was enqueued (and paid for).
+  enqueued,
+
+  /// A generation for this capture already existed — nothing new was charged.
+  replayed,
+
+  /// The selector refused. Nothing was charged, and [AutoGenerationRequest.trace]
+  /// says why.
+  declined,
+}
+
+/// The completed request trace, as `POST /admin/projects/:id/model/auto`
+/// returns it.
+///
+/// Every step in [steps] has ALREADY happened by the time this exists — the
+/// whole selection runs inside the one request, in well under a second. Render
+/// it as a finished checklist, never as live progress.
+class AutoGenerationRequest {
+  const AutoGenerationRequest({
+    required this.outcome,
+    this.model,
+    this.steps = const [],
+    this.trace,
+    this.declineReason,
+  });
+
+  final AutoGenerationOutcome outcome;
+
+  /// The QUEUED record to watch, for [AutoGenerationOutcome.enqueued] and
+  /// [AutoGenerationOutcome.replayed]. Null on a decline.
+  final ProjectModelView? model;
+
+  final List<GenerationStep> steps;
+
+  /// The selector's counters. Present on an enqueue and on a decline — a
+  /// decline without them is uninterpretable.
+  final GenerationSelectionTrace? trace;
+
+  /// Set only when [outcome] is [AutoGenerationOutcome.declined].
+  final GenerationDeclineReason? declineReason;
 }
 
 /// Outcome of a soft-delete: the keys that were moved out vs those already gone.
@@ -244,6 +312,46 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
       }
       return model;
     } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<AutoGenerationRequest> autoGenerateModel(
+    String projectId, {
+    bool force = false,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/admin/projects/$projectId/model/auto',
+        data: {if (force) 'force': true},
+      );
+      final data = res.data ?? const <String, dynamic>{};
+      return AutoGenerationRequest(
+        // 201 enqueued a generation; 200 replayed one that already existed.
+        outcome: res.statusCode == 200
+            ? AutoGenerationOutcome.replayed
+            : AutoGenerationOutcome.enqueued,
+        model: ProjectModelView.tryFromStaffMap(data['model']),
+        steps: GenerationStep.parseList(data['steps']),
+        trace: GenerationSelectionTrace.tryParse(data['trace']),
+      );
+    } on DioException catch (e) {
+      // A selector refusal is the single most informative outcome this endpoint
+      // has, and it arrives as a 422. Turning it into a bare exception would
+      // throw away the counters that explain it, so it is unwrapped into a
+      // result here rather than propagating as a failure.
+      final body = e.response?.data;
+      if (e.response?.statusCode == 422 &&
+          body is Map &&
+          body['code'] == 'NOT_SELECTABLE') {
+        return AutoGenerationRequest(
+          outcome: AutoGenerationOutcome.declined,
+          steps: GenerationStep.parseList(body['steps']),
+          trace: GenerationSelectionTrace.tryParse(body['trace']),
+          declineReason: GenerationDeclineReason.parse(body['reason']),
+        );
+      }
       throw _translate(e);
     }
   }
@@ -368,8 +476,17 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
     }
     final body = e.response?.data;
     final code = body is Map ? body['code'] : null;
-    if (status == 409 && code == 'NOT_EXPORTABLE') {
+    // NOT_EXPORTABLE arrives as 409 from the explicit-keys routes and as 422
+    // from the auto-generate route (where "this project has no capture" is a
+    // property of the request, not a conflicting state).
+    if ((status == 409 || status == 422) && code == 'NOT_EXPORTABLE') {
       return const LiveProjectsException(LiveProjectsFailure.notExportable);
+    }
+    if (status == 409 && code == 'DISABLED') {
+      return const LiveProjectsException(LiveProjectsFailure.generationDisabled);
+    }
+    if (status == 409 && code == 'USER_CAP_REACHED') {
+      return const LiveProjectsException(LiveProjectsFailure.dailyLimitReached);
     }
     if (status == 422 && code == 'CONFIRMATION_REQUIRED') {
       return const LiveProjectsException(

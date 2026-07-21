@@ -61,6 +61,7 @@ export const AnalyticsEvent = {
   ADMIN_ACCESS_DENIED: 'admin_access_denied',
   // ── Meshy AI model generation (staff-triggered) ───────────────────────────
   MODEL_GENERATION_REQUESTED: 'model_generation_requested',
+  MODEL_GENERATION_DECLINED: 'model_generation_declined',
   MODEL_APPROVED: 'model_approved',
   MODEL_IMAGE_UPLOADS_GENERATED: 'model_image_uploads_generated',
 } as const;
@@ -82,6 +83,20 @@ export const AUTH_FAIL_REASONS = [
 export const CLIENT_PLATFORMS = ['ios', 'android', 'web'] as const;
 /** Where a project_resumed open originated (optional context). */
 export const RESUME_SOURCES = ['projects_list', 'deep_link', 'direct'] as const;
+
+/**
+ * Which surface asked for a 3D model. Three genuinely different risk profiles:
+ * a human picked the photos, a human pressed a button and the SERVER picked
+ * them, or nobody asked at all.
+ */
+export const MODEL_GENERATION_TRIGGERS = ['staff_selection', 'manual_button', 'auto'] as const;
+
+/** The photo selector's typed refusals (AutoSelectionDeclineReason). */
+export const MODEL_DECLINE_REASONS = [
+  'MANIFEST_UNREADABLE',
+  'NO_USABLE_PHOTOS',
+  'INSUFFICIENT_SPREAD',
+] as const;
 
 // ── Permissions ──────────────────────────────────────────────────────────────
 /** How a permission grant was obtained: the in-app OS prompt, or the user
@@ -365,6 +380,40 @@ const modelGenerationRequestedProps = z
     key_count: z.number().int().positive(),
     /** True when an Idempotency-Key replayed an existing record (no new charge). */
     was_replay: z.boolean(),
+    /**
+     * WHICH surface asked. Optional so every pre-existing emit stays valid.
+     * Named `trigger`, not `source`, because `source` above is already the
+     * model's ORIGIN (meshy vs the in-house pipeline) and the two must not be
+     * confused in the tracking plan.
+     */
+    trigger: z.enum(MODEL_GENERATION_TRIGGERS).optional(),
+    /** The requester's role — staff and owners have different ceilings. */
+    actor_role: z.enum(USER_ROLES).optional(),
+    /** Staff force-regenerate: a deliberate second charge for the same capture. */
+    forced: z.boolean().optional(),
+  })
+  .strict();
+
+/**
+ * The SERVER-side photo selector refused to spend on a capture.
+ *
+ * The single most valuable event in this feature: the selector has only ever
+ * run against synthetic manifests, and these counters are what say whether a
+ * real-world decline is a genuinely bad capture, a threshold set too tight, or
+ * simply a capture packed before the manifest carried sharpness at all
+ * (`dropped_no_blur` large). Counts only — never a key.
+ */
+const modelGenerationDeclinedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    trigger: z.enum(MODEL_GENERATION_TRIGGERS),
+    reason: z.enum(MODEL_DECLINE_REASONS),
+    pool_size: z.number().int().nonnegative(),
+    /** Photos with no quality.blurScore — the pre-2026-07-21 manifest tell. */
+    dropped_no_blur: z.number().int().nonnegative(),
+    /** How many of the four yaw quadrants had at least one usable photo. */
+    quadrants_filled: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -431,6 +480,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.ADMIN_PROJECT_DELETED]: adminProjectDeletedProps,
   [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
   [AnalyticsEvent.MODEL_GENERATION_REQUESTED]: modelGenerationRequestedProps,
+  [AnalyticsEvent.MODEL_GENERATION_DECLINED]: modelGenerationDeclinedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,
   [AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED]: modelImageUploadsGeneratedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;

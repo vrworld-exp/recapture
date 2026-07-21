@@ -61,7 +61,9 @@ class _FakeExporter implements ImagePrepExporter {
 }
 
 class _FakeRepo
-    with FakeModelGenerationDefaults, FakeAdminDeleteDefaults
+    with FakeModelGenerationDefaults,
+        FakeAdminDeleteDefaults,
+        FakeAutoGenerationDefaults
     implements LiveProjectsRepository {
   int uploadUrlRequests = 0;
   int uploadedImages = 0;
