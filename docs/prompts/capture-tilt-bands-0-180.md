@@ -3,12 +3,14 @@
 
 # Task: 0–180° Camera-Tilt Bands per Capture Level (BOTTOM=up, EYE=straight, TOP=down)
 
-> **SUPERSEDED (band numbers only), 2026-07-21.** The band BOUNDARIES in the
-> table below are no longer current — they were retuned to
-> `low [0,40)` / `mid [40,110)` / `high [110,180)` by
+> **RETUNED (band numbers only), 2026-07-21.** The boundaries this task
+> originally shipped (equal thirds `0/60/120/180`) were superseded by
 > [capture-tilt-bands-retune-40-110.md](./capture-tilt-bands-retune-40-110.md).
-> Everything else in this document (the 0–180° scale, the level→band mapping,
-> the quaternion derivation) still stands.
+> The numbers below have been refreshed to the CURRENT bands —
+> `low [0,40)` / `mid [40,110)` / `high [110,180)`, deliberately unequal
+> (40/70/70), `mid` NOT centred on 90°. Everything else in this document (the
+> 0–180° scale, the level→band mapping, the quaternion derivation) is unchanged.
+> Historical "current state before this task" notes in §2 are left as written.
 
 > Touches BOTH codebases: the Flutter client (repo root) and `recapture-api/`
 > (remote-config defaults + schema must move in lockstep with the client
@@ -27,9 +29,9 @@ ring" using a single **camera-tilt angle on a 0–180° scale**:
 
 | Ring (level)       | Band id | Tilt range      | User instruction        |
 |--------------------|---------|-----------------|-------------------------|
-| BOTTOM ring (C)    | `low`   | **[0°, 60°)**   | tilt phone **up**       |
-| EYE ring (A)       | `mid`   | **[60°, 120°)** | hold phone **straight** |
-| TOP ring (B)       | `high`  | **[120°, 180°]**| tilt phone **down**     |
+| BOTTOM ring (C)    | `low`   | **[0°, 40°)**   | tilt phone **up**       |
+| EYE ring (A)       | `mid`   | **[40°, 110°)** | hold phone **straight** |
+| TOP ring (B)       | `high`  | **[110°, 180°]**| tilt phone **down**     |
 
 Where the tilt angle is defined as **the angle between the back-camera's aim
 direction and world-up**: 0° = camera pointing straight at the sky (phone held
@@ -133,9 +135,9 @@ trusting it.
 In `capture_config.dart` → `CaptureConfig.bundledDefault`:
 
 ```dart
-PitchBand(id: 'low',  minDegrees: 0,   maxDegrees: 60,  segments: 12),
-PitchBand(id: 'mid',  minDegrees: 60,  maxDegrees: 120, segments: 10),
-PitchBand(id: 'high', minDegrees: 120, maxDegrees: 180, segments: 8),
+PitchBand(id: 'low',  minDegrees: 0,   maxDegrees: 40,  segments: 12),
+PitchBand(id: 'mid',  minDegrees: 40,  maxDegrees: 110, segments: 10),
+PitchBand(id: 'high', minDegrees: 110, maxDegrees: 180, segments: 8),
 ```
 
 (Keep the legacy per-band `segments` values — real counts come from
@@ -165,8 +167,9 @@ max-excl).
 ### 4.3 UI
 
 - Tilt meter: replace the stale fallback `TiltTarget(30, 60, 'mid')` with the
-  new mid band (60–120); confirm `tiltGaugeRangeForBand` produces sensible
-  gauge spans for 60°-wide bands (padding, needle clamp).
+  new mid band (40–110); confirm `tiltGaugeRangeForBand` produces sensible
+  gauge spans for 40°- and 70°-wide bands (padding, needle clamp). The gauge
+  derives its centre from the band — do NOT re-centre it on 90°.
 - Instruction copy: wherever level intro/capture screens instruct the tilt
   ("Screen 6" family, level B/C intro wrappers, help-sheet `CaptureTip`s),
   align wording with: C = "Tilt the phone up", A = "Hold the phone straight",
@@ -198,7 +201,7 @@ max-excl).
   positive [0,30)" expectations are obsolete).
 - Feed: quaternion stream in → `TiltSample` out (EMA seeded, NaN dropped,
   error → unsupported).
-- Band membership sweep: tilt 0/59.9/60/119.9/120/179.999 map to
+- Band membership sweep: tilt 0/39.9/40/109.9/110/179.999 map to
   low/low/mid/mid/high/high; 180 physical (clamped) → high.
 - Tilt meter + shutter-gate widget tests re-pinned to new band numbers.
 - Full `flutter analyze` + `flutter test` green; backend `npm test` green.
