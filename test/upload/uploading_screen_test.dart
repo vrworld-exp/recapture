@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
+import 'package:recapture/application/upload/upload_flow.dart';
 import 'package:recapture/application/upload/upload_progress_provider.dart';
 import 'package:recapture/domain/entities/upload_progress.dart';
 import 'package:recapture/domain/upload/upload_flow_steps.dart';
@@ -65,7 +66,11 @@ void main() {
   List<({String name, Map<String, Object?> props})> named(String n) =>
       events.where((e) => e.name == n).toList();
 
-  Future<void> pump(WidgetTester tester) async {
+  /// The `extra` the screen handed to the Processing route, if it got there.
+  Object? processingExtra;
+
+  Future<void> pump(WidgetTester tester, {String? remoteProjectId}) async {
+    processingExtra = null;
     Widget stub(String l) => Scaffold(body: Text(l));
     final router = GoRouter(
       initialLocation: AppRoutes.uploading,
@@ -74,21 +79,31 @@ void main() {
             path: AppRoutes.uploading,
             builder: (_, __) => const UploadingScreen()),
         GoRoute(
-            path: AppRoutes.processing, builder: (_, __) => stub('PROCESSING')),
+            path: AppRoutes.processing,
+            builder: (_, state) {
+              processingExtra = state.extra;
+              return stub('PROCESSING');
+            }),
         GoRoute(path: AppRoutes.projects, builder: (_, __) => stub('PROJECTS')),
         // Screen 9F stub — asserts the uploading screen ROUTES here on failure.
         GoRoute(
             path: AppRoutes.uploadFailed, builder: (_, __) => stub('FAILED_9F')),
       ],
     );
+    final container = ProviderContainer(overrides: [
+      uploadProgressSourceProvider.overrideWithValue(_FakeSource(controller)),
+      uploadStepTimelineProvider.overrideWith((ref) => timelineController.stream),
+    ]);
+    addTearDown(container.dispose);
+    if (remoteProjectId != null) {
+      // Stand in for a flow that has already created the remote project — the
+      // screen reads the id from the live flow surface, not from the session.
+      final flow = UploadFlowProgress()..remoteProjectId = remoteProjectId;
+      container.read(uploadFlowProvider.notifier).installForTest(flow);
+    }
     await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          uploadProgressSourceProvider
-              .overrideWithValue(_FakeSource(controller)),
-          uploadStepTimelineProvider
-              .overrideWith((ref) => timelineController.stream),
-        ],
+      UncontrolledProviderScope(
+        container: container,
         child: MaterialApp.router(routerConfig: router),
       ),
     );
@@ -161,10 +176,35 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('PROCESSING'), findsOneWidget);
+    // No remote project was created in this flow → nothing to hand on, and the
+    // post-upload screen degrades to no generate button rather than one that
+    // would spend on a project id it guessed.
+    expect(processingExtra, isNull);
     final done = named(AnalyticsEvents.uploadCompletedView);
     expect(done, hasLength(1));
     expect(done.first.props['total_files'], 10);
     expect(done.first.props['duration_ms'], isA<int>());
+  });
+
+  testWidgets('completion carries the REMOTE project id to Processing',
+      (tester) async {
+    // The post-upload "Generate 3D model" button posts to
+    // POST /projects/:id/model and spends credits, so the id it uses must be
+    // the one the flow actually created — not the local session's id, and not
+    // re-derived downstream.
+    await pump(tester, remoteProjectId: 'remote-proj-9');
+    await emit(
+        tester,
+        _p(
+            status: UploadStatus.completed,
+            bytes: 10 * _mb,
+            total: 10 * _mb,
+            files: 1,
+            totalFiles: 1));
+    await tester.pumpAndSettle();
+
+    expect(find.text('PROCESSING'), findsOneWidget);
+    expect(processingExtra, 'remote-proj-9');
   });
 
   testWidgets('failed status → routes to Screen 9F + upload_failed_view',

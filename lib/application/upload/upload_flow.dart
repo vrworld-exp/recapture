@@ -212,6 +212,19 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   /// engine, finalize skip), not just the engine.
   void Function()? onCancelRequested;
 
+  /// The id of the project the backend MINTED for this flow, once it exists.
+  ///
+  /// The one fact the post-upload screen cannot derive for itself: the local
+  /// session's project id is a device-side id, and only `POST /projects` knows
+  /// the remote one. Carried here rather than re-resolved downstream so the
+  /// screen that offers "Generate 3D model" points at the project the photos
+  /// actually went into — a re-derived id that missed would 404 a paid button.
+  ///
+  /// Null until the create-project step succeeds, and null forever on a flow
+  /// that failed before it: the screen degrades to no button rather than to a
+  /// broken one.
+  String? remoteProjectId;
+
   /// False once the flow reached completed/failed/cancelled — a terminal flow
   /// is replaced (not reused) by the next start.
   bool get isActive => !_terminal;
@@ -560,6 +573,7 @@ class UploadFlowOrchestrator {
       _checkCancel();
       DevUploadLog.instance.add('project created (remoteId=$remoteProjectId); '
           'POST /jobs (expectedFiles=${bundle.totalImages + 1}) …');
+      progress.remoteProjectId = remoteProjectId;
       progress.stepCompleted(
         UploadFlowStepId.createProject,
         devDetail: ['remoteProjectId=$remoteProjectId'],

@@ -30,6 +30,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/model_generation_request_notifier.dart';
+import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/owner_model_state_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
 import '../../../data/repositories/projects_repository.dart';
@@ -47,6 +48,7 @@ class ModelBuildingScreen extends ConsumerStatefulWidget {
     this.onRegenerate,
     this.watchOwnerState = true,
     this.onOpenHistory,
+    this.watchOwnerRequest = false,
   });
 
   final String projectId;
@@ -68,6 +70,16 @@ class ModelBuildingScreen extends ConsumerStatefulWidget {
   /// cannot watch the run itself.
   final VoidCallback? onOpenHistory;
 
+  /// Read the request half from [ownerGenerationRequestProvider] instead of the
+  /// staff [modelGenerationRequestProvider].
+  ///
+  /// TRUE on the owner's post-capture path: the two providers post to different
+  /// routes (owner vs `/admin`) and carry different payloads (one sentence vs
+  /// steps + selector trace), so which one is in play is a property of who
+  /// pressed the button, not of this screen. The worker half below is identical
+  /// either way.
+  final bool watchOwnerRequest;
+
   @override
   ConsumerState<ModelBuildingScreen> createState() => _ModelBuildingScreenState();
 }
@@ -86,6 +98,9 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
   DateTime _lastMovement = DateTime.now();
 
   static const _stallThreshold = Duration(seconds: 45);
+
+  /// One-shot latch for the post-request re-read (see the owner branch below).
+  bool _refreshedAfterRequest = false;
 
   int? _monotonic(int? reported) {
     if (reported == null) return _maxPercent;
@@ -113,7 +128,11 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final request = ref.watch(modelGenerationRequestProvider(widget.projectId));
+    // Only ONE of the two request providers is ever read: watching the staff one
+    // on an owner's screen would spin up a notifier for a route they cannot call.
+    final request = widget.watchOwnerRequest
+        ? const ModelGenerationRequestState()
+        : ref.watch(modelGenerationRequestProvider(widget.projectId));
 
     // A finished generation changes the PROJECTS LIST, not just this screen:
     // `modelCount` is aggregated server-side into the list DTO, so the Models
@@ -153,6 +172,46 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
   }
 
   List<Widget> _content(ModelGenerationRequestState request) {
+    // ── The OWNER's press. One value, one sentence, no trace — see
+    // `watchOwnerRequest`. Every non-started outcome (declined, ceiling, rate
+    // limit, 404, offline) renders through the same plain message: an owner can
+    // act on the sentence and on nothing else we know.
+    if (widget.watchOwnerRequest) {
+      final owner = ref.watch(ownerGenerationRequestProvider(widget.projectId));
+      if (owner.isRequesting) {
+        return const [
+          _Waiting(percent: null, isStalled: false),
+          _Timeline(requestDone: false, percent: null),
+        ];
+      }
+      if (owner.refusalMessage case final message?) {
+        return [
+          _Message(
+            icon: Icons.photo_camera_back_outlined,
+            title: "We couldn't start this",
+            body: message,
+          ),
+        ];
+      }
+      // The poll and the POST start together, so the FIRST poll can land before
+      // the record the POST creates exists. Left alone that reads as "No 3D
+      // model yet" — and the notifier, seeing nothing pending, stops polling and
+      // never corrects itself. One re-read once the request confirms fixes both.
+      if (owner.isBuilding && !_refreshedAfterRequest) {
+        _refreshedAfterRequest = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || !widget.watchOwnerState) return;
+          ref.read(ownerModelStateProvider(widget.projectId).notifier).refresh();
+        });
+      }
+      // Started (or entered without a press) → fall through to the worker half,
+      // which is the same for everyone.
+      return _ownerWorkerContent(
+        requestDone: owner.isBuilding,
+        expectGeneration: owner.isBuilding,
+      );
+    }
+
     // ── The request itself failed (offline, ceiling, switched off). Nothing was
     // started, so there is nothing to watch — say what happened and stop.
     if (request.failure case final failure?) {
@@ -214,6 +273,25 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
       ];
     }
 
+    return [
+      ..._ownerWorkerContent(requestDone: request.hasResult),
+      _StaffTrace(
+        steps: request.request?.steps ?? const [],
+        selection: request.request?.trace,
+      ),
+    ];
+  }
+
+  /// The WORKER half — identical for staff and owner, because it is the same
+  /// poll of the same owner endpoint. [requestDone] is the only thing the two
+  /// callers disagree about: it comes from whichever request half is in play.
+  List<Widget> _ownerWorkerContent({
+    required bool requestDone,
+    bool expectGeneration = false,
+  }) {
+    if (!widget.watchOwnerState) {
+      return const [_Waiting(percent: null, isStalled: false)];
+    }
     final async = ref.watch(ownerModelStateProvider(widget.projectId));
     return [
       async.when(
@@ -232,14 +310,11 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
           isStalled: _looksStalled,
           hasStoppedChecking:
               ref.read(ownerModelStateProvider(widget.projectId).notifier).pollsExhausted,
-          requestDone: request.hasResult,
+          requestDone: requestDone,
+          expectGeneration: expectGeneration,
           onView: _openViewer,
           onRegenerate: widget.onRegenerate,
         ),
-      ),
-      _StaffTrace(
-        steps: request.request?.steps ?? const [],
-        selection: request.request?.trace,
       ),
     ];
   }
@@ -254,6 +329,7 @@ class _Body extends StatelessWidget {
     required this.requestDone,
     required this.onView,
     this.onRegenerate,
+    this.expectGeneration = false,
   });
 
   final OwnerModelState state;
@@ -263,6 +339,11 @@ class _Body extends StatelessWidget {
   final bool requestDone;
   final void Function(ProjectModelView model) onView;
   final VoidCallback? onRegenerate;
+
+  /// The server has just accepted a generation, so a record exists even if this
+  /// poll has not seen it yet. Turns the "nothing here" state into the waiting
+  /// state — the accurate one — instead of "No 3D model yet".
+  final bool expectGeneration;
 
   @override
   Widget build(BuildContext context) {
@@ -281,7 +362,7 @@ class _Body extends StatelessWidget {
       );
     }
 
-    if (state.isGenerating) {
+    if (state.isGenerating || (expectGeneration && state.isEmpty)) {
       // The poll cap ran out with the generation still pending. Saying nothing
       // would leave a spinner that never resolves — worse than admitting we
       // stopped looking.

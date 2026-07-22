@@ -439,7 +439,18 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.processing,
         name: AppRouteNames.processing,
-        builder: (_, __) => const FlowBackScope(child: ProcessingScreen()),
+        // The post-upload success screen. The REMOTE project id rides in via
+        // `extra` (see UploadingScreen); a null/garbled extra — a deep link, a
+        // hot restart, a flow that failed before creating the project —
+        // degrades the screen to "Back to Projects" with no Generate button,
+        // never a button that would 404.
+        builder: (_, state) => FlowBackScope(
+          child: ProcessingScreen(
+            projectId: state.extra is String && (state.extra! as String).isNotEmpty
+                ? state.extra! as String
+                : null,
+          ),
+        ),
       ),
       GoRoute(
         path: AppRoutes.modelReady,

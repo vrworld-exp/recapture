@@ -56,6 +56,78 @@ abstract interface class ProjectsRepository {
   /// former — so a caller that collapsed these into one nullable value would
   /// blank the screen every time a regenerate started.
   Future<OwnerModelState> fetchModelState(String id);
+
+  /// Asks the server to pick this project's photos and start a 3D model —
+  /// `POST /projects/:id/model`, the OWNER-facing "Generate 3D model" press.
+  ///
+  /// The STAFF equivalent is `LiveProjectsRepository.autoGenerateModel`, which
+  /// talks to `/admin/...` and returns the selector trace. This one deliberately
+  /// does not exist there: an owner gets 403 on the admin route, and the owner
+  /// payload carries no steps, no trace, no key names, and no phase vocabulary.
+  ///
+  /// NEVER THROWS AND NEVER TAKES A `force`. Every outcome — started, refused,
+  /// rate-limited, offline — comes back as a value with one owner-safe sentence,
+  /// because this drives a full screen rather than a control-flow decision, and
+  /// a refusal thrown away is the single most useful thing the server said.
+  /// Sending no `force` (and no cache-buster) is what lets the server's
+  /// `manual:{jobId}` idempotency key replay a repeat press instead of paying
+  /// for a second generation.
+  Future<OwnerGenerationRequestResult> requestModelGeneration(String id);
+}
+
+/// What `POST /projects/:id/model` did, as an owner may know it.
+enum OwnerGenerationRequestOutcome {
+  /// Accepted and queued (or replayed onto an existing run — indistinguishable
+  /// to the owner by design, and identical in what happens next: watch it).
+  started,
+
+  /// 422 NOT_SELECTABLE — the selector refused to spend on these photos. The
+  /// server working correctly, not a failure.
+  declined,
+
+  /// 422 NOT_READY — no finalized capture to build from yet.
+  notReady,
+
+  /// 409 DAILY_LIMIT_REACHED — the rolling 24h ceiling.
+  dailyLimitReached,
+
+  /// 409/502 GENERATION_UNAVAILABLE — switched off, or the pipeline could not
+  /// be reached. Nothing the owner did.
+  unavailable,
+
+  /// 404 — the project is gone.
+  notFound,
+
+  /// 429 — too many requests from this user.
+  rateLimited,
+
+  /// Transport failure (offline, timeout).
+  offline,
+
+  /// Anything else.
+  failed,
+}
+
+/// One generation request's outcome plus the ONE sentence to show for it.
+///
+/// [message] is always owner-safe: the server's own mapped copy for the codes it
+/// maps, and a local fallback otherwise. A raw error string, a response code, a
+/// key name or an upstream URL never reaches this field.
+class OwnerGenerationRequestResult {
+  const OwnerGenerationRequestResult(
+    this.outcome,
+    this.message, {
+    this.generation,
+  });
+
+  final OwnerGenerationRequestOutcome outcome;
+  final String message;
+
+  /// The run to watch, when the server reported one. Absent is not an error —
+  /// the polling on `GET /projects/:id` finds it either way.
+  final OwnerGenerationView? generation;
+
+  bool get isStarted => outcome == OwnerGenerationRequestOutcome.started;
 }
 
 /// What `GET /projects/:id` says about a project's 3D model, as the owner sees
@@ -168,7 +240,100 @@ class RemoteProjectsRepository implements ProjectsRepository {
       generation: OwnerGenerationView.tryParse(res.data?['generation']),
     );
   }
+
+  @override
+  Future<OwnerGenerationRequestResult> requestModelGeneration(String id) async {
+    try {
+      // No body, no `force`, no cache-busting parameter: the server derives its
+      // idempotency key from the capture job (`manual:{jobId}`), and anything
+      // the client added here would be a way to defeat that and pay twice.
+      final res = await _dio.post<Map<String, dynamic>>('/projects/$id/model');
+      return OwnerGenerationRequestResult(
+        OwnerGenerationRequestOutcome.started,
+        // Not shown anywhere — the started state is a screen, not a sentence.
+        'Creating your 3D model.',
+        generation: OwnerGenerationView.tryParse(res.data?['generation']),
+      );
+    } on DioException catch (e) {
+      return _translateGenerationFailure(e);
+    } catch (_) {
+      // A parse/shape surprise must not dead-end the tap either.
+      return const OwnerGenerationRequestResult(
+        OwnerGenerationRequestOutcome.failed,
+        'Something went wrong. Please try again.',
+      );
+    }
+  }
+
+  /// Maps one refused request onto an outcome + one owner-safe sentence.
+  ///
+  /// The server already authors owner-facing copy for every code below (it is
+  /// the same copy an owner would get from any other client), and for a decline
+  /// it is strictly better than anything decided here — there are three distinct
+  /// reasons and each names what to DO about it. So the server's message wins
+  /// for a code we recognise, and the local fallback covers everything else,
+  /// including a body with no message at all.
+  static OwnerGenerationRequestResult _translateGenerationFailure(
+    DioException e,
+  ) {
+    if (e.response == null) {
+      return const OwnerGenerationRequestResult(
+        OwnerGenerationRequestOutcome.offline,
+        "You're offline — check your connection and try again.",
+      );
+    }
+    final body = e.response?.data;
+    final code = body is Map ? (body['code'] ?? '').toString() : '';
+    final outcome = switch (code) {
+      'NOT_SELECTABLE' => OwnerGenerationRequestOutcome.declined,
+      'NOT_READY' => OwnerGenerationRequestOutcome.notReady,
+      'DAILY_LIMIT_REACHED' => OwnerGenerationRequestOutcome.dailyLimitReached,
+      'GENERATION_UNAVAILABLE' => OwnerGenerationRequestOutcome.unavailable,
+      'NOT_FOUND' => OwnerGenerationRequestOutcome.notFound,
+      'RATE_LIMITED' => OwnerGenerationRequestOutcome.rateLimited,
+      // An unrecognised code is NOT trusted to carry owner-safe copy.
+      _ => e.response?.statusCode == 404
+          ? OwnerGenerationRequestOutcome.notFound
+          : e.response?.statusCode == 429
+              ? OwnerGenerationRequestOutcome.rateLimited
+              : OwnerGenerationRequestOutcome.failed,
+    };
+    final fallback = ownerGenerationFallbackMessage(outcome);
+    final serverMessage = body is Map ? (body['message'] ?? '').toString() : '';
+    final trusted = outcome != OwnerGenerationRequestOutcome.failed &&
+        serverMessage.isNotEmpty &&
+        serverMessage.length <= 300;
+    return OwnerGenerationRequestResult(
+      outcome,
+      trusted ? serverMessage : fallback,
+    );
+  }
 }
+
+/// The copy shown when the server sent none we trust. Mapped only — same rule
+/// as Screen 9F's upload categories: never a code, never raw text.
+String ownerGenerationFallbackMessage(OwnerGenerationRequestOutcome outcome) =>
+    switch (outcome) {
+      OwnerGenerationRequestOutcome.started => 'Creating your 3D model.',
+      OwnerGenerationRequestOutcome.declined =>
+        "We couldn't build a 3D model from these photos. Try capturing the "
+            'object again, walking all the way around it.',
+      OwnerGenerationRequestOutcome.notReady =>
+        'Finish uploading this capture before creating a 3D model.',
+      OwnerGenerationRequestOutcome.dailyLimitReached =>
+        "You've reached today's limit for creating 3D models. Try again "
+            'tomorrow.',
+      OwnerGenerationRequestOutcome.unavailable =>
+        '3D model creation is not available right now.',
+      OwnerGenerationRequestOutcome.notFound =>
+        "We couldn't find this project.",
+      OwnerGenerationRequestOutcome.rateLimited =>
+        'Too many requests. Please try again in a few minutes.',
+      OwnerGenerationRequestOutcome.offline =>
+        "You're offline — check your connection and try again.",
+      OwnerGenerationRequestOutcome.failed =>
+        'Something went wrong. Please try again.',
+    };
 
 /// App-wide projects repository.
 final projectsRepositoryProvider = Provider<ProjectsRepository>(

@@ -13,7 +13,10 @@ import 'dart:typed_data';
 import 'package:recapture/data/repositories/live_projects_repository.dart'
     show AdminDeleteMode, AutoGenerationRequest, ModelImageUploadSlot;
 import 'package:recapture/data/repositories/projects_repository.dart'
-    show OwnerModelState;
+    show
+        OwnerGenerationRequestOutcome,
+        OwnerGenerationRequestResult,
+        OwnerModelState;
 import 'package:recapture/domain/entities/project_model.dart';
 
 /// Model-generation members of `LiveProjectsRepository`.
@@ -80,4 +83,24 @@ mixin FakeProjectModelDefaults {
   Future<ProjectModelView?> fetchModel(String id) async => null;
 
   Future<OwnerModelState> fetchModelState(String id) async => const OwnerModelState();
+
+  /// Throws rather than pretending to succeed: this one SPENDS MONEY, so a test
+  /// that reaches it by accident must fail loudly instead of quietly recording a
+  /// generation nobody meant to ask for.
+  Future<OwnerGenerationRequestResult> requestModelGeneration(String id) async =>
+      throw UnimplementedError('not used here');
+}
+
+/// The owner "Generate 3D model" press, defaulted to a plain success — for the
+/// tests that need the request to go through but do not assert on it.
+///
+/// Kept apart from [FakeProjectModelDefaults] for the same reason
+/// [FakeAutoGenerationDefaults] is: a fake cannot take two mixins that supply
+/// the same member, and most fakes want the throwing default above.
+mixin FakeOwnerGenerationSucceeds {
+  Future<OwnerGenerationRequestResult> requestModelGeneration(String id) async =>
+      const OwnerGenerationRequestResult(
+        OwnerGenerationRequestOutcome.started,
+        'Creating your 3D model.',
+      );
 }
