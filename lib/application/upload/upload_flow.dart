@@ -51,12 +51,12 @@ import '../../utils/app_env.dart';
 import '../../utils/byte_format.dart';
 import '../capture/analytics/capture_level_session.dart';
 import '../capture/capture_flow_variant_provider.dart';
+import '../capture/capture_shape_mode_provider.dart';
 import '../capture/ledger/level_capture_ledger_registry.dart';
 import '../capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../capture/progression/level_progression.dart';
 import '../capture/progression/level_progression_builder.dart';
 import '../capture/progression/level_progression_provider.dart';
-import '../config/config_notifier.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../projects/projects_notifier.dart';
 import '../warmup/backend_warmup.dart';
@@ -71,6 +71,7 @@ import 'upload_jobs_backend.dart';
 import 'upload_progress_provider.dart';
 
 import '../../domain/capture/capture_flow_variant.dart';
+import '../../domain/capture/capture_shape_mode.dart';
 
 /// A terminal upload-flow failure carrying its ALREADY-MAPPED category — the
 /// authoritative [UploadFailureSignal] `classifyUploadFailure` honors, so 9F
@@ -101,6 +102,7 @@ class UploadFlowContext {
     required this.registry,
     required this.variant,
     required this.workspaceRoot,
+    this.shapeMode = CaptureShapeMode.full,
     this.objectSize = 'medium',
   });
 
@@ -118,6 +120,12 @@ class UploadFlowContext {
   final LevelProgression progression;
   final LevelCaptureLedgerRegistry registry;
   final CaptureFlowVariant variant;
+
+  /// The capture SHAPE mode (full / meshy). Stamped on the manifest and POST
+  /// /jobs so finalize validates the bundle against the right shape; drives the
+  /// single-ring Meshy count (6 + manifest) via the effective config the context
+  /// was built with.
+  final CaptureShapeMode shapeMode;
 
   /// App-scoped documents root the packer stages/finalizes bundles under.
   final String workspaceRoot;
@@ -570,8 +578,11 @@ class UploadFlowOrchestrator {
         projectId: remoteProjectId,
         objectSize: ctx.objectSize,
         captureVariant: ctx.variant.id,
+        // Meshy is variant-less on the server; the variant above is sent but
+        // ignored for shape. The MODE is what selects the 6-shot shape.
+        captureMode: ctx.shapeMode.id,
         // MUST equal the bundle's real content (exact-checked at finalize):
-        // every staged image + the manifest.
+        // every staged image + the manifest. Meshy = 6 images + manifest = 7.
         expectedFilesCount: bundle.totalImages + 1,
         idempotencyKey: _uuid(),
       );
@@ -766,12 +777,14 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
     // see level_progression_provider.dart's SCOPE note), so the snapshot is
     // derived from the SAME live sources the Summary gate reads: config +
     // flow variant + the per-level ledgers.
+    final shapeMode = ref.read(captureShapeModeProvider);
     var progression = ref.read(levelProgressionControllerProvider);
     if (progression == null) {
       progression = progressionFromLedger(
-        ref.read(captureConfigProvider),
+        ref.read(effectiveCaptureConfigProvider),
         variant: ref.read(captureFlowVariantProvider),
         registry: ref.read(levelCaptureLedgerRegistryProvider),
+        mode: shapeMode,
       );
       DevUploadLog.instance.add(
           'progression derived from ledger (${progression.levels.map((l) => '${l.levelCode}=${l.acceptedCount}').join(', ')})');
@@ -816,10 +829,11 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       localProjectId: projectId,
       projectName: projectName,
       captureSessionId: session?.sessionId ?? '',
-      config: ref.read(captureConfigProvider),
+      config: ref.read(effectiveCaptureConfigProvider),
       progression: progression,
       registry: ref.read(levelCaptureLedgerRegistryProvider),
       variant: ref.read(captureFlowVariantProvider),
+      shapeMode: shapeMode,
       workspaceRoot: '${docs.path}/upload_workspace',
     );
   }
@@ -837,6 +851,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
         progression: context.progression,
         registry: context.registry,
         flowVariantId: context.variant.id,
+        captureModeId: context.shapeMode.id,
         cancelToken: cancelToken,
       );
 

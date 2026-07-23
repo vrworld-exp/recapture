@@ -293,7 +293,10 @@ function planFor(job: IJob): UploadPlan {
     keyPrefix: upload.rawPrefix,
     manifestKey: upload.manifestKey,
     keyTemplate: `${upload.rawPrefix}{relativePath}`,
-    levels: ringsForVariant(variantOf(job)),
+    // Ring set is mode-dependent (Meshy is EYE-only, full is EYE/TOP[/LOW]), so
+    // the mode MUST be threaded — omitting it would advertise TOP/LOW slots a
+    // Meshy job never fills and widen the containment check below.
+    levels: ringsForVariant(variantOf(job), modeOf(job)),
     expiresAt: planExpiresAt(job).toISOString(),
     partSizeMin: PART_SIZE_MIN,
     maxParts: MAX_PARTS,
@@ -764,7 +767,9 @@ async function loadUploadableJob(
   const segments = remainder.split('/');
   if (segments[0] === 'images') {
     const level = segments[1];
-    const allowed = ringsForVariant(variantOf(job)) as readonly string[];
+    // Mode-threaded: a Meshy job's only ring is EYE, so images/TOP|LOW/… must
+    // fail containment even though full's with_bottom would allow them.
+    const allowed = ringsForVariant(variantOf(job), modeOf(job)) as readonly string[];
     if (level === undefined || !allowed.includes(level)) {
       return { outcome: 'INVALID_KEY' };
     }

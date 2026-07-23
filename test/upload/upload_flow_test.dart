@@ -117,6 +117,7 @@ class _FakeBackend implements UploadJobsBackend {
     required String projectId,
     required String objectSize,
     required String captureVariant,
+    required String captureMode,
     required int expectedFilesCount,
     required String idempotencyKey,
   }) async {
@@ -125,6 +126,7 @@ class _FakeBackend implements UploadJobsBackend {
       'projectId': projectId,
       'objectSize': objectSize,
       'captureVariant': captureVariant,
+      'captureMode': captureMode,
       'expectedFilesCount': expectedFilesCount,
       'idempotencyKey': idempotencyKey,
     };
@@ -323,6 +325,7 @@ void main() {
       'projectId': 'proj-1',
       'objectSize': 'medium',
       'captureVariant': 'with_bottom',
+      'captureMode': 'full',
       'expectedFilesCount': 4,
       'idempotencyKey': 'uuid-fixed',
     });

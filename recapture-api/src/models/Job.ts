@@ -187,12 +187,13 @@ export interface IJob extends Document {
   captureVariant: CaptureFlowVariant;
 
   /**
-   * How much the session captured — 'full' (48 images) or 'meshy' (8–10, tuned
-   * for the AI model selector). Orthogonal to `captureVariant`: the mode says
-   * how many images per ring, the variant says which rings exist. Together they
-   * pick one cell of the shape matrix in types/captureVariants, which is what
-   * every count check derives its bounds from. Jobs predating the field read as
-   * the default ('full') via the schema default.
+   * How much the session captured — 'full' (48 images) or 'meshy' (ONE ring of
+   * 6, tuned for the AI model selector). The mode picks how many rings and how
+   * many images per ring: full uses `captureVariant` to choose EYE/TOP[/LOW],
+   * while meshy is a single fixed EYE ring and ignores the variant. Together
+   * they pick one cell of the shape matrix in types/captureVariants, which is
+   * what every count check derives its bounds from. Jobs predating the field
+   * read as the default ('full') via the schema default.
    */
   captureMode: CaptureMode;
 

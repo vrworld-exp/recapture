@@ -16,6 +16,7 @@
 // because it depends on the CaptureLevel taxonomy + config; the machine stays
 // config-agnostic and pure.
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_shape_mode.dart';
 import '../../../domain/capture/level_segment_machine.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
@@ -25,10 +26,11 @@ import '../analytics/capture_level_events.dart';
 List<LevelSegmentMachine> levelSegmentMachinesFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
+  CaptureShapeMode mode = CaptureShapeMode.full,
   int fillThreshold = 1,
 }) =>
     [
-      for (final level in variant.levels)
+      for (final level in activeCaptureLevels(variant, mode))
         levelSegmentMachineFor(
           level,
           config,

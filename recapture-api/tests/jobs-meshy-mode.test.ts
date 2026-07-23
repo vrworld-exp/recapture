@@ -1,9 +1,13 @@
 // tests/jobs-meshy-mode.test.ts
 //
 // Meshy capture mode end-to-end through the job endpoints: create with
-// `captureMode: 'meshy'`, finalize a 10-image bundle, and prove the per-ring
-// floor actually bites (9 images is a rejection, and so is 5/2/2 even though
-// its TOTAL would satisfy any scalar bound).
+// `captureMode: 'meshy'`, finalize a 6-image single-EYE-ring bundle, and prove
+// the per-ring floor actually bites (5 images is a rejection; a TOP/LOW ring is
+// an unexpected level; padding EYE to the full-mode count is EXCESS).
+//
+// Meshy is now ONE ring of 6 — no TOP, no LOW, and variant-less (with_bottom
+// and without_bottom are the same shape). The only legal expectedFilesCount is
+// 7 (6 photos + the manifest): create-job's range for this mode is [7, 7].
 //
 // The legacy-client case lives here too: a request that never mentions
 // captureMode must still be a full capture, because that is every client
@@ -66,10 +70,10 @@ async function createJob(body: Record<string, unknown>) {
     .send({ projectId: await makeProject(), objectSize: 'medium', ...body });
 }
 
-/** A Meshy manifest: per-ring counts, so a bundle can be made wrong on ONE ring
- * while its total still looks plausible. */
+/** A Meshy manifest: keyed by ring so a bundle can be made wrong on the EYE ring
+ * (too few / too many) or given a ring Meshy never captures (TOP/LOW). */
 function meshyManifest(
-  counts: Record<string, number> = { EYE: 6, TOP: 2, LOW: 2 },
+  counts: Record<string, number> = { EYE: 6 },
   extra: Record<string, unknown> = {}
 ): string {
   const photos = Object.entries(counts).flatMap(([ring, n]) =>
@@ -113,13 +117,12 @@ async function finalizeWith(
 }
 
 describe('POST /jobs — captureMode on the wire', () => {
-  it('accepts meshy and persists it, with the 11-file count (10 + manifest)', async () => {
-    const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 11 });
+  it('accepts meshy and persists it, with the 7-file count (6 + manifest)', async () => {
+    const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 7 });
 
     expect(res.status).toBe(201);
     const saved = await Job.findById(res.body.job.id).exec();
     expect(saved!.captureMode).toBe('meshy');
-    expect(saved!.captureVariant).toBe('with_bottom');
   });
 
   it('a client that never sends captureMode is a FULL capture', async () => {
@@ -143,7 +146,7 @@ describe('POST /jobs — captureMode on the wire', () => {
   });
 
   it('rejects a meshy-sized count under full mode', async () => {
-    const res = await createJob({ captureMode: 'full', expectedFilesCount: 11 });
+    const res = await createJob({ captureMode: 'full', expectedFilesCount: 7 });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_REQUEST');
@@ -151,17 +154,19 @@ describe('POST /jobs — captureMode on the wire', () => {
   });
 
   it('rejects an unknown mode rather than defaulting it', async () => {
-    const res = await createJob({ captureMode: 'turbo', expectedFilesCount: 11 });
+    const res = await createJob({ captureMode: 'turbo', expectedFilesCount: 7 });
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_REQUEST');
   });
 
-  it('without_bottom meshy is 8 images + manifest', async () => {
+  it('is variant-less: without_bottom meshy is the same 6-image shape', async () => {
+    // The variant is irrelevant in Meshy mode — the client sends a fixed value
+    // and the count/shape are identical either way.
     const res = await createJob({
       captureMode: 'meshy',
       captureVariant: 'without_bottom',
-      expectedFilesCount: 9,
+      expectedFilesCount: 7,
     });
 
     expect(res.status).toBe(201);
@@ -172,13 +177,13 @@ describe('POST /jobs/:jobId/finalize — meshy bundles', () => {
   /**
    * A job in UPLOADING with [storedCount] files expected.
    *
-   * Creation always uses the legal 11 (create-job's range refuses anything
-   * else in this mode) and the stored count is then overridden — that is the
-   * only way to drive the FINALIZE rules with a wrong-sized bundle, which is
-   * what these tests are actually about.
+   * Creation always uses the legal 7 (create-job's range refuses anything else
+   * in this mode) and the stored count is then overridden — that is the only
+   * way to drive the FINALIZE rules with a wrong-sized bundle, which is what
+   * these tests are actually about.
    */
-  async function uploadingMeshyJob(storedCount = 11): Promise<string> {
-    const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 11 });
+  async function uploadingMeshyJob(storedCount = 7): Promise<string> {
+    const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 7 });
     expect(res.status).toBe(201);
     const jobId = res.body.job.id as string;
     await Job.updateOne(
@@ -188,23 +193,20 @@ describe('POST /jobs/:jobId/finalize — meshy bundles', () => {
     return jobId;
   }
 
-  it('a valid 10-image 6/2/2 bundle finalizes', async () => {
+  it('a valid 6-image EYE bundle finalizes', async () => {
     const jobId = await uploadingMeshyJob();
 
-    const res = await finalizeWith(jobId, meshyManifest(), 11);
+    const res = await finalizeWith(jobId, meshyManifest(), 7);
 
     expect(res.status).toBe(200);
     expect(res.body.state).toBe('QUEUED');
-    expect(res.body.filesVerified).toBe(11);
+    expect(res.body.filesVerified).toBe(7);
   });
 
-  it('a 9-image bundle is rejected', async () => {
-    // The Task 3 done-criterion. 5/2/2 totals 9 and would pass any collapsed
-    // scalar floor (min 2 per ring, 8 total) — it is the per-ring bound that
-    // catches it.
-    const jobId = await uploadingMeshyJob(10);
+  it('a 5-image bundle is rejected — one missing shot fails the 100% floor', async () => {
+    const jobId = await uploadingMeshyJob(6);
 
-    const res = await finalizeWith(jobId, meshyManifest({ EYE: 5, TOP: 2, LOW: 2 }), 10);
+    const res = await finalizeWith(jobId, meshyManifest({ EYE: 5 }), 6);
 
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('VERIFICATION_FAILED');
@@ -214,24 +216,27 @@ describe('POST /jobs/:jobId/finalize — meshy bundles', () => {
     ]);
   });
 
-  it('one missing shot on a 2-photo ring is rejected — zero tolerance, stated', async () => {
-    const jobId = await uploadingMeshyJob(10);
-
-    const res = await finalizeWith(jobId, meshyManifest({ EYE: 6, TOP: 2, LOW: 1 }), 10);
-
-    expect(res.status).toBe(422);
-    expect(res.body.validationErrors[0].rule).toBe('INSUFFICIENT_PHOTOS_PER_LEVEL');
-  });
-
   it('an EYE ring padded to the full-mode count is rejected as EXCESS', async () => {
-    // Proof the ceiling is per-ring too: 16 on EYE is legal in full mode and
-    // must not be legal here just because some ring somewhere allows it.
-    const jobId = await uploadingMeshyJob(21);
-    const res = await finalizeWith(jobId, meshyManifest({ EYE: 16, TOP: 2, LOW: 2 }), 21);
+    // Proof the ceiling is enforced: 16 on EYE is legal in full mode and must
+    // not be legal here just because full allows it.
+    const jobId = await uploadingMeshyJob(17);
+    const res = await finalizeWith(jobId, meshyManifest({ EYE: 16 }), 17);
 
     expect(res.status).toBe(422);
     expect(res.body.validationErrors.map((e: { rule: string }) => e.rule)).toContain(
       'EXCESS_PHOTOS_PER_LEVEL'
+    );
+  });
+
+  it('a TOP or LOW ring is an unexpected level — Meshy captures EYE only', async () => {
+    // The old Meshy shape had TOP/LOW rings; the new one does not, so any photo
+    // outside EYE is a level this capture never covers.
+    const jobId = await uploadingMeshyJob(9);
+    const res = await finalizeWith(jobId, meshyManifest({ EYE: 6, TOP: 2 }), 9);
+
+    expect(res.status).toBe(422);
+    expect(res.body.validationErrors.map((e: { rule: string }) => e.rule)).toContain(
+      'UNEXPECTED_LEVELS'
     );
   });
 
@@ -240,8 +245,8 @@ describe('POST /jobs/:jobId/finalize — meshy bundles', () => {
 
     const res = await finalizeWith(
       jobId,
-      meshyManifest({ EYE: 6, TOP: 2, LOW: 2 }, { captureMode: 'full' }),
-      11
+      meshyManifest({ EYE: 6 }, { captureMode: 'full' }),
+      7
     );
 
     expect(res.status).toBe(422);
@@ -255,8 +260,8 @@ describe('POST /jobs/:jobId/finalize — meshy bundles', () => {
 
     const res = await finalizeWith(
       jobId,
-      meshyManifest({ EYE: 6, TOP: 2, LOW: 2 }, { captureMode: 'meshy' }),
-      11
+      meshyManifest({ EYE: 6 }, { captureMode: 'meshy' }),
+      7
     );
 
     expect(res.status).toBe(200);

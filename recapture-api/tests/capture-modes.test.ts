@@ -49,45 +49,43 @@ describe('capture modes — the wire concept', () => {
   });
 });
 
-describe('meshy shape — 6 / 2 / 2', () => {
-  it('with_bottom: EYE 6 + TOP 2 + LOW 2 = 10 images', () => {
-    expect(ringsForVariant('with_bottom', 'meshy')).toEqual(['EYE', 'TOP', 'LOW']);
+describe('meshy shape — one ring of 6', () => {
+  it('with_bottom: a single EYE ring of 6 (no TOP, no LOW)', () => {
+    expect(ringsForVariant('with_bottom', 'meshy')).toEqual(['EYE']);
     expect(expectedPerRing('with_bottom', 'EYE', 'meshy')).toBe(6);
-    expect(expectedPerRing('with_bottom', 'TOP', 'meshy')).toBe(2);
-    expect(expectedPerRing('with_bottom', 'LOW', 'meshy')).toBe(2);
-    expect(expectedImageCount('with_bottom', 'meshy')).toBe(10);
+    expect(expectedImageCount('with_bottom', 'meshy')).toBe(6);
   });
 
-  it('without_bottom: EYE 6 + TOP 2 = 8 images (no LOW)', () => {
-    expect(ringsForVariant('without_bottom', 'meshy')).toEqual(['EYE', 'TOP']);
-    expect(expectedImageCount('without_bottom', 'meshy')).toBe(8);
-  });
-
-  it('the total is a SUM over rings, not rings × per-ring', () => {
-    // The identity the full-mode suite asserts does NOT hold here, which is the
-    // whole reason expectedImageCount had to stop multiplying.
-    const rings = ringsForVariant('with_bottom', 'meshy');
-    expect(expectedImageCount('with_bottom', 'meshy')).not.toBe(
-      rings.length * expectedPerRing('with_bottom', 'EYE', 'meshy')
+  it('is variant-less: without_bottom is the SAME single-EYE-ring shape', () => {
+    // Meshy no longer has a with_bottom / without_bottom distinction — both
+    // cells are identical, so the variant a Meshy client sends is irrelevant.
+    expect(ringsForVariant('without_bottom', 'meshy')).toEqual(['EYE']);
+    expect(expectedImageCount('without_bottom', 'meshy')).toBe(6);
+    expect(expectedImageCount('without_bottom', 'meshy')).toBe(
+      expectedImageCount('with_bottom', 'meshy')
     );
+  });
+
+  it('total is the SUM over rings (trivially, for one ring)', () => {
+    const rings = ringsForVariant('with_bottom', 'meshy');
     expect(expectedImageCount('with_bottom', 'meshy')).toBe(
       rings.reduce((sum, ring) => sum + expectedPerRing('with_bottom', ring, 'meshy'), 0)
     );
   });
 
-  it('reports itself as non-uniform, while full stays uniform', () => {
-    expect(isUniformPerRing('with_bottom', 'meshy')).toBe(false);
+  it('a single ring is trivially uniform, and full stays uniform too', () => {
+    expect(isUniformPerRing('with_bottom', 'meshy')).toBe(true);
+    expect(isUniformPerRing('without_bottom', 'meshy')).toBe(true);
     expect(isUniformPerRing('with_bottom', 'full')).toBe(true);
     expect(isUniformPerRing('without_bottom', 'full')).toBe(true);
   });
 });
 
 describe('meshy coverage floor — all-or-nothing, stated not emergent', () => {
-  it('is 100%, so every ring must be complete', () => {
+  it('is 100%, so all 6 are required', () => {
     expect(MIN_RING_COVERAGE_PCT_BY_MODE.meshy).toBe(100);
     expect(minimumPerRing('with_bottom', 'EYE', 'meshy')).toBe(6);
-    expect(minimumPerRing('with_bottom', 'TOP', 'meshy')).toBe(2);
-    expect(minimumImageCount('with_bottom', 'meshy')).toBe(10);
+    expect(minimumImageCount('with_bottom', 'meshy')).toBe(6);
   });
 
   it('never exceeds the expected count on any ring (the un-uploadable trap)', () => {
@@ -107,19 +105,21 @@ describe('meshy coverage floor — all-or-nothing, stated not emergent', () => {
   it('has no legacy revisions, so compat bounds equal the current ones', () => {
     // Meshy has never shipped: there is no older capture to stay compatible
     // with, and inventing tolerance would just widen the accepted range.
-    expect(compatMinimumImageCount('with_bottom', 'meshy')).toBe(10);
-    expect(compatMaximumImageCount('with_bottom', 'meshy')).toBe(10);
-    expect(compatMinimumImageCount('without_bottom', 'meshy')).toBe(8);
-    expect(compatMaximumImageCount('without_bottom', 'meshy')).toBe(8);
+    expect(compatMinimumImageCount('with_bottom', 'meshy')).toBe(6);
+    expect(compatMaximumImageCount('with_bottom', 'meshy')).toBe(6);
+    expect(compatMinimumImageCount('without_bottom', 'meshy')).toBe(6);
+    expect(compatMaximumImageCount('without_bottom', 'meshy')).toBe(6);
   });
 });
 
 describe('photosByRing — the per-ring bound shape', () => {
-  it('meshy gives each ring its OWN pair', () => {
+  it('meshy is a single EYE ring pinned at exactly 6', () => {
     expect(photosByRing('with_bottom', 'meshy')).toEqual({
       EYE: { min: 6, max: 6 },
-      TOP: { min: 2, max: 2 },
-      LOW: { min: 2, max: 2 },
+    });
+    // Variant-less: without_bottom is byte-identical.
+    expect(photosByRing('without_bottom', 'meshy')).toEqual({
+      EYE: { min: 6, max: 6 },
     });
   });
 
@@ -135,14 +135,5 @@ describe('photosByRing — the per-ring bound shape', () => {
       EYE: { min: 15, max: 24 },
       TOP: { min: 15, max: 24 },
     });
-  });
-
-  it('a scalar pair could NOT express the meshy bounds', () => {
-    // The reason ManifestExpectations grew photosByLevel: collapsing 6/2/2 to
-    // one [min, max] pair yields [2, 6], which accepts a 2-photo EYE ring.
-    const bounds = photosByRing('with_bottom', 'meshy');
-    const collapsedMin = Math.min(...Object.values(bounds).map((b) => b.min));
-    expect(collapsedMin).toBe(2);
-    expect(bounds.EYE!.min).toBe(6);
   });
 });

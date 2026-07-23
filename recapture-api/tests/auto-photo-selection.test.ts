@@ -430,15 +430,16 @@ describe('selectPhotosForAutoGeneration', () => {
   });
 });
 
-// ── Meshy-mode ring sizes ────────────────────────────────────────────────────
+// ── Meshy-mode ring size ─────────────────────────────────────────────────────
 //
 // The selector was written against 12–36-photo rings and buckets photos into
-// four yaw quadrants. Meshy captures SIX on the eye ring, which is barely more
-// than the four photos the selector needs — the open question was whether the
-// quadrant mapping degenerates at that size and starts declining good captures.
-// It does not, and these tests pin down why so a future ring-size change cannot
-// break it silently.
-describe('meshy ring sizes (6 eye / 2 top / 2 bottom)', () => {
+// four yaw quadrants. Meshy now captures ONE ring of SIX (eye→top tilt on a
+// single EYE ring — no TOP, no LOW), which is barely more than the four photos
+// the selector needs. The open question was whether the quadrant mapping
+// degenerates at that size and starts declining good captures. It does not, and
+// these tests pin down why so a future ring-size change cannot break it
+// silently. The server still auto-selects the best 4 of the 6.
+describe('meshy single ring of 6', () => {
   /** A complete 6-photo eye ring, one photo per segment. */
   function meshyEyeRing(blurScores?: number[]) {
     return manifest(
@@ -547,8 +548,10 @@ describe('meshy ring sizes (6 eye / 2 top / 2 bottom)', () => {
   });
 
   it('falls back to the whole pool when the eye ring alone is too small', () => {
-    // TOP/LOW hold 2 photos each in Meshy mode. If the eye ring is unusable the
-    // selector widens to ALL rings rather than declining outright.
+    // The selector is shared with FULL captures, which do have TOP/LOW rings —
+    // if the eye ring comes out unusable it widens to ALL rings rather than
+    // declining outright. (A Meshy capture is EYE-only, so this path never
+    // arises there; the case is pinned so the shared fallback can't regress.)
     const photos = [
       photo({ file: 'eye_0.jpg', ring: 'EYE', segmentIndex: 0, blurScore: 10 }),
       photo({ file: 'top_0.jpg', ring: 'TOP', segmentIndex: 0, blurScore: 100 }),

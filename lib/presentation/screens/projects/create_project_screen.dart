@@ -7,7 +7,9 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/capture/capture_shape_mode_provider.dart';
 import '../../../application/projects/projects_notifier.dart';
+import '../../../domain/capture/capture_shape_mode.dart';
 import '../../../domain/entities/create_project_options.dart';
 import '../../../domain/entities/project.dart';
 import '../../../utils/analytics.dart';
@@ -36,6 +38,14 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
 
   ObjectSize? _selectedSize;
   CaptureMode? _selectedMode;
+
+  /// The capture SHAPE (full photogrammetry vs the short Meshy single-ring). This
+  /// is the PROVISIONAL Meshy entry point: a real Meshy project would get its own
+  /// creation flow, but this toggle is enough to drive the whole capture + upload
+  /// path end-to-end. Defaults to full (the common path). Distinct from
+  /// [_selectedMode], which is the auto-capture DRIVE (guided/manual).
+  CaptureShapeMode _selectedShape = CaptureShapeMode.full;
+
   bool _creating = false;
   String? _nameError;
 
@@ -107,11 +117,19 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
       'result': result,
       'object_size': size.apiValue,
       'capture_mode': mode.apiValue,
+      'capture_shape': _selectedShape.id,
       'name_length': name.length,
       'device_type': _deviceType,
     });
 
     if (created != null) {
+      // Carry the capture SHAPE into the flow: set the live provider + persist it
+      // per project so the whole capture + upload path runs in the chosen shape
+      // (best-effort — an unavailable store never blocks entry).
+      await ref
+          .read(captureShapeModeProvider.notifier)
+          .select(_selectedShape, projectId: created!.id);
+      if (!mounted) return;
       // Route replacement (goNamed): back must not return to this half-finished
       // form. TODO(precapture): PreCaptureScreen does not yet consume the
       // project id; pass-through via `extra` until its signature accepts it.
@@ -185,6 +203,28 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
                       if (option != kModeOptions.last)
                         const SizedBox(height: AppSpacing.sm),
                     ],
+                    const SizedBox(height: AppSpacing.xxl),
+                    const _SectionLabel('CAPTURE TYPE'),
+                    const SizedBox(height: AppSpacing.md),
+                    _ShapeCard(
+                      title: 'Full detail',
+                      subtitle:
+                          'Walk all rings for a photogrammetry-grade model (48 photos).',
+                      value: CaptureShapeMode.full,
+                      selected: _selectedShape,
+                      enabled: !_creating,
+                      onSelect: (v) => setState(() => _selectedShape = v),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    _ShapeCard(
+                      title: 'Quick scan (Meshy AI)',
+                      subtitle:
+                          'One circle, 6 photos — fastest path to an AI 3D model.',
+                      value: CaptureShapeMode.meshy,
+                      selected: _selectedShape,
+                      enabled: !_creating,
+                      onSelect: (v) => setState(() => _selectedShape = v),
+                    ),
                   ],
                 ),
               ),
@@ -368,6 +408,74 @@ class _ModeCard extends StatelessWidget {
                 : null,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Single-select capture-SHAPE card (Full detail / Quick scan). Selection shows
+/// via the accent border + radio glyph; mirrors the pre-capture variant cards.
+class _ShapeCard extends StatelessWidget {
+  const _ShapeCard({
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.selected,
+    required this.enabled,
+    required this.onSelect,
+  });
+
+  final String title;
+  final String subtitle;
+  final CaptureShapeMode value;
+  final CaptureShapeMode selected;
+  final bool enabled;
+  final ValueChanged<CaptureShapeMode> onSelect;
+
+  bool get _isSelected => value == selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: _isSelected,
+      enabled: enabled,
+      label: title,
+      hint: subtitle,
+      child: AppCard(
+        onTap: enabled ? () => onSelect(value) : null,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        border: _isSelected
+            ? const BorderSide(color: AppColors.mirageRed, width: 1.5)
+            : null,
+        child: Row(
+          children: [
+            Icon(
+              _isSelected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
+              color: _isSelected ? AppColors.mirageRed : AppColors.textMuted,
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.bodyLarge),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: AppColors.textMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

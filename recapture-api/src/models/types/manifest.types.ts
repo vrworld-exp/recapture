@@ -70,11 +70,11 @@ export interface ManifestExpectations {
    *
    * Why both exist: `full` carries the same count on every ring, so one pair of
    * scalars says everything about it, and every pre-Meshy caller keeps passing
-   * exactly what it always passed. Meshy is 6/2/2, and a single pair of scalars
-   * cannot express that without widening to [2, 6] — which would accept a
-   * 2-photo EYE ring and quietly defeat the floor. Rather than re-key the
-   * contract (and re-verify every `full` count check), the per-level map is
-   * additive and the uniform path is provably untouched.
+   * exactly what it always passed. The per-level map is the general path for any
+   * shape whose rings differ (a past `full` revision, a future non-uniform
+   * mode): a single pair of scalars would have to widen to the union and quietly
+   * accept an under-filled ring. Meshy today is a single EYE ring of 6, so its
+   * map is just `{ EYE: { min: 6, max: 6 } }`; the uniform path stays untouched.
    */
   photosByLevel?: Record<string, { min: number; max: number }>;
   /**

@@ -14,9 +14,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/capture/level_completion.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/capture_evaluation.dart';
-import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
+import 'capture_shape_mode_provider.dart';
 import 'ledger/level_capture_ledger_registry_provider.dart';
 import 'ledger/warned_photo_record.dart';
 import 'review_grid_items_provider.dart';
@@ -151,13 +151,14 @@ bool allLevelsComplete(List<LevelCaptureSummary> summaries) =>
 /// counts, coverage, and warnings).
 final captureSummaryProvider =
     Provider.autoDispose<List<LevelCaptureSummary>>((ref) {
-  final config = ref.watch(captureConfigProvider);
+  final config = ref.watch(effectiveCaptureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
+  final mode = ref.watch(captureShapeModeProvider);
   final registry = ref.watch(levelCaptureLedgerRegistryProvider);
   final thresholds = config.completionThresholds;
 
   return [
-    for (final level in variant.levels)
+    for (final level in activeCaptureLevels(variant, mode))
       () {
         final bandId = pitchBandIdForLevel(level);
         final items =

@@ -303,6 +303,11 @@ Map<String, dynamic> buildCaptureManifest({
   // id so pre-variant callers emit an explicit, truthful value. Emitted as
   // `flowVariant` (this manifest's camelCase convention).
   String flowVariantId = 'with_bottom',
+  // The capture SHAPE MODE id ('full' / 'meshy' — CaptureShapeMode.id). The
+  // backend cross-checks this against the job's captureMode at finalize, so a
+  // Meshy bundle must declare 'meshy'. Additive: defaults to 'full' so every
+  // pre-Meshy caller emits an explicit, truthful value. Emitted as `captureMode`.
+  String captureModeId = 'full',
 }) {
   // Canonical ordering — deterministic regardless of input order.
   final orderedLevels = [...levels]
@@ -366,6 +371,7 @@ Map<String, dynamic> buildCaptureManifest({
     'jobId': session.jobId,
     'captureSessionId': session.captureSessionId,
     'flowVariant': flowVariantId,
+    'captureMode': captureModeId,
     if (session.startedAtIso != null) 'startedAt': session.startedAtIso,
     if (session.completedAtIso != null) 'completedAt': session.completedAtIso,
     if (session.appVersion != null) 'appVersion': session.appVersion,

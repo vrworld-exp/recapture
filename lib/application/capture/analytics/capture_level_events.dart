@@ -19,6 +19,7 @@
 // dispatcher. PRIVACY: only opaque ids (project_id/session_id), enum values, and
 // counts — never names, emails, phones, file paths, or tokens.
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_shape_mode.dart';
 import '../../../utils/analytics.dart';
 
 /// The capture level this event belongs to. Serializes to "A"/"B"/"C".
@@ -69,6 +70,19 @@ extension CaptureFlowVariantLevels on CaptureFlowVariant {
           const [CaptureLevel.a, CaptureLevel.b],
       };
 }
+
+/// The ACTIVE capture levels for [variant] under capture shape [mode] — the ONE
+/// mode-aware level-list source every flow-shaping consumer (gates, the
+/// progression/machine builders, the summary) uses instead of `variant.levels`
+/// directly. Meshy is a single Eye ring, so it yields exactly [CaptureLevel.a]
+/// (band 'mid' → EYE) regardless of variant; full defers to the variant's
+/// A→B[→C] list. Keeping this in ONE place means a Meshy session can never demand
+/// (or list) Level B/C anywhere.
+List<CaptureLevel> activeCaptureLevels(
+  CaptureFlowVariant variant,
+  CaptureShapeMode mode,
+) =>
+    mode.isMeshy ? const [CaptureLevel.a] : variant.levels;
 
 /// A typed capture-level lifecycle event: its dispatcher [name] + its [properties].
 abstract class CaptureLevelEvent {

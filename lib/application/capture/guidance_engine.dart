@@ -23,7 +23,7 @@ import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/capture_readiness.dart' show CaptureMode;
 import '../../domain/entities/tilt_target.dart';
 import '../../utils/analytics.dart';
-import '../config/config_notifier.dart';
+import 'capture_shape_mode_provider.dart';
 import 'current_tilt_provider.dart';
 import 'ring_progress_provider.dart' show ringDirectionStateProvider;
 import 'stability_provider.dart';
@@ -137,7 +137,7 @@ final guidanceEngineProvider = Provider<GuidanceEngine>((ref) => GuidanceEngine(
 final guidanceProvider = Provider<GuidanceOutput>((ref) {
   final tiltSample = ref.watch(currentTiltProvider).valueOrNull;
   final stabilitySample = ref.watch(stabilityProvider).valueOrNull;
-  final config = ref.watch(captureConfigProvider);
+  final config = ref.watch(effectiveCaptureConfigProvider);
   final ring = ref.watch(ringDirectionStateProvider);
   final mode = ref.watch(captureModeProvider);
 

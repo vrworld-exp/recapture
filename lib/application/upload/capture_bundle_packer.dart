@@ -135,6 +135,7 @@ class CaptureBundlePacker {
     required LevelProgression progression,
     required LevelCaptureLedgerRegistry registry,
     String flowVariantId = 'with_bottom',
+    String captureModeId = 'full',
     void Function(int done, int total)? onProgress,
     BundleCancelToken? cancelToken,
   }) async {
@@ -271,6 +272,7 @@ class CaptureBundlePacker {
         levels: levels,
         photos: photos,
         flowVariantId: flowVariantId,
+        captureModeId: captureModeId,
       );
       File('${staging.path}/$kBundleManifestFileName')
           .writeAsStringSync(jsonEncode(manifest), flush: true);

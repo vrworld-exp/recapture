@@ -17,6 +17,7 @@ import 'package:hive/hive.dart';
 import '../../../data/local/box_names.dart';
 import '../../../data/local/hive_init.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_shape_mode.dart';
 import '../../../domain/capture/coverage_milestones.dart';
 import 'level_progression.dart';
 
@@ -173,11 +174,13 @@ class LevelProgressionStore {
     }
   }
 
-  /// Removes the snapshot for [projectId] (and its flow variant). No-op if absent.
+  /// Removes the snapshot for [projectId] (and its flow variant + shape mode).
+  /// No-op if absent.
   Future<void> clear(String projectId) async {
     final box = await _open();
     await box.delete(projectId);
     await box.delete(_variantKey(projectId));
+    await box.delete(_shapeModeKey(projectId));
   }
 
   // ── flow variant ───────────────────────────────────────────────────────────
@@ -207,5 +210,27 @@ class LevelProgressionStore {
     final box = await _open();
     final raw = box.get(_variantKey(projectId));
     return CaptureFlowVariant.tryFromId(raw is String ? raw : null);
+  }
+
+  // ── capture shape mode ───────────────────────────────────────────────────────
+  // The capture SHAPE MODE (full / meshy) for a project is project-scoped
+  // sequencing state, so it rides in this box as a sibling key — the same ONE
+  // durable location the flow variant uses, so the two can never disagree.
+
+  /// The box key holding [projectId]'s capture-shape-mode id.
+  static String _shapeModeKey(String projectId) => '$projectId::shape_mode';
+
+  /// Persists the chosen shape [mode] for [projectId].
+  Future<void> saveShapeMode(String projectId, CaptureShapeMode mode) async {
+    final box = await _open();
+    await box.put(_shapeModeKey(projectId), mode.id);
+  }
+
+  /// The persisted shape mode for [projectId]. Absent or unknown (every
+  /// pre-Meshy project) → [CaptureShapeMode.full]. Never throws.
+  Future<CaptureShapeMode> loadShapeMode(String projectId) async {
+    final box = await _open();
+    final raw = box.get(_shapeModeKey(projectId));
+    return CaptureShapeMode.fromId(raw is String ? raw : null);
   }
 }

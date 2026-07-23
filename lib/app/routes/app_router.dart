@@ -4,8 +4,8 @@ import 'package:go_router/go_router.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/capture_flow_variant_provider.dart';
+import '../../application/capture/capture_shape_mode_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
-import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/capture/capture_flow_variant.dart';
 import '../../domain/capture/completion_gate.dart';
@@ -229,11 +229,15 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (context, _) => FlowBackScope(
           child: Consumer(
             builder: (context, ref, _) {
+              final isMeshy = ref.watch(captureShapeModeProvider).isMeshy;
               final target = effectiveSegmentsFor(
-                ref.watch(captureConfigProvider),
+                ref.watch(effectiveCaptureConfigProvider),
                 ref.watch(captureFlowVariantProvider),
                 'mid',
               );
+              // Meshy is a SINGLE ring: Level A is the whole capture, so its CTA
+              // continues to the Summary (whose gate still guards it), not to a
+              // Level B that does not exist in this mode.
               return LevelACompleteScreen(
                 summary: LevelASummary(
                   accepted: target - 2,
@@ -241,7 +245,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                   coveragePct: 92,
                   rejected: 1,
                 ),
-                onStartLevelB: () => context.go(AppRoutes.levelBIntro),
+                nextLabel: isMeshy ? 'Continue' : null,
+                onStartLevelB: () => context.go(
+                  isMeshy ? AppRoutes.captureSummary : AppRoutes.levelBIntro,
+                ),
                 onReview: () => context.push(AppRoutes.levelAReview),
                 onDoneExit: () => context.go(AppRoutes.projects),
               );
@@ -254,11 +261,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBIntro,
         name: AppRouteNames.levelBIntro,
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         builder: (_, __) => const FlowBackScope(child: LevelBIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.levelBCapture,
         name: AppRouteNames.levelBCapture,
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         // Reuses the Level A capture screen (6A), driven by Level B's label +
         // tuned top-ring instruction copy. Analytics `level` is derived from
         // levelLabel ('B'), so the capture funnel is tagged level=B automatically.
@@ -275,6 +284,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBReview,
         name: AppRouteNames.levelBReview,
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'B',
           levelName: 'Top Ring',
@@ -284,6 +294,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBComplete,
         name: AppRouteNames.levelBComplete,
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         // FLOW-VARIANT FORK: with_bottom continues to Level C; without_bottom
         // is a 2-ring flow, so Level B is the FINAL ring — its CTA goes to the
         // Capture Summary (which the summary gate still guards) and its copy
@@ -320,13 +331,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCIntro,
         name: AppRouteNames.levelCIntro,
-        redirect: (_, __) => _levelCGuardRedirect(ref),
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
         builder: (_, __) => const FlowBackScope(child: LevelCIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.levelCCapture,
         name: AppRouteNames.levelCCapture,
-        redirect: (_, __) => _levelCGuardRedirect(ref),
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
         // Reuses the shared capture screen (6A/6B), driven by Level C's label +
         // tuned low-ring instruction copy. Analytics `level` is derived from
         // levelLabel ('C'), so the capture funnel is tagged level=C automatically.
@@ -345,7 +356,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCReview,
         name: AppRouteNames.levelCReview,
-        redirect: (_, __) => _levelCGuardRedirect(ref),
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
         builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'C',
           levelName: 'Low Ring',
@@ -355,7 +366,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCComplete,
         name: AppRouteNames.levelCComplete,
-        redirect: (_, __) => _levelCGuardRedirect(ref),
+        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
         builder: (_, __) => const FlowBackScope(
           child: LevelCompleteScreen(
             levelLabel: 'C',
@@ -436,12 +447,21 @@ String levelBCompleteNextRoute(CaptureFlowVariant variant) =>
         ? AppRoutes.captureSummary
         : AppRoutes.levelCIntro;
 
-/// Router adapter over [levelCRedirectForVariant]. A null [ref] (router built
-/// without provider access, e.g. a focused test) never blocks — same policy as
-/// the summary gate.
-String? _levelCGuardRedirect(Ref? ref) => ref == null
-    ? null
-    : levelCRedirectForVariant(ref.read(captureFlowVariantProvider));
+/// Router guard for a ring AFTER Level A (Level B or C). Meshy is a SINGLE Eye
+/// ring, so ANY Level B/C route bounces to the Summary (whose own gate redirect
+/// then routes an incomplete session to the first incomplete level's review);
+/// otherwise the Level-C-only rule applies (Level B is always reachable in the
+/// full flow). A null [ref] (router built without provider access, e.g. a focused
+/// test) never blocks — same policy as the summary gate.
+String? _postLevelAGuardRedirect(Ref? ref, {required bool isLevelC}) {
+  if (ref == null) return null;
+  if (ref.read(captureShapeModeProvider).isMeshy) {
+    return AppRoutes.captureSummary;
+  }
+  return isLevelC
+      ? levelCRedirectForVariant(ref.read(captureFlowVariantProvider))
+      : null;
+}
 
 /// Enforces the final completion gate at the Summary entry. Returns null (allow)
 /// when the gate is unlocked — emitting the once-per-transition unlock milestone —

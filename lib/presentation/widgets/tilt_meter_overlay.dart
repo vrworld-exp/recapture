@@ -7,8 +7,8 @@ import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
+import '../../application/capture/capture_shape_mode_provider.dart';
 import '../../application/capture/current_tilt_provider.dart';
-import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/tilt_target.dart';
 import '../../utils/analytics.dart';
@@ -116,7 +116,7 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
       }
       return;
     }
-    final target = _resolveTarget(ref.read(captureConfigProvider));
+    final target = _resolveTarget(ref.read(effectiveCaptureConfigProvider));
     final next = tiltStateWithHysteresis(
       _state,
       sample.tiltDegrees,
@@ -180,7 +180,7 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
       if (s != null) _onSample(s);
     });
 
-    final target = _resolveTarget(ref.watch(captureConfigProvider));
+    final target = _resolveTarget(ref.watch(effectiveCaptureConfigProvider));
     // Derive the gauge range from the band when not explicitly pinned, so the
     // zone is tuned/adaptive to whatever band the level configures.
     final range = (widget.gaugeMinDeg != null && widget.gaugeMaxDeg != null)

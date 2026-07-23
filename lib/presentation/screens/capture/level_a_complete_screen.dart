@@ -35,6 +35,7 @@ class LevelACompleteScreen extends ConsumerStatefulWidget {
     required this.onReview,
     this.onDoneExit,
     this.startLevelBEnabled = true,
+    this.nextLabel,
   });
 
   final LevelASummary summary;
@@ -46,6 +47,11 @@ class LevelACompleteScreen extends ConsumerStatefulWidget {
 
   /// When false, "Start Level B" is disabled with a note (Level B unavailable).
   final bool startLevelBEnabled;
+
+  /// Primary-CTA label. Defaults to "Start Level B" (the full A→B→C flow); the
+  /// single-ring Meshy flow passes "Continue" since Level A IS the whole capture
+  /// and the CTA goes straight to the Summary.
+  final String? nextLabel;
 
   @override
   ConsumerState<LevelACompleteScreen> createState() =>
@@ -143,7 +149,7 @@ class _LevelACompleteScreenState extends ConsumerState<LevelACompleteScreen>
               ],
               const SizedBox(height: AppSpacing.xxl),
               AppButton(
-                label: 'Start Level B',
+                label: widget.nextLabel ?? 'Start Level B',
                 icon: Icons.arrow_forward,
                 onPressed: widget.startLevelBEnabled
                     ? () => _dispatch('start_level_b', widget.onStartLevelB)

@@ -12,6 +12,7 @@ import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/capture/analytics/capture_trigger_analytics.dart';
 import '../../../application/capture/auto_capture_controller.dart';
+import '../../../application/capture/capture_shape_mode_provider.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
 import '../../../application/capture/capture_lock.dart';
 import '../../../application/capture/current_tilt_provider.dart';
@@ -198,6 +199,12 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// persisted (every entry starts paused by design).
   bool _capturePaused = true;
 
+  /// True when this is a MESHY capture (single Eye ring of 6, manual shutter).
+  /// Meshy has NO auto-capture: the AUTO pill and play/pause control are hidden
+  /// and the auto-fire loop is force-disabled, so the user taps the shutter at
+  /// each of the 6 yaw slots. Resolved once at [initState] from the shape mode.
+  bool _isMeshy = false;
+
   /// Single in-flight guard shared by the manual shutter path and the
   /// auto-capture loop, so the two can never run overlapping captures against
   /// the one native capture resource.
@@ -342,6 +349,12 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     _cameraController = CameraPreviewController();
     _cameraController.addListener(_onCameraStateChanged);
     WidgetsBinding.instance.addObserver(this);
+    // Meshy is manual-only: force auto-capture OFF up front so the loop can never
+    // fire and the pill/play-pause controls are hidden (see build()).
+    _isMeshy = ref.read(captureShapeModeProvider).isMeshy;
+    if (_isMeshy) {
+      _autoCapture = const AutoCaptureState(mode: AutoCaptureMode.off);
+    }
     _resolveProjectId();
     _loadAutoCapturePref();
     _loadCaptureSettings();
@@ -518,6 +531,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// none is stored / persistence is unavailable). Corrects [_autoCapture] only
   /// when it differs, so there is no needless rebuild.
   Future<void> _loadAutoCapturePref() async {
+    if (_isMeshy) return; // manual-only mode — the stored pref never applies
     final enabled = await _autoCaptureStore.getEnabled() ?? true;
     if (!mounted || enabled == _autoCapture.isOn) return;
     setState(() {
@@ -801,6 +815,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         stability!.stability == Stability.stable;
     final coverage = ref.read(segmentCoverageProvider);
     final enabled = _autoCapture.isOn &&
+        !_isMeshy && // Meshy is manual-only — the auto-fire loop never runs
         !_capturePaused &&
         !_autoCaptureSuspended &&
         _retake == null &&
@@ -1307,32 +1322,38 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   // yaw + ring progress into a DirectionHint.
                   const DirectionArrowOverlay(hint: DirectionHint.hidden),
                   // Auto-capture ON/OFF pill (top-right, below the top bar).
-                  Positioned(
-                    top: 0,
-                    right: 0,
-                    child: SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.only(
-                          top: 44,
-                          right: AppSpacing.lg,
-                        ),
-                        child: AutoCaptureIndicator(
-                          // While suspended (e.g. Help sheet open) the loop is
-                          // paused, so it can never be armed.
-                          state: _autoCaptureSuspended
-                              ? AutoCaptureState(mode: _autoCapture.mode)
-                              : _autoCapture,
-                          onToggle: _toggleAutoCapture,
+                  // Hidden in Meshy mode — that flow is manual-only.
+                  if (!_isMeshy)
+                    Positioned(
+                      top: 0,
+                      right: 0,
+                      child: SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.only(
+                            top: 44,
+                            right: AppSpacing.lg,
+                          ),
+                          child: AutoCaptureIndicator(
+                            // While suspended (e.g. Help sheet open) the loop is
+                            // paused, so it can never be armed.
+                            state: _autoCaptureSuspended
+                                ? AutoCaptureState(mode: _autoCapture.mode)
+                                : _autoCapture,
+                            onToggle: _toggleAutoCapture,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                   _BottomBar(
                     captureCount: _captureCount,
-                    playPause: _PlayPauseButton(
-                      paused: _capturePaused,
-                      onToggle: _toggleCapturePaused,
-                    ),
+                    // Meshy has no auto-progression to gate, so the play/pause
+                    // control is hidden — the shutter is the only capture path.
+                    playPause: _isMeshy
+                        ? const SizedBox.shrink()
+                        : _PlayPauseButton(
+                            paused: _capturePaused,
+                            onToggle: _toggleCapturePaused,
+                          ),
                     shutter: _ShutterControl(
                       band: _resolvedBand,
                       onCapture: _performCapture,

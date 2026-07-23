@@ -12,6 +12,7 @@
 // Kept OUT of the pure core (level_progression.dart) because it depends on the
 // CaptureLevel taxonomy + config; the core stays config-agnostic and pure.
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_shape_mode.dart';
 import '../../../domain/capture/coverage_milestones.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
@@ -28,10 +29,11 @@ const int kDefaultMinAcceptedPerLevel = 1;
 List<LevelProgressState> levelStatesFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
+  CaptureShapeMode mode = CaptureShapeMode.full,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
 }) {
   return [
-    for (final level in variant.levels)
+    for (final level in activeCaptureLevels(variant, mode))
       () {
         final bandId = pitchBandIdForLevel(level);
         return LevelProgressState(
@@ -50,12 +52,14 @@ List<LevelProgressState> levelStatesFromConfig(
 LevelProgression initialProgressionFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
+  CaptureShapeMode mode = CaptureShapeMode.full,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
 }) =>
     LevelProgression.of(
       levelStatesFromConfig(
         config,
         variant: variant,
+        mode: mode,
         minAcceptedCount: minAcceptedCount,
       ),
     );
@@ -74,10 +78,11 @@ LevelProgression progressionFromLedger(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   required LevelCaptureLedgerRegistry registry,
+  CaptureShapeMode mode = CaptureShapeMode.full,
 }) {
   final thresholds = config.completionThresholds;
   return LevelProgression.of([
-    for (final base in levelStatesFromConfig(config, variant: variant))
+    for (final base in levelStatesFromConfig(config, variant: variant, mode: mode))
       () {
         final accepted = registry.ledgerFor(base.levelId).accepted;
         final filled = accepted
@@ -109,11 +114,13 @@ LevelProgression reconcileWithConfig(
   LevelProgression persisted,
   CaptureConfig config, {
   required CaptureFlowVariant variant,
+  CaptureShapeMode mode = CaptureShapeMode.full,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
 }) {
   final fresh = levelStatesFromConfig(
     config,
     variant: variant,
+    mode: mode,
     minAcceptedCount: minAcceptedCount,
   );
   final merged = [

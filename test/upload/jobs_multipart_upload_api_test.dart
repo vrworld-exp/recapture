@@ -197,6 +197,7 @@ void main() {
         projectId: 'proj-9',
         objectSize: 'medium',
         captureVariant: 'with_bottom',
+        captureMode: 'full',
         expectedFilesCount: 37,
         idempotencyKey: 'uuid-1234',
       );
@@ -207,6 +208,7 @@ void main() {
         'projectId': 'proj-9',
         'objectSize': 'medium',
         'captureVariant': 'with_bottom',
+        'captureMode': 'full',
         'expectedFilesCount': 37,
       });
       expect(job.jobId, 'job-9');

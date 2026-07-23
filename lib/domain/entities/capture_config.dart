@@ -391,6 +391,47 @@ class CaptureConfig {
     ),
   );
 
+  /// Config version stamped on a Meshy capture — a distinct sentinel so a
+  /// manifest's `config.configVersion` unambiguously identifies the Meshy shape.
+  static const int meshyConfigVersion = 1000;
+
+  /// The MESHY single-ring capture config — one Eye ring of 6 shots, camera tilt
+  /// anywhere in [90, 180) (eye-level → top-down), 100% coverage floor (all 6
+  /// slots required). Its own const, NEVER remote-tuned: Meshy is a fixed,
+  /// deliberately-short flow whose whole point is predictable brevity.
+  ///
+  /// It reuses band id `'mid'` — the Eye-Ring / Level-A band — on purpose, so the
+  /// level→band→ring mapping (A → 'mid' → EYE) and every tilt-gate / segment /
+  /// HUD consumer keep working with ZERO branching; the band simply spans the
+  /// whole eye→top tilt range here. That the name says "mid" while the band goes
+  /// to the top is a mild misnomer kept for reuse — exactly mirroring the backend
+  /// keeping the ring name EYE for the single Meshy ring.
+  ///
+  /// `variantSegments` pins `'mid' = 6` for BOTH variant keys (Meshy is
+  /// variant-less) so [effectiveSegmentsFor] resolves 6 and never falls through
+  /// to the 16 bundled default. Both gates are pinned to 6: the completion gate
+  /// via `completionThresholds` (min accepted frames) and the hard upload gate
+  /// via `uploadMinShots` + the 100% coverage floor — so a session cannot finish
+  /// or upload until every one of the 6 slots is filled.
+  static const CaptureConfig meshy = CaptureConfig(
+    version: meshyConfigVersion,
+    pitchBands: [
+      PitchBand(id: 'mid', minDegrees: 90, maxDegrees: 180, segments: 6),
+    ],
+    thresholds: CaptureThresholds(
+      minSharpness: 0.45,
+      minCoveragePct: 100,
+      maxTiltDeltaDeg: 12,
+    ),
+    completionThresholds:
+        CompletionThresholds(perLevelMinAcceptedFrames: {'A': 6}),
+    uploadMinShots: UploadMinShots(perLevelMinShots: {'A': 6}),
+    variantSegments: VariantSegments(perVariant: {
+      'with_bottom': {'mid': 6},
+      'without_bottom': {'mid': 6},
+    }),
+  );
+
   /// Total capture positions across all bands.
   int get totalSegments => pitchBands.fold(0, (sum, b) => sum + b.segments);
 

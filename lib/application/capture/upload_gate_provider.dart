@@ -24,19 +24,20 @@ import '../../domain/capture/level_completion.dart';
 import '../../domain/capture/upload_gate.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../utils/analytics.dart';
-import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
+import 'capture_shape_mode_provider.dart';
 import 'review_grid_items_provider.dart';
 
 /// The live hard upload gate. Watch it for `eligible` / `shortLevels`; it reflects
 /// the current ledger + config every time it is read. Fail-safe: with no levels it
 /// reports NOT eligible (upload disabled), never enabling on unknown state.
 final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
-  final config = ref.watch(captureConfigProvider);
+  final config = ref.watch(effectiveCaptureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
+  final mode = ref.watch(captureShapeModeProvider);
   return evaluateUploadGate([
-    for (final level in variant.levels)
+    for (final level in activeCaptureLevels(variant, mode))
       () {
         final bandId = pitchBandIdForLevel(level);
         // Live accepted shots — the SAME source the review grids + completion

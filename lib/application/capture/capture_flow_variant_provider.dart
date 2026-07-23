@@ -18,8 +18,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/capture/capture_flow_variant.dart';
 import '../../domain/entities/capture_config.dart';
-import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
+import 'capture_shape_mode_provider.dart';
 import 'ledger/level_capture_ledger_registry.dart';
 import 'progression/level_progression_provider.dart';
 import 'session/capture_session_store.dart';
@@ -106,7 +106,7 @@ class ActiveCaptureBandIdNotifier extends Notifier<String> {
 /// for the live HUD (fill state + yaw→segment), so they can never disagree
 /// with the progression/machine layers.
 final activeLevelSegmentCountProvider = Provider<int>((ref) {
-  final config = ref.watch(captureConfigProvider);
+  final config = ref.watch(effectiveCaptureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
   final bandId = ref.watch(activeCaptureBandIdProvider);
   return effectiveSegmentsFor(config, variant, bandId);

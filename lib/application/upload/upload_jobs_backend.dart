@@ -40,6 +40,7 @@ abstract interface class UploadJobsBackend {
     required String projectId,
     required String objectSize,
     required String captureVariant,
+    required String captureMode,
     required int expectedFilesCount,
     required String idempotencyKey,
   });
@@ -80,6 +81,7 @@ class DioUploadJobsBackend implements UploadJobsBackend {
     required String projectId,
     required String objectSize,
     required String captureVariant,
+    required String captureMode,
     required int expectedFilesCount,
     required String idempotencyKey,
   }) async {
@@ -89,6 +91,7 @@ class DioUploadJobsBackend implements UploadJobsBackend {
         'projectId': projectId,
         'objectSize': objectSize,
         'captureVariant': captureVariant,
+        'captureMode': captureMode,
         'expectedFilesCount': expectedFilesCount,
       },
       options: Options(headers: {'Idempotency-Key': idempotencyKey}),
