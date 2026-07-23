@@ -5,26 +5,28 @@
 // a MATRIX of two orthogonal choices the client makes:
 //
 //   • captureMode  — how much we capture: 'full' (photogrammetry-grade, 48) or
-//                    'meshy' (a short capture tuned for Meshy AI, 8–10).
+//                    'meshy' (a short capture tuned for Meshy AI: ONE ring of 6).
 //   • flowVariant  — whether the object's BOTTOM is capturable, which decides
-//                    whether the LOW ring exists at all.
+//                    whether the LOW ring exists at all — in FULL mode only.
 //
-// They are orthogonal on purpose: "can you photograph the bottom?" is a
-// question about the OBJECT and stays meaningful in both modes, so folding
-// Meshy into the variant enum would conflate two unrelated questions (and break
-// the client's documented invariant that without_bottom's band list is a strict
-// prefix of with_bottom's).
+// They are orthogonal on purpose in full mode: "can you photograph the bottom?"
+// is a question about the OBJECT, so folding the mode into the variant enum
+// would conflate two unrelated questions (and break the client's documented
+// invariant that without_bottom's band list is a strict prefix of with_bottom's).
+// In MESHY mode the variant is inert — both cells are the same single EYE ring —
+// but the field is still carried so a mode switch never loses the answer.
 //
 // Every server-side consumer (create-job count cross-check, upload-urls key
 // containment, finalize manifest validation, remote-config defaults) derives
 // ring sets and counts from the helpers here. Re-declaring a ring list or a
 // per-ring count anywhere else is a bug — including hardcoding the 48 total.
 //
-// ── PER-RING COUNTS ARE NOT UNIFORM ─────────────────────────────────────────
-// `full` uses one count on every ring (16/16/16, 24/24). `meshy` does not
-// (6/2/2). So a total is a SUM OVER RINGS, never `rings.length × perRing`, and
-// a per-ring bound is a lookup, never a scalar. The uniform-only helpers below
-// are kept for `full` callers and documented as such.
+// ── PER-RING COUNTS ARE NOT (NECESSARILY) UNIFORM ───────────────────────────
+// `full` uses one count on every ring (16/16/16, 24/24). `meshy` is a single
+// ring of 6, which is trivially uniform. Historically Meshy was 6/2/2, so the
+// helpers below still treat a total as a SUM OVER RINGS, never
+// `rings.length × perRing`, and a per-ring bound as a lookup, never a scalar —
+// the shape module stays correct if a non-uniform mode is ever reintroduced.
 //
 // ── SIGNATURE CONVENTION ────────────────────────────────────────────────────
 // `mode` is an OPTIONAL TRAILING parameter defaulting to 'full' on every helper.
@@ -73,8 +75,9 @@ interface CaptureShape {
  * variants total 48 (16×3 vs 24×2), but consumers must use expectedImageCount()
  * rather than assume the totals coincide.
  *
- * `meshy` captures far less — enough spread for the 4 photos the model selector
- * picks, and no more, because every extra shot is user time spent for nothing.
+ * `meshy` is ONE ring of 6 (variant-independent) — enough spread for the 4
+ * photos the model selector picks, and no more, because every extra shot is
+ * user time spent for nothing.
  */
 const SHAPE_DEFS: Record<CaptureMode, Record<CaptureFlowVariant, CaptureShape>> = {
   full: {
@@ -82,8 +85,13 @@ const SHAPE_DEFS: Record<CaptureMode, Record<CaptureFlowVariant, CaptureShape>> 
     without_bottom: { rings: ['EYE', 'TOP'], perRing: { EYE: 24, TOP: 24 } },
   },
   meshy: {
-    with_bottom: { rings: ['EYE', 'TOP', 'LOW'], perRing: { EYE: 6, TOP: 2, LOW: 2 } },
-    without_bottom: { rings: ['EYE', 'TOP'], perRing: { EYE: 6, TOP: 2 } },
+    // ONE ring of 6 — variant-independent. "Can you photograph the bottom?" does
+    // not change a Meshy capture: it is always a single EYE ring the user sweeps
+    // from eye level to looking down at the top, and the model selector picks the
+    // best 4 of the 6. So both variants resolve to the exact same shape; there is
+    // no TOP or LOW ring in Meshy mode at all.
+    with_bottom: { rings: ['EYE'], perRing: { EYE: 6 } },
+    without_bottom: { rings: ['EYE'], perRing: { EYE: 6 } },
   },
 };
 
@@ -126,12 +134,10 @@ const LEGACY_PER_RING: Record<CaptureMode, Record<CaptureFlowVariant, readonly n
  *           (lib/domain/entities/capture_config.dart). A ring finished at 80%
  *           is a legitimate, uploadable capture.
  *   meshy → 100, stated EXPLICITLY rather than left to emerge from ceil().
- *           At 2 photos per ring an 80% floor is ceil(1.6) = 2, i.e. already
- *           all-or-nothing; leaving that implicit would mean the tolerance
- *           silently changed the day someone tuned a count from 2 to 3. Meshy
- *           captures ten photos total and the model selector needs spread from
- *           all of them, so "capture all of it" is also the honest product
- *           rule, not just the arithmetic one.
+ *           Meshy is a single ring of 6 and the model selector needs spread
+ *           from all of them, so "capture all of it" is the honest product rule.
+ *           Stating it explicitly also means the floor cannot silently drift the
+ *           day someone retunes the ring's count.
  */
 export const MIN_RING_COVERAGE_PCT_BY_MODE: Record<CaptureMode, number> = {
   full: 80,
