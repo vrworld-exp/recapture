@@ -23,8 +23,11 @@ import {
 } from './types/job.types';
 import {
   CAPTURE_FLOW_VARIANTS,
+  CAPTURE_MODES,
   DEFAULT_CAPTURE_FLOW_VARIANT,
+  DEFAULT_CAPTURE_MODE,
   type CaptureFlowVariant,
+  type CaptureMode,
 } from './types/captureVariants';
 
 // ── Sub-schemas ──────────────────────────────────────────────────────────────
@@ -184,6 +187,16 @@ export interface IJob extends Document {
   captureVariant: CaptureFlowVariant;
 
   /**
+   * How much the session captured — 'full' (48 images) or 'meshy' (8–10, tuned
+   * for the AI model selector). Orthogonal to `captureVariant`: the mode says
+   * how many images per ring, the variant says which rings exist. Together they
+   * pick one cell of the shape matrix in types/captureVariants, which is what
+   * every count check derives its bounds from. Jobs predating the field read as
+   * the default ('full') via the schema default.
+   */
+  captureMode: CaptureMode;
+
+  /**
    * Client-supplied idempotency key (`Idempotency-Key` header on POST /jobs),
    * unique per user when present — a retried create resolves to this job
    * instead of inserting a duplicate.
@@ -300,6 +313,12 @@ const JobSchema = new Schema<IJob>(
       enum: CAPTURE_FLOW_VARIANTS,
       required: true,
       default: DEFAULT_CAPTURE_FLOW_VARIANT,
+    },
+    captureMode: {
+      type: String,
+      enum: CAPTURE_MODES,
+      required: true,
+      default: DEFAULT_CAPTURE_MODE,
     },
     idempotencyKey: {
       type: String,

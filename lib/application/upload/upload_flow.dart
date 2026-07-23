@@ -51,6 +51,7 @@ import '../../utils/app_env.dart';
 import '../../utils/byte_format.dart';
 import '../capture/analytics/capture_level_session.dart';
 import '../capture/capture_flow_variant_provider.dart';
+import '../capture/capture_mode_provider.dart';
 import '../capture/ledger/level_capture_ledger_registry.dart';
 import '../capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../capture/progression/level_progression.dart';
@@ -71,6 +72,7 @@ import 'upload_jobs_backend.dart';
 import 'upload_progress_provider.dart';
 
 import '../../domain/capture/capture_flow_variant.dart';
+import '../../domain/capture/capture_mode.dart';
 
 /// A terminal upload-flow failure carrying its ALREADY-MAPPED category — the
 /// authoritative [UploadFailureSignal] `classifyUploadFailure` honors, so 9F
@@ -100,6 +102,7 @@ class UploadFlowContext {
     required this.progression,
     required this.registry,
     required this.variant,
+    this.mode = CaptureMode.full,
     required this.workspaceRoot,
     this.objectSize = 'medium',
   });
@@ -118,6 +121,11 @@ class UploadFlowContext {
   final LevelProgression progression;
   final LevelCaptureLedgerRegistry registry;
   final CaptureFlowVariant variant;
+
+  /// The capture MODE the session ran under. Decides the per-ring counts the
+  /// bundle contains, so it must reach both the job (`POST /jobs`) and the
+  /// manifest — the server validates the bundle against the mode it was told.
+  final CaptureMode mode;
 
   /// App-scoped documents root the packer stages/finalizes bundles under.
   final String workspaceRoot;
@@ -519,7 +527,7 @@ class UploadFlowOrchestrator {
           'context resolved (project="${ctx.projectName}", '
           'localProjectId=${ctx.localProjectId.isEmpty ? '<empty>' : ctx.localProjectId}, '
           'sessionId=${ctx.captureSessionId.isEmpty ? '<empty>' : ctx.captureSessionId}, '
-          'variant=${ctx.variant.id})');
+          'variant=${ctx.variant.id}, mode=${ctx.mode.id})');
 
       // Local ids for the bundle/manifest — the REMOTE ids are minted below;
       // the backend pairs files↔manifest by keys/photo entries, not these.
@@ -584,6 +592,7 @@ class UploadFlowOrchestrator {
         projectId: remoteProjectId,
         objectSize: ctx.objectSize,
         captureVariant: ctx.variant.id,
+        captureMode: ctx.mode.id,
         // MUST equal the bundle's real content (exact-checked at finalize):
         // every staged image + the manifest.
         expectedFilesCount: bundle.totalImages + 1,
@@ -834,6 +843,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       progression: progression,
       registry: ref.read(levelCaptureLedgerRegistryProvider),
       variant: ref.read(captureFlowVariantProvider),
+      mode: ref.read(captureModeProvider),
       workspaceRoot: '${docs.path}/upload_workspace',
     );
   }
@@ -851,6 +861,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
         progression: context.progression,
         registry: context.registry,
         flowVariantId: context.variant.id,
+        captureModeId: context.mode.id,
         cancelToken: cancelToken,
       );
 

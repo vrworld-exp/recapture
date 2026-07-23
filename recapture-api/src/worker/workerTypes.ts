@@ -19,7 +19,7 @@ import {
   type UploadInfo,
 } from '@/models/types/job.types';
 import type { CaptureSummary, ObjectSize } from '@/models/types/capture.types';
-import type { CaptureFlowVariant } from '@/models/types/captureVariants';
+import type { CaptureFlowVariant, CaptureMode } from '@/models/types/captureVariants';
 
 /** jobType every upload-pipeline job carries (the schema default). */
 export const DEFAULT_JOB_TYPE = CAPTURE_PROCESSING_JOB_TYPE;
@@ -55,6 +55,7 @@ export interface WorkerJob {
   nextRetryAt?: Date | null;
   objectSize?: ObjectSize;
   captureVariant?: CaptureFlowVariant;
+  captureMode?: CaptureMode;
   upload?: UploadInfo;
   captureSummary?: CaptureSummary;
   /** Durable pipeline stage pointer — the resume/retry entry point. */

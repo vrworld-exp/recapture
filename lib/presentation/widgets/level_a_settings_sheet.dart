@@ -21,6 +21,7 @@ Future<void> showLevelASettingsSheet(
   BuildContext context, {
   required ValueListenable<CaptureSettings> settings,
   required void Function(CaptureSettings) onChanged,
+  bool autoCaptureSupported = true,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -31,7 +32,11 @@ Future<void> showLevelASettingsSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
     ),
-    builder: (_) => LevelASettingsSheet(settings: settings, onChanged: onChanged),
+    builder: (_) => LevelASettingsSheet(
+      settings: settings,
+      onChanged: onChanged,
+      autoCaptureSupported: autoCaptureSupported,
+    ),
   );
 }
 
@@ -40,10 +45,17 @@ class LevelASettingsSheet extends StatelessWidget {
     super.key,
     required this.settings,
     required this.onChanged,
+    this.autoCaptureSupported = true,
   });
 
   final ValueListenable<CaptureSettings> settings;
   final void Function(CaptureSettings) onChanged;
+
+  /// Whether this capture mode HAS an auto-capture loop. False in Meshy mode:
+  /// the row stays visible but disabled, with copy saying why. Hiding it would
+  /// leave a user who knows the setting exists hunting for it; a live toggle
+  /// that silently does nothing is worse still.
+  final bool autoCaptureSupported;
 
   static String get _deviceType =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
@@ -105,13 +117,17 @@ class LevelASettingsSheet extends StatelessWidget {
                     children: [
                       _SwitchRow(
                         title: 'Auto-capture',
-                        subtitle:
-                            'Capture automatically when steady and aligned.',
-                        value: s.autoCapture,
-                        onChanged: (v) {
-                          _emit('auto_capture', v ? 'on' : 'off');
-                          onChanged(s.copyWith(autoCapture: v));
-                        },
+                        subtitle: autoCaptureSupported
+                            ? 'Capture automatically when steady and aligned.'
+                            : 'Not available in Meshy Capture — you tap to '
+                                'shoot each photo.',
+                        value: autoCaptureSupported && s.autoCapture,
+                        onChanged: autoCaptureSupported
+                            ? (v) {
+                                _emit('auto_capture', v ? 'on' : 'off');
+                                onChanged(s.copyWith(autoCapture: v));
+                              }
+                            : null,
                       ),
                       _SwitchRow(
                         title: 'Save to gallery',
@@ -155,7 +171,10 @@ class _SwitchRow extends StatelessWidget {
   final String title;
   final String subtitle;
   final bool value;
-  final ValueChanged<bool> onChanged;
+
+  /// Null renders the row DISABLED (SwitchListTile's own convention) rather
+  /// than live-but-inert.
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {

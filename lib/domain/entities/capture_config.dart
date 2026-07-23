@@ -5,6 +5,7 @@
 // sanitized cache → these bundled defaults. Always a valid, non-empty config.
 
 import '../capture/capture_flow_variant.dart';
+import '../capture/capture_mode.dart';
 
 /// One pitch band (a vertical slice of the capture sphere) and how many capture
 /// positions to take around it.
@@ -242,23 +243,55 @@ class VariantSegments {
   /// input — it validates.
   const VariantSegments({
     Map<String, Map<String, int>> perVariant = const {},
-  }) : _perVariant = perVariant;
+    Map<String, Map<String, int>>? defaults,
+  })  : _perVariant = perVariant,
+        _defaults = defaults;
 
   final Map<String, Map<String, int>> _perVariant;
 
-  /// The product defaults: 16-16-16 with bottom, 24-24 without (48 total both).
-  static const VariantSegments bundledDefault = VariantSegments(perVariant: {
+  /// The bundled numbers a missing/invalid override falls back to. Null means
+  /// [_fullDefaults] — so an instance constructed the old way is a FULL-mode
+  /// block, exactly as it was before capture modes existed.
+  final Map<String, Map<String, int>>? _defaults;
+
+  static const Map<String, Map<String, int>> _fullDefaults = {
     'with_bottom': {'mid': 16, 'high': 16, 'low': 16},
     'without_bottom': {'mid': 24, 'high': 24},
-  });
+  };
+
+  /// Meshy mode's bundled numbers: 6 eye / 2 top / 2 bottom (10 with the
+  /// bottom ring, 8 without). Far fewer than full mode because the model
+  /// selector only consumes 4 photos — the capture supplies spread, not
+  /// density.
+  /// Public alias of the Meshy bundled numbers — [CaptureConfig.fromMap] needs
+  /// them as the fallback when the remote block is absent.
+  static const Map<String, Map<String, int>> meshyDefaults = _meshyDefaults;
+
+  static const Map<String, Map<String, int>> _meshyDefaults = {
+    'with_bottom': {'mid': 6, 'high': 2, 'low': 2},
+    'without_bottom': {'mid': 6, 'high': 2},
+  };
+
+  /// The product defaults: 16-16-16 with bottom, 24-24 without (48 total both).
+  static const VariantSegments bundledDefault =
+      VariantSegments(perVariant: _fullDefaults);
+
+  /// The Meshy-mode defaults — the block `meshy_capture_variant_segments`
+  /// overrides. A SEPARATE instance rather than a nesting of the one above:
+  /// the server serves them under a separate wire key for the same reason
+  /// (re-keying would silently strand already-shipped clients on defaults).
+  static const VariantSegments meshyBundledDefault = VariantSegments(
+    perVariant: _meshyDefaults,
+    defaults: _meshyDefaults,
+  );
 
   /// The configured count for ([variantId], [bandId]): the stored override when
-  /// present and valid, else [bundledDefault]'s entry, else null (an unknown
+  /// present and valid, else this block's bundled entry, else null (an unknown
   /// variant/band pair — the caller falls back to the legacy band count).
   int? segmentsFor(String variantId, String bandId) {
     final v = _perVariant[variantId]?[bandId];
     if (v != null && v >= 1) return v;
-    final d = bundledDefault._perVariant[variantId]?[bandId];
+    final d = (_defaults ?? _fullDefaults)[variantId]?[bandId];
     return (d != null && d >= 1) ? d : null;
   }
 
@@ -266,8 +299,15 @@ class VariantSegments {
   /// positive-integer entries survive; non-positive / ill-typed entries are
   /// dropped so that pair falls back to the bundled default. A non-map input
   /// yields all-defaults. Never throws.
-  factory VariantSegments.fromMap(Object? raw) {
-    if (raw is! Map) return bundledDefault;
+  factory VariantSegments.fromMap(
+    Object? raw, {
+    Map<String, Map<String, int>>? defaults,
+  }) {
+    if (raw is! Map) {
+      return defaults == null
+          ? bundledDefault
+          : VariantSegments(perVariant: defaults, defaults: defaults);
+    }
     final parsed = <String, Map<String, int>>{};
     raw.forEach((variantId, bands) {
       if (variantId is! String || bands is! Map) return;
@@ -278,7 +318,7 @@ class VariantSegments {
       });
       if (perBand.isNotEmpty) parsed[variantId] = perBand;
     });
-    return VariantSegments(perVariant: parsed);
+    return VariantSegments(perVariant: parsed, defaults: defaults);
   }
 
   /// Round-trips back to the wire shape [fromMap] consumes (only stored
@@ -299,7 +339,7 @@ class VariantSegments {
       });
       if (perBand.isNotEmpty) out[variantId] = perBand;
     });
-    return VariantSegments(perVariant: out);
+    return VariantSegments(perVariant: out, defaults: _defaults);
   }
 
   @override
@@ -333,17 +373,53 @@ class VariantSegments {
 /// Precedence: variant override / bundled variant default
 /// ([VariantSegments.segmentsFor]) → the band's legacy [PitchBand.segments]
 /// (old cached configs) → 16. Always `>= 1`.
+/// [mode] selects WHICH block answers: full mode reads
+/// `guided_capture_variant_segments`, Meshy mode reads
+/// `meshy_capture_variant_segments`. It is an optional trailing parameter
+/// defaulting to [CaptureMode.full] so every pre-Meshy call site keeps
+/// resolving exactly the number it always resolved.
+///
+/// NOTE FOR MESHY: the legacy per-band [PitchBand.segments] fallback and the
+/// final `16` are FULL-mode numbers and must never be reached in Meshy mode —
+/// they would silently turn a 2-photo ring into a 12- or 16-photo one. The
+/// Meshy block is complete for every (variant, band) pair it can be asked
+/// about, so the fallback is unreachable there by construction; the explicit
+/// guard below keeps it that way if someone later trims the defaults.
 int effectiveSegmentsFor(
   CaptureConfig config,
   CaptureFlowVariant variant,
-  String bandId,
-) {
-  final v = config.variantSegments.segmentsFor(variant.id, bandId);
+  String bandId, {
+  CaptureMode mode = CaptureMode.full,
+}) {
+  final block = mode == CaptureMode.meshy
+      ? config.meshySegments
+      : config.variantSegments;
+  final v = block.segmentsFor(variant.id, bandId);
   if (v != null) return v;
+  if (mode == CaptureMode.meshy) {
+    // Never inherit a full-mode count here — see the note above.
+    return VariantSegments.meshyBundledDefault.segmentsFor(variant.id, bandId) ?? 2;
+  }
   for (final b in config.pitchBands) {
     if (b.id == bandId && b.segments >= 1) return b.segments;
   }
   return 16;
+}
+
+/// Total expected photos for a whole capture — the SUM over the variant's
+/// active rings, never `rings × perRing`. That identity holds in full mode and
+/// does not in Meshy mode (6/2/2), so the sum is the only safe form. Mirrors
+/// the server's `expectedImageCount`.
+int expectedPhotoTotalFor(
+  CaptureConfig config,
+  CaptureFlowVariant variant, {
+  CaptureMode mode = CaptureMode.full,
+}) {
+  var total = 0;
+  for (final bandId in variant.bandIds) {
+    total += effectiveSegmentsFor(config, variant, bandId, mode: mode);
+  }
+  return total;
 }
 
 /// App-wide capture configuration. Server-tunable without an app release.
@@ -355,6 +431,7 @@ class CaptureConfig {
     this.completionThresholds = CompletionThresholds.bundledDefault,
     this.uploadMinShots = UploadMinShots.bundledDefault,
     this.variantSegments = VariantSegments.bundledDefault,
+    this.meshySegments = VariantSegments.meshyBundledDefault,
   });
 
   final int version;
@@ -369,7 +446,14 @@ class CaptureConfig {
 
   /// Per-flow-variant ring segment counts (16-16-16 / 24-24 by default) —
   /// resolved through [effectiveSegmentsFor], never read raw by flow consumers.
+  /// FULL mode only; see [meshySegments].
   final VariantSegments variantSegments;
+
+  /// The same, for MESHY mode (6-2-2 / 6-2 by default). A separate field rather
+  /// than a mode-nested [variantSegments] because the server serves it under a
+  /// separate wire key — re-keying the existing block would strand already
+  /// shipped clients on bundled defaults with no error anywhere.
+  final VariantSegments meshySegments;
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
@@ -434,6 +518,12 @@ class CaptureConfig {
           UploadMinShots.fromMap(m['guided_capture_min_accepted_shots']),
       variantSegments:
           VariantSegments.fromMap(m['guided_capture_variant_segments']),
+      // Absent block (an older server, or a cached pre-v5 payload) → the
+      // bundled Meshy numbers, which is the correct degradation.
+      meshySegments: VariantSegments.fromMap(
+        m['meshy_capture_variant_segments'],
+        defaults: VariantSegments.meshyDefaults,
+      ),
     );
   }
 
@@ -444,6 +534,7 @@ class CaptureConfig {
         'guided_capture_completion_thresholds': completionThresholds.toMap(),
         'guided_capture_min_accepted_shots': uploadMinShots.toMap(),
         'guided_capture_variant_segments': variantSegments.toMap(),
+        'meshy_capture_variant_segments': meshySegments.toMap(),
       };
 
   CaptureConfig copyWith({
@@ -453,6 +544,7 @@ class CaptureConfig {
     CompletionThresholds? completionThresholds,
     UploadMinShots? uploadMinShots,
     VariantSegments? variantSegments,
+    VariantSegments? meshySegments,
   }) =>
       CaptureConfig(
         version: version ?? this.version,
@@ -461,5 +553,6 @@ class CaptureConfig {
         completionThresholds: completionThresholds ?? this.completionThresholds,
         uploadMinShots: uploadMinShots ?? this.uploadMinShots,
         variantSegments: variantSegments ?? this.variantSegments,
+        meshySegments: meshySegments ?? this.meshySegments,
       );
 }

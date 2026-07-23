@@ -17,6 +17,7 @@ import '../../domain/entities/capture_evaluation.dart';
 import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
+import 'capture_mode_provider.dart';
 import 'ledger/level_capture_ledger_registry_provider.dart';
 import 'ledger/warned_photo_record.dart';
 import 'review_grid_items_provider.dart';
@@ -153,6 +154,7 @@ final captureSummaryProvider =
     Provider.autoDispose<List<LevelCaptureSummary>>((ref) {
   final config = ref.watch(captureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
+  final mode = ref.watch(captureModeProvider);
   final registry = ref.watch(levelCaptureLedgerRegistryProvider);
   final thresholds = config.completionThresholds;
 
@@ -169,7 +171,7 @@ final captureSummaryProvider =
 
         // The SAME effective-N resolver the builders/machines use (always >= 1),
         // so the summary can never disagree with the flow on segment count.
-        final segCount = effectiveSegmentsFor(config, variant, bandId);
+        final segCount = effectiveSegmentsFor(config, variant, bandId, mode: mode);
         final filled = items
             .map((i) => i.ringIndex)
             .whereType<int>()

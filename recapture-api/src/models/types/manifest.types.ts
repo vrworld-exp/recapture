@@ -64,10 +64,31 @@ export interface ManifestExpectations {
    */
   maxPhotosPerLevel?: number;
   /**
+   * PER-LEVEL bounds, keyed by ring name — the shape a non-uniform capture
+   * needs. When a level has an entry here it OVERRIDES the scalars above for
+   * that level; levels without one fall back to the scalars.
+   *
+   * Why both exist: `full` carries the same count on every ring, so one pair of
+   * scalars says everything about it, and every pre-Meshy caller keeps passing
+   * exactly what it always passed. Meshy is 6/2/2, and a single pair of scalars
+   * cannot express that without widening to [2, 6] — which would accept a
+   * 2-photo EYE ring and quietly defeat the floor. Rather than re-key the
+   * contract (and re-verify every `full` count check), the per-level map is
+   * additive and the uniform path is provably untouched.
+   */
+  photosByLevel?: Record<string, { min: number; max: number }>;
+  /**
    * The job's capture flow variant. When set, a manifest whose top-level
    * `flowVariant` field is present and different is a FLOW_VARIANT_MISMATCH;
    * an ABSENT manifest field is tolerated (pre-variant clients — same default
    * as create-job) and never an error by itself.
    */
   expectedFlowVariant?: string;
+  /**
+   * The job's capture mode, cross-checked against the manifest's `captureMode`
+   * on exactly the same terms as [expectedFlowVariant]: both sides must be
+   * stated for a mismatch to fire, and an absent manifest field is the pre-Meshy
+   * client and is tolerated.
+   */
+  expectedCaptureMode?: string;
 }

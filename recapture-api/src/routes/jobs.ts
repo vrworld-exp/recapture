@@ -106,10 +106,13 @@ router.post(
         res.status(400).json({
           status: 'error',
           code: 'INVALID_REQUEST',
+          // Names the MODE as well as the variant: the two together pick the
+          // valid range, so a message citing only the variant would look wrong
+          // to anyone reading it against a Meshy capture's numbers.
           message:
-            `expectedFilesCount is inconsistent with captureVariant — a ` +
-            `'${result.captureVariant}' capture has between ${result.minimum} and ` +
-            `${result.maximum} files (images + manifest).`,
+            `expectedFilesCount is inconsistent with captureMode/captureVariant — a ` +
+            `'${result.captureMode}' '${result.captureVariant}' capture has between ` +
+            `${result.minimum} and ${result.maximum} files (images + manifest).`,
           fields: { expectedFilesCount: `must be ${result.minimum}-${result.maximum}` },
         });
         return;

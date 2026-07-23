@@ -16,6 +16,7 @@
 // because it depends on the CaptureLevel taxonomy + config; the machine stays
 // config-agnostic and pure.
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/capture/level_segment_machine.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
@@ -45,6 +46,7 @@ LevelSegmentMachine levelSegmentMachineFor(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   int fillThreshold = 1,
+  CaptureMode mode = CaptureMode.full,
 }) {
   final bandId = pitchBandIdForLevel(level);
   final band = config.pitchBands.firstWhere(
@@ -57,7 +59,7 @@ LevelSegmentMachine levelSegmentMachineFor(
     levelId: bandId,
     levelCode: level.code,
     band: band,
-    segmentCount: effectiveSegmentsFor(config, variant, bandId),
+    segmentCount: effectiveSegmentsFor(config, variant, bandId, mode: mode),
     fillThreshold: fillThreshold,
   );
 }

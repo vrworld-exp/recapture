@@ -20,6 +20,7 @@ import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
 import 'live_projects_view.dart';
+import 'capture_mode_sheet.dart';
 import 'model_building_screen.dart';
 import 'model_viewer_screen.dart';
 
@@ -251,6 +252,23 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     }
   }
 
+  /// The `+` action: ask which capture mode, then open Create Project.
+  ///
+  /// The chooser is unconditional — choosing a capture mode is now part of
+  /// creating a project, so there is no path to Create Project that leaves the
+  /// mode unstated. A dismissed sheet navigates NOWHERE: the user backed out of
+  /// creating a project, and pushing the form anyway would ignore that.
+  ///
+  /// REQUIRES a server that understands `captureMode`. A Meshy project created
+  /// against an older deployment reaches create-job with a mode and a 10-file
+  /// count that server knows nothing about, and 422s there — after the user has
+  /// already shot everything.
+  Future<void> _onCreateProject() async {
+    final mode = await showCaptureModeSheet(context);
+    if (mode == null || !mounted) return;
+    context.pushNamed(AppRouteNames.createProject, extra: mode);
+  }
+
   /// Staff-only per-project Preview (My-projects surface). Pushed so hardware
   /// back returns here. No in-flight claim: it's a pure navigation, not a
   /// mutation, and the Preview screen owns its own load/guards.
@@ -403,7 +421,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       floatingActionButton: showLive
           ? null
           : FloatingActionButton(
-              onPressed: () => context.pushNamed(AppRouteNames.createProject),
+              onPressed: _onCreateProject,
               backgroundColor: AppColors.mirageRed,
               child: const Icon(Icons.add, color: Colors.white),
             ),

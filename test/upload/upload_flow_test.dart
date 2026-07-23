@@ -119,6 +119,7 @@ class _FakeBackend implements UploadJobsBackend {
     required String captureVariant,
     required int expectedFilesCount,
     required String idempotencyKey,
+    String captureMode = 'full',
   }) async {
     calls.add('createJob');
     jobArgs = {

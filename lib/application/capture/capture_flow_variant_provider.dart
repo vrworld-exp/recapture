@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/capture/capture_flow_variant.dart';
 import '../../domain/entities/capture_config.dart';
 import '../config/config_notifier.dart';
+import 'capture_mode_provider.dart';
 import 'analytics/capture_level_events.dart';
 import 'ledger/level_capture_ledger_registry.dart';
 import 'progression/level_progression_provider.dart';
@@ -109,7 +110,8 @@ final activeLevelSegmentCountProvider = Provider<int>((ref) {
   final config = ref.watch(captureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
   final bandId = ref.watch(activeCaptureBandIdProvider);
-  return effectiveSegmentsFor(config, variant, bandId);
+  final mode = ref.watch(captureModeProvider);
+  return effectiveSegmentsFor(config, variant, bandId, mode: mode);
 });
 
 /// Whether [projectId] already has ≥1 ACCEPTED photo on ANY ring (all three

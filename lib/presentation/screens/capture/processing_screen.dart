@@ -27,6 +27,8 @@
 // finds the request already made). The server's `manual:{jobId}` idempotency key
 // is the third and final backstop — this screen deliberately sends no `force`
 // and no cache-buster that could defeat it.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -34,7 +36,9 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/capture/capture_mode_provider.dart';
 import '../../../application/projects/owner_generation_request_notifier.dart';
+import '../../../utils/feature_flags.dart';
 import '../../widgets/app_button.dart';
 import '../projects/model_building_screen.dart';
 
@@ -55,6 +59,37 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
   /// A press is in flight (the POST, and the screen it pushed). Blocks the
   /// fast double tap; the notifier blocks everything slower.
   bool _pressing = false;
+
+  /// One-shot latch for the automatic Meshy path, so a rebuild cannot fire a
+  /// second (paid) generation.
+  bool _autoStarted = false;
+
+  /// Meshy mode generates its model without being asked — that is the point of
+  /// the mode. Behind its OWN flag so the capture flow can be dogfooded before
+  /// any credits are spent; with the flag off a Meshy capture lands on the same
+  /// manual button a full capture does.
+  bool get _autoGenerates =>
+      kMeshyAutoGenerateEnabled &&
+      ref.read(captureModeProvider).generatesModelAutomatically;
+
+  @override
+  void initState() {
+    super.initState();
+    // Fire after the first frame so the push has a mounted Navigator, and only
+    // when there is a project to spend on.
+    if (widget.projectId == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_autoGenerates || _autoStarted) return;
+      _autoStarted = true;
+      // The SAME request the button makes — deliberately not a second path.
+      // It carries no body, no `force` and no cache-buster, so the server's
+      // `manual:{jobId}` idempotency key still collapses a repeat into a
+      // replay, the per-user rate window still applies, and the run still
+      // counts against the shared 24h ceiling. An automatic trigger that
+      // bypassed any of those would be the one place a bill could run away.
+      unawaited(_onGenerate(widget.projectId!));
+    });
+  }
 
   Future<void> _onGenerate(String projectId) async {
     if (_pressing) return;
@@ -139,7 +174,11 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
                 textAlign: TextAlign.center,
               ),
               const Spacer(),
-              if (projectId != null) ...[
+              // SUPPRESSED, not de-emphasised, when the mode generates on its
+              // own: the model is already being made, so a "Generate 3D model"
+              // button would either be a no-op or a second charge. The user is
+              // taken to the build screen instead.
+              if (projectId != null && !_autoGenerates) ...[
                 AppButton(
                   key: const Key('processing_generate_model'),
                   label: hasRequested

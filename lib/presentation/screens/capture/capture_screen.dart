@@ -13,6 +13,7 @@ import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/capture/analytics/capture_trigger_analytics.dart';
 import '../../../application/capture/auto_capture_controller.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
+import '../../../application/capture/capture_mode_provider.dart';
 import '../../../application/capture/capture_lock.dart';
 import '../../../application/capture/current_tilt_provider.dart';
 import '../../../application/capture/ledger/captured_photo_record.dart';
@@ -279,6 +280,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         ref.read(captureConfigProvider),
         ref.read(captureFlowVariantProvider),
         _levelBandId,
+        mode: ref.read(captureModeProvider),
       );
 
   /// Whether a saved draft was restored into the live coverage (guards
@@ -498,7 +500,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       level: _captureLevel,
       projectId: session.projectId,
       sessionId: session.sessionId,
-      captureMode: _autoCapture.isOn ? 'guided' : 'manual',
+      // 'guided' = the auto loop is driving; 'manual' = the user taps every
+      // shot. Meshy sessions are always manual, so this is what makes them
+      // separable in the funnel without a second analytics field.
+      captureMode: _autoCaptureAllowed && _autoCapture.isOn ? 'guided' : 'manual',
       targetSegments: _levelSegmentCount(),
       sensorSupported: _sensorSupportedNow(),
       deviceType: _deviceType,
@@ -514,10 +519,31 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         (stability?.sensorSupported ?? false);
   }
 
+  /// Whether this session may auto-capture AT ALL.
+  ///
+  /// False in Meshy mode: 2 photos on a ring is nothing for a loop to pace, and
+  /// a frame the loop takes is one the user did not compose — at 10 photos
+  /// feeding a model, every frame is load-bearing. The SHUTTER is unaffected;
+  /// this gates only the automatic loop, the AUTO pill, and the settings toggle.
+  bool get _autoCaptureAllowed =>
+      ref.read(captureModeProvider).usesAutoCapture;
+
   /// Best-effort read of the persisted auto-capture preference (default ON when
   /// none is stored / persistence is unavailable). Corrects [_autoCapture] only
   /// when it differs, so there is no needless rebuild.
   Future<void> _loadAutoCapturePref() async {
+    // Meshy mode neither READS nor WRITES the store: the preference is a full-
+    // mode setting, and letting a Meshy session read it would turn auto-capture
+    // on for a flow that must not have it — or, worse, letting it write would
+    // leak "off" back into the user's full-capture sessions.
+    if (!_autoCaptureAllowed) {
+      if (mounted && _autoCapture.isOn) {
+        setState(() =>
+            _autoCapture = const AutoCaptureState(mode: AutoCaptureMode.off));
+        _syncSettings();
+      }
+      return;
+    }
     final enabled = await _autoCaptureStore.getEnabled() ?? true;
     if (!mounted || enabled == _autoCapture.isOn) return;
     setState(() {
@@ -557,6 +583,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// and logs the toggle. Armed/countdown are owned by the (separate) auto-capture
   /// loop, so a manual toggle just sets the mode.
   void _toggleAutoCapture() {
+    if (!_autoCaptureAllowed) return; // no auto loop to toggle in Meshy mode
     final newOn = !_autoCapture.isOn;
     setState(() {
       _autoCapture = AutoCaptureState(
@@ -800,7 +827,8 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     final isStable = (stability?.sensorSupported ?? false) &&
         stability!.stability == Stability.stable;
     final coverage = ref.read(segmentCoverageProvider);
-    final enabled = _autoCapture.isOn &&
+    final enabled = _autoCaptureAllowed &&
+        _autoCapture.isOn &&
         !_capturePaused &&
         !_autoCaptureSuspended &&
         _retake == null &&
@@ -1059,6 +1087,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         context,
         settings: _settings,
         onChanged: _onSettingChanged,
+        autoCaptureSupported: _autoCaptureAllowed,
       );
     } finally {
       if (mounted) setState(() => _autoCaptureSuspended = false);
@@ -1080,6 +1109,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   }
 
   void _applyAutoCaptureSetting(bool on) {
+    if (!_autoCaptureAllowed) return; // the sheet renders it disabled anyway
     setState(() {
       _autoCapture = AutoCaptureState(
         mode: on ? AutoCaptureMode.on : AutoCaptureMode.off,
@@ -1316,14 +1346,20 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                           top: 44,
                           right: AppSpacing.lg,
                         ),
-                        child: AutoCaptureIndicator(
-                          // While suspended (e.g. Help sheet open) the loop is
-                          // paused, so it can never be armed.
-                          state: _autoCaptureSuspended
-                              ? AutoCaptureState(mode: _autoCapture.mode)
-                              : _autoCapture,
-                          onToggle: _toggleAutoCapture,
-                        ),
+                        // Absent entirely in Meshy mode — a pill that only ever
+                        // reads OFF and refuses its own tap is worse than no
+                        // pill. Nothing reserves its space, so the layout simply
+                        // closes up.
+                        child: !_autoCaptureAllowed
+                            ? const SizedBox.shrink()
+                            : AutoCaptureIndicator(
+                                // While suspended (e.g. Help sheet open) the
+                                // loop is paused, so it can never be armed.
+                                state: _autoCaptureSuspended
+                                    ? AutoCaptureState(mode: _autoCapture.mode)
+                                    : _autoCapture,
+                                onToggle: _toggleAutoCapture,
+                              ),
                       ),
                     ),
                   ),

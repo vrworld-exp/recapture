@@ -16,6 +16,7 @@ import 'package:recapture/application/capture/progression/level_progression_stor
 import 'package:recapture/application/capture/segment_coverage_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
+import 'package:recapture/domain/capture/capture_mode.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/segment_coverage.dart';
 import 'package:recapture/utils/analytics.dart';
@@ -51,6 +52,28 @@ class _FakeStore extends LevelProgressionStore {
   @override
   Future<CaptureFlowVariant> loadVariant(String projectId) async =>
       variants[projectId] ?? CaptureFlowVariant.withBottom;
+  // Capture-mode siblings of the variant methods. Overridden for the same
+  // reason the variant ones are: the base class opens Hive, which a widget test
+  // has no host for.
+  final Map<String, CaptureMode> modes = {};
+  @override
+  Future<void> saveMode(String projectId, CaptureMode mode) async {
+    modes[projectId] = mode;
+  }
+
+  @override
+  Future<CaptureMode> loadMode(String projectId) async =>
+      modes[projectId] ?? CaptureMode.full;
+
+  @override
+  Future<CaptureMode?> loadModeOrNull(String projectId) async => modes[projectId];
+
+  @override
+  Future<void> migrateProject(String fromId, String toId) async {
+    final mode = modes.remove(fromId);
+    if (mode != null) modes[toId] = mode;
+  }
+
 }
 
 class _StubConfig extends ConfigNotifier {

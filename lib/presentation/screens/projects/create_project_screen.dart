@@ -7,6 +7,7 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/capture/capture_mode_provider.dart';
 import '../../../application/projects/projects_notifier.dart';
 import '../../../domain/entities/create_project_options.dart';
 import '../../../domain/entities/project.dart';
@@ -112,6 +113,16 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
     });
 
     if (created != null) {
+      // Persist the capture mode NOW — this is the first moment a project id
+      // exists to key it on. The sheet's selection was in-memory only until
+      // here (there was nothing to attach it to), and the mode has to be a
+      // property of the PROJECT: a user resuming from the list never passes
+      // through the sheet again. Offline, the id is a temp one and the outbox
+      // migrates the record when the server id arrives.
+      await ref
+          .read(captureModeProvider.notifier)
+          .persistFor(created!.id);
+      if (!mounted) return;
       // Route replacement (goNamed): back must not return to this half-finished
       // form. TODO(precapture): PreCaptureScreen does not yet consume the
       // project id; pass-through via `extra` until its signature accepts it.

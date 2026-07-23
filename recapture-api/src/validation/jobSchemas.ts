@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { OBJECT_SIZE_VALUES } from '@/validation/projectSchemas';
 import {
   CAPTURE_FLOW_VARIANTS,
+  CAPTURE_MODES,
   DEFAULT_CAPTURE_FLOW_VARIANT,
+  DEFAULT_CAPTURE_MODE,
 } from '@/models/types/captureVariants';
 
 /**
@@ -33,6 +35,9 @@ export const createJobSchema = z
     // Optional with a default so pre-variant clients (which never send it)
     // keep working unchanged as full three-ring captures.
     captureVariant: z.enum(CAPTURE_FLOW_VARIANTS).default(DEFAULT_CAPTURE_FLOW_VARIANT),
+    // Same treatment, same reason: a client that predates Meshy mode never
+    // sends this and must keep creating full captures unchanged.
+    captureMode: z.enum(CAPTURE_MODES).default(DEFAULT_CAPTURE_MODE),
     expectedFilesCount: z.coerce
       .number()
       .int('expectedFilesCount must be an integer')

@@ -207,11 +207,30 @@ void main() {
         'projectId': 'proj-9',
         'objectSize': 'medium',
         'captureVariant': 'with_bottom',
+        // Sent EXPLICITLY even for the default. The server would infer 'full'
+        // from its absence, but a job record that states the shape it was
+        // created for is the difference between reading a bundle's counts and
+        // guessing them.
+        'captureMode': 'full',
         'expectedFilesCount': 37,
       });
       expect(job.jobId, 'job-9');
       expect(job.keyPrefix, 'dev/u/proj-9/job-9/');
       expect(job.manifestKey, 'dev/u/proj-9/job-9/capture_manifest.json');
+    });
+
+    test('createJob carries a meshy captureMode when the session used one',
+        () async {
+      await backend.createJob(
+        projectId: 'proj-9',
+        objectSize: 'medium',
+        captureVariant: 'with_bottom',
+        expectedFilesCount: 11,
+        idempotencyKey: 'uuid-1234',
+        captureMode: 'meshy',
+      );
+
+      expect((requests.single.data as Map)['captureMode'], 'meshy');
     });
 
     test('finalizeJob posts reportedFilesCount and returns the state',

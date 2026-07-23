@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/capture_flow_variant_provider.dart';
+import '../../application/capture/capture_mode_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
 import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
@@ -270,6 +271,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                 ref.watch(captureConfigProvider),
                 ref.watch(captureFlowVariantProvider),
                 'mid',
+                mode: ref.watch(captureModeProvider),
               );
               return LevelACompleteScreen(
                 summary: LevelASummary(

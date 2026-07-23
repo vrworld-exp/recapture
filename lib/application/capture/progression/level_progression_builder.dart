@@ -12,6 +12,7 @@
 // Kept OUT of the pure core (level_progression.dart) because it depends on the
 // CaptureLevel taxonomy + config; the core stays config-agnostic and pure.
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/capture/coverage_milestones.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
@@ -29,6 +30,7 @@ List<LevelProgressState> levelStatesFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
+  CaptureMode mode = CaptureMode.full,
 }) {
   return [
     for (final level in variant.levels)
@@ -37,7 +39,7 @@ List<LevelProgressState> levelStatesFromConfig(
         return LevelProgressState(
           levelId: bandId,
           levelCode: level.code,
-          segmentCount: effectiveSegmentsFor(config, variant, bandId),
+          segmentCount: effectiveSegmentsFor(config, variant, bandId, mode: mode),
           minAcceptedCount: minAcceptedCount,
           minCoveragePct: config.thresholds.minCoveragePct,
         );

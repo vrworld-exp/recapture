@@ -1,4 +1,6 @@
 // lib/application/projects/projects_notifier.dart
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/local/projects_cache_box.dart';
@@ -10,6 +12,7 @@ import '../../domain/entities/project.dart';
 import '../../domain/entities/project_status.dart';
 import '../auth/auth_notifier.dart';
 import '../../domain/entities/auth_state.dart';
+import '../capture/progression/level_progression_provider.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../offline/offline_queue_notifier.dart';
 import 'project_capture_cleanup.dart';
@@ -139,6 +142,16 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     } else if (!current.any((p) => p.id == serverProject.id)) {
       state = AsyncData<List<Project>>([serverProject, ...current]);
     }
+    // Carry the project-scoped capture state (capture mode, flow variant,
+    // progression) from the temp id onto the real one. Without this an
+    // offline-created Meshy project resumes as a FULL capture — the mode was
+    // stored under an id that no longer names anything.
+    unawaited(
+      ref
+          .read(levelProgressionStoreProvider)
+          .migrateProject(tempId, serverProject.id)
+          .catchError((_) {}),
+    );
   }
 
   /// Optimistically renames the project, then confirms with the repo. Rolls back

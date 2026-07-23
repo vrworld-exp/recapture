@@ -24,6 +24,7 @@ import 'package:recapture/application/capture/session/capture_session_store.dart
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/local/active_session_box.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
+import 'package:recapture/domain/capture/capture_mode.dart';
 import 'package:recapture/domain/entities/active_session.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/checklist_item.dart';
@@ -80,6 +81,28 @@ class _FakeProgressionStore extends LevelProgressionStore {
   Future<LevelProgression?> load(String projectId) async => null;
   @override
   Future<void> clear(String projectId) async {}
+  // Capture-mode siblings of the variant methods. Overridden for the same
+  // reason the variant ones are: the base class opens Hive, which a widget test
+  // has no host for.
+  final Map<String, CaptureMode> modes = {};
+  @override
+  Future<void> saveMode(String projectId, CaptureMode mode) async {
+    modes[projectId] = mode;
+  }
+
+  @override
+  Future<CaptureMode> loadMode(String projectId) async =>
+      modes[projectId] ?? CaptureMode.full;
+
+  @override
+  Future<CaptureMode?> loadModeOrNull(String projectId) async => modes[projectId];
+
+  @override
+  Future<void> migrateProject(String fromId, String toId) async {
+    final mode = modes.remove(fromId);
+    if (mode != null) modes[toId] = mode;
+  }
+
 }
 
 /// Draft store whose Level A snapshot carries [acceptedCount] accepted photos —

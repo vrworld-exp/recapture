@@ -27,6 +27,7 @@ import '../../utils/analytics.dart';
 import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
+import 'capture_mode_provider.dart';
 import 'review_grid_items_provider.dart';
 
 /// The live hard upload gate. Watch it for `eligible` / `shortLevels`; it reflects
@@ -35,6 +36,7 @@ import 'review_grid_items_provider.dart';
 final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
   final config = ref.watch(captureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
+  final mode = ref.watch(captureModeProvider);
   return evaluateUploadGate([
     for (final level in variant.levels)
       () {
@@ -42,7 +44,7 @@ final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
         // Live accepted shots — the SAME source the review grids + completion
         // gate read (no duplicated shot-counting).
         final items = ref.watch(reviewGridItemsProvider(bandId));
-        final segments = effectiveSegmentsFor(config, variant, bandId);
+        final segments = effectiveSegmentsFor(config, variant, bandId, mode: mode);
         // Distinct in-range segments among the accepted shots — the ledger
         // analogue of SegmentCoverage.filledCount (same rule as the upload
         // flow's progressionFromLedger snapshot).
