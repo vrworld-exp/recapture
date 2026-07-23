@@ -36,8 +36,8 @@ import {
  *   Optional: absent means the client uses its bundled Meshy defaults.
  *
  * NOTE: `thresholds` and `segmentCounts` are OBJECT-SIZE knobs and apply to
- * FULL captures only. Meshy mode captures ONE ring of 6 regardless of object
- * size — far below those floors — so it is exempt from both by design.
+ * FULL captures only. Meshy mode captures 6/2/2 regardless of object size —
+ * far below those floors — so it is exempt from both by design.
  *
  * `.strict()` keeps the served payload to exactly these keys. Stored configs are
  * validated against this before serving; anything that doesn't conform falls
@@ -116,9 +116,8 @@ function variantSegmentsBlock(
   mode: CaptureMode = DEFAULT_CAPTURE_MODE
 ): Record<string, number> {
   return ringsForVariant(variant, mode).reduce<Record<string, number>>((acc, ring) => {
-    // Per RING, not one number for the variant: full's rings can differ across
-    // revisions and this stays correct if a future mode is non-uniform. (Meshy
-    // is a single EYE ring of 6, so its block is just { mid: 6 }.)
+    // Per RING now, not one number for the variant — Meshy's rings differ from
+    // each other (6/2/2) and a single count would misreport two of the three.
     acc[BAND_ID_BY_RING[ring]] = expectedPerRing(variant, ring, mode);
     return acc;
   }, {});
@@ -155,8 +154,7 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     with_bottom: variantSegmentsBlock('with_bottom'),
     without_bottom: variantSegmentsBlock('without_bottom'),
   },
-  // ONE ring of 6 (EYE only) — see the shape matrix. Both variant blocks are
-  // identical ({ mid: 6 }) because Meshy is variant-less. `thresholds` and
+  // EYE 6 / TOP 2 / LOW 2 — see the shape matrix. `thresholds` and
   // `segmentCounts` above are NOT consulted in Meshy mode: they are the
   // object-size knobs (30/24/18 photos, 36/30/24 segments), all far above
   // Meshy's counts, and object size does not modulate this mode at all.
