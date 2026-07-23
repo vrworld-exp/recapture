@@ -27,12 +27,13 @@ import { Project } from '@/models/Project';
 import { type ObjectSize } from '@/models/types/capture.types';
 import {
   DEFAULT_CAPTURE_FLOW_VARIANT,
+  DEFAULT_CAPTURE_MODE,
   compatMaximumImageCount,
-  compatMaximumPerRing,
   compatMinimumImageCount,
-  compatMinimumPerRing,
+  photosByRing,
   ringsForVariant,
   type CaptureFlowVariant,
+  type CaptureMode,
 } from '@/models/types/captureVariants';
 import { BUCKET_RAW } from '@/config/s3';
 import { env } from '@/config/env';
@@ -123,6 +124,7 @@ export type CreateJobResult =
       minimum: number;
       maximum: number;
       captureVariant: CaptureFlowVariant;
+      captureMode: CaptureMode;
     }
   | { outcome: 'IDEMPOTENCY_CONFLICT' }
   | { outcome: 'CREATED'; job: JobDto; uploadPlan: UploadPlan }
@@ -180,14 +182,15 @@ export async function createJob(
   // both widened to the union over retired count revisions (compat*) so a
   // capture made under an older config stays uploadable after a deploy.
   // The model's expectedFilesCount is manifest-INCLUSIVE, hence the +1s.
-  const minimum = compatMinimumImageCount(input.captureVariant) + 1;
-  const maximum = compatMaximumImageCount(input.captureVariant) + 1;
+  const minimum = compatMinimumImageCount(input.captureVariant, input.captureMode) + 1;
+  const maximum = compatMaximumImageCount(input.captureVariant, input.captureMode) + 1;
   if (input.expectedFilesCount < minimum || input.expectedFilesCount > maximum) {
     return {
       outcome: 'COUNT_INCONSISTENT',
       minimum,
       maximum,
       captureVariant: input.captureVariant,
+      captureMode: input.captureMode,
     };
   }
 
@@ -214,6 +217,7 @@ export async function createJob(
       state: 'CREATED',
       objectSize: modelSize,
       captureVariant: input.captureVariant,
+      captureMode: input.captureMode,
       ...(idempotencyKey ? { idempotencyKey } : {}),
       upload: {
         uploadMethod: 'S3_PRESIGNED_MULTIPART',
@@ -266,6 +270,9 @@ function replayOrConflict(existing: IJob, input: CreateJobInput): CreateJobResul
     existing.projectId.toHexString() === input.projectId &&
     existing.objectSize === WIRE_TO_MODEL[input.objectSize] &&
     variantOf(existing) === input.captureVariant &&
+    // A repeat with the same key but a different MODE is a different capture
+    // (different counts, different validation) — a conflict, not a replay.
+    modeOf(existing) === input.captureMode &&
     existing.upload?.expectedFilesCount === input.expectedFilesCount;
   if (!samePayload) {
     return { outcome: 'IDEMPOTENCY_CONFLICT' };
@@ -298,6 +305,12 @@ function planFor(job: IJob): UploadPlan {
  * predating the field on read; the ?? is a second belt for lean/legacy paths. */
 function variantOf(job: IJob): CaptureFlowVariant {
   return job.captureVariant ?? DEFAULT_CAPTURE_FLOW_VARIANT;
+}
+
+/** The job's capture mode — same backfill reasoning as [variantOf]: every job
+ * created before Meshy mode existed was a full capture. */
+function modeOf(job: IJob): CaptureMode {
+  return job.captureMode ?? DEFAULT_CAPTURE_MODE;
 }
 
 /** The instant the job's upload plan stops accepting initiate/part-url calls. */
@@ -609,13 +622,21 @@ export async function finalizeJob(
     parsedManifest = undefined; // → MANIFEST_UNREADABLE from the validator
   }
   const variant = variantOf(job);
-  const variantRings = [...ringsForVariant(variant)];
+  const mode = modeOf(job);
+  const variantRings = [...ringsForVariant(variant, mode)];
+  const perRing = photosByRing(variant, mode);
   const validation = validateCaptureManifest(parsedManifest, {
     requiredLevels: variantRings,
     allowedLevels: variantRings,
-    minPhotosPerLevel: compatMinimumPerRing(variant),
-    maxPhotosPerLevel: compatMaximumPerRing(variant),
+    // Scalars stay for the uniform (full) case so its behaviour is untouched;
+    // photosByLevel carries the per-ring truth a non-uniform mode needs — one
+    // pair of scalars cannot say "6 on EYE but 2 on TOP" without also
+    // accepting 2 on EYE.
+    minPhotosPerLevel: Math.min(...Object.values(perRing).map((b) => b.min)),
+    maxPhotosPerLevel: Math.max(...Object.values(perRing).map((b) => b.max)),
+    photosByLevel: perRing,
     expectedFlowVariant: variant,
+    expectedCaptureMode: mode,
   });
   if (!validation.valid) {
     return {

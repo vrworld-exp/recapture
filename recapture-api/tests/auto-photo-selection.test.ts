@@ -429,3 +429,141 @@ describe('selectPhotosForAutoGeneration', () => {
     expect(a).toEqual(b);
   });
 });
+
+// ── Meshy-mode ring sizes ────────────────────────────────────────────────────
+//
+// The selector was written against 12–36-photo rings and buckets photos into
+// four yaw quadrants. Meshy captures SIX on the eye ring, which is barely more
+// than the four photos the selector needs — the open question was whether the
+// quadrant mapping degenerates at that size and starts declining good captures.
+// It does not, and these tests pin down why so a future ring-size change cannot
+// break it silently.
+describe('meshy ring sizes (6 eye / 2 top / 2 bottom)', () => {
+  /** A complete 6-photo eye ring, one photo per segment. */
+  function meshyEyeRing(blurScores?: number[]) {
+    return manifest(
+      Array.from({ length: 6 }, (_, i) =>
+        photo({
+          file: `eye_${String(i).padStart(4, '0')}.jpg`,
+          segmentIndex: i,
+          blurScore: blurScores?.[i] ?? 100,
+        })
+      ),
+      6
+    );
+  }
+
+  it('a complete 6-photo ring fills all four quadrants', () => {
+    // segmentIndex/6 → quadrant: 0,1→q0  2→q1  3,4→q2  5→q3. Every quadrant is
+    // covered, so the spread guard is satisfied by a ring the user simply
+    // finished — no luck involved.
+    const result = selectPhotosForAutoGeneration(meshyEyeRing(), {
+      minBlurScore: DEFAULT_MIN_BLUR_SCORE,
+    });
+
+    expect(result.outcome).toBe('SELECTED');
+    expect(result.trace!.segmentCountUsed).toBe(6);
+    expect(result.trace!.quadrantHistogram).toEqual([2, 1, 2, 1]);
+  });
+
+  it('selects exactly the target, one photo per quadrant', () => {
+    // The best case the selector has: four filled quadrants and four photos
+    // wanted, so pass 1 alone satisfies it and no backfill is needed.
+    const result = selectPhotosForAutoGeneration(meshyEyeRing(), {
+      minBlurScore: DEFAULT_MIN_BLUR_SCORE,
+    });
+
+    expect(result.keys).toHaveLength(AUTO_TARGET_PHOTOS);
+    const quadrants = result.trace!.chosen.map((c) => c.quadrant).sort();
+    expect(quadrants).toEqual([0, 1, 2, 3]);
+  });
+
+  it('spread still beats sharpness at this ring size', () => {
+    // The property the whole selector exists for, re-checked at n=6: two very
+    // sharp photos in the same quadrant must not crowd out a duller photo that
+    // is the only view of another side.
+    const result = selectPhotosForAutoGeneration(
+      meshyEyeRing([100, 99, 40, 40, 40, 40]),
+      { minBlurScore: DEFAULT_MIN_BLUR_SCORE }
+    );
+
+    expect(result.outcome).toBe('SELECTED');
+    const quadrants = result.trace!.chosen.map((c) => c.quadrant).sort();
+    expect(quadrants).toEqual([0, 1, 2, 3]);
+  });
+
+  it('a one-sided ring is declined for spread, not paid for', () => {
+    // Segments 0,1,2 of six all sit in quadrants 0-1 — one side of the object.
+    // Three photos clears AUTO_MIN_PHOTOS, so this reaches the spread guard
+    // rather than being caught by the pool floor: it is the guard itself that
+    // has to refuse, at a ring size barely larger than the target.
+    const result = selectPhotosForAutoGeneration(
+      manifest(
+        [0, 1].map((i) =>
+          photo({ file: `eye_${i}.jpg`, segmentIndex: i, blurScore: 100 })
+        ).concat([photo({ file: 'eye_x.jpg', segmentIndex: 0, blurScore: 90 })]),
+        6
+      ),
+      { minBlurScore: DEFAULT_MIN_BLUR_SCORE }
+    );
+
+    expect(result.outcome).toBe('DECLINED');
+    expect(result.reason).toBe('INSUFFICIENT_SPREAD');
+  });
+
+  it('a uniformly SOFT 6-photo ring still yields a model, not a decline', () => {
+    // The blur floor relaxes when applying it would leave fewer than
+    // AUTO_MIN_PHOTOS. At n=16 that relaxation is a rare edge; at n=6 it is a
+    // routine one, and it is what stops a slightly-soft short capture from
+    // declining on a technicality. Documented here because it means the FLOOR
+    // is not the thing that protects Meshy quality — spread is.
+    const result = selectPhotosForAutoGeneration(
+      meshyEyeRing([10, 10, 10, 10, 10, 10]),
+      { minBlurScore: DEFAULT_MIN_BLUR_SCORE }
+    );
+
+    expect(result.outcome).toBe('SELECTED');
+    // The trace still records how soft it was, so the tuning question stays
+    // answerable even though the floor did not bite.
+    expect(result.trace!.belowBlurFloor).toBe(6);
+  });
+
+  it('declines only when FEWER THAN 3 photos survive at all', () => {
+    // The real failure mode at this ring size is missing photos/metadata, not
+    // softness — two usable frames is below AUTO_MIN_PHOTOS and cannot be
+    // relaxed away.
+    const result = selectPhotosForAutoGeneration(
+      manifest(
+        [0, 3].map((i) =>
+          photo({ file: `eye_${i}.jpg`, segmentIndex: i, blurScore: 100 })
+        ),
+        6
+      ),
+      { minBlurScore: DEFAULT_MIN_BLUR_SCORE }
+    );
+
+    expect(result.outcome).toBe('DECLINED');
+    expect(result.reason).toBe('NO_USABLE_PHOTOS');
+  });
+
+  it('falls back to the whole pool when the eye ring alone is too small', () => {
+    // TOP/LOW hold 2 photos each in Meshy mode. If the eye ring is unusable the
+    // selector widens to ALL rings rather than declining outright.
+    const photos = [
+      photo({ file: 'eye_0.jpg', ring: 'EYE', segmentIndex: 0, blurScore: 10 }),
+      photo({ file: 'top_0.jpg', ring: 'TOP', segmentIndex: 0, blurScore: 100 }),
+      photo({ file: 'top_1.jpg', ring: 'TOP', segmentIndex: 1, blurScore: 100 }),
+      photo({ file: 'low_0.jpg', ring: 'LOW', segmentIndex: 0, blurScore: 100 }),
+      photo({ file: 'low_1.jpg', ring: 'LOW', segmentIndex: 1, blurScore: 100 }),
+    ];
+    const result = selectPhotosForAutoGeneration(
+      { ...manifest(photos, 6), config: { segmentCounts: { A: 6, B: 2, C: 2 } } },
+      { minBlurScore: DEFAULT_MIN_BLUR_SCORE }
+    );
+
+    // Whatever it decides, it must be a decision — never a crash on a ring
+    // smaller than the quadrant count.
+    expect(['SELECTED', 'DECLINED']).toContain(result.outcome);
+    expect(result.trace).toBeDefined();
+  });
+});

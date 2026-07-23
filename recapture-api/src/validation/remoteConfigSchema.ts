@@ -6,10 +6,12 @@ import {
   type ObjectSize,
 } from '@/models/types/capture.types';
 import {
+  DEFAULT_CAPTURE_MODE,
   expectedPerRing,
   ringsForVariant,
   type CaptureFlowVariant,
   type CaptureRingName,
+  type CaptureMode,
 } from '@/models/types/captureVariants';
 
 /**
@@ -29,6 +31,13 @@ import {
  *   counts, keyed variant-id → band-id (`mid`/`high`/`low` — the CLIENT's
  *   vocabulary for the EYE/TOP/LOW rings; the ring names stay in the
  *   S3/manifest layer and never leak here).
+ * - `meshy_capture_variant_segments` — the same shape for MESHY capture mode,
+ *   in its own key so an older client parsing the block above is unaffected.
+ *   Optional: absent means the client uses its bundled Meshy defaults.
+ *
+ * NOTE: `thresholds` and `segmentCounts` are OBJECT-SIZE knobs and apply to
+ * FULL captures only. Meshy mode captures 6/2/2 regardless of object size —
+ * far below those floors — so it is exempt from both by design.
  *
  * `.strict()` keeps the served payload to exactly these keys. Stored configs are
  * validated against this before serving; anything that doesn't conform falls
@@ -57,6 +66,19 @@ export const remoteConfigSchema = z
         without_bottom: z.record(z.string(), z.number().int().positive()),
       })
       .strict(),
+    // Meshy mode's counts ride in their OWN key rather than nesting the block
+    // above by mode. Re-keying it would hand every already-shipped client a map
+    // where it expects ints: VariantSegments.fromMap drops ill-typed entries,
+    // so those clients would silently fall back to bundled defaults and lose
+    // remote tunability for FULL captures — with no error anywhere. Optional so
+    // a stored config written before Meshy still validates.
+    meshy_capture_variant_segments: z
+      .object({
+        with_bottom: z.record(z.string(), z.number().int().positive()),
+        without_bottom: z.record(z.string(), z.number().int().positive()),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -89,9 +111,14 @@ const BAND_ID_BY_RING: Record<CaptureRingName, string> = {
 /** One variant's band→count block, derived from the canonical variant module
  * so the served defaults can never drift from the server's own capture rules
  * (mirrors the client's bundled VariantSegments defaults by construction). */
-function variantSegmentsBlock(variant: CaptureFlowVariant): Record<string, number> {
-  return ringsForVariant(variant).reduce<Record<string, number>>((acc, ring) => {
-    acc[BAND_ID_BY_RING[ring]] = expectedPerRing(variant);
+function variantSegmentsBlock(
+  variant: CaptureFlowVariant,
+  mode: CaptureMode = DEFAULT_CAPTURE_MODE
+): Record<string, number> {
+  return ringsForVariant(variant, mode).reduce<Record<string, number>>((acc, ring) => {
+    // Per RING now, not one number for the variant — Meshy's rings differ from
+    // each other (6/2/2) and a single count would misreport two of the three.
+    acc[BAND_ID_BY_RING[ring]] = expectedPerRing(variant, ring, mode);
     return acc;
   }, {});
 }
@@ -103,10 +130,13 @@ function variantSegmentsBlock(variant: CaptureFlowVariant): Record<string, numbe
  * defaults can never silently diverge from the server's own capture rules.
  */
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
-  // Version 4: tilt bands retuned from equal thirds to 0–40 / 40–110 / 110–180
-  // (bumped so client ETag/304 caches roll over to the new payload). Version 3
-  // was the 16×3 / 24×2 per-ring counts; version 2 was the 0–180° band scale.
-  version: 4,
+  // Version 5: adds meshy_capture_variant_segments (Meshy capture mode). The
+  // bump is what rolls client ETag/304 caches over to the new payload — a
+  // client still serving a cached v4 simply never sees the Meshy block and
+  // falls back to its bundled defaults, which is the correct degradation.
+  // Version 4 retuned the tilt bands to 0–40 / 40–110 / 110–180; version 3 was
+  // the 16×3 / 24×2 per-ring counts; version 2 was the 0–180° band scale.
+  version: 5,
   // LOW/EYE/TOP guided-capture rings as camera-tilt bands tiling [0, 180]:
   // BOTTOM ring `low` (tilt up) [0,40) / EYE ring `mid` (hold straight)
   // [40,110) / TOP ring `high` (tilt down) [110,180). Deliberately UNEQUAL
@@ -123,5 +153,13 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
   guided_capture_variant_segments: {
     with_bottom: variantSegmentsBlock('with_bottom'),
     without_bottom: variantSegmentsBlock('without_bottom'),
+  },
+  // EYE 6 / TOP 2 / LOW 2 — see the shape matrix. `thresholds` and
+  // `segmentCounts` above are NOT consulted in Meshy mode: they are the
+  // object-size knobs (30/24/18 photos, 36/30/24 segments), all far above
+  // Meshy's counts, and object size does not modulate this mode at all.
+  meshy_capture_variant_segments: {
+    with_bottom: variantSegmentsBlock('with_bottom', 'meshy'),
+    without_bottom: variantSegmentsBlock('without_bottom', 'meshy'),
   },
 };

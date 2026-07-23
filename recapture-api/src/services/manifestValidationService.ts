@@ -52,6 +52,10 @@ const manifestShapeSchema = z
     // The client's declared capture variant (top-level, camelCase). Optional:
     // pre-variant manifests never carry it, and its absence is tolerated.
     flowVariant: z.string().optional(),
+    // The client's declared capture mode. Optional for the same reason
+    // flowVariant is: pre-Meshy manifests never carry it, and its absence
+    // means 'full' rather than being an error.
+    captureMode: z.string().optional(),
     summary: z
       .object({
         totalPhotos: z.number().int().nonnegative(),
@@ -152,6 +156,30 @@ export function validateCaptureManifest(
     });
   }
 
+  // Rule 2b: the same cross-check for the capture MODE, and for the same
+  // reason — a manifest that says it was captured under different counts than
+  // the job was created for is describing a different capture. Reported under
+  // the existing FLOW_VARIANT_MISMATCH rule id rather than a new one: it is the
+  // same class of finding (client shape ≠ job shape), and rule ids are a stable
+  // contract that clients map to copy.
+  const declaredMode = parsed.data.captureMode;
+  if (
+    expectations.expectedCaptureMode !== undefined &&
+    declaredMode !== undefined &&
+    declaredMode !== expectations.expectedCaptureMode
+  ) {
+    errors.push({
+      rule: 'FLOW_VARIANT_MISMATCH',
+      message:
+        `Manifest declares captureMode '${declaredMode}' but the job was ` +
+        `created as '${expectations.expectedCaptureMode}'.`,
+      detail: {
+        declared: declaredMode,
+        expected: expectations.expectedCaptureMode,
+      },
+    });
+  }
+
   // One grouping pass feeds Rules 3–5.
   const photosByLevel = new Map<string, number>();
   for (const photo of photos) {
@@ -193,21 +221,35 @@ export function validateCaptureManifest(
   // photo minimum (absent levels are Rule 3's finding, unexpected levels are
   // Rule 4's — neither is double-reported here). minPhotosPerLevel === 0
   // flags nothing by construction.
+  //
+  // Bounds resolve PER LEVEL: a level named in `photosByLevel` uses its own
+  // pair, anything else falls back to the scalars. With no `photosByLevel` at
+  // all — every pre-Meshy caller — this is exactly the old uniform check, which
+  // is why `full` validation is unchanged rather than re-verified.
+  const perLevel = expectations.photosByLevel;
+  const minFor = (levelId: string): number =>
+    perLevel?.[levelId]?.min ?? expectations.minPhotosPerLevel;
+  const maxFor = (levelId: string): number | undefined =>
+    perLevel?.[levelId]?.max ?? expectations.maxPhotosPerLevel;
+
   const underMinLevels = [...photosByLevel.entries()]
     .filter(([levelId]) => !unexpectedLevels.includes(levelId))
-    .filter(([, count]) => count < expectations.minPhotosPerLevel)
+    .filter(([levelId, count]) => count < minFor(levelId))
     .sort(([a], [b]) => levelSortKey(a).localeCompare(levelSortKey(b)))
     .map(([levelId, count]) => ({
       levelId,
       count,
-      required: expectations.minPhotosPerLevel,
+      required: minFor(levelId),
     }));
   if (underMinLevels.length > 0) {
     errors.push({
       rule: 'INSUFFICIENT_PHOTOS_PER_LEVEL',
-      message:
-        `${underMinLevels.length} level(s) have fewer than ` +
-        `${expectations.minPhotosPerLevel} photo(s).`,
+      // The scalar phrasing only tells the truth when one number governs every
+      // level; with per-level bounds the numbers live in `detail`.
+      message: perLevel
+        ? `${underMinLevels.length} level(s) have fewer photos than required.`
+        : `${underMinLevels.length} level(s) have fewer than ` +
+          `${expectations.minPhotosPerLevel} photo(s).`,
       detail: { levels: underMinLevels },
     });
   }
@@ -218,20 +260,21 @@ export function validateCaptureManifest(
   // caught by an exact-total check. Unexpected levels stay Rule 4's finding;
   // an omitted maxPhotosPerLevel enforces nothing.
   const maxPerLevel = expectations.maxPhotosPerLevel;
-  const overMaxLevels =
-    maxPerLevel === undefined
-      ? []
-      : [...photosByLevel.entries()]
-          .filter(([levelId]) => !unexpectedLevels.includes(levelId))
-          .filter(([, count]) => count > maxPerLevel)
-          .sort(([a], [b]) => levelSortKey(a).localeCompare(levelSortKey(b)))
-          .map(([levelId, count]) => ({ levelId, count, allowed: maxPerLevel }));
+  const overMaxLevels = [...photosByLevel.entries()]
+    .filter(([levelId]) => !unexpectedLevels.includes(levelId))
+    .filter(([levelId, count]) => {
+      const allowed = maxFor(levelId);
+      return allowed !== undefined && count > allowed;
+    })
+    .sort(([a], [b]) => levelSortKey(a).localeCompare(levelSortKey(b)))
+    .map(([levelId, count]) => ({ levelId, count, allowed: maxFor(levelId)! }));
   if (overMaxLevels.length > 0) {
     errors.push({
       rule: 'EXCESS_PHOTOS_PER_LEVEL',
-      message:
-        `${overMaxLevels.length} level(s) have more than ` +
-        `${maxPerLevel} photo(s).`,
+      message: perLevel
+        ? `${overMaxLevels.length} level(s) have more photos than allowed.`
+        : `${overMaxLevels.length} level(s) have more than ` +
+          `${maxPerLevel} photo(s).`,
       detail: { levels: overMaxLevels },
     });
   }

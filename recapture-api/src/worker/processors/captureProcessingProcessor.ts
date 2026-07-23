@@ -15,9 +15,9 @@
 //   • unfixable bundle problems throw NonRetryableJobError with a stable
 //     JobError code → terminal FAILED + error sub-doc, never retried.
 import {
-  compatMaximumPerRing,
-  compatMinimumPerRing,
   DEFAULT_CAPTURE_FLOW_VARIANT,
+  DEFAULT_CAPTURE_MODE,
+  photosByRing,
   ringsForVariant,
 } from '@/models/types/captureVariants';
 import {
@@ -93,13 +93,17 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
   // both legacy-compatible (compat*) so jobs captured under an older per-ring
   // count revision still process.
   const variant = job.captureVariant ?? DEFAULT_CAPTURE_FLOW_VARIANT;
-  const variantRings = [...ringsForVariant(variant)];
+  const mode = job.captureMode ?? DEFAULT_CAPTURE_MODE;
+  const variantRings = [...ringsForVariant(variant, mode)];
+  const perRing = photosByRing(variant, mode);
   const validation = validateCaptureManifest(parsedManifest, {
     requiredLevels: variantRings,
     allowedLevels: variantRings,
-    minPhotosPerLevel: compatMinimumPerRing(variant),
-    maxPhotosPerLevel: compatMaximumPerRing(variant),
+    minPhotosPerLevel: Math.min(...Object.values(perRing).map((b) => b.min)),
+    maxPhotosPerLevel: Math.max(...Object.values(perRing).map((b) => b.max)),
+    photosByLevel: perRing,
     expectedFlowVariant: variant,
+    expectedCaptureMode: mode,
   });
   if (!validation.valid) {
     throw new NonRetryableJobError(
