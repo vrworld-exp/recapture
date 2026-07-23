@@ -20,6 +20,7 @@ import '../../utils/analytics.dart';
 import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
+import 'capture_mode_provider.dart';
 import 'review_grid_items_provider.dart';
 
 /// The live final completion gate. Watch it for `isUnlocked` / per-level status;
@@ -28,8 +29,10 @@ import 'review_grid_items_provider.dart';
 final completionGateProvider = Provider.autoDispose<SummaryGate>((ref) {
   final thresholds =
       ref.watch(captureConfigProvider.select((c) => c.completionThresholds));
+  final variant = ref.watch(captureFlowVariantProvider);
+  final mode = ref.watch(captureModeProvider);
   return evaluateSummaryGate([
-    for (final level in ref.watch(captureFlowVariantProvider).levels)
+    for (final level in activeCaptureLevels(variant, mode))
       LevelCompletionStatus(
         levelCode: level.code,
         // Live accepted frames — the SAME source the review grids + summary read.

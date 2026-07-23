@@ -521,8 +521,8 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
 
   /// Whether this session may auto-capture AT ALL.
   ///
-  /// False in Meshy mode: 2 photos on a ring is nothing for a loop to pace, and
-  /// a frame the loop takes is one the user did not compose — at 10 photos
+  /// False in Meshy mode: a single ring of 6 is nothing for a loop to pace, and
+  /// a frame the loop takes is one the user did not compose — with only 6 frames
   /// feeding a model, every frame is load-bearing. The SHUTTER is unaffected;
   /// this gates only the automatic loop, the AUTO pill, and the settings toggle.
   bool get _autoCaptureAllowed =>
@@ -1538,6 +1538,11 @@ class _ShutterControl extends ConsumerWidget {
     final tiltSupported = tilt?.sensorSupported ?? false;
     final stabilitySupported = stability?.sensorSupported ?? false;
 
+    // Meshy enforces the eye→top window HARD: a shot outside [60,180) is worthless
+    // to the model, so the tilt gate must not fail open. Full mode keeps its
+    // fail-open (never lock out a sensor-less device). See CaptureReadiness.
+    final hardGate = ref.watch(captureModeProvider).usesHardTiltGate;
+
     return ShutterButton(
       key: const ValueKey('capture_shutter'),
       readiness: CaptureReadiness(
@@ -1547,8 +1552,10 @@ class _ShutterControl extends ConsumerWidget {
         inBand: tiltSupported &&
             CapturePitchGuide.isInBand(band, tilt!.tiltDegrees),
         stable: stabilitySupported && stability!.stability == Stability.stable,
-        // Both sensors must be usable to gate; otherwise fail open.
+        // Both sensors must be usable to gate; otherwise fail open (full mode).
         sensorSupported: tiltSupported && stabilitySupported,
+        // In Meshy, enforce the band even without sensors (no fail-open).
+        hardGate: hardGate,
       ),
       onCapture: onCapture,
       onTriggered: onTriggered,

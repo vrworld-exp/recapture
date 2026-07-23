@@ -144,43 +144,43 @@ void main() {
       );
     });
 
-    test('meshy resolves 6 eye / 2 top / 2 bottom', () {
+    test('meshy resolves 6 on the single eye ring, variant-independent', () {
       int seg(String band, CaptureFlowVariant v) => effectiveSegmentsFor(
             config,
             v,
             band,
             mode: CaptureMode.meshy,
           );
+      // The ONLY band Meshy captures is the eye ring — and both variants resolve
+      // it identically (Meshy is variant-independent: no top/bottom ring).
       expect(seg('mid', CaptureFlowVariant.withBottom), 6);
-      expect(seg('high', CaptureFlowVariant.withBottom), 2);
-      expect(seg('low', CaptureFlowVariant.withBottom), 2);
       expect(seg('mid', CaptureFlowVariant.withoutBottom), 6);
-      expect(seg('high', CaptureFlowVariant.withoutBottom), 2);
+      // The active band set is just the eye ring, for either variant.
+      expect(activeBandIdsFor(CaptureFlowVariant.withBottom, CaptureMode.meshy),
+          ['mid']);
+      expect(
+          activeBandIdsFor(CaptureFlowVariant.withoutBottom, CaptureMode.meshy),
+          ['mid']);
     });
 
-    test('totals are a SUM over rings — 10 with bottom, 8 without', () {
+    test('total is 6 for both variants — one ring, variant-independent', () {
       expect(
         expectedPhotoTotalFor(config, CaptureFlowVariant.withBottom,
             mode: CaptureMode.meshy),
-        10,
+        6,
       );
       expect(
         expectedPhotoTotalFor(config, CaptureFlowVariant.withoutBottom,
             mode: CaptureMode.meshy),
-        8,
-      );
-      // The identity full mode satisfies must NOT be assumed here.
-      expect(
-        expectedPhotoTotalFor(config, CaptureFlowVariant.withBottom,
-            mode: CaptureMode.meshy),
-        isNot(3 * 6),
+        6,
       );
     });
 
     test('meshy never inherits a full-mode fallback count', () {
-      // The dangerous failure: an unresolved Meshy lookup silently returning 12
-      // (the legacy band count) or 16 would turn a 2-photo ring into a
-      // 16-photo one and strand the user mid-capture.
+      // The dangerous failure: the Meshy eye ring silently resolving to 12 (the
+      // legacy band count) or 16 would turn the 6-photo ring into a 16-photo one
+      // and strand the user mid-capture. Even with a bare config whose 'mid'
+      // band carries the legacy segments:12, the Meshy count stays 6.
       const bare = CaptureConfig(
         version: 1,
         pitchBands: [
@@ -193,9 +193,9 @@ void main() {
         ),
       );
       expect(
-        effectiveSegmentsFor(bare, CaptureFlowVariant.withBottom, 'high',
+        effectiveSegmentsFor(bare, CaptureFlowVariant.withBottom, 'mid',
             mode: CaptureMode.meshy),
-        2,
+        6,
       );
     });
   });
@@ -299,7 +299,7 @@ void main() {
             ),
             SelectableOptionCard<CaptureMode>(
               title: 'Meshy Capture',
-              subtitle: '10 photos',
+              subtitle: '6 photos',
               value: CaptureMode.meshy,
               selected: CaptureMode.full,
               onSelect: (m) => tapped = m,
@@ -320,7 +320,7 @@ void main() {
         home: Scaffold(
           body: SelectableOptionCard<CaptureMode>(
             title: 'Meshy Capture',
-            subtitle: '10 photos',
+            subtitle: '6 photos',
             value: CaptureMode.meshy,
             selected: CaptureMode.full,
             locked: true,

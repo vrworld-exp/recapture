@@ -1,7 +1,7 @@
 // lib/application/capture/capture_mode_provider.dart
 //
 // Reactive + persistence wiring for the capture MODE (full 48-photo guided vs
-// meshy 8–10-photo manual — see CaptureMode).
+// meshy single-ring-of-6 manual — see CaptureMode).
 //
 // OWNERSHIP: the mode is chosen when the project is created (the `+` sheet on
 // Projects), held here for the whole app session, and persisted per project as

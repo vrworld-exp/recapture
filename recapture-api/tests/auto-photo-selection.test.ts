@@ -438,7 +438,7 @@ describe('selectPhotosForAutoGeneration', () => {
 // quadrant mapping degenerates at that size and starts declining good captures.
 // It does not, and these tests pin down why so a future ring-size change cannot
 // break it silently.
-describe('meshy ring sizes (6 eye / 2 top / 2 bottom)', () => {
+describe('meshy ring size (a single eye ring of 6)', () => {
   /** A complete 6-photo eye ring, one photo per segment. */
   function meshyEyeRing(blurScores?: number[]) {
     return manifest(
@@ -547,8 +547,11 @@ describe('meshy ring sizes (6 eye / 2 top / 2 bottom)', () => {
   });
 
   it('falls back to the whole pool when the eye ring alone is too small', () => {
-    // TOP/LOW hold 2 photos each in Meshy mode. If the eye ring is unusable the
-    // selector widens to ALL rings rather than declining outright.
+    // Robustness of the PURE selector: given a pool that also contains stray
+    // TOP/LOW frames (e.g. a legacy 6/2/2 capture, or a full-mode pool), an
+    // unusable eye ring widens to ALL rings rather than declining outright.
+    // Real single-ring Meshy captures never produce TOP/LOW — this only proves
+    // the selector never crashes on a ring smaller than the quadrant count.
     const photos = [
       photo({ file: 'eye_0.jpg', ring: 'EYE', segmentIndex: 0, blurScore: 10 }),
       photo({ file: 'top_0.jpg', ring: 'TOP', segmentIndex: 0, blurScore: 100 }),

@@ -15,6 +15,7 @@ import '../../../application/capture/session/capture_session_store.dart';
 import '../../../application/config/config_notifier.dart';
 import '../../../data/local/active_session_box.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../../../domain/entities/checklist_item.dart';
 import '../../../utils/analytics.dart';
@@ -184,6 +185,9 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
   @override
   Widget build(BuildContext context) {
     final variant = ref.watch(captureFlowVariantProvider);
+    // Meshy is variant-independent (ONE ring of 6, no underside) — the bottom
+    // question is meaningless there, so it is replaced with a single explainer.
+    final mode = ref.watch(captureModeProvider);
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       appBar: AppBar(
@@ -228,11 +232,14 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
                     ),
                   ],
                   const SizedBox(height: AppSpacing.lg),
-                  _BottomCaptureQuestion(
-                    selected: variant,
-                    locked: _variantLocked,
-                    onSelect: _selectVariant,
-                  ),
+                  if (mode == CaptureMode.meshy)
+                    const _MeshyCaptureNote()
+                  else
+                    _BottomCaptureQuestion(
+                      selected: variant,
+                      locked: _variantLocked,
+                      onSelect: _selectVariant,
+                    ),
                 ],
               ),
             ),
@@ -326,6 +333,33 @@ class _BottomCaptureQuestion extends ConsumerWidget {
           selected: selected,
           locked: locked,
           onSelect: onSelect,
+        ),
+      ],
+    );
+  }
+}
+
+/// The Meshy-mode explainer that REPLACES the bottom question: Meshy is one ring
+/// of 6, variant-independent, with no underside — so there is no Yes/No choice to
+/// make, only a description of the single sweep.
+class _MeshyCaptureNote extends StatelessWidget {
+  const _MeshyCaptureNote();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'One ring — 6 photos.',
+          style: theme.textTheme.bodyLarge,
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Circle the object once, keeping the camera between eye level and '
+          'looking down at its top. No underside needed.',
+          style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
         ),
       ],
     );

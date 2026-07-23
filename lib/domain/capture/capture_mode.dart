@@ -6,23 +6,26 @@
 //
 //   full  → the photogrammetry-grade guided capture: 48 photos, auto-capture
 //           loop, the flow that existed before this type did.
-//   meshy → a short capture tuned for Meshy AI: 8–10 photos, shutter only.
-//           The model selector picks 4 of them, so the capture only has to
-//           supply spread — not density.
+//   meshy → a short capture tuned for Meshy AI: ONE ring of 6, shutter only,
+//           with a hard eye→top tilt gate. The model selector picks the best 4
+//           of them, so the capture only has to supply spread — not density.
 //
-// ── ORTHOGONAL TO CaptureFlowVariant, NOT A THIRD VARIANT ───────────────────
-// [CaptureFlowVariant] answers "can you photograph the object's BOTTOM?", and
-// that question is still meaningful in Meshy mode — so the two compose into a
-// matrix rather than collapsing into one enum:
+// ── ORTHOGONAL TO CaptureFlowVariant IN FULL MODE ───────────────────────────
+// [CaptureFlowVariant] answers "can you photograph the object's BOTTOM?". In
+// FULL mode that question is meaningful, so the two compose into a matrix:
 //
 //   full  × with_bottom    → 16 / 16 / 16  (48)
 //   full  × without_bottom → 24 / 24       (48)
-//   meshy × with_bottom    → 6 / 2 / 2     (10)
-//   meshy × without_bottom → 6 / 2         (8)
 //
-// Folding Meshy into the variant enum would also break that type's documented
-// invariant that `without_bottom.bandIds` is a strict PREFIX of
-// `with_bottom.bandIds` — the flow order would stop being one sequence.
+// In MESHY mode the variant is INERT — both cells are the identical single eye
+// ring of 6 (there is no top or bottom ring to add), so:
+//
+//   meshy × with_bottom    → 6  (one eye ring)
+//   meshy × without_bottom → 6  (the same one eye ring)
+//
+// The active level list in Meshy is therefore always just Level A regardless of
+// variant — see `activeCaptureLevels` (capture_level_events.dart), the single
+// source every flow-shaping iteration goes through.
 //
 // Per-ring segment counts live in [CaptureConfig.variantSegments]
 // (remote-overridable, resolved through `effectiveSegmentsFor`); this type owns
@@ -39,7 +42,7 @@ enum CaptureMode {
   /// The full photogrammetry capture (48 photos, guided auto-capture).
   full,
 
-  /// The short Meshy AI capture (8–10 photos, manual shutter).
+  /// The short Meshy AI capture (one ring of 6, manual shutter, hard tilt gate).
   meshy;
 
   /// Canonical wire/persistence id — used in Hive, analytics, the API
@@ -51,7 +54,7 @@ enum CaptureMode {
 
   /// Whether the capture screen runs its AUTO-CAPTURE loop.
   ///
-  /// False for Meshy: at 2 photos on a ring there is nothing for an auto loop
+  /// False for Meshy: on a single ring of 6 there is nothing for an auto loop
   /// to pace, and every frame it takes on its own is one the user did not
   /// compose. The shutter stays live in both modes — this gates only the loop.
   bool get usesAutoCapture => this == CaptureMode.full;
@@ -59,10 +62,20 @@ enum CaptureMode {
   /// Whether OBJECT SIZE modulates this mode's counts.
   ///
   /// False for Meshy: the size-based knobs (30/24/18 minimum photos, 36/30/24
-  /// segments) are all far above Meshy's per-ring counts, so applying them
-  /// would make every Meshy capture permanently incomplete. Meshy captures
-  /// 6/2/2 for a thimble and for a motorcycle alike.
+  /// segments) are all far above Meshy's ring count, so applying them would make
+  /// every Meshy capture permanently incomplete. Meshy captures one ring of 6
+  /// for a thimble and for a motorcycle alike.
   bool get usesObjectSize => this == CaptureMode.full;
+
+  /// Whether the shutter's tilt gate is HARD in this mode — enforced even when
+  /// the motion sensors are unavailable (no fail-open).
+  ///
+  /// True for Meshy: a shot outside the eye→top window is worthless to the
+  /// model, so the band must bite regardless of sensor state (a sensor-less
+  /// device then cannot capture, which is correct — it cannot meet the
+  /// guarantee). False for full, whose shutter fails OPEN so a sensor-less
+  /// device is never locked out. See [CaptureReadiness].
+  bool get usesHardTiltGate => this == CaptureMode.meshy;
 
   /// Whether a 3D model is generated automatically once the upload finishes.
   ///

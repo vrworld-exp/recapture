@@ -9,6 +9,7 @@ import '../../application/capture/completion_gate_provider.dart';
 import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/capture/capture_flow_variant.dart';
+import '../../domain/capture/capture_mode.dart';
 import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
 import '../../domain/entities/retake_request.dart';
@@ -267,12 +268,17 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (context, _) => FlowBackScope(
           child: Consumer(
             builder: (context, ref, _) {
+              final mode = ref.watch(captureModeProvider);
               final target = effectiveSegmentsFor(
                 ref.watch(captureConfigProvider),
                 ref.watch(captureFlowVariantProvider),
                 'mid',
-                mode: ref.watch(captureModeProvider),
+                mode: mode,
               );
+              // Meshy has only Level A (the single eye ring): its primary CTA
+              // finishes the capture and goes straight to the Summary — there is
+              // no Level B/C. Full mode advances to the Level B intro.
+              final meshy = mode == CaptureMode.meshy;
               return LevelACompleteScreen(
                 summary: LevelASummary(
                   accepted: target - 2,
@@ -280,7 +286,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                   coveragePct: 92,
                   rejected: 1,
                 ),
-                onStartLevelB: () => context.go(AppRoutes.levelBIntro),
+                primaryLabel: meshy ? 'Finish — go to summary' : 'Start Level B',
+                onStartLevelB: meshy
+                    ? () => context.go(AppRoutes.captureSummary)
+                    : () => context.go(AppRoutes.levelBIntro),
                 onReview: () => context.push(AppRoutes.levelAReview),
                 onDoneExit: () => context.go(AppRoutes.projects),
               );

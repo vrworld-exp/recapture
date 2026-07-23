@@ -259,17 +259,19 @@ class VariantSegments {
     'without_bottom': {'mid': 24, 'high': 24},
   };
 
-  /// Meshy mode's bundled numbers: 6 eye / 2 top / 2 bottom (10 with the
-  /// bottom ring, 8 without). Far fewer than full mode because the model
-  /// selector only consumes 4 photos — the capture supplies spread, not
-  /// density.
+  /// Meshy mode's bundled numbers: ONE eye ring of 6 (variant-independent).
+  /// "Can you photograph the bottom?" does not change a Meshy capture — both
+  /// variants resolve to the identical single-ring shape, so there is no `high`
+  /// (top) or `low` (bottom) band here at all. Far fewer than full mode because
+  /// the model selector only consumes 4 photos — the capture supplies spread,
+  /// not density.
   /// Public alias of the Meshy bundled numbers — [CaptureConfig.fromMap] needs
   /// them as the fallback when the remote block is absent.
   static const Map<String, Map<String, int>> meshyDefaults = _meshyDefaults;
 
   static const Map<String, Map<String, int>> _meshyDefaults = {
-    'with_bottom': {'mid': 6, 'high': 2, 'low': 2},
-    'without_bottom': {'mid': 6, 'high': 2},
+    'with_bottom': {'mid': 6},
+    'without_bottom': {'mid': 6},
   };
 
   /// The product defaults: 16-16-16 with bottom, 24-24 without (48 total both).
@@ -381,10 +383,12 @@ class VariantSegments {
 ///
 /// NOTE FOR MESHY: the legacy per-band [PitchBand.segments] fallback and the
 /// final `16` are FULL-mode numbers and must never be reached in Meshy mode —
-/// they would silently turn a 2-photo ring into a 12- or 16-photo one. The
-/// Meshy block is complete for every (variant, band) pair it can be asked
-/// about, so the fallback is unreachable there by construction; the explicit
-/// guard below keeps it that way if someone later trims the defaults.
+/// they would silently turn the single 6-photo ring into a 12- or 16-photo one.
+/// The Meshy block is complete for the one (variant, `mid`) pair Meshy can be
+/// asked about (the flow only ever runs Level A in Meshy — see
+/// activeCaptureLevels), so the fallback is unreachable there by construction;
+/// the explicit guard below keeps it that way if someone later trims the
+/// defaults.
 int effectiveSegmentsFor(
   CaptureConfig config,
   CaptureFlowVariant variant,
@@ -397,8 +401,10 @@ int effectiveSegmentsFor(
   final v = block.segmentsFor(variant.id, bandId);
   if (v != null) return v;
   if (mode == CaptureMode.meshy) {
-    // Never inherit a full-mode count here — see the note above.
-    return VariantSegments.meshyBundledDefault.segmentsFor(variant.id, bandId) ?? 2;
+    // Never inherit a full-mode count here — see the note above. The only band
+    // Meshy resolves is the eye ring ('mid' → 6); a degenerate ask for any
+    // other band falls back to that ring count, never a phantom full-mode one.
+    return VariantSegments.meshyBundledDefault.segmentsFor(variant.id, bandId) ?? 6;
   }
   for (final b in config.pitchBands) {
     if (b.id == bandId && b.segments >= 1) return b.segments;
@@ -406,17 +412,29 @@ int effectiveSegmentsFor(
   return 16;
 }
 
-/// Total expected photos for a whole capture — the SUM over the variant's
-/// active rings, never `rings × perRing`. That identity holds in full mode and
-/// does not in Meshy mode (6/2/2), so the sum is the only safe form. Mirrors
-/// the server's `expectedImageCount`.
+/// The band ids a capture actually runs, for [variant] under [mode]. FULL mode
+/// uses the variant's rings ([CaptureFlowVariant.bandIds]); MESHY mode is ONE
+/// eye ring ('mid'), variant-independent — the domain-side counterpart of the
+/// application layer's `activeCaptureLevels(…, meshy) == [Level A]`. Both encode
+/// the same fact ("Meshy = the eye ring"), so a total computed here and a flow
+/// built there can never disagree on which rings exist.
+List<String> activeBandIdsFor(
+  CaptureFlowVariant variant,
+  CaptureMode mode,
+) =>
+    mode == CaptureMode.meshy ? const ['mid'] : variant.bandIds;
+
+/// Total expected photos for a whole capture — the SUM over the ACTIVE rings
+/// ([activeBandIdsFor]), never `rings × perRing`. That identity holds in full
+/// mode and does not for a non-uniform mode, so the sum is the only safe form.
+/// Mirrors the server's `expectedImageCount` (which sums over its ring set too).
 int expectedPhotoTotalFor(
   CaptureConfig config,
   CaptureFlowVariant variant, {
   CaptureMode mode = CaptureMode.full,
 }) {
   var total = 0;
-  for (final bandId in variant.bandIds) {
+  for (final bandId in activeBandIdsFor(variant, mode)) {
     total += effectiveSegmentsFor(config, variant, bandId, mode: mode);
   }
   return total;
@@ -449,9 +467,9 @@ class CaptureConfig {
   /// FULL mode only; see [meshySegments].
   final VariantSegments variantSegments;
 
-  /// The same, for MESHY mode (6-2-2 / 6-2 by default). A separate field rather
-  /// than a mode-nested [variantSegments] because the server serves it under a
-  /// separate wire key — re-keying the existing block would strand already
+  /// The same, for MESHY mode (a single eye ring of 6, variant-independent, by
+  /// default). A separate field rather than a mode-nested [variantSegments]
+  /// because the server serves it under a separate wire key — re-keying the existing block would strand already
   /// shipped clients on bundled defaults with no error anywhere.
   final VariantSegments meshySegments;
 

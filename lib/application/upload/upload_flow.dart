@@ -795,6 +795,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
         ref.read(captureConfigProvider),
         variant: ref.read(captureFlowVariantProvider),
         registry: ref.read(levelCaptureLedgerRegistryProvider),
+        mode: ref.read(captureModeProvider),
       );
       DevUploadLog.instance.add(
           'progression derived from ledger (${progression.levels.map((l) => '${l.levelCode}=${l.acceptedCount}').join(', ')})');

@@ -452,8 +452,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 child: ConstrainedBox(
                   constraints: BoxConstraints(minHeight: constraints.maxHeight),
                   child: ProjectsEmptyState(
-                    onStartCapture: () =>
-                        context.pushNamed(AppRouteNames.createProject),
+                    // Go through the same capture-mode sheet the FAB uses — a
+                    // direct push here would skip the Full/Meshy chooser, so a
+                    // first-time user (whose list is empty) could never start a
+                    // Meshy capture and would silently get a Full one.
+                    onStartCapture: _onCreateProject,
                   ),
                 ),
               ),

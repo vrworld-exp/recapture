@@ -1,7 +1,8 @@
 // lib/application/capture/progression/level_segment_machines.dart
 //
-// Builds one independent [LevelSegmentMachine] per ACTIVE level of the flow
-// variant — the same source, the SAME band resolution, and the SAME segment
+// Builds one independent [LevelSegmentMachine] per ACTIVE level (via
+// [activeCaptureLevels]: full → A→B[→C]; meshy → just A) — the same source, the
+// SAME band resolution, and the SAME segment
 // resolver ([effectiveSegmentsFor]) as `levelStatesFromConfig`
 // (level_progression_builder.dart), so a level's machine and its progression
 // summary can never disagree on segment count or which band it is.
@@ -27,14 +28,16 @@ List<LevelSegmentMachine> levelSegmentMachinesFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   int fillThreshold = 1,
+  CaptureMode mode = CaptureMode.full,
 }) =>
     [
-      for (final level in variant.levels)
+      for (final level in activeCaptureLevels(variant, mode))
         levelSegmentMachineFor(
           level,
           config,
           variant: variant,
           fillThreshold: fillThreshold,
+          mode: mode,
         ),
     ];
 

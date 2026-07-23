@@ -38,7 +38,7 @@ final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
   final variant = ref.watch(captureFlowVariantProvider);
   final mode = ref.watch(captureModeProvider);
   return evaluateUploadGate([
-    for (final level in variant.levels)
+    for (final level in activeCaptureLevels(variant, mode))
       () {
         final bandId = pitchBandIdForLevel(level);
         // Live accepted shots — the SAME source the review grids + completion

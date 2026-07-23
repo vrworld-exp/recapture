@@ -1,9 +1,9 @@
 // lib/application/capture/progression/level_progression_builder.dart
 //
 // Builds the ordered level sequence for the progression core FROM CONFIG + the
-// FLOW VARIANT — never a hardcoded 3-tuple. It iterates the variant's ACTIVE
-// levels (CaptureFlowVariant.levels: A→B→C with bottom, A→B without) and
-// resolves each level's band via the single level→band map [pitchBandIdForLevel]
+// FLOW VARIANT + the capture MODE — never a hardcoded tuple. It iterates the
+// active level list via [activeCaptureLevels] (full: A→B[→C]; meshy: just A, the
+// single eye ring) and resolves each level's band via [pitchBandIdForLevel]
 // and its segment count via the single [effectiveSegmentsFor] resolver
 // (variant counts → legacy band counts → 12). Retuning a variant's counts
 // server-side (guided_capture_variant_segments) flows straight through here
@@ -33,7 +33,7 @@ List<LevelProgressState> levelStatesFromConfig(
   CaptureMode mode = CaptureMode.full,
 }) {
   return [
-    for (final level in variant.levels)
+    for (final level in activeCaptureLevels(variant, mode))
       () {
         final bandId = pitchBandIdForLevel(level);
         return LevelProgressState(
@@ -53,12 +53,14 @@ LevelProgression initialProgressionFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
+  CaptureMode mode = CaptureMode.full,
 }) =>
     LevelProgression.of(
       levelStatesFromConfig(
         config,
         variant: variant,
         minAcceptedCount: minAcceptedCount,
+        mode: mode,
       ),
     );
 
@@ -76,10 +78,11 @@ LevelProgression progressionFromLedger(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   required LevelCaptureLedgerRegistry registry,
+  CaptureMode mode = CaptureMode.full,
 }) {
   final thresholds = config.completionThresholds;
   return LevelProgression.of([
-    for (final base in levelStatesFromConfig(config, variant: variant))
+    for (final base in levelStatesFromConfig(config, variant: variant, mode: mode))
       () {
         final accepted = registry.ledgerFor(base.levelId).accepted;
         final filled = accepted
@@ -112,11 +115,13 @@ LevelProgression reconcileWithConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
+  CaptureMode mode = CaptureMode.full,
 }) {
   final fresh = levelStatesFromConfig(
     config,
     variant: variant,
     minAcceptedCount: minAcceptedCount,
+    mode: mode,
   );
   final merged = [
     for (final f in fresh)

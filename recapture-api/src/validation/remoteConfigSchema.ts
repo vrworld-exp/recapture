@@ -154,8 +154,8 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     with_bottom: variantSegmentsBlock('with_bottom'),
     without_bottom: variantSegmentsBlock('without_bottom'),
   },
-  // EYE 6 / TOP 2 / LOW 2 — see the shape matrix. `thresholds` and
-  // `segmentCounts` above are NOT consulted in Meshy mode: they are the
+  // ONE ring of 6 (variant-independent) — see the shape matrix. `thresholds`
+  // and `segmentCounts` above are NOT consulted in Meshy mode: they are the
   // object-size knobs (30/24/18 photos, 36/30/24 segments), all far above
   // Meshy's counts, and object size does not modulate this mode at all.
   meshy_capture_variant_segments: {

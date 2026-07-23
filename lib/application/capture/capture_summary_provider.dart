@@ -159,7 +159,7 @@ final captureSummaryProvider =
   final thresholds = config.completionThresholds;
 
   return [
-    for (final level in variant.levels)
+    for (final level in activeCaptureLevels(variant, mode))
       () {
         final bandId = pitchBandIdForLevel(level);
         final items =
