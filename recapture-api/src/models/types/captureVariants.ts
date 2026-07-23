@@ -133,15 +133,17 @@ const LEGACY_PER_RING: Record<CaptureMode, Record<CaptureFlowVariant, readonly n
  *   full  → 80. Mirrors the mobile client's bundled `minCoveragePct`
  *           (lib/domain/entities/capture_config.dart). A ring finished at 80%
  *           is a legitimate, uploadable capture.
- *   meshy → 100, stated EXPLICITLY rather than left to emerge from ceil().
- *           Meshy is a single ring of 6 and the model selector needs spread
- *           from all of them, so "capture all of it" is the honest product rule.
- *           Stating it explicitly also means the floor cannot silently drift the
- *           day someone retunes the ring's count.
+ *   meshy → 80, which for the single ring of 6 means ceil(0.8 · 6) = 5 — a Meshy
+ *           capture may finish ONE slot short (5 of 6) rather than demanding the
+ *           last, hard-to-reach angle. The model selector picks the best 4 of
+ *           whatever is captured, and 5 slots still give it spread across the
+ *           object. Mirrors the client's `minCoveragePctForMode(meshy)` — the two
+ *           MUST stay equal (a server floor above the client's completion rule
+ *           makes a client-complete capture un-uploadable).
  */
 export const MIN_RING_COVERAGE_PCT_BY_MODE: Record<CaptureMode, number> = {
   full: 80,
-  meshy: 100,
+  meshy: 80,
 };
 
 /**
