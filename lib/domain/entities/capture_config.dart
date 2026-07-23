@@ -95,6 +95,28 @@ class CaptureThresholds {
       );
 }
 
+/// The Meshy capture-advance / upload coverage floor (PERCENT). For the single
+/// eye ring of 6 this means `ceil(0.8 · 6) = 5` filled slots — a Meshy capture
+/// may finish ONE slot short (5 of 6) rather than demanding the last, hard-to-
+/// reach angle. Stated EXPLICITLY here (not read from the tunable
+/// [CaptureThresholds.minCoveragePct]) so that a full-mode retune — or a stale
+/// cached config that raised the global floor — can never change what "a Meshy
+/// ring is done" means. MUST equal the backend `MIN_RING_COVERAGE_PCT_BY_MODE
+/// .meshy` (a client floor above the server's makes a client-complete capture
+/// un-uploadable, and below it lets the client "finish" a bundle the server 400s).
+const double kMeshyMinCoveragePct = 80;
+
+/// The coverage floor (PERCENT of a ring's segments) that a level must reach to
+/// count as done, resolved per capture MODE. Mirrors the backend's
+/// `minCoveragePctFor(mode)`:
+///   • full  → the remote/bundled [CaptureThresholds.minCoveragePct] (tunable).
+///   • meshy → the explicit [kMeshyMinCoveragePct] (5 of 6), independent of the
+///     global so a full-mode change never moves the Meshy rule.
+/// Every client coverage gate (capture-screen auto-advance, the upload gate's
+/// `requiredFilled`) routes through this ONE function so they cannot diverge.
+double minCoveragePctForMode(CaptureMode mode, CaptureThresholds thresholds) =>
+    mode == CaptureMode.meshy ? kMeshyMinCoveragePct : thresholds.minCoveragePct;
+
 /// Default minimum accepted frames a level needs to count as complete when no
 /// per-level override is configured. Validated `>= 1`.
 const int kDefaultMinAcceptedFrames = 1;

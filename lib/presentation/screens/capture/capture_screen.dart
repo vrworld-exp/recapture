@@ -959,7 +959,13 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       coverage,
       acceptedCount: _ledger.accepted.length,
       minAcceptedCount: 1,
-      minCoveragePct: ref.read(captureConfigProvider).thresholds.minCoveragePct,
+      // Per-mode floor: Meshy finishes one slot short (5 of 6) via its explicit
+      // floor; full uses the tunable global. Routed through the ONE resolver the
+      // upload gate also uses, so "capture done" and "upload eligible" agree.
+      minCoveragePct: minCoveragePctForMode(
+        ref.read(captureModeProvider),
+        ref.read(captureConfigProvider).thresholds,
+      ),
     );
     if (!completion.isComplete) return;
     _levelCompleteNavigated = true;

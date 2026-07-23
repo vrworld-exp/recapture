@@ -1,9 +1,10 @@
 // tests/jobs-meshy-mode.test.ts
 //
 // Meshy capture mode end-to-end through the job endpoints: create with
-// `captureMode: 'meshy'`, finalize the single EYE ring of 6, and prove the
-// per-ring floor bites (a 5-photo EYE ring is a rejection) and that TOP/LOW —
-// which Meshy no longer captures — are rejected as UNEXPECTED_LEVELS.
+// `captureMode: 'meshy'`, finalize the single EYE ring (5 or 6 — the ring may
+// finish one slot short), and prove the per-ring floor bites (a 4-photo EYE ring
+// is a rejection) and that TOP/LOW — which Meshy no longer captures — are
+// rejected as UNEXPECTED_LEVELS.
 //
 // The legacy-client case lives here too: a request that never mentions
 // captureMode must still be a full capture, because that is every client
@@ -123,6 +124,22 @@ describe('POST /jobs — captureMode on the wire', () => {
     expect(saved!.captureVariant).toBe('with_bottom');
   });
 
+  it('accepts the one-slot-short count of 6 (5 photos + manifest)', async () => {
+    // The ring may finish at 5 of 6, so 6 files (5 + manifest) is now in range.
+    const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 6 });
+
+    expect(res.status).toBe(201);
+    expect((await Job.findById(res.body.job.id).exec())!.captureMode).toBe('meshy');
+  });
+
+  it('rejects a count below the one-slot-short floor (5 = 4 photos + manifest)', async () => {
+    const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 5 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_REQUEST');
+    expect(res.body.message).toContain('meshy');
+  });
+
   it('a client that never sends captureMode is a FULL capture', async () => {
     // Every client in the field today. The default must be applied at the same
     // layer the variant default is, not inferred later from the counts.
@@ -143,9 +160,9 @@ describe('POST /jobs — captureMode on the wire', () => {
     expect(res.body.message).toContain('meshy');
   });
 
-  it('rejects the old 6/2/2 Meshy count (11) — only 7 is legal now', async () => {
+  it('rejects the old 6/2/2 Meshy count (11) — only 6–7 is legal now', async () => {
     // A client still shaped to the retired 6/2/2 capture would send 11; the
-    // single-ring reshape makes exactly 7 the only accepted Meshy count.
+    // single-ring reshape makes only 6 or 7 an accepted Meshy count.
     const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 11 });
 
     expect(res.status).toBe(400);
@@ -183,10 +200,10 @@ describe('POST /jobs/:jobId/finalize — meshy bundles', () => {
   /**
    * A job in UPLOADING with [storedCount] files expected.
    *
-   * Creation always uses the legal 7 (create-job's range refuses anything
-   * else in this mode) and the stored count is then overridden — that is the
-   * only way to drive the FINALIZE rules with a wrong-sized bundle, which is
-   * what these tests are actually about.
+   * Creation always uses the legal 7 (create-job's range is 6–7 in this mode)
+   * and the stored count is then overridden — that is the only way to drive the
+   * FINALIZE rules with a wrong-sized bundle, which is what these tests are
+   * actually about.
    */
   async function uploadingMeshyJob(storedCount = 7): Promise<string> {
     const res = await createJob({ captureMode: 'meshy', expectedFilesCount: 7 });
@@ -209,18 +226,28 @@ describe('POST /jobs/:jobId/finalize — meshy bundles', () => {
     expect(res.body.filesVerified).toBe(7);
   });
 
-  it('a 5-photo EYE ring is rejected — the 100% floor bites', async () => {
-    // At a 100% coverage floor the single ring is all-or-nothing: one shot short
-    // of 6 is INSUFFICIENT_PHOTOS_PER_LEVEL.
+  it('a 5-photo EYE ring finalizes — the ring may finish one slot short (6 files)', async () => {
+    // The 80% floor makes 5 of 6 a complete, uploadable Meshy ring.
     const jobId = await uploadingMeshyJob(6);
 
     const res = await finalizeWith(jobId, meshyManifest({ EYE: 5 }), 6);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state).toBe('QUEUED');
+    expect(res.body.filesVerified).toBe(6);
+  });
+
+  it('a 4-photo EYE ring is rejected — below the 5-of-6 floor', async () => {
+    // One slot short is allowed (5); two short (4) is INSUFFICIENT_PHOTOS_PER_LEVEL.
+    const jobId = await uploadingMeshyJob(5);
+
+    const res = await finalizeWith(jobId, meshyManifest({ EYE: 4 }), 5);
 
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('VERIFICATION_FAILED');
     expect(res.body.validationErrors[0].rule).toBe('INSUFFICIENT_PHOTOS_PER_LEVEL');
     expect(res.body.validationErrors[0].detail.levels).toEqual([
-      { levelId: 'EYE', count: 5, required: 6 },
+      { levelId: 'EYE', count: 4, required: 5 },
     ]);
   });
 

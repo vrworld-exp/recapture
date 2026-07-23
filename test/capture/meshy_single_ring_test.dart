@@ -17,6 +17,7 @@ import 'package:recapture/application/capture/ledger/captured_photo_record.dart'
 import 'package:recapture/application/capture/progression/level_progression_builder.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
 import 'package:recapture/domain/capture/capture_mode.dart';
+import 'package:recapture/domain/capture/level_completion.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/capture_pitch_guide.dart';
 import 'package:recapture/domain/entities/capture_readiness.dart' as readiness;
@@ -113,8 +114,49 @@ void main() {
       final mid = p.stateForId('mid')!;
       expect(mid.segmentCount, 6);
       expect(mid.filledCount, 6);
-      expect(mid.isComplete, isTrue); // all 6 → the 100% floor is met
+      expect(mid.isComplete, isTrue); // all 6 filled
       expect(p.overallComplete, isTrue);
+    });
+  });
+
+  group('coverage floor — Meshy finishes one slot short (5 of 6)', () {
+    test('minCoveragePctForMode: meshy is the explicit 80, full is the global', () {
+      expect(
+        minCoveragePctForMode(CaptureMode.meshy, config.thresholds),
+        kMeshyMinCoveragePct,
+      );
+      expect(kMeshyMinCoveragePct, 80);
+      // Full defers to the tunable global (bundled default 80 here).
+      expect(
+        minCoveragePctForMode(CaptureMode.full, config.thresholds),
+        config.thresholds.minCoveragePct,
+      );
+    });
+
+    test('the eye ring auto-advances at 5 of 6, but not at 4', () {
+      final pct = minCoveragePctForMode(CaptureMode.meshy, config.thresholds);
+      // 5 filled of 6 clears the floor; the ring is done one slot short.
+      expect(
+        evaluateLevelA(
+          filledCount: 5,
+          segmentCount: 6,
+          acceptedCount: 5,
+          minAcceptedCount: 1,
+          minCoveragePct: pct,
+        ).isComplete,
+        isTrue,
+      );
+      // 4 of 6 is still short — two slots missing does not finish the ring.
+      expect(
+        evaluateLevelA(
+          filledCount: 4,
+          segmentCount: 6,
+          acceptedCount: 4,
+          minAcceptedCount: 1,
+          minCoveragePct: pct,
+        ).isComplete,
+        isFalse,
+      );
     });
   });
 

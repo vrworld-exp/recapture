@@ -59,8 +59,11 @@ final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
           accepted: items.length,
           required: config.uploadMinShots.minShotsFor(level.code),
           filled: filled,
-          requiredFilled:
-              requiredSegmentsFor(config.thresholds.minCoveragePct, segments),
+          // Per-mode floor: Meshy requires 5 of 6 (its explicit floor); full
+          // uses the tunable global. SAME resolver the capture-screen advance
+          // uses, so the two never disagree on "how many segments is enough".
+          requiredFilled: requiredSegmentsFor(
+              minCoveragePctForMode(mode, config.thresholds), segments),
         );
       }(),
   ]);

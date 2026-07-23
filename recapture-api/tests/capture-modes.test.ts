@@ -86,12 +86,13 @@ describe('meshy shape — ONE ring of 6', () => {
   });
 });
 
-describe('meshy coverage floor — all-or-nothing, stated not emergent', () => {
-  it('is 100%, so the ring must be fully captured', () => {
-    expect(MIN_RING_COVERAGE_PCT_BY_MODE.meshy).toBe(100);
-    expect(minimumPerRing('with_bottom', 'EYE', 'meshy')).toBe(6);
-    expect(minimumImageCount('with_bottom', 'meshy')).toBe(6);
-    expect(minimumImageCount('without_bottom', 'meshy')).toBe(6);
+describe('meshy coverage floor — one slot short, stated not emergent', () => {
+  it('is 80%, so the single ring of 6 may finish one slot short (5 of 6)', () => {
+    expect(MIN_RING_COVERAGE_PCT_BY_MODE.meshy).toBe(80);
+    // ceil(0.8 · 6) = 5 — a Meshy ring finishes at 5 of its 6 slots.
+    expect(minimumPerRing('with_bottom', 'EYE', 'meshy')).toBe(5);
+    expect(minimumImageCount('with_bottom', 'meshy')).toBe(5);
+    expect(minimumImageCount('without_bottom', 'meshy')).toBe(5);
   });
 
   it('never exceeds the expected count on any ring (the un-uploadable trap)', () => {
@@ -108,23 +109,24 @@ describe('meshy coverage floor — all-or-nothing, stated not emergent', () => {
     }
   });
 
-  it('has no legacy revisions, so compat bounds equal the current ones', () => {
-    // Meshy has never shipped a stable count to stay compatible with; inventing
-    // tolerance would just widen the accepted range.
-    expect(compatMinimumImageCount('with_bottom', 'meshy')).toBe(6);
+  it('has no legacy revisions — compat bounds are the current floor..ceiling', () => {
+    // Meshy has never shipped a stable count to stay compatible with, so the
+    // compat range is just [coverage floor (5), expected ceiling (6)] — the same
+    // 5-or-6 window finalize accepts and create-job ranges over.
+    expect(compatMinimumImageCount('with_bottom', 'meshy')).toBe(5);
     expect(compatMaximumImageCount('with_bottom', 'meshy')).toBe(6);
-    expect(compatMinimumImageCount('without_bottom', 'meshy')).toBe(6);
+    expect(compatMinimumImageCount('without_bottom', 'meshy')).toBe(5);
     expect(compatMaximumImageCount('without_bottom', 'meshy')).toBe(6);
   });
 });
 
 describe('photosByRing — the per-ring bound shape', () => {
-  it('meshy is a single EYE pair; TOP/LOW are absent', () => {
+  it('meshy is a single EYE pair (5 floor..6 ceiling); TOP/LOW are absent', () => {
     expect(photosByRing('with_bottom', 'meshy')).toEqual({
-      EYE: { min: 6, max: 6 },
+      EYE: { min: 5, max: 6 },
     });
     expect(photosByRing('without_bottom', 'meshy')).toEqual({
-      EYE: { min: 6, max: 6 },
+      EYE: { min: 5, max: 6 },
     });
   });
 
