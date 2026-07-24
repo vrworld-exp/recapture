@@ -65,14 +65,21 @@ abstract interface class ProjectsRepository {
   /// does not exist there: an owner gets 403 on the admin route, and the owner
   /// payload carries no steps, no trace, no key names, and no phase vocabulary.
   ///
-  /// NEVER THROWS AND NEVER TAKES A `force`. Every outcome — started, refused,
-  /// rate-limited, offline — comes back as a value with one owner-safe sentence,
-  /// because this drives a full screen rather than a control-flow decision, and
-  /// a refusal thrown away is the single most useful thing the server said.
-  /// Sending no `force` (and no cache-buster) is what lets the server's
-  /// `manual:{jobId}` idempotency key replay a repeat press instead of paying
-  /// for a second generation.
-  Future<OwnerGenerationRequestResult> requestModelGeneration(String id);
+  /// NEVER THROWS. Every outcome — started, refused, rate-limited, offline —
+  /// comes back as a value with one owner-safe sentence, because this drives a
+  /// full screen rather than a control-flow decision, and a refusal thrown away
+  /// is the single most useful thing the server said.
+  ///
+  /// [regenerate] false (default) sends NO body: the server's `manual:{jobId}`
+  /// idempotency key then replays a repeat press instead of paying for a second
+  /// generation — this is the FIRST-generation / post-capture path. [regenerate]
+  /// true is a deliberate "make a new version" spend: the server forces a fresh
+  /// generation, still bounded server-side by the rate window and the per-user
+  /// 24h ceiling. Only ever pass true from an explicit user "Regenerate" tap.
+  Future<OwnerGenerationRequestResult> requestModelGeneration(
+    String id, {
+    bool regenerate,
+  });
 }
 
 /// What `POST /projects/:id/model` did, as an owner may know it.
@@ -242,12 +249,19 @@ class RemoteProjectsRepository implements ProjectsRepository {
   }
 
   @override
-  Future<OwnerGenerationRequestResult> requestModelGeneration(String id) async {
+  Future<OwnerGenerationRequestResult> requestModelGeneration(
+    String id, {
+    bool regenerate = false,
+  }) async {
     try {
-      // No body, no `force`, no cache-busting parameter: the server derives its
-      // idempotency key from the capture job (`manual:{jobId}`), and anything
-      // the client added here would be a way to defeat that and pay twice.
-      final res = await _dio.post<Map<String, dynamic>>('/projects/$id/model');
+      // First generation: no body, so the server derives `manual:{jobId}` and a
+      // repeat replays instead of paying twice. Regenerate: send the explicit
+      // flag so the server forces a NEW version (still capped server-side). The
+      // client never sends `force` directly — only this intent-carrying flag.
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/projects/$id/model',
+        data: regenerate ? {'regenerate': true} : null,
+      );
       return OwnerGenerationRequestResult(
         OwnerGenerationRequestOutcome.started,
         // Not shown anywhere — the started state is a screen, not a sentence.

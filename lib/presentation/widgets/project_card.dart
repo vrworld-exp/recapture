@@ -117,7 +117,15 @@ class ProjectCard extends StatelessWidget {
   }
 
   List<Widget> _buildActionArea(BuildContext context) {
-    final action = project.status.cardAction;
+    // Once a viewable model exists, the "Processing…" label is stale noise: the
+    // model is done and the Models button is the real state. Suppress it so the
+    // card doesn't spin forever. Uploading is untouched — that's a live upload,
+    // not a finished model.
+    final rawAction = project.status.cardAction;
+    final action =
+        rawAction == ProjectCardAction.processing && project.hasViewableModels
+            ? ProjectCardAction.none
+            : rawAction;
     final showPreview = onPreview != null;
     final showModels = onModels != null;
     final showGenerate = onGenerate != null;

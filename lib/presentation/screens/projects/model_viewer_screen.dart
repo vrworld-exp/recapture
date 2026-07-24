@@ -42,6 +42,7 @@ class ModelViewerScreen extends StatelessWidget {
     required this.model,
     this.title = '3D Model',
     this.onApprove,
+    this.onRegenerate,
     this.renderBuilder = defaultRenderBuilder,
   });
 
@@ -51,6 +52,11 @@ class ModelViewerScreen extends StatelessWidget {
   /// Staff-only "we're satisfied — skip manual creation" action. Null hides it
   /// (the owner's viewer).
   final Future<void> Function()? onApprove;
+
+  /// Owner-facing "make a new version of this model" action. Null hides it
+  /// (the staff viewer, which regenerates via Prepare-Images instead). Shown as
+  /// a bottom action when there is no approve bar — the two never coexist.
+  final VoidCallback? onRegenerate;
 
   /// How the model is rendered. Defaults to the real orbit/AR viewer
   /// ([ModelRenderView]: load/error states + the "View in your space" CTA).
@@ -114,6 +120,21 @@ class ModelViewerScreen extends StatelessWidget {
                       child: _ApproveBar(
                         approved: model.approved,
                         onApprove: onApprove!,
+                      ),
+                    ),
+                  )
+                // Owner-only "make a new version" — never alongside the staff
+                // approve bar. Each tap is a deliberate new (capped) generation.
+                else if (onRegenerate != null)
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.all(AppSpacing.lg),
+                      child: AppButton.secondary(
+                        key: const ValueKey('model_regenerate_cta'),
+                        label: 'Create a new version',
+                        icon: Icons.auto_awesome_outlined,
+                        onPressed: onRegenerate,
                       ),
                     ),
                   ),

@@ -1,8 +1,9 @@
 // test/projects/models_button_gating_test.dart
 //
-// The staff "Models" entry point on BOTH project surfaces (My projects and the
-// Live tab), and the rule that decides whether it renders at all:
-// `modelCount > 0` — SUCCEEDED generations only, by backend contract.
+// The "Models" entry point on BOTH project surfaces (My projects — now open to
+// any owner — and the staff Live tab), and the rule that decides whether it
+// renders at all: `modelCount > 0` — SUCCEEDED generations only, by backend
+// contract.
 //
 // The interesting case is the FAILED-only project: it HAS generation records,
 // but nothing viewable, so the button must stay hidden rather than open an
@@ -110,13 +111,44 @@ void main() {
       expect(find.text('Models'), findsNothing);
     });
 
-    testWidgets('non-staff never sees Models, even with a viewable model',
+    testWidgets('non-staff owner sees Models for their own viewable model',
         (tester) async {
+      // Any owner can open their own generated models now — the staff gate on
+      // onModels is gone (still requires modelCount > 0).
       await tester.pumpWidget(_app(isStaff: false, mineModelCount: 2));
       await _pumpFrames(tester);
 
       expect(find.text('My vase'), findsOneWidget);
+      expect(find.text('Models'), findsOneWidget);
+    });
+
+    testWidgets('non-staff owner with no viewable model still sees no Models',
+        (tester) async {
+      await tester.pumpWidget(_app(isStaff: false, mineModelCount: 0));
+      await _pumpFrames(tester);
+
+      expect(find.text('My vase'), findsOneWidget);
       expect(find.text('Models'), findsNothing);
+    });
+
+    testWidgets('a viewable model hides the "Processing…" label',
+        (tester) async {
+      // Once a model exists the generation is done; the perpetual "Processing…"
+      // spinner is stale noise, so it's suppressed. The fake project is
+      // PROCESSING, so without a model the label would show (next test).
+      await tester.pumpWidget(_app(isStaff: true, mineModelCount: 1));
+      await _pumpFrames(tester);
+
+      expect(find.text('Models'), findsOneWidget);
+      expect(find.text('Processing…'), findsNothing);
+    });
+
+    testWidgets('processing with no viewable model still shows the label',
+        (tester) async {
+      await tester.pumpWidget(_app(isStaff: true, mineModelCount: 0));
+      await _pumpFrames(tester);
+
+      expect(find.text('Processing…'), findsOneWidget);
     });
   });
 

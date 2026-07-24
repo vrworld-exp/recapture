@@ -72,6 +72,32 @@ class OwnerGenerationRequestNotifier
     return state;
   }
 
+  /// A deliberate "make a new version" press — a genuine second spend on the
+  /// same capture, so it does NOT collapse into the first via the idempotency
+  /// key: it sends `regenerate: true`, which the server forces (still bounded
+  /// there by the rate window and the per-user 24h ceiling).
+  ///
+  /// Guarded ONLY against a concurrent in-flight press, not against an earlier
+  /// completed result — the whole point is to start a new run after one already
+  /// finished. The server's daily cap is the real spend bound; this just stops a
+  /// double-tap firing two at once.
+  Future<OwnerGenerationRequestState> regenerate() async {
+    if (state.isRequesting) return state;
+    state = const OwnerGenerationRequestState(isRequesting: true);
+
+    final result = await ref
+        .read(projectsRepositoryProvider)
+        .requestModelGeneration(arg, regenerate: true);
+    state = OwnerGenerationRequestState(result: result);
+
+    Analytics.logEvent('model_generation_requested', {
+      'source': 'owner_regenerate',
+      'outcome': result.outcome.name,
+      'forced': true,
+    });
+    return state;
+  }
+
   /// Drops the last result so a later press starts clean. Not called on leaving
   /// the build screen — the press must outlive it (see the provider note).
   void clear() => state = const OwnerGenerationRequestState();

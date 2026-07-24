@@ -180,6 +180,48 @@ void main() {
     });
   });
 
+  // ── The card hides the stale "Processing…" spinner once a model exists ─────
+
+  group('ProjectCard processing label', () {
+    testWidgets('a viewable model suppresses the Processing label',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.dark,
+        home: Scaffold(
+          body: ProjectCard(
+            // PROCESSING project that already has a viewable model: the
+            // generation is done, so the perpetual spinner is stale noise.
+            project: _project(ProjectStatus.processing).copyWith(modelCount: 1),
+            onResume: (_) {},
+            onView: (_) {},
+            onRetry: (_) {},
+            onMore: (_) {},
+            onModels: (_) {},
+          ),
+        ),
+      ));
+      expect(find.text('Models'), findsOneWidget);
+      expect(find.text('Processing…'), findsNothing);
+    });
+
+    testWidgets('processing with no model still shows the label',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.dark,
+        home: Scaffold(
+          body: ProjectCard(
+            project: _project(ProjectStatus.processing),
+            onResume: (_) {},
+            onView: (_) {},
+            onRetry: (_) {},
+            onMore: (_) {},
+          ),
+        ),
+      ));
+      expect(find.text('Processing…'), findsOneWidget);
+    });
+  });
+
   group('Live tab card', () {
     Future<void> pumpLive(WidgetTester tester, ProjectStatus status) async {
       final repo = _StubLiveRepo(

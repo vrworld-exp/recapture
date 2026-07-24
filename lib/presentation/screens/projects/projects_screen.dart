@@ -8,6 +8,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/model_generation_request_notifier.dart';
+import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
 import '../../../data/repositories/projects_repository.dart';
 import '../../../domain/entities/project.dart';
@@ -39,7 +40,7 @@ class ProjectsScreen extends ConsumerStatefulWidget {
   ConsumerState<ProjectsScreen> createState() => _ProjectsScreenState();
 }
 
-class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
+class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware {
   /// Per-project in-flight guard so a double-tap can't fire two requests/navs.
   final Set<String> _actionInFlight = <String>{};
 
@@ -60,6 +61,52 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
   _ProjectsTab _tab = _ProjectsTab.mine;
 
   ProjectsNotifier get _notifier => ref.read(projectsProvider.notifier);
+
+  @override
+  void initState() {
+    super.initState();
+    // A fresh mount (e.g. `context.go(/projects)` after the capture → generate
+    // flow) shows the CACHED list first — re-pull once so a model finished while
+    // away is picked up without a manual swipe.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshSilently());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Subscribe to the root-navigator observer so [didPopNext] fires when a
+    // pushed screen (model viewer, build, capture flow) pops back to here.
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      projectsRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void dispose() {
+    projectsRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  /// Returned to this tab after a pushed screen popped — re-pull so a model
+  /// generated while away shows its Models button. See [projectsRouteObserver].
+  @override
+  void didPopNext() => _refreshSilently();
+
+  /// A focus-driven re-fetch. Unlike [_refresh] it NEVER surfaces the offline
+  /// modal: a background refresh that nags on every network blip would be worse
+  /// than a slightly stale list. The notifier keeps the visible list on failure.
+  Future<void> _refreshSilently() async {
+    if (!mounted || _refreshInFlight) return;
+    _refreshInFlight = true;
+    try {
+      await _notifier.refresh();
+    } catch (_) {
+      // Keep the visible list; the next focus/pull reconciles.
+    } finally {
+      _refreshInFlight = false;
+    }
+  }
 
   String get _deviceType =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
@@ -168,7 +215,13 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       if (state.hasViewableModel) {
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
-            builder: (_) => ModelViewerScreen(model: state.model!, title: p.name),
+            builder: (_) => ModelViewerScreen(
+              model: state.model!,
+              title: p.name,
+              // Owners can spin a fresh version straight from the viewer; staff
+              // regenerate through Prepare-Images (see _regenerateHandlerFor).
+              onRegenerate: _regenerateHandlerFor(p),
+            ),
           ),
         );
         return;
@@ -196,25 +249,50 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     context.goNamed(AppRouteNames.modelReady);
   }
 
-  /// The "try different photos" action for the model-building screen, or null
-  /// when this user has no such path.
+  /// The "make a new version" action for the model viewer / building screen.
   ///
-  /// Regeneration goes through the Preview gallery → Prepare-Images, which is a
-  /// STAFF surface (it exposes every captured photo and the model-input upload
-  /// route). So the CTA exists for staff and is simply absent for an owner —
-  /// absent rather than present-and-refusing, because a button that always
-  /// errors is worse than no button.
-  ///
-  /// TODO(product): decide whether owners should get a regenerate path of their
-  /// own. Auto-generation makes this the natural "I don't like it" escape
-  /// hatch, but opening Prepare-Images to owners means widening a staff-only
-  /// surface — a deliberate decision, not a wiring detail.
-  VoidCallback? _regenerateHandlerFor(Project p) {
-    if (!ref.read(isStaffProvider)) return null;
-    return () => context.pushNamed(
-          AppRouteNames.previewGallery,
-          pathParameters: {'id': p.id},
-        );
+  /// Two different paths by role. STAFF regenerate through the Preview gallery →
+  /// Prepare-Images, where they hand-pick and clean up the photos. OWNERS get
+  /// the server-selected path — the same POST the post-capture button uses, with
+  /// `regenerate: true` so it makes a genuinely new version rather than replaying
+  /// the existing one. The owner spend is bounded server-side by the per-user
+  /// daily cap; here it is just a button.
+  VoidCallback _regenerateHandlerFor(Project p) {
+    if (ref.read(isStaffProvider)) {
+      return () => context.pushNamed(
+            AppRouteNames.previewGallery,
+            pathParameters: {'id': p.id},
+          );
+    }
+    return () => _onRegenerate(p);
+  }
+
+  /// Owner "Create a new version": forces a fresh (capped) generation and opens
+  /// the build screen to watch it. Mirrors [_onGenerate] but through the owner
+  /// notifier's [OwnerGenerationRequestNotifier.regenerate], and it deliberately
+  /// does NOT gate on `_claim`: it is launched from a pushed screen (the viewer /
+  /// build screen), not the card, so the per-card in-flight guard doesn't apply —
+  /// the notifier's own in-flight guard is what stops a double-fire.
+  Future<void> _onRegenerate(Project p) async {
+    _logAction('regenerate', p);
+    // Fire the request; the build screen we push renders its progress/outcome.
+    final pending =
+        ref.read(ownerGenerationRequestProvider(p.id).notifier).regenerate();
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelBuildingScreen(
+            projectId: p.id,
+            projectName: p.name,
+            watchOwnerRequest: true,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
+    } finally {
+      // Let the POST settle before returning so a fast re-tap finds it in flight.
+      await pending;
+    }
   }
 
   /// Staff-only "Generate 3D model": the SERVER picks the photos and starts a
@@ -481,16 +559,18 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 onMore: _onMore,
                 onPreview:
                     isStaff && _isExportable(project) ? _onPreview : null,
-                // Also requires a VIEWABLE model: the history has nothing to
-                // show otherwise, and a button that opens an empty screen is
-                // worse than no button. Failed-only projects therefore show no
-                // Models button (see ProjectListItem.modelCount).
-                onModels: isStaff && project.hasViewableModels ? _onModels : null,
-                // Phase 1 is staff-only. Also requires a FINALIZED capture:
-                // without one the server always answers NOT_EXPORTABLE, and a
-                // button that can only ever error is worse than no button.
-                onGenerate:
-                    isStaff && _isExportable(project) ? _onGenerate : null,
+                // Any owner can open their own generated models — _onModels
+                // routes to ModelViewerScreen for every user. Still requires a
+                // VIEWABLE model: the history has nothing to show otherwise, and
+                // a button that opens an empty screen is worse than no button.
+                // Failed-only projects therefore show no Models button (see
+                // ProjectListItem.modelCount).
+                onModels: project.hasViewableModels ? _onModels : null,
+                // Any owner can generate a model for their own capturable
+                // project. Still requires a FINALIZED capture: without one the
+                // server always answers NOT_EXPORTABLE, and a button that can
+                // only ever error is worse than no button.
+                onGenerate: _isExportable(project) ? _onGenerate : null,
               );
             },
           ),

@@ -652,7 +652,10 @@ class _Ready extends StatelessWidget {
           const SizedBox(height: AppSpacing.md),
           TextButton(
             onPressed: onRegenerate,
-            child: const Text('Not happy with it? Try different photos'),
+            // Neutral copy: an owner's regenerate re-selects server-side (they
+            // don't pick photos), while staff's opens Prepare-Images. Both make
+            // a new version, so the CTA names that outcome, not the mechanism.
+            child: const Text('Not happy with it? Create a new version'),
           ),
         ],
       ],

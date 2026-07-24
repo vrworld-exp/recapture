@@ -45,7 +45,10 @@ class _StubRepo with FakeProjectModelDefaults implements ProjectsRepository {
   final List<String> requested = [];
 
   @override
-  Future<OwnerGenerationRequestResult> requestModelGeneration(String id) async {
+  Future<OwnerGenerationRequestResult> requestModelGeneration(
+    String id, {
+    bool regenerate = false,
+  }) async {
     requested.add(id);
     if (gate != null) await gate!.future;
     return result ??

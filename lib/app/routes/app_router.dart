@@ -1,4 +1,5 @@
 // lib/app/routes/app_router.dart
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
@@ -40,6 +41,15 @@ import '../../presentation/screens/capture/ar_preview_screen.dart';
 import 'auth_router_notifier.dart';
 import 'flow_back.dart';
 import 'route_error_screen.dart';
+
+/// Observes route pushes/pops on the app's root navigator so screens can react
+/// to becoming visible again after a pushed screen pops.
+///
+/// The Projects Hub uses it to re-fetch its list on focus: a finished 3D model
+/// only appears once the list DTO's `modelCount` is refreshed, and a generation
+/// runs for minutes AFTER the user has left the build screen — so returning to
+/// this tab (from the model viewer, a capture flow, anywhere) has to re-pull.
+final projectsRouteObserver = RouteObserver<PageRoute<dynamic>>();
 
 /// Named route paths for the ReCapture app.
 /// No route string should exist anywhere else in the codebase — always
@@ -132,6 +142,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
   return GoRouter(
     initialLocation: AppRoutes.splash,
     refreshListenable: authNotifier,
+    // Root-navigator observer so the Projects Hub can refresh on focus (see
+    // projectsRouteObserver): a model generated after the user left the build
+    // screen is invisible until the list is re-pulled.
+    observers: [projectsRouteObserver],
     redirect: (context, state) {
       final loc = state.matchedLocation;
 

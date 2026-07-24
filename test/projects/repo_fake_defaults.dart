@@ -87,7 +87,10 @@ mixin FakeProjectModelDefaults {
   /// Throws rather than pretending to succeed: this one SPENDS MONEY, so a test
   /// that reaches it by accident must fail loudly instead of quietly recording a
   /// generation nobody meant to ask for.
-  Future<OwnerGenerationRequestResult> requestModelGeneration(String id) async =>
+  Future<OwnerGenerationRequestResult> requestModelGeneration(
+    String id, {
+    bool regenerate = false,
+  }) async =>
       throw UnimplementedError('not used here');
 }
 
@@ -98,7 +101,10 @@ mixin FakeProjectModelDefaults {
 /// [FakeAutoGenerationDefaults] is: a fake cannot take two mixins that supply
 /// the same member, and most fakes want the throwing default above.
 mixin FakeOwnerGenerationSucceeds {
-  Future<OwnerGenerationRequestResult> requestModelGeneration(String id) async =>
+  Future<OwnerGenerationRequestResult> requestModelGeneration(
+    String id, {
+    bool regenerate = false,
+  }) async =>
       const OwnerGenerationRequestResult(
         OwnerGenerationRequestOutcome.started,
         'Creating your 3D model.',

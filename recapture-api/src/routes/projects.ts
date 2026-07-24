@@ -219,10 +219,12 @@ router.post(
  * hint that Meshy exists. An owner learns only that a model is being made, or
  * one plain reason it cannot be.
  *
- * Gated by MANUAL_MODEL_GENERATION_ENABLED like the staff route. Phase 1 ships
- * with no client entry point pointing here (owner regenerate rights are a
- * separate product decision) — this is the plumbing, so enabling it later is a
- * gate flip rather than a backend change.
+ * Gated by MANUAL_MODEL_GENERATION_ENABLED like the staff route. Called two
+ * ways: with no body it is idempotent (a repeat replays the existing run — this
+ * is what the automatic / post-capture path uses); with `{ regenerate: true }`
+ * the owner is deliberately asking for a NEW version of the same capture, so it
+ * forces a fresh spend — still bounded by the rate window and the per-user 24h
+ * ceiling, which both count it.
  */
 router.post(
   '/:id/model',
@@ -262,13 +264,22 @@ router.post(
       return;
     }
 
+    // An explicit `{ regenerate: true }` is a deliberate NEW spend on the same
+    // capture — the owner asked for a fresh version. Without it the request is
+    // idempotent by default (server derives `manual:{jobId}`), so the automatic
+    // and post-capture paths can never double-spend on a repeat. A regenerate is
+    // NOT unbounded: it still passes through the rate window above AND the
+    // per-user 24h ceiling inside the service (MANUAL_MODEL_MAX_PER_USER_PER_DAY),
+    // both of which count it. That daily cap is the real "pay again" bound.
+    const regenerate =
+      req.body != null && (req.body as { regenerate?: unknown }).regenerate === true;
+
     let result;
     try {
-      // Owners never get `force`: an unbounded "pay again" loop behind a button
-      // is exactly what the idempotent default exists to prevent.
       result = await generateModelOnDemand({
         projectId: project.id,
         actor: { userId, role: 'USER' },
+        force: regenerate,
       });
     } catch (err: unknown) {
       if (err instanceof GenerationInfrastructureError) {
@@ -331,7 +342,7 @@ router.post(
       was_replay: result.outcome === 'REPLAYED',
       trigger: 'manual_button',
       actor_role: 'USER',
-      forced: false,
+      forced: regenerate,
     });
 
     // 202: the request is accepted and queued; the model itself takes minutes

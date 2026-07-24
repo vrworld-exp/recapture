@@ -19,6 +19,9 @@ import 'package:recapture/presentation/screens/projects/projects_screen.dart';
 /// Serves the owner list without repositories/Hive (same pattern as the
 /// dev-tools screen test).
 class _FakeProjectsNotifier extends ProjectsNotifier {
+  _FakeProjectsNotifier({this.modelCount = 0});
+  final int modelCount;
+
   @override
   Future<List<Project>> build() async => [
         Project(
@@ -27,6 +30,7 @@ class _FakeProjectsNotifier extends ProjectsNotifier {
           status: ProjectStatus.processing,
           updatedAt: DateTime(2026, 7, 12),
           totalPhotos: 36,
+          modelCount: modelCount,
         ),
       ];
 }
@@ -49,10 +53,11 @@ class _FakeLiveProjectsNotifier extends LiveProjectsNotifier {
       );
 }
 
-Widget _app({required bool isStaff}) {
+Widget _app({required bool isStaff, int mineModelCount = 0}) {
   return ProviderScope(
     overrides: [
-      projectsProvider.overrideWith(_FakeProjectsNotifier.new),
+      projectsProvider
+          .overrideWith(() => _FakeProjectsNotifier(modelCount: mineModelCount)),
       liveProjectsProvider.overrideWith(_FakeLiveProjectsNotifier.new),
       isStaffProvider.overrideWithValue(isStaff),
       // The Live tab reads the admin flag for its delete affordance; without
@@ -112,5 +117,21 @@ void main() {
     await _pumpFrames(tester);
     expect(find.text('My vase'), findsOneWidget);
     expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
+
+  testWidgets('non-staff owner gets Generate + Models on their own project',
+      (tester) async {
+    // The 3D-model flow is no longer staff-only: an owner sees "Generate 3D
+    // model" on their exportable (PROCESSING) project, and "Models" once a
+    // viewable model exists — all without any staff tab chrome.
+    await tester.pumpWidget(_app(isStaff: false, mineModelCount: 1));
+    await _pumpFrames(tester);
+
+    expect(find.text('My vase'), findsOneWidget);
+    expect(find.text('Generate 3D model'), findsOneWidget);
+    expect(find.text('Models'), findsOneWidget);
+    // Still no staff-only surface.
+    expect(find.byType(SegmentedButton), findsNothing);
+    expect(find.text('Live projects'), findsNothing);
   });
 }
