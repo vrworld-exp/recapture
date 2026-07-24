@@ -668,6 +668,34 @@ describe('POST /projects/:id/model', () => {
     expect(await ProjectModel.countDocuments({})).toBe(0);
   });
 
+  it('a plain repeat replays, but { regenerate: true } forces a NEW version', async () => {
+    const owner = await makeUser();
+    const { project, prefix } = await makeCapturedProject(owner.id);
+    mockS3(prefix);
+
+    // First press: the one record for this capture.
+    const first = await request(app).post(`/projects/${project.id}/model`).set(owner.auth).send({});
+    expect(first.status).toBe(202);
+    expect(await ProjectModel.countDocuments({})).toBe(1);
+
+    // A plain repeat is idempotent — no second spend, still one record.
+    const replay = await request(app)
+      .post(`/projects/${project.id}/model`)
+      .set(owner.auth)
+      .send({});
+    expect(replay.status).toBe(202);
+    expect(await ProjectModel.countDocuments({})).toBe(1);
+
+    // The explicit regenerate is a deliberate new version: a second record,
+    // still bounded by the per-user daily cap (2 of 5 here).
+    const regen = await request(app)
+      .post(`/projects/${project.id}/model`)
+      .set(owner.auth)
+      .send({ regenerate: true });
+    expect(regen.status).toBe(202);
+    expect(await ProjectModel.countDocuments({})).toBe(2);
+  });
+
   it('gives a decline plain, actionable copy and no internal reason code', async () => {
     const owner = await makeUser();
     const { project, prefix } = await makeCapturedProject(owner.id);
