@@ -63,6 +63,17 @@ class ProjectCard extends StatelessWidget {
   /// (per-project in-flight guard owned by the screen).
   final bool isActionInFlight;
 
+  /// Whether to render the top-right status pill.
+  ///
+  /// Hidden once a viewable model exists AND the project is still flagged
+  /// "Processing…": the model is the real deliverable and it's done, so a
+  /// perpetually-pulsing amber "Processing" pill is stale noise. Every other
+  /// status keeps its pill. Mirrors the action-area suppression in
+  /// [_buildActionArea].
+  bool get _showStatusPill =>
+      !(project.status == ProjectStatus.processing &&
+          project.hasViewableModels);
+
   @override
   Widget build(BuildContext context) {
     return AppCard(
@@ -99,8 +110,10 @@ class ProjectCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              AppStatusPill(status: project.status),
+              if (_showStatusPill) ...[
+                const SizedBox(width: AppSpacing.sm),
+                AppStatusPill(status: project.status),
+              ],
               IconButton(
                 icon: const Icon(Icons.more_vert, color: AppColors.textSecondary),
                 iconSize: 20,

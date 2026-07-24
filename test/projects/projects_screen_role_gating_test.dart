@@ -119,18 +119,33 @@ void main() {
     expect(find.byType(FloatingActionButton), findsOneWidget);
   });
 
-  testWidgets('non-staff owner gets Generate + Models on their own project',
+  testWidgets(
+      'non-staff owner: Generate on an exportable project with no model yet',
       (tester) async {
     // The 3D-model flow is no longer staff-only: an owner sees "Generate 3D
-    // model" on their exportable (PROCESSING) project, and "Models" once a
-    // viewable model exists — all without any staff tab chrome.
-    await tester.pumpWidget(_app(isStaff: false, mineModelCount: 1));
+    // model" on their exportable (PROCESSING) project — all without any staff
+    // tab chrome. No model yet, so no Models button.
+    await tester.pumpWidget(_app(isStaff: false, mineModelCount: 0));
     await _pumpFrames(tester);
 
     expect(find.text('My vase'), findsOneWidget);
     expect(find.text('Generate 3D model'), findsOneWidget);
-    expect(find.text('Models'), findsOneWidget);
+    expect(find.text('Models'), findsNothing);
     // Still no staff-only surface.
+    expect(find.byType(SegmentedButton), findsNothing);
+    expect(find.text('Live projects'), findsNothing);
+  });
+
+  testWidgets('non-staff owner: a viewable model swaps Generate for Models',
+      (tester) async {
+    // Once this capture already has a model, Generate gives way to Models —
+    // re-offering a build on a capture that already succeeded is redundant.
+    await tester.pumpWidget(_app(isStaff: false, mineModelCount: 1));
+    await _pumpFrames(tester);
+
+    expect(find.text('My vase'), findsOneWidget);
+    expect(find.text('Models'), findsOneWidget);
+    expect(find.text('Generate 3D model'), findsNothing);
     expect(find.byType(SegmentedButton), findsNothing);
     expect(find.text('Live projects'), findsNothing);
   });

@@ -295,9 +295,16 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     }
   }
 
-  /// Staff-only "Generate 3D model": the SERVER picks the photos and starts a
-  /// generation, then this pushes the screen that explains what it decided and
-  /// watches the build.
+  /// "Generate 3D model": the SERVER picks the photos and starts a generation,
+  /// then this pushes the screen that explains what it decided and watches the
+  /// build.
+  ///
+  /// Role-split, because the two audiences talk to different routes with
+  /// different payloads: an OWNER goes through [_onGenerateOwner]
+  /// (`POST /projects/:id/model`, one owner-safe sentence), while STAFF use the
+  /// `/admin` auto route below, which additionally returns the selector trace
+  /// the staff building screen renders. An owner hitting the admin route would
+  /// only ever 403, so they never reach it.
   ///
   /// The screen is pushed FIRST and the request is awaited there rather than
   /// here, because the most valuable outcome is a REFUSAL: a snackbar can say
@@ -305,6 +312,10 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   /// what numbers. Every outcome — enqueued, replayed, declined, failed — gets
   /// the same full screen.
   Future<void> _onGenerate(Project p) async {
+    if (!ref.read(isStaffProvider)) {
+      await _onGenerateOwner(p);
+      return;
+    }
     if (!_claim(p)) return;
     _logAction('generate', p);
     // Fire-and-render: the notifier holds the result, so the screen shows the
@@ -325,6 +336,36 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       // Let the request settle before releasing the per-project claim, so a
       // second press cannot start a second (paid) generation while the first
       // is still in flight.
+      await pending;
+      _release(p);
+    }
+  }
+
+  /// Owner "Generate 3D model": the non-staff counterpart to [_onGenerate].
+  ///
+  /// Fires the owner request (`POST /projects/:id/model` via
+  /// [OwnerGenerationRequestNotifier.request] — no body, so a repeat replays
+  /// instead of paying twice) and pushes the owner-safe build screen with
+  /// [ModelBuildingScreen.watchOwnerRequest] set, so it watches the OWNER
+  /// notifier rather than the staff one. Same double-spend discipline as
+  /// [_onGenerate]: claim first, await the POST before releasing.
+  Future<void> _onGenerateOwner(Project p) async {
+    if (!_claim(p)) return;
+    _logAction('generate', p);
+    final pending =
+        ref.read(ownerGenerationRequestProvider(p.id).notifier).request();
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelBuildingScreen(
+            projectId: p.id,
+            projectName: p.name,
+            watchOwnerRequest: true,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
+    } finally {
       await pending;
       _release(p);
     }
@@ -372,6 +413,15 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   /// The button carries no NUMBER on purpose — the count exists to decide
   /// whether to render it, and the very next tap shows the full history anyway.
   void _onModels(Project p) {
+    // Role-split by what each audience can reach. STAFF open the full
+    // generation HISTORY (the `/admin/projects/:id/models` endpoint the history
+    // screen polls). An OWNER has no history endpoint — that route would 403 —
+    // so their "Models" opens the newest finished model directly through the
+    // owner path, identical to [_onView].
+    if (!ref.read(isStaffProvider)) {
+      _onView(p);
+      return;
+    }
     _logAction('models', p);
     context.pushNamed(
       AppRouteNames.modelHistory,
@@ -567,10 +617,15 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
                 // ProjectListItem.modelCount).
                 onModels: project.hasViewableModels ? _onModels : null,
                 // Any owner can generate a model for their own capturable
-                // project. Still requires a FINALIZED capture: without one the
-                // server always answers NOT_EXPORTABLE, and a button that can
-                // only ever error is worse than no button.
-                onGenerate: _isExportable(project) ? _onGenerate : null,
+                // project. Requires a FINALIZED capture (without one the server
+                // always answers NOT_EXPORTABLE) AND no model yet: once this
+                // capture already has one, Generate gives way to the Models
+                // button — a viewable model is the successful end state, so
+                // re-offering Generate there is redundant noise. Regenerating
+                // stays reachable from inside the viewer.
+                onGenerate: _isExportable(project) && !project.hasViewableModels
+                    ? _onGenerate
+                    : null,
               );
             },
           ),

@@ -307,10 +307,10 @@ class ModelRenderViewState extends State<ModelRenderView> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    CircularProgressIndicator(color: AppColors.mirageRed),
+                    SizedBox(height: AppSpacing.xl),
                     Icon(Icons.view_in_ar_outlined,
                         color: AppColors.textMuted, size: 40),
-                    SizedBox(height: AppSpacing.xl),
-                    CircularProgressIndicator(color: AppColors.mirageRed),
                     SizedBox(height: AppSpacing.xl),
                     Text(
                       'Preparing your model…',

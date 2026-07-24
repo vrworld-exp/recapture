@@ -49,6 +49,7 @@ class ModelBuildingScreen extends ConsumerStatefulWidget {
     this.watchOwnerState = true,
     this.onOpenHistory,
     this.watchOwnerRequest = false,
+    @visibleForTesting this.onOpenViewer,
   });
 
   final String projectId;
@@ -80,6 +81,12 @@ class ModelBuildingScreen extends ConsumerStatefulWidget {
   /// either way.
   final bool watchOwnerRequest;
 
+  /// Test seam for the auto-open-on-ready path. The real viewer drives a
+  /// WebView that has no widget-test platform, so tests inject this to observe
+  /// that the finished model opens exactly once, without rendering it. Null in
+  /// production, where [_openViewer] pushes the real [ModelViewerScreen].
+  final void Function(ProjectModelView model)? onOpenViewer;
+
   @override
   ConsumerState<ModelBuildingScreen> createState() => _ModelBuildingScreenState();
 }
@@ -102,6 +109,17 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
   /// One-shot latch for the post-request re-read (see the owner branch below).
   bool _refreshedAfterRequest = false;
 
+  /// True once a settled poll showed NO viewable model yet — i.e. the user is
+  /// actually watching this build, not arriving on an already-finished one.
+  /// Gates the auto-open below so a re-entry onto a done model never bounces
+  /// straight back out.
+  bool _sawWaitingState = false;
+
+  /// One-shot latch so the finished model opens the viewer exactly once. Kept
+  /// even after the viewer is popped, so returning here lands on the "ready"
+  /// state with its View button rather than auto-opening again.
+  bool _autoOpenedViewer = false;
+
   int? _monotonic(int? reported) {
     if (reported == null) return _maxPercent;
     final current = _maxPercent;
@@ -119,6 +137,10 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
       DateTime.now().difference(_lastMovement) > _stallThreshold;
 
   Future<void> _openViewer(ProjectModelView model) async {
+    if (widget.onOpenViewer case final override?) {
+      override(model);
+      return;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ModelViewerScreen(model: model, title: widget.projectName),
@@ -141,9 +163,31 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
       ref.listen<AsyncValue<OwnerModelState>>(
         ownerModelStateProvider(widget.projectId),
         (previous, next) {
+          final data = next.valueOrNull;
+          if (data == null) return;
+          // Remember that we've seen a settled "still building" poll — that's
+          // what tells a genuine finish apart from opening onto a done model.
+          if (!data.hasViewableModel) {
+            _sawWaitingState = true;
+            return;
+          }
           final hadModel = previous?.valueOrNull?.hasViewableModel ?? false;
-          final hasModel = next.valueOrNull?.hasViewableModel ?? false;
-          if (!hadModel && hasModel) ref.invalidate(projectsProvider);
+          // A finished generation changes the PROJECTS LIST, not just this
+          // screen: `modelCount` is aggregated server-side into the list DTO,
+          // so the Models button stays hidden until the list is re-fetched.
+          if (!hadModel) ref.invalidate(projectsProvider);
+          // Take the owner straight to the finished model — pressing Generate
+          // was a request to SEE a model, so land them on it rather than on a
+          // "done, tap to view" screen. One-shot, and only when we actually
+          // watched it finish here (never on a re-entry onto an already-done
+          // model, which would bounce the user straight back out).
+          final model = data.model;
+          if (_sawWaitingState && !_autoOpenedViewer && model != null) {
+            _autoOpenedViewer = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) _openViewer(model);
+            });
+          }
         },
       );
     }
