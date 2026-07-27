@@ -186,7 +186,13 @@ final captureSummaryProvider =
           segmentCount: segCount,
           acceptedCount: items.length,
           minAcceptedCount: minRequired,
-          minCoveragePct: config.thresholds.minCoveragePct,
+          // Per-MODE floor, through the SAME resolver the capture-screen
+          // auto-advance and the upload gate use. Reading the raw global here
+          // would let a remote retune of `minCoveragePct` make this screen
+          // disagree with the gate that let the user reach it: phantom
+          // "Incomplete" badges, a Fix Issues button for a finished capture,
+          // and a confirm dialog on an upload the gate considers complete.
+          minCoveragePct: minCoveragePctForMode(mode, config.thresholds),
         );
 
         return LevelCaptureSummary(

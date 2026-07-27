@@ -16,6 +16,14 @@
 //     when every level is complete.
 //   • Save for later — exits to the project list; the session is resumable.
 //
+// MESHY MODE drops the two incomplete-capture surfaces — Fix Issues and the
+// below-minimum notice/confirm — so Upload starts the pipeline on the first tap
+// (see `CaptureMode.offersIncompleteRemedies`). Everything that protects a real
+// failure stays in BOTH modes: the offline block, the hard `uploadGateProvider`
+// re-checks around every await, the `_navigating` latch, Save for later, and
+// Cancel. A Meshy user who deletes photos in Review still lands on the hard
+// gate, with `_UploadGateNotice` naming the short level and offering the remedy.
+//
 // Completeness + shortfall are read from the per-level summary (which composes the
 // shared `evaluateLevelA` validator over the live ledger) — this screen recomputes
 // no coverage and owns no sequencing or upload mechanics.
@@ -219,7 +227,14 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
     }
 
     _navigating = true; // blocks double-tap through the await
-    if (anyBelowMin) {
+    // MESHY: no incomplete-capture confirm. One shot per wedge plus the
+    // auto-advance at the coverage floor means a Meshy user standing here has
+    // already captured correctly, so the dialog would ask about a problem that
+    // cannot exist. The HARD gate above (and its re-check below) is untouched —
+    // this skips the warn-then-allow prompt, never a safety check.
+    final confirmBelowMin =
+        anyBelowMin && ref.read(captureModeProvider).offersIncompleteRemedies;
+    if (confirmBelowMin) {
       final proceed = await _confirmBelowMin(incompleteLabel);
       if (!proceed) {
         if (mounted) setState(() => _navigating = false); // re-arm for a retry
@@ -373,6 +388,10 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
         .syncPassedMilestone(uploadGate, sessionId: _sessionId);
 
     final overallComplete = allLevelsComplete(summaries);
+    // Whether this mode offers the incomplete-capture remedies at all (Fix
+    // Issues + the below-min notice/confirm) — false in Meshy, see CaptureMode.
+    final offersRemedies =
+        ref.watch(captureModeProvider).offersIncompleteRemedies;
     final mostWork = mostWorkLevel(summaries);
     final incompleteLabel =
         [for (final s in summaries) if (!s.isComplete) s.level.code].join(',');
@@ -453,8 +472,8 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
           _BottomBar(
             uploadEligible: uploadGate.eligible,
             shortLevels: uploadGate.shortLevels,
-            anyLevelBelowMin: !overallComplete,
-            showFixIssues: mostWork != null,
+            showBelowMinNotice: !overallComplete && offersRemedies,
+            showFixIssues: mostWork != null && offersRemedies,
             onUpload: () => _onUpload(
               anyBelowMin: !overallComplete,
               incompleteLabel: incompleteLabel,
@@ -476,7 +495,7 @@ class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.uploadEligible,
     required this.shortLevels,
-    required this.anyLevelBelowMin,
+    required this.showBelowMinNotice,
     required this.showFixIssues,
     required this.onUpload,
     required this.onFixShortLevel,
@@ -493,8 +512,11 @@ class _BottomBar extends StatelessWidget {
   final List<UploadLevelStatus> shortLevels;
 
   /// Soft: some level is below completion (coverage/count) but ABOVE the hard
-  /// floor — Upload stays enabled (warn-then-allow).
-  final bool anyLevelBelowMin;
+  /// floor — Upload stays enabled (warn-then-allow), and the notice says so.
+  /// Always false in Meshy, where the incomplete-capture surfaces are suppressed
+  /// (see `CaptureMode.offersIncompleteRemedies`) — the hard-gate notice above
+  /// it is unaffected and still renders in every mode.
+  final bool showBelowMinNotice;
   final bool showFixIssues;
   final VoidCallback onUpload;
 
@@ -528,7 +550,7 @@ class _BottomBar extends StatelessWidget {
                   shortLevels: shortLevels,
                   onFixShortLevel: onFixShortLevel,
                 )
-              else if (anyLevelBelowMin)
+              else if (showBelowMinNotice)
                 Padding(
                   padding: const EdgeInsets.only(bottom: AppSpacing.sm),
                   child: Text(

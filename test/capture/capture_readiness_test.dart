@@ -63,7 +63,79 @@ void main() {
     });
   });
 
+  group('alreadyCaptured — the gate that never fails open', () {
+    test('blocks a guided shot even with every other gate satisfied', () {
+      const r = CaptureReadiness(
+        mode: CaptureMode.guided,
+        inBand: true,
+        stable: true,
+        placed: true,
+        alreadyCaptured: true,
+      );
+      expect(r.canCapture, isFalse);
+      expect(r.primaryBlockReason, BlockReason.alreadyCaptured);
+    });
+
+    test('blocks despite the sensor fail-open (checked first)', () {
+      // Sensors unavailable would normally allow the shot (full mode's rule);
+      // a duplicate is refused regardless of what the sensors are doing.
+      const r = CaptureReadiness(
+        mode: CaptureMode.guided,
+        sensorSupported: false,
+        alreadyCaptured: true,
+      );
+      expect(r.canCapture, isFalse);
+      expect(r.primaryBlockReason, BlockReason.alreadyCaptured);
+    });
+
+    test('blocks in MANUAL mode too (checked before the manual allowance)', () {
+      const r = CaptureReadiness(
+        mode: CaptureMode.manual,
+        alreadyCaptured: true,
+      );
+      expect(r.canCapture, isFalse);
+      expect(r.primaryBlockReason, BlockReason.alreadyCaptured);
+    });
+
+    test('defaults false — every pre-existing construction is unchanged', () {
+      const r = CaptureReadiness(
+        mode: CaptureMode.guided,
+        inBand: true,
+        stable: true,
+      );
+      expect(r.alreadyCaptured, isFalse);
+      expect(r.canCapture, isTrue);
+    });
+  });
+
   group('primaryBlockReason ordering', () {
+    test('placement first, then already-captured, then band, then stability',
+        () {
+      // Placement still outranks it: with nothing placed there is no meaningful
+      // wedge to be duplicating.
+      expect(
+        const CaptureReadiness(
+                mode: CaptureMode.guided,
+                inBand: true,
+                stable: true,
+                placed: false,
+                alreadyCaptured: true)
+            .primaryBlockReason,
+        BlockReason.notPlaced,
+      );
+      // Already-captured outranks band + stability: "turn to the next section"
+      // is the action that resolves it; steadying an unusable shot is a dead end.
+      expect(
+        const CaptureReadiness(
+                mode: CaptureMode.guided,
+                inBand: false,
+                stable: false,
+                alreadyCaptured: true)
+            .primaryBlockReason,
+        BlockReason.alreadyCaptured,
+      );
+    });
+
     test('placement first, then band, then stability', () {
       expect(
         const CaptureReadiness(
@@ -98,6 +170,19 @@ void main() {
       const CaptureReadiness(mode: CaptureMode.guided, inBand: true) ==
           const CaptureReadiness(mode: CaptureMode.guided, inBand: false),
       isFalse,
+    );
+    // alreadyCaptured participates in equality/hashCode like every other gate.
+    expect(
+      const CaptureReadiness(
+              mode: CaptureMode.guided, alreadyCaptured: true) ==
+          const CaptureReadiness(mode: CaptureMode.guided),
+      isFalse,
+    );
+    expect(
+      const CaptureReadiness(mode: CaptureMode.guided, alreadyCaptured: true)
+          .hashCode,
+      const CaptureReadiness(mode: CaptureMode.guided, alreadyCaptured: true)
+          .hashCode,
     );
   });
 }

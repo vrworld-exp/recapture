@@ -144,6 +144,12 @@ void main() {
     return reg;
   }
 
+  /// FULL MODE ONLY. No `captureModeProvider` override → the provider's default
+  /// [CaptureMode.full], which is what every assertion below is scoped to: the
+  /// Fix Issues button and the below-min notice/confirm exist in full mode and
+  /// are deliberately absent in Meshy (see
+  /// test/capture/meshy_one_shot_per_segment_test.dart, which covers that mode
+  /// and asserts this full-mode shape alongside it).
   Future<void> pump(
     WidgetTester tester,
     LevelCaptureLedgerRegistry reg, {

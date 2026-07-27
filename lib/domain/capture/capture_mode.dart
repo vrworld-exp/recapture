@@ -77,6 +77,26 @@ enum CaptureMode {
   /// device is never locked out. See [CaptureReadiness].
   bool get usesHardTiltGate => this == CaptureMode.meshy;
 
+  /// Whether each ring wedge accepts exactly ONE shot.
+  ///
+  /// True for Meshy: the ring is six wedges and the selector wants SPREAD, so a
+  /// second shot into a wedge that already holds one adds nothing — it just
+  /// lets a user fill the quota without turning, producing six near-identical
+  /// frames and a model built from one side of the object. Once a wedge is
+  /// filled the shutter refuses it and the user must turn to an empty one.
+  /// False for full, whose 16-per-ring density expects repeat shots.
+  bool get oneShotPerSegment => this == CaptureMode.meshy;
+
+  /// Whether the Capture Summary offers the INCOMPLETE-capture remedies — the
+  /// "Fix Issues" button and the below-minimum confirm dialog.
+  ///
+  /// False for Meshy: with one shot per wedge and an auto-advance the moment
+  /// the coverage floor is met, a Meshy user who reached the Summary captured
+  /// correctly by construction, so both surfaces offer a remedy for a problem
+  /// that isn't there. This hides only those two; the HARD upload gate, its
+  /// remedy rows, and the offline block are safety and stay in both modes.
+  bool get offersIncompleteRemedies => this != CaptureMode.meshy;
+
   /// Whether a 3D model is generated automatically once the upload finishes.
   ///
   /// True for Meshy — the whole point of the mode is "capture and get a model",
