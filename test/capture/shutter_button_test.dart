@@ -49,6 +49,7 @@ void main() {
     required CaptureReadiness readiness,
     Future<void> Function()? onCapture,
     VoidCallback? onBlockedTap,
+    String? label,
     bool reduceMotion = false,
     Duration blockedCooldown = Duration.zero,
   }) async {
@@ -60,6 +61,7 @@ void main() {
             body: Center(
               child: ShutterButton(
                 readiness: readiness,
+                label: label,
                 onCapture: onCapture ?? () async {},
                 onBlockedTap: onBlockedTap,
                 blockedTapCooldown: blockedCooldown,
@@ -193,6 +195,44 @@ void main() {
     await pump(tester, readiness: _blockedUnstable);
     expect(find.bySemanticsLabel('Capture, blocked: hold steady'),
         findsOneWidget);
+  });
+
+  testWidgets('renders the flow label, and names it in semantics',
+      (tester) async {
+    await pump(tester, readiness: _ready, label: 'Click');
+    expect(find.text('Click'), findsOneWidget);
+    expect(find.bySemanticsLabel('Capture Click, ready'), findsOneWidget);
+
+    await pump(tester, readiness: _ready, label: 'Auto');
+    expect(find.text('Auto'), findsOneWidget);
+    expect(find.bySemanticsLabel('Capture Auto, ready'), findsOneWidget);
+  });
+
+  testWidgets('no label supplied → unchanged core + semantics', (tester) async {
+    await pump(tester, readiness: _ready);
+    expect(find.byType(Text), findsNothing);
+    expect(find.bySemanticsLabel('Capture, ready'), findsOneWidget);
+  });
+
+  testWidgets('the spinner replaces the label while capturing', (tester) async {
+    final gate = Completer<void>();
+    await pump(
+      tester,
+      readiness: _ready,
+      label: 'Click',
+      onCapture: () => gate.future,
+    );
+    expect(find.text('Click'), findsOneWidget);
+
+    await tester.tap(find.byType(ShutterButton));
+    await tester.pump();
+    expect(find.text('Click'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    gate.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Click'), findsOneWidget); // label comes back
   });
 
   testWidgets('disposed mid-capture does not throw', (tester) async {

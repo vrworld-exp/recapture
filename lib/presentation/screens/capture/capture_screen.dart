@@ -1356,6 +1356,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                           ),
                     shutter: _ShutterControl(
                       band: _resolvedBand,
+                      isMeshy: _isMeshy,
                       onCapture: _performCapture,
                       onTriggered: _onManualTriggered,
                     ),
@@ -1499,9 +1500,16 @@ class _CameraErrorSurface extends StatelessWidget {
 class _ShutterControl extends ConsumerWidget {
   const _ShutterControl({
     required this.band,
+    required this.isMeshy,
     required this.onCapture,
     this.onTriggered,
   });
+
+  /// The active session's capture shape mode, snapshotted at level entry by the
+  /// parent (same source as the hidden AUTO pill / play-pause). Only names the
+  /// shutter: 'Click' for the manual-only Meshy flow, 'Auto' for the full flow's
+  /// auto-capture loop. The shutter itself is manual in BOTH modes.
+  final bool isMeshy;
 
   /// The EFFECTIVE pitch band THIS level enforces — resolved once at level entry
   /// (override → remote/cache → bundled default) and held stable for the pass by
@@ -1525,6 +1533,7 @@ class _ShutterControl extends ConsumerWidget {
 
     return ShutterButton(
       key: const ValueKey('capture_shutter'),
+      label: isMeshy ? 'Click' : 'Auto',
       readiness: CaptureReadiness(
         mode: CaptureMode.guided,
         // Reuse the SHARED pitch-band gate (min inclusive, max exclusive) — the
