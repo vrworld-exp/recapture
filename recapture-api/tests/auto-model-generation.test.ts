@@ -17,9 +17,9 @@ import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
 import { buildJobKeyPrefix } from '@/utils/s3Keys';
 import { findExportableJob } from '@/services/adminProjectsService';
+import { captureGenerationIdempotencyKey } from '@/services/projectModelsService';
 import {
   AUTO_MODEL_FLAG_KEY,
-  autoGenerationIdempotencyKey,
   maybeAutoGenerateModel,
 } from '@/services/autoModelGenerationService';
 
@@ -279,12 +279,12 @@ describe('maybeAutoGenerateModel', () => {
     expect(await Job.countDocuments({ jobType: MESHY_MODEL_GENERATION_JOB_TYPE })).toBe(1);
   });
 
-  it('derives a per-job idempotency key', async () => {
+  it('derives a per-job idempotency key (the shared capture key)', async () => {
     const { job } = await makeCaptureJob();
     await maybeAutoGenerateModel({ job: job as never, manifest: goodManifest() });
 
     const record = await ProjectModel.findOne({}).exec();
-    expect(record?.idempotencyKey).toBe(autoGenerationIdempotencyKey(job._id));
+    expect(record?.idempotencyKey).toBe(captureGenerationIdempotencyKey(job._id));
   });
 
   it('lets the unique index settle a concurrent double-process', async () => {

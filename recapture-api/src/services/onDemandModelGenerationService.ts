@@ -46,6 +46,7 @@ import {
   type AutoSelectionTrace,
 } from '@/services/autoPhotoSelectionService';
 import {
+  captureGenerationIdempotencyKey,
   countServerSelectedGenerationsInLast24h,
   createMeshyModelRequest,
   persistGenerationTrace,
@@ -131,18 +132,19 @@ export class GenerationInfrastructureError extends Error {
 /**
  * The idempotency key for a button-triggered generation.
  *
- * Derived from the capture job (not the project, not a random value) for the
- * same reason the automatic key is: a second press on the same capture must
- * REPLAY the existing record rather than pay again, while a genuine recapture
- * is a new job id and correctly gets a new, deliberate spend.
+ * A non-forced press uses the SHARED capture key
+ * ([captureGenerationIdempotencyKey]): a second press on the same capture — or
+ * an automatic generation that already ran for it — REPLAYS the existing record
+ * rather than paying again. A genuine recapture is a new job id and correctly
+ * gets a new, deliberate spend.
  */
 export function manualGenerationIdempotencyKey(
   jobId: Types.ObjectId | string,
   force = false
 ): string {
-  const base = `manual:${jobId.toString()}`;
+  const base = captureGenerationIdempotencyKey(jobId);
   // A forced regenerate is asking to pay again on purpose, so it must NOT
-  // collide with the record it is regenerating.
+  // collide with the record it is regenerating (or with an automatic one).
   return force ? `${base}:${randomUUID()}` : base;
 }
 
