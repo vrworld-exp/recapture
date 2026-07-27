@@ -44,8 +44,11 @@ final class RejectAlreadyFilled extends SegmentCaptureDecision {
   const RejectAlreadyFilled(super.segmentIndex);
 
   /// User-facing warning copy. The SINGLE source of truth — UI layers must read
-  /// this constant, never hardcode the string at call sites.
-  static const String warningMessage = 'Already captured this angle';
+  /// this constant, never hardcode the string at call sites. It is deliberately
+  /// DIRECTIVE ("turn to the next section"): the only useful thing to tell a user
+  /// standing at a finished segment is where to go, not what went wrong.
+  static const String warningMessage =
+      'Already captured this angle — turn to the next section';
 
   @override
   bool operator ==(Object other) =>

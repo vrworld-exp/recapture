@@ -99,6 +99,7 @@ class _ShutterButtonState extends State<ShutterButton> {
         BlockReason.outOfBand => 'out_of_band',
         BlockReason.unstable => 'unstable',
         BlockReason.notPlaced => 'not_placed',
+        BlockReason.alreadyCaptured => 'already_captured',
         BlockReason.sensorUnavailable || BlockReason.capturing => 'unknown',
       },
     });
@@ -155,6 +156,8 @@ class _ShutterButtonState extends State<ShutterButton> {
     if (widget.readiness.canCapture) return 'Capture$suffix, ready';
     return switch (widget.readiness.primaryBlockReason) {
       BlockReason.notPlaced => 'Capture$suffix, blocked: place the object',
+      BlockReason.alreadyCaptured =>
+        'Capture$suffix, blocked: already captured this angle',
       BlockReason.outOfBand => 'Capture$suffix, blocked: adjust tilt',
       BlockReason.unstable => 'Capture$suffix, blocked: hold steady',
       _ => 'Capture$suffix, blocked',

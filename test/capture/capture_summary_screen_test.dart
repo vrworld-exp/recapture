@@ -15,7 +15,10 @@ import 'package:recapture/application/capture/ledger/captured_photo_record.dart'
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry.dart';
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry_provider.dart';
 import 'package:recapture/application/capture/ledger/warned_photo_record.dart';
+import 'package:recapture/application/capture/capture_shape_mode_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
+import 'package:recapture/application/upload/upload_flow.dart';
+import 'package:recapture/domain/capture/capture_shape_mode.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/presentation/screens/capture/capture_summary_screen.dart';
 import 'package:recapture/utils/analytics.dart';
@@ -96,6 +99,13 @@ class _NoLowBandConfigNotifier extends ConfigNotifier {
       );
 }
 
+/// Puts the session in MESHY shape mode — one Level A ring of 6, 100% coverage
+/// floor, both gates at 6 (see CaptureConfig.meshy).
+class _MeshyShapeModeController extends CaptureShapeModeController {
+  @override
+  CaptureShapeMode build() => CaptureShapeMode.meshy;
+}
+
 CapturedPhotoRecord _accepted(int seg, String path) => CapturedPhotoRecord(
       segmentIndex: seg,
       framePath: path,
@@ -148,6 +158,7 @@ void main() {
     WidgetTester tester,
     LevelCaptureLedgerRegistry reg, {
     ConfigNotifier Function() config = _StubConfigNotifier.new,
+    bool meshy = false,
   }) async {
     Widget stub(String label) => Scaffold(body: Text(label));
     final router = GoRouter(
@@ -177,6 +188,11 @@ void main() {
         overrides: [
           levelCaptureLedgerRegistryProvider.overrideWithValue(reg),
           captureConfigProvider.overrideWith(config),
+          // Meshy routes the whole screen through CaptureConfig.meshy (single
+          // Level A ring of 6, 100% floor) via effectiveCaptureConfigProvider —
+          // the real production path, not a hand-installed config.
+          if (meshy)
+            captureShapeModeProvider.overrideWith(_MeshyShapeModeController.new),
         ],
         child: MaterialApp.router(routerConfig: router),
       ),
@@ -401,6 +417,68 @@ void main() {
     final action = named(AnalyticsEvents.captureSummaryAction);
     expect(action.single.props['action'], 'review');
     expect(action.single.props['level'], 'B');
+  });
+
+  // ── MESHY: the friction-free Summary ────────────────────────────────────────
+  //
+  // A Meshy session is ONE ring of 6 that cannot reach this screen short of 6/6
+  // (the one-shot-per-wedge gate + the 100% completion floor), so "Fix Issues" is
+  // unreachable-by-construction and Upload never has anything to warn about. The
+  // correctness guards (offline block, live gate re-check, double-tap latch) stay.
+  group('meshy mode', () {
+    ProviderContainer containerOf(WidgetTester tester) =>
+        ProviderScope.containerOf(tester.element(find.byType(MaterialApp)));
+
+    testWidgets('Fix Issues is hidden even when the level is short',
+        (tester) async {
+      // 3 of 6 wedges: incomplete AND below the hard floor.
+      await pump(tester, registryWith({'mid': 3}), meshy: true);
+
+      expect(find.text('Level A • Eye Ring'), findsOneWidget);
+      expect(find.text('Level B • Top Ring'), findsNothing); // single ring
+      expect(find.byKey(const Key('summary_fix_issues')), findsNothing);
+      // The hard-gate notice still explains the block and offers its remedy row —
+      // hiding Fix Issues removes the confusing button, not the information.
+      expect(find.byKey(const Key('upload_gate_notice')), findsOneWidget);
+    });
+
+    testWidgets('Upload (6/6) goes straight to the pipeline — no confirm',
+        (tester) async {
+      await pump(tester, registryWith({'mid': 6}), meshy: true);
+      final container = containerOf(tester);
+
+      expect(find.byKey(const Key('summary_fix_issues')), findsNothing);
+      expect(find.byKey(const Key('upload_gate_notice')), findsNothing);
+      expect(container.read(uploadFlowProvider), isNull);
+
+      await tester.tap(find.byKey(const Key('summary_upload')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('below_min_dialog')), findsNothing);
+      expect(container.read(uploadFlowProvider), isNotNull,
+          reason: 'uploadFlowProvider.start() ran');
+      expect(find.text('UPLOADING'), findsOneWidget);
+      expect(named(AnalyticsEvents.uploadInitiated), hasLength(1));
+    });
+
+    testWidgets('the live hard gate still refuses a short session',
+        (tester) async {
+      await pump(tester, registryWith({'mid': 5}), meshy: true); // 5 of 6
+      final container = containerOf(tester);
+
+      await tester.tap(find.byKey(const Key('summary_upload')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('UPLOADING'), findsNothing);
+      expect(container.read(uploadFlowProvider), isNull);
+      expect(named(AnalyticsEvents.uploadInitiated), isEmpty);
+      expect(named(AnalyticsEvents.uploadGateBlocked), isNotEmpty);
+    });
+
+    // FULL mode keeps both surfaces — pinned by the tests above, which all run in
+    // full mode: 'cards show accepted/min...' and 'Fix Issues → greatest-shortfall
+    // level' assert summary_fix_issues is present, and 'Upload (eligible but
+    // incomplete) → confirm' asserts below_min_dialog still appears.
   });
 
   group('hard upload gate', () {

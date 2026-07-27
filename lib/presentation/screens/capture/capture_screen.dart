@@ -25,8 +25,8 @@ import '../../../application/capture/segment_coverage_provider.dart';
 import '../../../application/capture/session/capture_session_codec.dart';
 import '../../../application/capture/session/capture_session_store.dart';
 import '../../../application/capture/stability_provider.dart';
-import '../../../application/config/config_notifier.dart';
 import '../../../domain/capture/level_completion.dart';
+import '../../../domain/capture/segment_capture_decision.dart';
 import '../../../data/local/active_session_box.dart';
 import '../../../data/local/auto_capture_box.dart';
 import '../../../data/local/capture_settings_box.dart';
@@ -282,8 +282,15 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// N the progression/machine layers and the live HUD providers use). Computed
   /// directly (not via the active-band provider) so it is correct even before
   /// [_activateLevelRing] stamps the active band.
+  ///
+  /// Reads the EFFECTIVE config (shape-mode aware), not the raw remote one: in
+  /// Meshy this ring is 6, and the live HUD providers
+  /// ([activeLevelSegmentCountProvider], and through it the yaw→segment
+  /// bucketing) already resolve 6 from the same source. Reading the raw config
+  /// here reshaped the coverage to the full flow's 16 and desynced the two.
+  /// In full mode the two providers are identical, so nothing changes.
   int _levelSegmentCount() => effectiveSegmentsFor(
-        ref.read(captureConfigProvider),
+        ref.read(effectiveCaptureConfigProvider),
         ref.read(captureFlowVariantProvider),
         _levelBandId,
       );
@@ -758,6 +765,15 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   Future<void> _performCapture() async {
     if (!_captureLock.tryAcquire()) return; // auto fire in flight — stand down
     try {
+      // HARD one-shot-per-segment guard (Meshy). The shutter's own readiness can
+      // be one frame stale and a native shutter call is expensive + side-effecting,
+      // so the decision is re-taken here, immediately before the capture. A RETAKE
+      // is exempt: it deliberately re-shoots a filled segment.
+      if (_isMeshy && _retake == null && !_isSegmentCaptureAllowed()) {
+        _showAlreadyCapturedWarning();
+        return; // no frame, no counter, no ledger, no thumbnail — finally releases
+      }
+
       final frame = await _captureChannel.captureSingle();
       if (!mounted) return;
       if (frame == null) return;
@@ -795,6 +811,44 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     } finally {
       _captureLock.release();
     }
+  }
+
+  /// The one-shot-per-segment decision for the CURRENT ring segment, via the pure
+  /// [evaluateSegmentCapture]. FAILS OPEN: an unknown or out-of-range segment
+  /// (sensors warming up, no usable gyro) allows the capture — a device without
+  /// motion sensors must still be able to shoot. Caller-gated to Meshy + non-retake.
+  bool _isSegmentCaptureAllowed() {
+    final seg =
+        ref.read(currentRingSegmentProvider).valueOrNull?.currentSegment;
+    final coverage = ref.read(segmentCoverageProvider);
+    if (seg == null || seg < 0 || seg >= coverage.segmentCount) return true;
+    return switch (evaluateSegmentCapture(
+      segmentIndex: seg,
+      isFilled: coverage.filled[seg],
+    )) {
+      ProceedCapture() => true,
+      RejectAlreadyFilled() => false,
+    };
+  }
+
+  /// Surfaces the duplicate-angle refusal, reading the copy from the decision
+  /// model's single source of truth. Shown both when the blocked shutter is tapped
+  /// and when the pre-capture guard refuses, using the app's standard SnackBar
+  /// pattern (no new overlay). Best-effort: no messenger (unmounted) → silent.
+  void _showAlreadyCapturedWarning() {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          key: Key('already_captured_snack'),
+          backgroundColor: AppColors.warning,
+          duration: Duration(seconds: 2),
+          content: Text(RejectAlreadyFilled.warningMessage),
+        ),
+      );
   }
 
   /// One auto-capture evaluation per orientation tick. Reads the live stability,
@@ -939,6 +993,12 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// `minAcceptedCount` is 1: the repo has no Dart count-config field, so coverage
   /// (`CaptureConfig.thresholds.minCoveragePct`) is the effective production gate —
   /// reaching it already implies ≥1 accepted. Retake mode never auto-completes.
+  ///
+  /// The floor comes from the EFFECTIVE (shape-mode aware) config, so Meshy
+  /// completes at its own 100% floor — all 6 wedges. Reading the raw remote config
+  /// here completed a Meshy session at 5/6 (the full flow's 80%) and stranded the
+  /// user on a Summary whose Upload gate demands 6. Full mode is unchanged (the
+  /// two providers are identical there).
   void _maybeAutoComplete() {
     if (_levelCompleteNavigated || _retake != null) return;
     final coverage = ref.read(segmentCoverageProvider);
@@ -946,7 +1006,8 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       coverage,
       acceptedCount: _ledger.accepted.length,
       minAcceptedCount: 1,
-      minCoveragePct: ref.read(captureConfigProvider).thresholds.minCoveragePct,
+      minCoveragePct:
+          ref.read(effectiveCaptureConfigProvider).thresholds.minCoveragePct,
     );
     if (!completion.isComplete) return;
     _levelCompleteNavigated = true;
@@ -1357,8 +1418,14 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                     shutter: _ShutterControl(
                       band: _resolvedBand,
                       isMeshy: _isMeshy,
+                      // ONE shot per ring sixth — Meshy only. A retake must be
+                      // able to re-shoot a filled segment, and once the level has
+                      // completed the gate is moot (the screen is leaving).
+                      enforceOneShotPerSegment:
+                          _isMeshy && _retake == null && !_levelCompleteNavigated,
                       onCapture: _performCapture,
                       onTriggered: _onManualTriggered,
+                      onAlreadyCapturedTap: _showAlreadyCapturedWarning,
                     ),
                     thumbnails: ThumbnailStrip(
                       recent: _recentThumbnails,
@@ -1501,8 +1568,10 @@ class _ShutterControl extends ConsumerWidget {
   const _ShutterControl({
     required this.band,
     required this.isMeshy,
+    required this.enforceOneShotPerSegment,
     required this.onCapture,
     this.onTriggered,
+    this.onAlreadyCapturedTap,
   });
 
   /// The active session's capture shape mode, snapshotted at level entry by the
@@ -1517,11 +1586,23 @@ class _ShutterControl extends ConsumerWidget {
   /// agree; and a mid-pass config/override change never shifts the gate.
   final PitchBand band;
 
+  /// ONE shot per ring segment: when true, the shutter refuses a tap while the
+  /// segment the camera currently points at already holds an accepted shot — the
+  /// user must physically turn to an unfilled one. Only the Meshy flow sets this;
+  /// the shipped full flow's manual shutter is deliberately untouched (its
+  /// auto-capture loop already skips filled segments via `isCurrentFilled`).
+  final bool enforceOneShotPerSegment;
+
   final Future<void> Function() onCapture;
 
   /// Capture-initiation hook (fires once per non-blocked tap) — the parent emits
   /// `manual_capture_triggered` with full context from the readiness.
   final void Function(CaptureReadiness readiness)? onTriggered;
+
+  /// Nudge for a blocked tap at an ALREADY-CAPTURED segment — the parent surfaces
+  /// the "turn to the next section" warning. Wired only for that reason: a tap
+  /// blocked on tilt/stability keeps its existing (silent) behaviour.
+  final VoidCallback? onAlreadyCapturedTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1530,6 +1611,18 @@ class _ShutterControl extends ConsumerWidget {
 
     final tiltSupported = tilt?.sensorSupported ?? false;
     final stabilitySupported = stability?.sensorSupported ?? false;
+
+    // FAIL-OPEN: only a KNOWN, in-range, filled segment blocks. An unknown /
+    // out-of-range segment (sensors warming up or unavailable) leaves this false,
+    // so a device with no usable gyro can still shoot.
+    final seg =
+        ref.watch(currentRingSegmentProvider).valueOrNull?.currentSegment;
+    final coverage = ref.watch(segmentCoverageProvider);
+    final alreadyCaptured = enforceOneShotPerSegment &&
+        seg != null &&
+        seg >= 0 &&
+        seg < coverage.segmentCount &&
+        coverage.filled[seg];
 
     return ShutterButton(
       key: const ValueKey('capture_shutter'),
@@ -1543,9 +1636,11 @@ class _ShutterControl extends ConsumerWidget {
         stable: stabilitySupported && stability!.stability == Stability.stable,
         // Both sensors must be usable to gate; otherwise fail open.
         sensorSupported: tiltSupported && stabilitySupported,
+        alreadyCaptured: alreadyCaptured,
       ),
       onCapture: onCapture,
       onTriggered: onTriggered,
+      onBlockedTap: alreadyCaptured ? onAlreadyCapturedTap : null,
     );
   }
 }
@@ -1607,13 +1702,15 @@ class _RingCoverageHud extends ConsumerWidget {
 /// segment count (N) from the config band, accepted/coverage from the shared
 /// [RingCoverage] — so the two HUD readouts can never disagree. Empty until the
 /// ring-progress resolver supplies filled segments; the completion threshold is
-/// CaptureConfig's `minCoveragePct`.
+/// the EFFECTIVE config's `minCoveragePct` (the same floor [_maybeAutoComplete]
+/// gates on, so the meter can't read "complete" while the gate disagrees — in
+/// Meshy that is 100%, not the full flow's 80%).
 class _ProgressMeterHud extends ConsumerWidget {
   const _ProgressMeterHud();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final config = ref.watch(captureConfigProvider);
+    final config = ref.watch(effectiveCaptureConfigProvider);
     // Same live source as the ring map → the two readouts can never disagree.
     final coverage = ref.watch(segmentCoverageProvider).toRingCoverage();
     return ProgressMeter(

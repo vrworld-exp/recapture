@@ -33,6 +33,7 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
+import '../../../application/capture/capture_shape_mode_provider.dart';
 import '../../../application/capture/capture_summary_provider.dart';
 import '../../../application/capture/completion_gate_provider.dart';
 import '../../../application/capture/review_grid_items_provider.dart';
@@ -215,7 +216,13 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
     }
 
     _navigating = true; // blocks double-tap through the await
-    if (anyBelowMin) {
+    // MESHY: no warn-then-allow prompt. A Meshy session can only reach this
+    // screen with all 6 wedges filled (the one-shot-per-segment gate + the 100%
+    // completion floor), so the confirm would be a dead-end question — Upload
+    // starts the pipeline immediately. The correctness guards above and below
+    // (offline block, live gate re-check, the _navigating latch) all still run.
+    final isMeshy = ref.read(captureShapeModeProvider).isMeshy;
+    if (anyBelowMin && !isMeshy) {
       final proceed = await _confirmBelowMin(incompleteLabel);
       if (!proceed) {
         if (mounted) setState(() => _navigating = false); // re-arm for a retry
@@ -370,6 +377,10 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
 
     final overallComplete = allLevelsComplete(summaries);
     final mostWork = mostWorkLevel(summaries);
+    // MESHY: Fix Issues is unreachable-by-construction (the flow cannot land here
+    // short of its 6/6 floor), so showing it is pure confusion. The per-level
+    // Review card stays — that is the opt-in "I made a mistake" surface.
+    final isMeshy = ref.watch(captureShapeModeProvider).isMeshy;
     final incompleteLabel =
         [for (final s in summaries) if (!s.isComplete) s.level.code].join(',');
     final totalPhotos = summaries.fold<int>(0, (sum, s) => sum + s.frameCount);
@@ -450,7 +461,7 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
             uploadEligible: uploadGate.eligible,
             shortLevels: uploadGate.shortLevels,
             anyLevelBelowMin: !overallComplete,
-            showFixIssues: mostWork != null,
+            showFixIssues: mostWork != null && !isMeshy,
             onUpload: () => _onUpload(
               anyBelowMin: !overallComplete,
               incompleteLabel: incompleteLabel,
