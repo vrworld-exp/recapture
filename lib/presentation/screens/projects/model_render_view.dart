@@ -111,6 +111,18 @@ class ModelRenderViewState extends State<ModelRenderView> {
 })();
 ''';
 
+  /// Uniform scale applied to the model. Meshy GLBs carry no calibrated
+  /// real-world size and render ~2.5× too large in AR (Scene Viewer / Quick
+  /// Look place the model at its baked bounds), so 1/2.5 = 0.4 brings it down
+  /// to roughly the real object's size. The `scale` transform is baked into
+  /// the scene model-viewer exports to AR, so this applies on both platforms;
+  /// the inline preview re-frames via the `105%` cameraOrbit, so it is
+  /// visually unaffected. Pinch-to-scale (arScale.auto) still lets the user
+  /// fine-tune from this starting size.
+  @visibleForTesting
+  // static const modelScale = '0.4 0.4 0.4';
+  static const modelScale = '0.2 0.2 0.2';
+
   /// How long the loading skin may wait for a load signal before uncovering
   /// the viewer anyway. A missed signal (broken channel, changed DOM layout)
   /// must degrade to model-viewer's own progress bar — never to a skin that
@@ -247,6 +259,9 @@ class ModelRenderViewState extends State<ModelRenderView> {
       alt: 'A 3D model of the captured object',
       ar: true,
       arModes: ModelRenderView.arModesFor(usdzUrl),
+      // Shrink the model to roughly the real object's size — Meshy GLBs come
+      // in ~2.5× too large in AR (see [modelScale]).
+      scale: modelScale,
       // A captured physical object sits on a surface. Meshy GLBs carry no
       // calibrated real-world size, so pinch-to-scale stays enabled rather
       // than pinning a possibly-wrong "100%".
