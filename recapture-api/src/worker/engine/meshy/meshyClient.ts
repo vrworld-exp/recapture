@@ -174,9 +174,23 @@ export const meshyClient: MeshyClient = {
    * Submits 1–4 image URLs and returns Meshy's task id. THIS CALL SPENDS
    * CREDITS: the caller must persist the returned id before doing anything
    * else, so a crash can never turn into a second submission.
+   *
+   * The mesh budget is sent EXPLICITLY rather than left to Meshy's defaults.
+   * `should_remesh` defaults to false on Meshy's newer models, which returns the
+   * raw generated mesh — unbounded in practice (observed 55k–1.2M triangles for
+   * the same kind of captured object), and the large end simply does not render
+   * in the app's WebView. Pinning remesh + target_polycount + texture_resolution
+   * is what makes "the generation succeeded" and "the owner can see it" the same
+   * statement. See MESHY_TARGET_POLYCOUNT in config/env.ts.
    */
   async createMultiImageTask(imageUrls: string[]): Promise<{ taskId: string }> {
-    const res = await transport().post(MULTI_IMAGE_PATH, { image_urls: imageUrls });
+    const res = await transport().post(MULTI_IMAGE_PATH, {
+      image_urls: imageUrls,
+      should_remesh: true,
+      topology: 'triangle',
+      target_polycount: env.MESHY_TARGET_POLYCOUNT,
+      texture_resolution: env.MESHY_TEXTURE_RESOLUTION,
+    });
     if (res.status < 200 || res.status >= 300) {
       throw toMeshyError(res.status, 'create multi-image task');
     }

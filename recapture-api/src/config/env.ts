@@ -95,6 +95,29 @@ const envSchema = z.object({
   MESHY_TASK_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
   /** Presigned-GET TTL for the source images handed to Meshy (seconds). */
   MESHY_SOURCE_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * Triangle budget for a generated model — the size the phone has to render.
+   *
+   * NOT cosmetic. Meshy's remesh phase defaults to OFF on its newer models, and
+   * the raw mesh it returns for a captured object is unbounded: live results
+   * ranged from 55k to 1.2M triangles (4 MB to 38 MB GLB). Past roughly a few
+   * hundred thousand triangles an Android WebView runs out of heap or loses its
+   * WebGL context while parsing the GLB, model-viewer fires `error`, and the
+   * owner sees "We couldn't load this model" for a generation that in fact
+   * succeeded. Asking for a fixed budget is what keeps every result viewable on
+   * the device it was captured with.
+   *
+   * 100k sits well inside Meshy's own 100–300,000 range: high enough to keep the
+   * surface detail of a captured object, low enough to load on a mid-range phone
+   * (~8 MB GLB). Raise it only alongside a device test.
+   */
+  MESHY_TARGET_POLYCOUNT: z.coerce.number().int().min(100).max(300_000).default(100_000),
+  /**
+   * Base-colour texture resolution requested from Meshy. '2k' is Meshy's own
+   * default and the one a phone can hold comfortably; '4k'/'8k' multiply the
+   * decoded texture memory that the same WebView has to find.
+   */
+  MESHY_TEXTURE_RESOLUTION: z.enum(['2k', '4k', '8k']).default('2k'),
   /** Max Create-Model requests one staff user may make per window (credits!). */
   MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
   /** Sliding window for the Create-Model cap (seconds). */
