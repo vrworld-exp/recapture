@@ -90,6 +90,16 @@ enum CaptureMode {
         CaptureMode.meshy => 'Meshy Capture',
       };
 
+  /// Word printed on the capture shutter, naming what the button does in THIS
+  /// mode: full runs the auto-capture loop ("Auto"), Meshy is shutter-only, so
+  /// every frame is a deliberate press ("Click"). Kept next to
+  /// [usesAutoCapture] — the behaviour the copy describes — so the two can
+  /// never drift apart.
+  String get shutterLabel => switch (this) {
+        CaptureMode.full => 'Auto',
+        CaptureMode.meshy => 'Click',
+      };
+
   /// Tolerant parse of a wire/persisted id. Unknown or null → [full] (the
   /// pre-mode behavior — every legacy session was a full capture). Never
   /// throws, matching the repo's defensive-parse convention.

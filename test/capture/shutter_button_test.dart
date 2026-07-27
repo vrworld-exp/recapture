@@ -51,6 +51,7 @@ void main() {
     VoidCallback? onBlockedTap,
     bool reduceMotion = false,
     Duration blockedCooldown = Duration.zero,
+    String? label,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -60,6 +61,7 @@ void main() {
             body: Center(
               child: ShutterButton(
                 readiness: readiness,
+                label: label,
                 onCapture: onCapture ?? () async {},
                 onBlockedTap: onBlockedTap,
                 blockedTapCooldown: blockedCooldown,
@@ -193,6 +195,36 @@ void main() {
     await pump(tester, readiness: _blockedUnstable);
     expect(find.bySemanticsLabel('Capture, blocked: hold steady'),
         findsOneWidget);
+  });
+
+  testWidgets('mode label prints on the core; null renders none', (tester) async {
+    await pump(tester, readiness: _ready, label: 'Click');
+    expect(find.text('Click'), findsOneWidget);
+
+    await pump(tester, readiness: _ready);
+    expect(find.text('Click'), findsNothing);
+    expect(find.text('Auto'), findsNothing);
+  });
+
+  testWidgets('label yields the core to the in-flight spinner', (tester) async {
+    final gate = Completer<void>();
+    await pump(
+      tester,
+      readiness: _ready,
+      label: 'Auto',
+      onCapture: () => gate.future,
+    );
+    expect(find.text('Auto'), findsOneWidget);
+
+    await tester.tap(find.byType(ShutterButton));
+    await tester.pump();
+    expect(find.text('Auto'), findsNothing); // spinner owns the core
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    gate.complete();
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Auto'), findsOneWidget); // restored
   });
 
   testWidgets('disposed mid-capture does not throw', (tester) async {

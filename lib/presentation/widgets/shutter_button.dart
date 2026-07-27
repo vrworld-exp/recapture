@@ -23,12 +23,19 @@ class ShutterButton extends StatefulWidget {
     super.key,
     required this.readiness,
     required this.onCapture,
+    this.label,
     this.onTriggered,
     this.onBlockedTap,
     this.blockedTapCooldown = const Duration(seconds: 2),
   });
 
   final CaptureReadiness readiness;
+
+  /// Short word printed on the button's core naming what the shutter does in
+  /// the active capture mode ("Auto" in full capture, "Click" in Meshy — see
+  /// `CaptureMode.shutterLabel`). Null renders the plain core (no text). It is
+  /// hidden while a capture is in flight, where the spinner owns the core.
+  final String? label;
 
   /// Performs the actual capture (parent's `takePicture`); completes on success,
   /// throws on a real failure. The button reflects in-flight/success/error only.
@@ -199,6 +206,25 @@ class _ShutterButtonState extends State<ShutterButton> {
                               shape: BoxShape.circle,
                             ),
                           ),
+                          // Mode word ("Auto" / "Click"). Excluded from
+                          // semantics: the button's own label already says what
+                          // a tap does, so announcing the word again would just
+                          // repeat it.
+                          if (widget.label != null && !_capturing)
+                            ExcludeSemantics(
+                              child: Text(
+                                widget.label!,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelSmall
+                                    ?.copyWith(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.5,
+                                    ),
+                              ),
+                            ),
                           if (_capturing)
                             const SizedBox(
                               width: 26,

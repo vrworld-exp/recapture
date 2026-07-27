@@ -1547,10 +1547,16 @@ class _ShutterControl extends ConsumerWidget {
     // Meshy enforces the eye→top window HARD: a shot outside [60,180) is worthless
     // to the model, so the tilt gate must not fail open. Full mode keeps its
     // fail-open (never lock out a sensor-less device). See CaptureReadiness.
-    final hardGate = ref.watch(captureModeProvider).usesHardTiltGate;
+    // One read for both the gate and the printed word, so the button can never
+    // show "Click" while enforcing full mode's rules (or vice versa).
+    final captureMode = ref.watch(captureModeProvider);
+    final hardGate = captureMode.usesHardTiltGate;
 
     return ShutterButton(
       key: const ValueKey('capture_shutter'),
+      // "Auto" in full capture (the shutter supplements the auto loop),
+      // "Click" in Meshy (shutter-only — every one of the 6 is a press).
+      label: captureMode.shutterLabel,
       readiness: CaptureReadiness(
         mode: CaptureMode.guided,
         // Reuse the SHARED pitch-band gate (min inclusive, max exclusive) — the

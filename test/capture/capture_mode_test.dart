@@ -120,6 +120,13 @@ void main() {
       expect(CaptureMode.full.generatesModelAutomatically, isFalse);
       expect(CaptureMode.meshy.generatesModelAutomatically, isTrue);
     });
+
+    test('shutter label names what the button does in each mode', () {
+      // The word tracks usesAutoCapture: a loop-driven shutter says "Auto", a
+      // press-only one says "Click".
+      expect(CaptureMode.full.shutterLabel, 'Auto');
+      expect(CaptureMode.meshy.shutterLabel, 'Click');
+    });
   });
 
   group('per-ring counts', () {
