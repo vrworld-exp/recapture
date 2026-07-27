@@ -190,6 +190,56 @@ void main() {
       expect(find.byKey(const ValueKey('model_loading')), findsOneWidget);
       expect(find.textContaining('couldn’t load'), findsNothing);
     });
+
+    testWidgets('a load FAILURE is fatal — the kind is reported and mapped',
+        (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('error:loadfailure');
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('model_retry_cta')), findsOneWidget);
+    });
+
+    testWidgets('a WebGL context loss does NOT strand a loaded model on the '
+        'retry body — model-viewer restores it itself', (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('loaded:ar');
+      await tester.pump();
+
+      key.currentState!.handleEvent('error:webglcontextlost');
+      await tester.pump();
+
+      // Still the live viewer, still AR-capable: nothing was torn down.
+      expect(find.byKey(const ValueKey('model_retry_cta')), findsNothing);
+      expect(find.textContaining('couldn’t load'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+      await tester.pump();
+      expect(find.textContaining('AR isn’t available'), findsNothing);
+    });
+
+    testWidgets('a context loss DURING load leaves the load watch running '
+        'rather than failing the screen', (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('error:webglcontextlost');
+      await tester.pump();
+
+      // Still waiting, not failed — and the fallback still ends the wait.
+      expect(find.byKey(const ValueKey('model_loading')), findsOneWidget);
+      expect(find.byKey(const ValueKey('model_retry_cta')), findsNothing);
+
+      await tester.pump(ModelRenderViewState.loadingFallback);
+      expect(find.byKey(const ValueKey('model_loading')), findsNothing);
+      expect(find.textContaining('couldn’t load'), findsNothing);
+    });
+
+    testWidgets('an UNKNOWN error kind stays fatal — only the kinds we know '
+        'recover are forgiven', (tester) async {
+      await tester.pumpWidget(app());
+      key.currentState!.handleEvent('error:something-new');
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('model_retry_cta')), findsOneWidget);
+    });
   });
 
   group('ModelRenderView.arModesFor', () {

@@ -107,7 +107,15 @@ class ModelRenderViewState extends State<ModelRenderView> {
   }
   if (viewer.loaded) { report(); }
   else { viewer.addEventListener('load', report, { once: true }); }
-  viewer.addEventListener('error', function () { post('error'); });
+  // model-viewer raises exactly two error kinds, and only ONE of them is a
+  // dead end: 'loadfailure' (the GLB could not be fetched or parsed) versus
+  // 'webglcontextlost' (the WebView dropped the GL context — it restores
+  // itself and re-renders). Reporting the kind is what lets the Dart side
+  // stop killing a viewer that is about to recover on its own.
+  viewer.addEventListener('error', function (e) {
+    var kind = (e && e.detail && e.detail.type) || 'unknown';
+    post('error:' + kind);
+  });
 })();
 ''';
 
@@ -187,9 +195,27 @@ class ModelRenderViewState extends State<ModelRenderView> {
     _cancelArProbe = null;
   }
 
+  /// model-viewer error kinds that must NOT strand the user on the retry body.
+  ///
+  /// `webglcontextlost` is the WebView reclaiming the GL context — under memory
+  /// pressure, on a heavy model, or simply because the app was backgrounded.
+  /// model-viewer restores the context and re-renders by itself, so failing the
+  /// whole screen replaces a viewer that recovers in a second with a dead end
+  /// whose only escape (Try again) rebuilds the webview and re-downloads the
+  /// GLB — strictly worse than doing nothing.
+  static const _recoverableErrorKinds = {'webglcontextlost'};
+
   @visibleForTesting
   void handleEvent(String message) {
     if (!mounted) return;
+    // `error:<kind>` from the injected lifecycle script. A bare `error` (an
+    // older page, or the "no <model-viewer> in the DOM" report) has no kind and
+    // stays fatal.
+    if (message.startsWith('error:')) {
+      final kind = message.substring('error:'.length);
+      if (_recoverableErrorKinds.contains(kind)) return;
+      message = 'error';
+    }
     setState(() {
       switch (message) {
         // A standalone AR flip: does NOT touch the load wait — it can arrive

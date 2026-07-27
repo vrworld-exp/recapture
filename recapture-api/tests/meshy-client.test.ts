@@ -58,11 +58,32 @@ describe('meshyClient — request shape', () => {
     // Field name is the live contract's: `image_urls`, not `images`/`image_url`.
     expect(post).toHaveBeenCalledWith('/openapi/v1/multi-image-to-3d', {
       image_urls: ['https://s3/a', 'https://s3/b'],
+      should_remesh: true,
+      topology: 'triangle',
+      target_polycount: env.MESHY_TARGET_POLYCOUNT,
+      texture_resolution: env.MESHY_TEXTURE_RESOLUTION,
     });
     expect(captured.config.baseURL).toBe(env.MESHY_BASE_URL);
     expect((captured.config.headers as Record<string, string>).Authorization).toBe(
       'Bearer test-meshy-key'
     );
+  });
+
+  it('pins a mesh budget the phone can render instead of taking Meshy defaults', async () => {
+    // The regression this guards: with should_remesh left to Meshy's default
+    // (false on its newer models) the returned GLB was unbounded — live results
+    // reached 1.2M triangles / 38 MB, which the app's WebView cannot load, so a
+    // successful generation surfaced to the owner as "couldn't load this model".
+    stubTransport({ status: 200, data: { result: 'task-abc' } });
+
+    await meshyClient.createMultiImageTask(['https://s3/a']);
+
+    const body = post.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(body.should_remesh).toBe(true);
+    expect(body.target_polycount).toBe(env.MESHY_TARGET_POLYCOUNT);
+    // Meshy's own accepted range — a budget outside it is rejected at 400.
+    expect(env.MESHY_TARGET_POLYCOUNT).toBeGreaterThanOrEqual(100);
+    expect(env.MESHY_TARGET_POLYCOUNT).toBeLessThanOrEqual(300_000);
   });
 
   it('normalizes the retrieve response into a typed MeshyTask', async () => {
