@@ -26,6 +26,7 @@ import { ProjectModel } from '@/models/ProjectModel';
 import { getServerFlag } from '@/services/remoteConfigService';
 import { selectPhotosForAutoGeneration } from '@/services/autoPhotoSelectionService';
 import {
+  captureGenerationIdempotencyKey,
   countServerSelectedGenerationsInLast24h,
   createMeshyModelRequest,
   persistGenerationTrace,
@@ -69,20 +70,6 @@ export interface MaybeAutoGenerateInput {
 }
 
 /**
- * The deterministic idempotency key for a job's automatic generation.
- *
- * This is the money guard that matters most. Because it is derived from the
- * capture job id (not random, not client-supplied), the unique
- * (createdByUserId, idempotencyKey) index means a re-claimed, retried, or
- * duplicate-processed capture job REPLAYS the existing record instead of
- * enqueuing — and paying for — a second generation. A genuine recapture is a
- * NEW job id, so it correctly gets a new (deliberate) spend.
- */
-export function autoGenerationIdempotencyKey(jobId: Types.ObjectId | string): string {
-  return `auto:${jobId.toString()}`;
-}
-
-/**
  * Decides and (if warranted) enqueues one automatic generation for a finished
  * capture job. Never throws for a business reason — every refusal is a
  * SKIPPED outcome the caller can log.
@@ -108,11 +95,14 @@ export async function maybeAutoGenerateModel(
     return { outcome: 'SKIPPED', reason: 'JOB_INCOMPLETE' };
   }
 
-  // ── Guard 2: one auto-generation per CAPTURE JOB, never per project.
-  // A cheap pre-check that skips the work below in the common retry case; the
-  // unique index (via the REPLAYED outcome) remains the actual race authority,
-  // because two workers can pass this check concurrently.
-  const idempotencyKey = autoGenerationIdempotencyKey(job._id);
+  // ── Guard 2: one server-selected generation per CAPTURE JOB, never per
+  // project — and SHARED with the "Generate 3D model" button. Both use
+  // captureGenerationIdempotencyKey, so a capture that already has a
+  // button-triggered generation (or a re-claimed/retried auto one) is found
+  // here and skipped rather than paid for twice. A cheap pre-check for the
+  // common case; the unique index (via the REPLAYED outcome) remains the actual
+  // race authority, because two callers can pass this check concurrently.
+  const idempotencyKey = captureGenerationIdempotencyKey(job._id);
   const existing = await ProjectModel.findOne({
     createdByUserId: new Types.ObjectId(userId),
     idempotencyKey,

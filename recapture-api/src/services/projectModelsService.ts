@@ -255,6 +255,25 @@ export type CreateMeshyModelResult =
  * rule the export and soft-delete paths use — and validated with the SAME
  * containment rule, so a caller can only ever select photos it can already see.
  */
+/**
+ * The idempotency key that makes a capture's FIRST server-selected generation
+ * unique — SHARED by both the automatic capture-processor path
+ * (`maybeAutoGenerateModel`) and the non-forced owner "Generate 3D model" button
+ * (`generateModelOnDemand`). Because both attribute the record to the same owner
+ * and use this same key, whichever trigger fires first wins, and the other
+ * collides on the unique `(createdByUserId, idempotencyKey)` index and REPLAYS
+ * the existing record instead of paying for a SECOND Meshy task. That is what
+ * stops one capture becoming two models (two charges, two different meshes).
+ *
+ * Derived from the capture jobId (not random, not the project) so a genuine
+ * recapture — a new job id — correctly earns its own deliberate generation. A
+ * forced staff regenerate appends a random suffix (see
+ * `manualGenerationIdempotencyKey`) so it does NOT collide.
+ */
+export function captureGenerationIdempotencyKey(jobId: Types.ObjectId | string): string {
+  return `capture:${jobId.toString()}`;
+}
+
 export async function createMeshyModelRequest(
   input: CreateMeshyModelRequestInput
 ): Promise<CreateMeshyModelResult> {
