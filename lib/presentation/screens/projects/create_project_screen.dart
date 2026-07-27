@@ -8,7 +8,10 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/capture_mode_provider.dart';
+import '../../../application/capture/progression/level_progression_provider.dart';
 import '../../../application/projects/projects_notifier.dart';
+import '../../../data/local/storage_providers.dart';
+import '../../../domain/entities/active_session.dart';
 import '../../../domain/entities/create_project_options.dart';
 import '../../../domain/entities/project.dart';
 import '../../../utils/analytics.dart';
@@ -122,6 +125,34 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
       await ref
           .read(captureModeProvider.notifier)
           .persistFor(created!.id);
+
+      // Persist the object SIZE against the project for the same reason — a
+      // resumed session never revisits this form, and the server Project DTO
+      // does not carry the size back. The upload flow reads it so POST /jobs
+      // declares the size the project was created with (a mismatch is a
+      // SIZE_MISMATCH rejection). Best-effort; never blocks the flow.
+      try {
+        await ref
+            .read(levelProgressionStoreProvider)
+            .saveObjectSize(created!.id, size);
+      } catch (_) {/* durability is best-effort; see saveObjectSize */}
+
+      // Establish this project as the resumable ACTIVE SESSION. This is the ONE
+      // place the server project id is handed to the capture→upload route: the
+      // pre-capture, capture and upload screens all resolve the current project
+      // from ActiveSessionBox (not the route arg), so without this the upload
+      // flow could not tell which project the photos belong to and would create
+      // a SECOND one. Offline this records the temp id; the capture runs under
+      // it and the upload flow's fallback create path handles a non-server id.
+      // Best-effort — a failed write degrades to the old behaviour, never a crash.
+      try {
+        await ref.read(activeSessionBoxProvider).save(
+              ActiveSession(
+                projectId: created!.id,
+                updatedAt: DateTime.now(),
+              ),
+            );
+      } catch (_) {/* best-effort; capture falls back to no active session */}
       if (!mounted) return;
       // Route replacement (goNamed): back must not return to this half-finished
       // form. TODO(precapture): PreCaptureScreen does not yet consume the

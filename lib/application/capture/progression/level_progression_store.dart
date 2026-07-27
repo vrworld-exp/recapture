@@ -19,6 +19,10 @@ import '../../../data/local/hive_init.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
 import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/capture/coverage_milestones.dart';
+// `hide CaptureMode`: this file already uses the capture CaptureMode
+// (domain/capture); create_project_options defines an unrelated same-named enum
+// (guided/manual). We want its ObjectSize + apiValue extension, not that enum.
+import '../../../domain/entities/create_project_options.dart' hide CaptureMode;
 import 'level_progression.dart';
 
 /// Centralised JSON keys so encode/decode can't drift via a typo.
@@ -175,12 +179,13 @@ class LevelProgressionStore {
   }
 
   /// Removes the snapshot for [projectId] (and its flow variant + capture
-  /// mode). No-op if absent.
+  /// mode + object size). No-op if absent.
   Future<void> clear(String projectId) async {
     final box = await _open();
     await box.delete(projectId);
     await box.delete(_variantKey(projectId));
     await box.delete(_modeKey(projectId));
+    await box.delete(_objectSizeKey(projectId));
   }
 
   // ── flow variant ───────────────────────────────────────────────────────────
@@ -242,6 +247,37 @@ class LevelProgressionStore {
     return CaptureMode.tryFromId(raw is String ? raw : null);
   }
 
+  // ── object size ──────────────────────────────────────────────────────────────
+  // Same project-scoped rationale as the mode: the object size is chosen at
+  // project creation (the create form), never on a screen a RESUMED session
+  // passes through, so it cannot live on the navigation stack. It is not carried
+  // on the server Project DTO either, so this is the one durable client-side home
+  // — and the upload flow needs it to send `POST /jobs objectSize` that matches
+  // the project's stored size (the server rejects a mismatch with SIZE_MISMATCH).
+
+  /// The box key holding [projectId]'s object-size wire value.
+  static String _objectSizeKey(String projectId) => '$projectId::object_size';
+
+  /// Persists the chosen object [size] for [projectId] (as its wire apiValue).
+  Future<void> saveObjectSize(String projectId, ObjectSize size) async {
+    final box = await _open();
+    await box.put(_objectSizeKey(projectId), size.apiValue);
+  }
+
+  /// The persisted object size for [projectId], or null when none was ever saved
+  /// (or the stored value is unknown). Lets callers keep their own default (the
+  /// upload flow falls back to 'medium') for a legacy/never-persisted project
+  /// instead of silently forcing one. Never throws.
+  Future<ObjectSize?> loadObjectSizeOrNull(String projectId) async {
+    final box = await _open();
+    final raw = box.get(_objectSizeKey(projectId));
+    if (raw is! String) return null;
+    for (final size in ObjectSize.values) {
+      if (size.apiValue == raw) return size;
+    }
+    return null;
+  }
+
   /// Moves every project-scoped record from [fromId] to [toId].
   ///
   /// The offline-create path needs this: a project created without a network
@@ -261,6 +297,7 @@ class LevelProgressionStore {
       (fromId, toId),
       (_variantKey(fromId), _variantKey(toId)),
       (_modeKey(fromId), _modeKey(toId)),
+      (_objectSizeKey(fromId), _objectSizeKey(toId)),
     ]) {
       final value = box.get(from);
       if (value == null) continue;

@@ -105,7 +105,8 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     // Offline: show it immediately with a temp id + pending flag, and queue the
     // create so it survives a restart and flushes on reconnect. No network call.
     final pending = Project(
-      id: 'pending_${DateTime.now().toUtc().microsecondsSinceEpoch}',
+      id: '$kPendingProjectIdPrefix'
+          '${DateTime.now().toUtc().microsecondsSinceEpoch}',
       name: name,
       status: ProjectStatus.draft,
       updatedAt: DateTime.now(),
@@ -274,6 +275,13 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     } catch (_) {/* cache write failure must not affect the visible list */}
   }
 }
+
+/// Prefix of the optimistic local id assigned to an offline-created project
+/// before the server issues a real one (see [ProjectsNotifier.create]). Kept as
+/// a named constant so consumers that must distinguish a real server id from a
+/// placeholder — notably the upload flow's project-reuse check — cannot drift
+/// from the minting site.
+const String kPendingProjectIdPrefix = 'pending_';
 
 /// App-wide projects state. The single source of truth for the project list.
 final projectsProvider =
