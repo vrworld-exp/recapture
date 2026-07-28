@@ -119,7 +119,7 @@ class LevelASettingsSheet extends StatelessWidget {
                         title: 'Auto-capture',
                         subtitle: autoCaptureSupported
                             ? 'Capture automatically when steady and aligned.'
-                            : 'Not available in Meshy Capture — you tap to '
+                            : 'Not available in Maya AI Capture — you tap to '
                                 'shoot each photo.',
                         value: autoCaptureSupported && s.autoCapture,
                         onChanged: autoCaptureSupported

@@ -112,7 +112,7 @@ class _CaptureModeSheetState extends ConsumerState<_CaptureModeSheet> {
             const SizedBox(height: AppSpacing.sm),
             SelectableOptionCard<CaptureMode>(
               key: const Key('capture_mode_meshy'),
-              title: 'Meshy Capture',
+              title: 'Maya AI Capture',
               subtitle: 'Faster. ${_totalFor(CaptureMode.meshy)} photos, you '
                   'tap to shoot.',
               value: CaptureMode.meshy,

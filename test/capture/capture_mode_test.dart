@@ -305,7 +305,7 @@ void main() {
               onSelect: (m) => tapped = m,
             ),
             SelectableOptionCard<CaptureMode>(
-              title: 'Meshy Capture',
+              title: 'Maya AI Capture',
               subtitle: '6 photos',
               value: CaptureMode.meshy,
               selected: CaptureMode.full,
@@ -316,7 +316,7 @@ void main() {
       ));
 
       expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
-      await t.tap(find.text('Meshy Capture'));
+      await t.tap(find.text('Maya AI Capture'));
       expect(tapped, CaptureMode.meshy);
     });
 
@@ -326,7 +326,7 @@ void main() {
         theme: AppTheme.dark,
         home: Scaffold(
           body: SelectableOptionCard<CaptureMode>(
-            title: 'Meshy Capture',
+            title: 'Maya AI Capture',
             subtitle: '6 photos',
             value: CaptureMode.meshy,
             selected: CaptureMode.full,
@@ -336,7 +336,7 @@ void main() {
         ),
       ));
 
-      await t.tap(find.text('Meshy Capture'));
+      await t.tap(find.text('Maya AI Capture'));
       expect(taps, 0);
     });
   });

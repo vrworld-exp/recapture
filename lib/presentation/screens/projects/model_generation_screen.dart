@@ -142,9 +142,9 @@ class _Pending extends StatelessWidget {
 /// stays on its best-known step with an indeterminate bar.
 enum _GenStep {
   queued('Queued', 'Waiting for the processing worker to pick this up.'),
-  preparing('Preparing photos', 'Sending your selected photos to Meshy AI.'),
+  preparing('Preparing photos', 'Sending your selected photos to Maya AI.'),
   generating('Generating 3D model',
-      'Meshy AI is building the 3D model from your photos.'),
+      'Maya AI is building the 3D model from your photos.'),
   finalizing('Saving model', 'Downloading the result into ReCapture storage.');
 
   const _GenStep(this.label, this.detail);

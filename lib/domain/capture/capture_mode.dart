@@ -107,7 +107,7 @@ enum CaptureMode {
   /// Human-facing name for the creation sheet and analytics-free UI copy.
   String get label => switch (this) {
         CaptureMode.full => 'Full Capture',
-        CaptureMode.meshy => 'Meshy Capture',
+        CaptureMode.meshy => 'Maya AI Capture',
       };
 
   /// Word printed on the capture shutter, naming what the button does in THIS

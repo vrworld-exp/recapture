@@ -29,7 +29,7 @@ enum ModelSource {
   /// The origin label shown on the viewer, or null when there is nothing to
   /// attribute.
   String? get badgeLabel => switch (this) {
-        ModelSource.meshy => 'Created by Meshy AI',
+        ModelSource.meshy => 'Created by Maya AI',
         ModelSource.manual || ModelSource.unknown => null,
       };
 }

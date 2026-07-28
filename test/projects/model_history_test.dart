@@ -296,7 +296,7 @@ void main() {
       await _load(tester);
 
       expect(find.text('rendering https://cdn/model.glb'), findsOneWidget);
-      expect(find.text('Created by Meshy AI'), findsOneWidget);
+      expect(find.text('Created by Maya AI'), findsOneWidget);
     });
 
     testWidgets('an unknown model id shows the unavailable state, not a blank',

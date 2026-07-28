@@ -392,7 +392,7 @@ void main() {
           ),
         );
 
-    testWidgets('a meshy model is badged "Created by Meshy AI"',
+    testWidgets('a meshy model is badged "Created by Maya AI"',
         (tester) async {
       await tester.pumpWidget(app(const ProjectModelView(
         id: 'm1',
@@ -402,7 +402,7 @@ void main() {
       )));
       await tester.pump();
 
-      expect(find.text('Created by Meshy AI'), findsOneWidget);
+      expect(find.text('Created by Maya AI'), findsOneWidget);
     });
 
     testWidgets('a manual model carries no Meshy attribution', (tester) async {
@@ -414,7 +414,7 @@ void main() {
       )));
       await tester.pump();
 
-      expect(find.text('Created by Meshy AI'), findsNothing);
+      expect(find.text('Created by Maya AI'), findsNothing);
     });
   });
 }
