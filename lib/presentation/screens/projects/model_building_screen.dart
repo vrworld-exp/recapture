@@ -29,6 +29,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/generation_tracker_notifier.dart';
 import '../../../application/projects/model_generation_request_notifier.dart';
 import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/owner_model_state_notifier.dart';
@@ -88,7 +89,8 @@ class ModelBuildingScreen extends ConsumerStatefulWidget {
   final void Function(ProjectModelView model)? onOpenViewer;
 
   @override
-  ConsumerState<ModelBuildingScreen> createState() => _ModelBuildingScreenState();
+  ConsumerState<ModelBuildingScreen> createState() =>
+      _ModelBuildingScreenState();
 }
 
 class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
@@ -120,6 +122,36 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
   /// state with its View button rather than auto-opening again.
   bool _autoOpenedViewer = false;
 
+  /// While this screen is up, IT polls `GET /projects/:id` (via
+  /// [ownerModelStateProvider]) — so the app-wide tracker must not poll the same
+  /// project at the same time. Two pollers on one endpoint is double traffic and
+  /// two sources of truth racing each other into the projects-list
+  /// invalidation.
+  ///
+  /// Suppression is not untracking: the generation stays in the tracker, and the
+  /// status bar keeps showing it. This screen just takes over the asking.
+  ///
+  /// The notifier is captured in [initState] rather than read again in
+  /// [dispose], because `ref` is off-limits once the element is being disposed.
+  /// Holding it is safe: [generationTrackerProvider] is app-scoped and not
+  /// autoDisposed, so it outlives this screen by construction.
+  GenerationTrackerNotifier? _tracker;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.watchOwnerState) return;
+    final tracker = ref.read(generationTrackerProvider.notifier);
+    _tracker = tracker;
+    tracker.suppress(widget.projectId);
+  }
+
+  @override
+  void dispose() {
+    _tracker?.unsuppress(widget.projectId);
+    super.dispose();
+  }
+
   int? _monotonic(int? reported) {
     if (reported == null) return _maxPercent;
     final current = _maxPercent;
@@ -143,7 +175,8 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
     }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ModelViewerScreen(model: model, title: widget.projectName),
+        builder: (_) =>
+            ModelViewerScreen(model: model, title: widget.projectName),
       ),
     );
   }
@@ -245,7 +278,9 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
         _refreshedAfterRequest = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || !widget.watchOwnerState) return;
-          ref.read(ownerModelStateProvider(widget.projectId).notifier).refresh();
+          ref
+              .read(ownerModelStateProvider(widget.projectId).notifier)
+              .refresh();
         });
       }
       // Started (or entered without a press) → fall through to the worker half,
@@ -272,7 +307,8 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
     // here, not the least: the selector has never seen a real capture, so this
     // is a likely first-week outcome and it has to be explained well.
     if (request.wasDeclined) {
-      final reason = request.request?.declineReason ?? GenerationDeclineReason.unknown;
+      final reason =
+          request.request?.declineReason ?? GenerationDeclineReason.unknown;
       return [
         _Message(
           icon: Icons.photo_camera_back_outlined,
@@ -280,7 +316,9 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
           body: reason.message,
           action: widget.onRegenerate == null
               ? null
-              : AppButton(label: 'Choose photos yourself', onPressed: widget.onRegenerate),
+              : AppButton(
+                  label: 'Choose photos yourself',
+                  onPressed: widget.onRegenerate),
         ),
         _StaffTrace(
           steps: request.request?.steps ?? const [],
@@ -352,8 +390,9 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
           state: state,
           percent: _monotonic(state.generation?.progressPercent),
           isStalled: _looksStalled,
-          hasStoppedChecking:
-              ref.read(ownerModelStateProvider(widget.projectId).notifier).pollsExhausted,
+          hasStoppedChecking: ref
+              .read(ownerModelStateProvider(widget.projectId).notifier)
+              .pollsExhausted,
           requestDone: requestDone,
           expectGeneration: expectGeneration,
           onView: _openViewer,
@@ -431,7 +470,8 @@ class _Body extends StatelessWidget {
         title: "We couldn't build your model",
         // Deliberately no code, no upstream text. The one useful thing an owner
         // can do is try again with photos they choose.
-        body: 'Something went wrong while creating the 3D model from your photos.',
+        body:
+            'Something went wrong while creating the 3D model from your photos.',
         action: onRegenerate == null
             ? null
             : AppButton(label: 'Try again', onPressed: onRegenerate),
@@ -494,7 +534,8 @@ class _Waiting extends StatelessWidget {
           const SizedBox(height: AppSpacing.sm),
           Text(
             'Still working — some objects take longer.',
-            style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+            style:
+                theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
             textAlign: TextAlign.center,
           ),
         ],
@@ -530,7 +571,9 @@ class _Timeline extends StatelessWidget {
 
   StepRowStatus _statusFor(int lowerBound, int upperBound) {
     final p = percent;
-    if (p == null) return lowerBound == 0 ? StepRowStatus.running : StepRowStatus.pending;
+    if (p == null) {
+      return lowerBound == 0 ? StepRowStatus.running : StepRowStatus.pending;
+    }
     if (p >= upperBound) return StepRowStatus.done;
     if (p >= lowerBound) return StepRowStatus.running;
     return StepRowStatus.pending;
@@ -554,7 +597,8 @@ class _Timeline extends StatelessWidget {
           ),
           StepChecklistRow(
             status: _statusFor(0, 70),
-            label: p == null ? 'Building the model' : 'Building the model — $p%',
+            label:
+                p == null ? 'Building the model' : 'Building the model — $p%',
           ),
           StepChecklistRow(
             status: _statusFor(70, 100),
@@ -598,7 +642,8 @@ class _StaffTrace extends ConsumerWidget {
       padding: const EdgeInsets.only(top: AppSpacing.xl),
       child: ExpansionTile(
         tilePadding: EdgeInsets.zero,
-        title: Text('Selection trace (dev)', style: theme.textTheme.labelMedium),
+        title:
+            Text('Selection trace (dev)', style: theme.textTheme.labelMedium),
         children: [
           for (final step in steps)
             Padding(
@@ -727,9 +772,11 @@ class _Message extends StatelessWidget {
       children: [
         Icon(icon, size: 56, color: theme.colorScheme.outline),
         const SizedBox(height: AppSpacing.lg),
-        Text(title, style: theme.textTheme.titleLarge, textAlign: TextAlign.center),
+        Text(title,
+            style: theme.textTheme.titleLarge, textAlign: TextAlign.center),
         const SizedBox(height: AppSpacing.sm),
-        Text(body, style: theme.textTheme.bodyMedium, textAlign: TextAlign.center),
+        Text(body,
+            style: theme.textTheme.bodyMedium, textAlign: TextAlign.center),
         if (action != null) ...[
           const SizedBox(height: AppSpacing.xl),
           action!,

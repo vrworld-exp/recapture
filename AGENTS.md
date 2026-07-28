@@ -161,7 +161,8 @@ do not remove it).
   `AUTO_MODEL_GENERATION_ENABLED` (the capture processor, unattended, per
   capture) and `MANUAL_MODEL_GENERATION_ENABLED` (the "Generate 3D model"
   button — `POST /admin/projects/:id/model/auto`, and the owner-facing
-  `POST /projects/:id/model` whose client entry point is not wired yet). One
+  `POST /projects/:id/model`, reached from the post-upload screen, the Projects
+  card and the viewer's "create a new version"). One
   shared flag would make the button dead until unattended spend was switched
   on, which is exactly backwards: the button is how the selector gets exercised
   on real captures before that. Both count against ONE rolling 24h ceiling
@@ -176,6 +177,53 @@ do not remove it).
   is no streaming and nothing to poll (the minutes-long half is `progress`).
   The trace is **staff-only**: it is on `ProjectModelDto` and on NEITHER owner
   DTO, because it names our S3 key layout and our pipeline's internals.
+- **A running generation is tracked APP-WIDE, not by a screen.** The minutes-long
+  half is watched by two different things, deliberately not merged:
+  `ownerModelStateProvider` (family, autoDisposed) answers "what is the full
+  model situation of the project I am looking at" and dies with
+  `ModelBuildingScreen`; `generationTrackerProvider`
+  (`application/projects/generation_tracker_notifier.dart`, app-scoped, NOT
+  autoDisposed) answers "what work is the app waiting on, anywhere". The tracker
+  owns ONE poll timer for every watched project (3s→10s backoff, 120-poll cap),
+  clamps each project's percent **monotonically** (progress writes are fenced,
+  so a stale percent arrives out of order), invalidates `projectsProvider` on
+  every terminal transition (the list DTO's `modelCount` is aggregated
+  server-side, so the Models button stays hidden until a re-fetch), stops
+  polling while backgrounded, and clears on logout. It drives a global status bar
+  mounted in `MaterialApp.router`'s `builder`, above the navigator.
+  - **`suppress(projectId)` / `unsuppress` is the seam that stops double
+    polling.** `ModelBuildingScreen` suppresses its own project for its lifetime,
+    because it is already polling that exact endpoint; two pollers on one project
+    is double traffic and two sources of truth racing into the list
+    invalidation. Suppression does **not** untrack — the bar still shows it.
+  - **Only project IDS are durable** (`model_generations` box, one JSON doc via
+    `GenerationTrackerBox`). Never the percent or the status: a run can finish,
+    fail, or be superseded while the app is dead, so a restored entry starts as
+    `running` with no percent and is re-polled immediately. Terminal entries are
+    not persisted, so a finished model is never re-announced on a cold start.
+    `start()` (called once from the app shell) — not mere construction — is what
+    turns persistence on, because screens now build this notifier just to read
+    the capture lock and that must never touch the disk.
+  - Tracking is **observation, never a spend decision**. The guards that decide
+    whether a paid POST fires are unchanged: the widget's in-flight latch,
+    `ownerGenerationRequestProvider.hasStarted` (which is why that provider is
+    not autoDisposed), and the server's idempotency key.
+- **The capture lock is ENTRY-ONLY, and that is load-bearing.** While any
+  tracked generation is `running`, `captureLockedProvider` is true and starting a
+  new capture is blocked in exactly two places: the router's top-level redirect
+  (`appRedirectFor` → `captureLockRedirectFor`, which gates **only**
+  `/capture/pre` and `/projects/new`) and the Projects Hub's CTAs, which go
+  *disabled with an explanation* rather than vanishing. Nothing inside the flow
+  is gated — not `/capture/level-*`, `/capture/summary`, `/upload`, or
+  `/processing` — because `redirect` runs on EVERY navigation including
+  intra-flow moves, so gating an inner route would eject a user thirty photos
+  into a ring the moment an unrelated generation started. The lock stops you
+  entering a capture; it never interrupts one in progress. Terminal entries do
+  not lock (a bar the user has not dismissed must not keep them out of the
+  camera), and a null `ref` never blocks (the standalone-test escape hatch every
+  guard here has).
+  - **In-app only.** "Background" means within the running app: there are no push
+    or local notifications, so a user who leaves finds the result on next open.
 - **Prepare-Images (edited model inputs).** Before Create-Model the client's
   ImagePrepScreen lets staff crop/relight COPIES of the selected photos. Edited
   JPEGs are PUT via `POST /admin/projects/:id/model-images/upload-urls`
@@ -242,7 +290,8 @@ do not remove it).
 ### Client foundations
 - **Tokens** live in `flutter_secure_storage` (OS Keychain/Keystore), **not Hive**.
 - **Hive** holds non-secret cache/state. Boxes: `active_session`,
-  `projects_cache`, `config_cache`, `offline_queue`. Box names are centralized
+  `projects_cache`, `config_cache`, `offline_queue`, `model_generations` (the
+  3D-model generations being watched — ids only, see above). Box names are centralized
   (`data/local/box_names.dart`); init/adapter registration in
   `data/local/hive_init.dart`. Tests use a temp-dir Hive helper.
 - **Dio** has an interceptor pipeline (`data/remote/`); the auth-refresh

@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/projects_repository.dart';
 import '../../utils/analytics.dart';
+import 'generation_tracker_notifier.dart';
 
 /// What the owner's generation request is doing / did.
 class OwnerGenerationRequestState {
@@ -56,7 +57,10 @@ class OwnerGenerationRequestNotifier
   /// protect against different things: the widget stops a fast double tap, this
   /// stops a re-entry from anywhere else while one is still in flight. Both
   /// matter — the request spends credits.
-  Future<OwnerGenerationRequestState> request() async {
+  ///
+  /// [projectName] is only ever used to NAME the run in the app-wide status bar;
+  /// the post-capture flow has the id but not the name and may omit it.
+  Future<OwnerGenerationRequestState> request({String? projectName}) async {
     if (state.hasStarted) return state;
     state = const OwnerGenerationRequestState(isRequesting: true);
 
@@ -69,6 +73,7 @@ class OwnerGenerationRequestNotifier
       'outcome': result.outcome.name,
       'forced': false,
     });
+    _trackIfStarted(result, projectName);
     return state;
   }
 
@@ -81,7 +86,7 @@ class OwnerGenerationRequestNotifier
   /// completed result — the whole point is to start a new run after one already
   /// finished. The server's daily cap is the real spend bound; this just stops a
   /// double-tap firing two at once.
-  Future<OwnerGenerationRequestState> regenerate() async {
+  Future<OwnerGenerationRequestState> regenerate({String? projectName}) async {
     if (state.isRequesting) return state;
     state = const OwnerGenerationRequestState(isRequesting: true);
 
@@ -95,7 +100,20 @@ class OwnerGenerationRequestNotifier
       'outcome': result.outcome.name,
       'forced': true,
     });
+    _trackIfStarted(result, projectName);
     return state;
+  }
+
+  /// Hands an accepted run to the app-wide tracker, so it keeps being watched
+  /// after the screen that asked for it is gone.
+  ///
+  /// Strictly AFTER the POST has resolved, and only on `started`. Tracking is
+  /// observation, never a spend decision — the guards above, plus the server's
+  /// idempotency key, remain the only things that decide whether a request
+  /// fires, and this must not become a fourth.
+  void _trackIfStarted(OwnerGenerationRequestResult result, String? name) {
+    if (!result.isStarted) return;
+    ref.read(generationTrackerProvider.notifier).track(arg, projectName: name);
   }
 
   /// Drops the last result so a later press starts clean. Not called on leaving

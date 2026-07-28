@@ -8,6 +8,7 @@ import '../../application/capture/capture_flow_variant_provider.dart';
 import '../../application/capture/capture_mode_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
 import '../../application/config/config_notifier.dart';
+import '../../application/projects/generation_tracker_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/capture/capture_flow_variant.dart';
 import '../../domain/capture/capture_mode.dart';
@@ -15,6 +16,7 @@ import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
 import '../../domain/entities/retake_request.dart';
 import '../../domain/upload/upload_failure.dart';
+import '../../utils/analytics.dart';
 import '../../presentation/screens/auth/splash_screen.dart';
 import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
@@ -146,22 +148,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
     // projectsRouteObserver): a model generated after the user left the build
     // screen is invisible until the list is re-pulled.
     observers: [projectsRouteObserver],
-    redirect: (context, state) {
-      final loc = state.matchedLocation;
-
-      // The splash owns the initial decision (and clears expired tokens before
-      // setting auth state) — let it run without interference.
-      if (loc == AppRoutes.splash) return null;
-
-      final loggedIn = authNotifier.isAuthenticated;
-      final goingToAuth = _authLocations.contains(loc);
-
-      // Block protected content for signed-out users — no flash, hard redirect.
-      if (!loggedIn && !goingToAuth) return AppRoutes.auth;
-      // Keep signed-in users out of the auth flow.
-      if (loggedIn && goingToAuth) return AppRoutes.projects;
-      return null;
-    },
+    redirect: (context, state) => appRedirectFor(
+      location: state.matchedLocation,
+      isAuthenticated: authNotifier.isAuthenticated,
+      ref: ref,
+    ),
     errorBuilder: (context, state) => RouteErrorScreen(
       onGoHome: () => context.go(
         authNotifier.isAuthenticated ? AppRoutes.projects : AppRoutes.auth,
@@ -300,7 +291,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                   coveragePct: 92,
                   rejected: 1,
                 ),
-                primaryLabel: meshy ? 'Finish — go to summary' : 'Start Level B',
+                primaryLabel:
+                    meshy ? 'Finish — go to summary' : 'Start Level B',
                 onStartLevelB: meshy
                     ? () => context.go(AppRoutes.captureSummary)
                     : () => context.go(AppRoutes.levelBIntro),
@@ -330,8 +322,9 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           levelName: 'Top Ring',
           nextRoute: AppRoutes.levelBReview,
           instructions: kLevelBCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+          retakeRequest: state.extra is RetakeRequest
+              ? state.extra! as RetakeRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -400,8 +393,9 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           levelName: 'Low Ring',
           nextRoute: AppRoutes.levelCReview,
           instructions: kLevelCCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+          retakeRequest: state.extra is RetakeRequest
+              ? state.extra! as RetakeRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -471,9 +465,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // never a button that would 404.
         builder: (_, state) => FlowBackScope(
           child: ProcessingScreen(
-            projectId: state.extra is String && (state.extra! as String).isNotEmpty
-                ? state.extra! as String
-                : null,
+            projectId:
+                state.extra is String && (state.extra! as String).isNotEmpty
+                    ? state.extra! as String
+                    : null,
           ),
         ),
       ),
@@ -489,6 +484,78 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       ),
     ],
   );
+}
+
+/// The app's whole top-level redirect decision for one navigation.
+///
+/// Extracted from the router closure so the guard chain — auth first, then the
+/// capture lock — is directly exercisable by a test that pumps a router over
+/// cheap stub screens, instead of only through the real screen tree.
+///
+/// Order is load-bearing: the capture lock runs AFTER the auth guard, because a
+/// signed-out user's destination is the auth screen, not Projects.
+String? appRedirectFor({
+  required String location,
+  required bool isAuthenticated,
+  Ref? ref,
+}) {
+  // The splash owns the initial decision (and clears expired tokens before
+  // setting auth state) — let it run without interference.
+  if (location == AppRoutes.splash) return null;
+
+  final goingToAuth = _authLocations.contains(location);
+
+  // Block protected content for signed-out users — no flash, hard redirect.
+  if (!isAuthenticated && !goingToAuth) return AppRoutes.auth;
+  // Keep signed-in users out of the auth flow.
+  if (isAuthenticated && goingToAuth) return AppRoutes.projects;
+
+  // Starting a NEW capture is the one thing a running 3D-model generation
+  // blocks.
+  return _captureLockRedirect(ref, location);
+}
+
+/// The ONLY two routes the capture lock gates: the entrances to a capture.
+///
+/// Everything else in the flow — `/capture/level-*`, `/capture/summary`,
+/// `/upload`, `/processing` — is deliberately absent. `redirect` runs on EVERY
+/// navigation, including moves inside a capture, so gating an inner route would
+/// eject a user who is thirty photos into a ring the moment an unrelated
+/// generation started elsewhere. Their photos are on disk and the session
+/// resumes, but being thrown out mid-capture reads as data loss. The lock stops
+/// you ENTERING a capture; it never interrupts one already under way.
+const Set<String> kCaptureEntryLocations = {
+  AppRoutes.preCapture,
+  AppRoutes.createProject,
+};
+
+/// The pure capture-lock decision for one navigation: the Projects Hub (block)
+/// when a generation is running AND [location] is a capture ENTRANCE, else null
+/// (allow). Side-effect-free — the analytics live in the router closure — so it
+/// is directly unit-testable, mirroring [levelCRedirectForVariant].
+String? captureLockRedirectFor({
+  required String location,
+  required bool isLocked,
+}) {
+  if (!isLocked) return null;
+  if (!kCaptureEntryLocations.contains(location)) return null;
+  return AppRoutes.projects;
+}
+
+/// Router adapter over [captureLockRedirectFor]. A null [ref] (router built
+/// without provider access, e.g. a focused test) never blocks — the same policy
+/// the Level C guard and the summary gate use.
+///
+/// The cheap location check comes FIRST so an ordinary navigation never even
+/// instantiates the tracker.
+String? _captureLockRedirect(Ref? ref, String location) {
+  if (ref == null || !kCaptureEntryLocations.contains(location)) return null;
+  if (!ref.read(captureLockedProvider)) return null;
+  Analytics.logEvent('capture_blocked_by_generation', {
+    'entry':
+        location == AppRoutes.preCapture ? 'pre_capture' : 'create_project',
+  });
+  return AppRoutes.projects;
 }
 
 /// The pure no-Level-C decision for a flow [variant]: without_bottom has no

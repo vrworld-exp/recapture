@@ -7,6 +7,7 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/generation_tracker_notifier.dart';
 import '../../../application/projects/model_generation_request_notifier.dart';
 import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
@@ -40,7 +41,8 @@ class ProjectsScreen extends ConsumerStatefulWidget {
   ConsumerState<ProjectsScreen> createState() => _ProjectsScreenState();
 }
 
-class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware {
+class _ProjectsScreenState extends ConsumerState<ProjectsScreen>
+    with RouteAware {
   /// Per-project in-flight guard so a double-tap can't fire two requests/navs.
   final Set<String> _actionInFlight = <String>{};
 
@@ -138,8 +140,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   void _logRefresh(String result) {
     Analytics.logEvent('projects_list_refreshed', {
       'result': result,
-      'project_count':
-          result == 'success' ? (_projectsOrEmpty().length) : 0,
+      'project_count': result == 'success' ? (_projectsOrEmpty().length) : 0,
       'device_type': _deviceType,
     });
   }
@@ -210,7 +211,8 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     if (!_claim(p)) return;
     _logAction('view', p);
     try {
-      final state = await ref.read(projectsRepositoryProvider).fetchModelState(p.id);
+      final state =
+          await ref.read(projectsRepositoryProvider).fetchModelState(p.id);
       if (!mounted) return;
       if (state.hasViewableModel) {
         await Navigator.of(context).push(
@@ -276,8 +278,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   Future<void> _onRegenerate(Project p) async {
     _logAction('regenerate', p);
     // Fire the request; the build screen we push renders its progress/outcome.
-    final pending =
-        ref.read(ownerGenerationRequestProvider(p.id).notifier).regenerate();
+    final pending = ref
+        .read(ownerGenerationRequestProvider(p.id).notifier)
+        .regenerate(projectName: p.name);
     try {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -352,8 +355,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   Future<void> _onGenerateOwner(Project p) async {
     if (!_claim(p)) return;
     _logAction('generate', p);
-    final pending =
-        ref.read(ownerGenerationRequestProvider(p.id).notifier).request();
+    final pending = ref
+        .read(ownerGenerationRequestProvider(p.id).notifier)
+        .request(projectName: p.name);
     try {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
@@ -494,6 +498,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     });
 
     final projectsAsync = ref.watch(projectsProvider);
+    // A 3D model is still being built somewhere, so a NEW capture cannot start
+    // yet. The CTAs below go disabled rather than disappearing, and the notice
+    // says why — a silently dead button is the worst version of this. The
+    // router redirect is the backstop for deep links and stale routes.
+    final captureLocked = ref.watch(captureLockedProvider);
     // Staff gating: the Live tab exists ONLY for MODEL_ARTIST/ADMIN accounts
     // (server-verified via /auth/me; every /admin call is re-checked
     // server-side). Non-staff users get the exact pre-existing screen.
@@ -502,7 +511,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
 
     final listBody = showLive
         ? const LiveProjectsView()
-        : _buildBody(projectsAsync);
+        : _buildBody(projectsAsync, captureLocked: captureLocked);
     final tabbedBody = isStaff
         ? Column(
             children: [
@@ -549,15 +558,28 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       floatingActionButton: showLive
           ? null
           : FloatingActionButton(
-              onPressed: _onCreateProject,
-              backgroundColor: AppColors.mirageRed,
+              // Disabled, not hidden, while a generation runs — see
+              // [captureLocked] and the notice above the list.
+              onPressed: captureLocked ? null : _onCreateProject,
+              backgroundColor:
+                  captureLocked ? AppColors.disabled : AppColors.mirageRed,
               child: const Icon(Icons.add, color: Colors.white),
             ),
-      body: tabbedBody,
+      body: captureLocked && !showLive
+          ? Column(
+              children: [
+                const _CaptureLockedNotice(),
+                Expanded(child: tabbedBody),
+              ],
+            )
+          : tabbedBody,
     );
   }
 
-  Widget _buildBody(AsyncValue<List<Project>> projectsAsync) {
+  Widget _buildBody(
+    AsyncValue<List<Project>> projectsAsync, {
+    required bool captureLocked,
+  }) {
     return projectsAsync.when(
       // A refresh/mutation keeps the previous data visible via `skipLoadingOn*`
       // defaults; a true first load / reload has no data yet → skeleton.
@@ -584,7 +606,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
                     // direct push here would skip the Full/Meshy chooser, so a
                     // first-time user (whose list is empty) could never start a
                     // Meshy capture and would silently get a Full one.
-                    onStartCapture: _onCreateProject,
+                    onStartCapture: captureLocked ? null : _onCreateProject,
                   ),
                 ),
               ),
@@ -603,7 +625,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
               return ProjectCard(
                 project: project,
                 isActionInFlight: _actionInFlight.contains(project.id),
-                onResume: _onResume,
+                // Resuming a draft re-enters capture, so it is locked by the
+                // same rule as the create CTA.
+                onResume: captureLocked ? null : _onResume,
                 onView: _onView,
                 onRetry: _onRetry,
                 onMore: _onMore,
@@ -641,6 +665,43 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       backgroundColor: AppColors.surface1,
       onRefresh: _refresh,
       child: child,
+    );
+  }
+}
+
+/// Says why the capture CTAs are dead.
+///
+/// The disabled button is the mechanism; this is the explanation. Without it the
+/// user is left tapping something that does nothing, with the status bar at the
+/// top of the app as the only clue the two are related.
+class _CaptureLockedNotice extends StatelessWidget {
+  const _CaptureLockedNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('projects_capture_locked_notice'),
+      width: double.infinity,
+      color: AppColors.surface1,
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.lg,
+        vertical: AppSpacing.sm,
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, size: 16, color: AppColors.royalGold),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              'You can start a new capture once your 3D model is finished.',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: AppColors.textSecondary),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

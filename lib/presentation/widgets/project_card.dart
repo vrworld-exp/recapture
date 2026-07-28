@@ -26,7 +26,12 @@ class ProjectCard extends StatelessWidget {
   });
 
   final Project project;
-  final ValueChanged<Project> onResume;
+
+  /// Null DISABLES the Resume button rather than hiding it — the capture lock
+  /// (a 3D model still being built) makes resuming temporarily impossible, and a
+  /// button that silently vanishes is harder to understand than one that is
+  /// visibly unavailable next to the bar explaining why.
+  final ValueChanged<Project>? onResume;
   final ValueChanged<Project> onView;
   final ValueChanged<Project> onRetry;
 
@@ -70,9 +75,8 @@ class ProjectCard extends StatelessWidget {
   /// perpetually-pulsing amber "Processing" pill is stale noise. Every other
   /// status keeps its pill. Mirrors the action-area suppression in
   /// [_buildActionArea].
-  bool get _showStatusPill =>
-      !(project.status == ProjectStatus.processing &&
-          project.hasViewableModels);
+  bool get _showStatusPill => !(project.status == ProjectStatus.processing &&
+      project.hasViewableModels);
 
   @override
   Widget build(BuildContext context) {
@@ -115,7 +119,8 @@ class ProjectCard extends StatelessWidget {
                 AppStatusPill(status: project.status),
               ],
               IconButton(
-                icon: const Icon(Icons.more_vert, color: AppColors.textSecondary),
+                icon:
+                    const Icon(Icons.more_vert, color: AppColors.textSecondary),
                 iconSize: 20,
                 visualDensity: VisualDensity.compact,
                 tooltip: 'Project options',
@@ -217,7 +222,7 @@ class ProjectCard extends StatelessWidget {
           label: 'Resume',
           isFullWidth: false,
           isLoading: isActionInFlight,
-          onPressed: () => onResume(project),
+          onPressed: onResume == null ? null : () => onResume!(project),
         );
       case ProjectCardAction.view:
         return AppButton.secondary(
@@ -261,8 +266,7 @@ class _ProgressLabel extends StatelessWidget {
         const SizedBox(width: AppSpacing.sm),
         Text(
           label,
-          style:
-              Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
         ),
       ],
     );

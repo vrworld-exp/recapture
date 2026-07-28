@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'active_session_box.dart';
 import 'config_cache_box.dart';
+import 'generation_tracker_box.dart';
 import 'level_intro_box.dart';
 import 'offline_queue_box.dart';
 import 'projects_cache_box.dart';
@@ -22,6 +23,12 @@ final configCacheBoxProvider =
 /// Gateway to the persisted offline action queue box.
 final offlineQueueBoxProvider =
     Provider<OfflineQueueBox>((ref) => OfflineQueueBox());
+
+/// Gateway to the watched-3D-model-generations store. Typed as the interface so
+/// widget tests can override it with an in-memory fake rather than doing Hive
+/// IO inside `testWidgets`.
+final generationTrackerStoreProvider =
+    Provider<GenerationTrackerStore>((ref) => GenerationTrackerBox());
 
 /// Gateway to the per-intro "seen" / "don't show again" flags store.
 final levelIntroStoreProvider =

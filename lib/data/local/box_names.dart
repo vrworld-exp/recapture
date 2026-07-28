@@ -50,6 +50,16 @@ abstract final class BoxNames {
   /// uploads. Cleared on cancel/complete; holds no capture image data.
   static const String uploadProgress = 'upload_progress';
 
+  /// Durable list of the 3D-model generations the app is WATCHING (project id +
+  /// name + when watching began), keyed by nothing — one JSON document — so a
+  /// kill/relaunch keeps tracking a generation that is still running
+  /// server-side.
+  ///
+  /// Holds NO progress and NO status on purpose: the server is the authority on
+  /// both, and a generation can finish, fail, or be superseded while the app is
+  /// dead. What survives here is only the list of ids to go ask about.
+  static const String modelGenerations = 'model_generations';
+
   /// Durable offline UPLOAD JOB queue (per session: the re-runnable session spec
   /// + queue state), keyed by `jobId`. The queue-level layer ABOVE
   /// [uploadProgress]: it remembers WHICH uploads are waiting for connection

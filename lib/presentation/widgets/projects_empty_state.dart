@@ -10,7 +10,9 @@ import 'app_button.dart';
 class ProjectsEmptyState extends StatelessWidget {
   const ProjectsEmptyState({super.key, required this.onStartCapture});
 
-  final VoidCallback onStartCapture;
+  /// Null DISABLES the CTA (the capture lock — a 3D model is still being
+  /// built). Kept visible so the reason shown above it has something to explain.
+  final VoidCallback? onStartCapture;
 
   @override
   Widget build(BuildContext context) {

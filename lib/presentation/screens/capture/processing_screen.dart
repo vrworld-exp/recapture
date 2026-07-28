@@ -37,7 +37,9 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/capture_mode_provider.dart';
+import '../../../application/projects/generation_tracker_notifier.dart';
 import '../../../application/projects/owner_generation_request_notifier.dart';
+import '../../../data/repositories/projects_repository.dart';
 import '../../../utils/feature_flags.dart';
 import '../../widgets/app_button.dart';
 import '../projects/model_building_screen.dart';
@@ -79,7 +81,18 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
     // when there is a project to spend on.
     if (widget.projectId == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_autoGenerates || _autoStarted) return;
+      if (!mounted) return;
+      if (!_autoGenerates) {
+        // A capture can start a generation with NO press at all (server-side
+        // auto-generation), and the upload result says nothing about it. So ask
+        // once, rather than guessing, and hand anything already running to the
+        // app-wide tracker. Skipped when this screen is about to fire the
+        // request itself — that path tracks on its own `started` outcome, and a
+        // second GET would only race it.
+        unawaited(_trackExistingGeneration(widget.projectId!));
+        return;
+      }
+      if (_autoStarted) return;
       _autoStarted = true;
       // The SAME request the button makes — deliberately not a second path.
       // It carries no body, no `force` and no cache-buster, so the server's
@@ -91,6 +104,25 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
     });
   }
 
+  /// One read of `GET /projects/:id` to find out whether the server already
+  /// started a generation for this capture. Purely observational — it never
+  /// POSTs, so it can never spend.
+  Future<void> _trackExistingGeneration(String projectId) async {
+    try {
+      final state =
+          await ref.read(projectsRepositoryProvider).fetchModelState(projectId);
+      if (!mounted || !state.isGenerating) return;
+      ref.read(generationTrackerProvider.notifier).track(
+            projectId,
+            projectName: _buildScreenTitle,
+            source: GenerationTrackingSource.postCapture,
+          );
+    } catch (_) {
+      // Offline / server hiccup: nothing to track. The project itself still
+      // shows the model whenever the user next opens it.
+    }
+  }
+
   Future<void> _onGenerate(String projectId) async {
     if (_pressing) return;
     setState(() => _pressing = true);
@@ -98,8 +130,9 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen> {
     // here. The most valuable outcome is a REFUSAL, and a refusal needs a
     // screen — a snackbar cannot carry "walk all the way around the object"
     // and still be readable.
-    final pending =
-        ref.read(ownerGenerationRequestProvider(projectId).notifier).request();
+    final pending = ref
+        .read(ownerGenerationRequestProvider(projectId).notifier)
+        .request(projectName: _buildScreenTitle);
     try {
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
