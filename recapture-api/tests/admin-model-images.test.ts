@@ -289,3 +289,153 @@ describe('POST /admin/projects/:id/model-images/upload-urls', () => {
     expect(exp.body.export.fileCount).toBe(2);
   });
 });
+
+// ── Read-through byte proxy ──────────────────────────────────────────────────
+//
+// GET /admin/projects/:id/photo-bytes exists because the Prepare-Images screen
+// cannot always use a presigned S3 GET: the browser build has no CORS on the
+// raw bucket, and a long prep session outlives the presign. The `key` is
+// caller-supplied, so containment is the security property under test here —
+// without it this route reads any object in the bucket.
+describe('GET /admin/projects/:id/photo-bytes', () => {
+  /** Scripts GetObject to return [body], asserting the absolute key requested. */
+  function mockGetObject(body: Buffer, contentType = 'image/jpeg') {
+    const seen: string[] = [];
+    vi.spyOn(s3Client, 'send').mockImplementation((async (cmd: {
+      constructor: { name: string };
+      input: { Key?: string };
+    }) => {
+      if (cmd.constructor.name !== 'GetObjectCommand') {
+        throw new Error(`unexpected S3 command: ${cmd.constructor.name}`);
+      }
+      seen.push(cmd.input.Key as string);
+      return {
+        ContentType: contentType,
+        Body: { transformToByteArray: async () => new Uint8Array(body) },
+      };
+    }) as never);
+    return seen;
+  }
+
+  it('MODEL_ARTIST reads a capture photo through the job prefix', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id, 'PROCESSING');
+    const { prefix } = await makeFinalizedJob(owner.id, project.id as string);
+
+    const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+    const seen = mockGetObject(bytes);
+
+    const res = await request(app)
+      .get(`/admin/projects/${project.id}/photo-bytes`)
+      .query({ key: 'images/EYE/eye_0001.jpg' })
+      .set(artist.auth);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/jpeg');
+    expect(Buffer.from(res.body)).toEqual(bytes);
+    // Resolved against the job root, not taken at face value.
+    expect(seen).toEqual([`${prefix}images/EYE/eye_0001.jpg`]);
+    // Staff imagery must never sit in a shared cache.
+    expect(res.headers['cache-control']).toContain('private');
+  });
+
+  it('serves an edited model-input copy too (the prep screen re-reads its own uploads)', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id, 'PROCESSING');
+    const { prefix } = await makeFinalizedJob(owner.id, project.id as string);
+
+    const seen = mockGetObject(Buffer.from([1, 2, 3]));
+    const res = await request(app)
+      .get(`/admin/projects/${project.id}/photo-bytes`)
+      .query({ key: 'model-input/abc/photo_1.jpg' })
+      .set(artist.auth);
+
+    expect(res.status).toBe(200);
+    expect(seen).toEqual([`${prefix}model-input/abc/photo_1.jpg`]);
+  });
+
+  it('SECURITY: escaping keys are refused with 422 and never reach S3', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id, 'PROCESSING');
+    await makeFinalizedJob(owner.id, project.id as string);
+
+    const send = vi.spyOn(s3Client, 'send');
+
+    for (const key of [
+      '../../../etc/passwd',
+      'images/../../other-job/images/x.jpg',
+      '/absolute/key.jpg',
+    ]) {
+      const res = await request(app)
+        .get(`/admin/projects/${project.id}/photo-bytes`)
+        .query({ key })
+        .set(artist.auth);
+      expect(res.status).toBe(422);
+      expect(res.body.code).toBe('INVALID_KEY');
+    }
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('missing key → 400; absent object → 404', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const project = await makeProject(owner.id, 'PROCESSING');
+    await makeFinalizedJob(owner.id, project.id as string);
+
+    const noKey = await request(app)
+      .get(`/admin/projects/${project.id}/photo-bytes`)
+      .set(artist.auth);
+    expect(noKey.status).toBe(400);
+    expect(noKey.body.code).toBe('INVALID_REQUEST');
+
+    vi.spyOn(s3Client, 'send').mockImplementation((async () => {
+      throw Object.assign(new Error('NoSuchKey'), {
+        name: 'NoSuchKey',
+        $metadata: { httpStatusCode: 404 },
+      });
+    }) as never);
+
+    const gone = await request(app)
+      .get(`/admin/projects/${project.id}/photo-bytes`)
+      .query({ key: 'images/EYE/nope.jpg' })
+      .set(artist.auth);
+    expect(gone.status).toBe(404);
+  });
+
+  it('USER → 403; no token → 401; unknown project → 404; no finalized job → 409', async () => {
+    const owner = await makeUser('USER');
+    const artist = await makeUser('MODEL_ARTIST');
+    const user = await makeUser('USER');
+    const project = await makeProject(owner.id, 'PROCESSING');
+    await makeFinalizedJob(owner.id, project.id as string);
+    const query = { key: 'images/EYE/eye_0001.jpg' };
+
+    const forbidden = await request(app)
+      .get(`/admin/projects/${project.id}/photo-bytes`)
+      .query(query)
+      .set(user.auth);
+    expect(forbidden.status).toBe(403);
+
+    const noAuth = await request(app)
+      .get(`/admin/projects/${project.id}/photo-bytes`)
+      .query(query);
+    expect(noAuth.status).toBe(401);
+
+    const missing = await request(app)
+      .get(`/admin/projects/${new Types.ObjectId().toHexString()}/photo-bytes`)
+      .query(query)
+      .set(artist.auth);
+    expect(missing.status).toBe(404);
+
+    const noJob = await makeProject(owner.id, 'PROCESSING');
+    const notExportable = await request(app)
+      .get(`/admin/projects/${noJob.id}/photo-bytes`)
+      .query(query)
+      .set(artist.auth);
+    expect(notExportable.status).toBe(409);
+    expect(notExportable.body.code).toBe('NOT_EXPORTABLE');
+  });
+});

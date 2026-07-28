@@ -118,6 +118,23 @@ export const adminModelImageUploadsBodySchema = z
 
 export type AdminModelImageUploadsBody = z.infer<typeof adminModelImageUploadsBodySchema>;
 
+/**
+ * Query for GET /admin/projects/:id/photo-bytes — the read-through proxy the
+ * Prepare-Images screen falls back to when it cannot fetch a presigned URL
+ * directly (browser, no raw-bucket CORS; or an expired presign).
+ *
+ * Same key shape as a Create-Model selection element. Containment against the
+ * resolved job prefix is the SERVICE's job, exactly as for `keys` above — this
+ * only bounds the string.
+ */
+export const adminPhotoBytesQuerySchema = z
+  .object({
+    key: z.string().min(1).max(1024),
+  })
+  .strict();
+
+export type AdminPhotoBytesQuery = z.infer<typeof adminPhotoBytesQuerySchema>;
+
 /** `:id`/`:modelId` params for the model approve route. */
 export const adminModelIdParamsSchema = z
   .object({
