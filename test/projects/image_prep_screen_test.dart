@@ -31,11 +31,13 @@ final Uint8List _pngBytes = Uint8List.fromList(
 
 class _FakeLoader implements PrepImageLoader {
   int calls = 0;
+  final projectIds = <String>[];
 
   @override
-  Future<Uint8List> load(PreviewPhoto photo) async {
+  Future<LoadedPrepImage> load(String projectId, PreviewPhoto photo) async {
     calls++;
-    return _pngBytes;
+    projectIds.add(projectId);
+    return LoadedPrepImage(bytes: _pngBytes, width: 8, height: 6);
   }
 }
 
@@ -69,6 +71,9 @@ class _FakeRepo
   int uploadedImages = 0;
   List<String>? createdWithKeys;
 
+  /// Keys the Prepare-Images loader fell back to the API proxy for.
+  final proxyFetches = <String>[];
+
   static const model = ProjectModelView(
     id: 'm1',
     source: ModelSource.meshy,
@@ -86,6 +91,12 @@ class _FakeRepo
   Future<PreviewDeleteResult> deletePhotos(
           String projectId, List<String> keys) async =>
       const PreviewDeleteResult(deleted: [], missing: []);
+
+  @override
+  Future<Uint8List> fetchPhotoBytes(String projectId, String key) async {
+    proxyFetches.add(key);
+    return _pngBytes;
+  }
 
   @override
   Future<List<ModelImageUploadSlot>> requestModelImageUploads(

@@ -114,6 +114,12 @@ abstract interface class LiveProjectsRepository {
   /// [LiveProjectsException] (network / server).
   Future<void> uploadModelImage(ModelImageUploadSlot slot, Uint8List bytes);
 
+  /// Reads one capture photo's bytes THROUGH the API, by job-root-relative
+  /// [key]. The Prepare-Images fallback for when the presigned URL cannot be
+  /// used directly: the web build cannot read the raw bucket (no CORS on it)
+  /// and a long session outlives the presign. Throws [LiveProjectsException].
+  Future<Uint8List> fetchPhotoBytes(String projectId, String key);
+
   /// The project's generation history, newest first. Throws
   /// [LiveProjectsException].
   Future<List<ProjectModelView>> listModels(String projectId);
@@ -378,6 +384,27 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
         throw const LiveProjectsException(LiveProjectsFailure.server);
       }
       return slots;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<Uint8List> fetchPhotoBytes(String projectId, String key) async {
+    // AUTHENTICATED client, unlike uploadModelImage: this is our own API, so
+    // it needs the app's bearer token and baseUrl (the presigned-URL reasoning
+    // is the exact inverse).
+    try {
+      final res = await _dio.get<List<int>>(
+        '/admin/projects/$projectId/photo-bytes',
+        queryParameters: {'key': key},
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final data = res.data;
+      if (data == null || data.isEmpty) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return Uint8List.fromList(data);
     } on DioException catch (e) {
       throw _translate(e);
     }

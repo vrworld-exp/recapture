@@ -6,7 +6,14 @@
 //     Close chip) to close, drag vertices to refine, long-press a segment to
 //     insert a point, select + delete a point, undo the last. Outside the
 //     closed polygon is dimmed live; Apply hands the CLOSED polygon back.
-//   • rectangle mode — a draggable/resizable box (free or 1:1) for quick crops.
+//   • rectangle mode — drag anywhere on empty canvas to DRAW a box (any
+//     direction), or grab the body/corners to move and resize it (free or 1:1).
+//
+// Gesture note: tap and pan share one detector, and the pan recognizer wins
+// the arena as soon as a finger drifts past kTouchSlop — so a "tap" from a
+// real thumb frequently arrives as a pan. Both modes therefore treat a pan
+// that grabbed nothing and barely moved as a tap; without that, polygon points
+// simply never appeared.
 //
 // All coordinates are NORMALIZED [0,1] in rotated-image space (the domain
 // contract, image_edit.dart) — this widget converts to pixels only for
@@ -16,6 +23,9 @@
 // AppliedCropOverlayPainter (bottom of file) is the display-only companion:
 // it shows an APPLIED polygon as the export will look (white outside), so the
 // user sees the result without a bake pass.
+import 'dart:math' as math;
+
+import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_colors.dart';
@@ -27,6 +37,12 @@ enum PrepCropMode { polygon, rectangle }
 
 /// Hit-test radius for grabbing a vertex / handle, in logical pixels.
 const double _kGrabRadiusPx = 24;
+
+/// A pan that grabbed nothing and travelled less than this is treated as a
+/// TAP. The pan recognizer wins the gesture arena as soon as a finger drifts
+/// past kTouchSlop (~18px), which is routine for a real thumb — without this
+/// fallback those taps were swallowed and no polygon point was ever added.
+const double _kTapSlopPx = 36;
 
 class PrepCropEditor extends StatefulWidget {
   const PrepCropEditor({
@@ -59,6 +75,15 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
   late bool _closed;
   int? _selected;
   int? _dragIndex;
+
+  /// Where the current pan began, so a pan that grabbed no vertex and barely
+  /// moved can be replayed as a tap on release (see [_kTapSlopPx]).
+  Offset? _panStart;
+
+  /// Most recent pan position — onPanEnd carries no coordinates, so the travel
+  /// distance has to be measured from what onPanUpdate last saw. Stays null
+  /// when the gesture never moved at all, which also counts as a tap.
+  Offset? _lastPanPosition;
 
   late RectCrop _rect;
   bool _square = false;
@@ -158,6 +183,8 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
 
   // ── Rectangle gestures ─────────────────────────────────────────────────────
 
+  /// The handle a drag at [local] should grab, or null when the touch is
+  /// outside the box entirely — the caller then starts a NEW rect there.
   _RectHandle? _handleNear(Offset local, Size size) {
     final r = _rectPx(size);
     final corners = {
@@ -172,6 +199,60 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
     return r.contains(local) ? _RectHandle.body : null;
   }
 
+  /// Begins a rectangle drag. A touch on the existing box moves/resizes it; a
+  /// touch anywhere else DRAWS A NEW BOX from that anchor — previously this
+  /// returned null and the drag was silently discarded, so the rect could only
+  /// ever be nudged from its hardcoded starting position.
+  void _rectPanStart(Offset local, Size size) {
+    final handle = _handleNear(local, size);
+    _rectDragStart = local;
+    if (handle != null) {
+      _rectDrag = handle;
+      _rectAtDragStart = _rect;
+      return;
+    }
+    _rectDrag = _RectHandle.draw;
+    _rectAtDragStart = _rect; // restored if the draw ends degenerate
+  }
+
+  /// Live rect for a draw-from-anchor drag: anchor and current point are
+  /// opposite corners, normalized so dragging in ANY direction works (not just
+  /// down-and-right).
+  void _rectDrawUpdate(Offset local, Size size) {
+    final start = _rectDragStart;
+    if (start == null) return;
+    final a = _toNorm(start, size);
+    final b = _toNorm(local, size);
+    var left = math.min(a.x, b.x);
+    var top = math.min(a.y, b.y);
+    var width = (a.x - b.x).abs();
+    var height = (a.y - b.y).abs();
+    if (_square) {
+      final side = math.min(width, height);
+      // Keep the corner under the finger on the shrinking axis.
+      if (b.x < a.x) left = a.x - side;
+      if (b.y < a.y) top = a.y - side;
+      width = side;
+      height = side;
+    }
+    setState(() =>
+        _rect = RectCrop(left: left, top: top, width: width, height: height));
+  }
+
+  /// Discards a draw that never became a usable box (a stray tap on empty
+  /// canvas), restoring whatever rect was there before.
+  void _rectPanEnd() {
+    if (_rectDrag == _RectHandle.draw) {
+      final before = _rectAtDragStart;
+      if (before != null && (_rect.width < 0.02 || _rect.height < 0.02)) {
+        setState(() => _rect = before);
+      }
+    }
+    _rectDrag = null;
+    _rectDragStart = null;
+    _rectAtDragStart = null;
+  }
+
   Rect _rectPx(Size size) => Rect.fromLTWH(
         _rect.left * size.width,
         _rect.top * size.height,
@@ -184,6 +265,12 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
     final start = _rectDragStart;
     final at = _rectAtDragStart;
     if (handle == null || start == null || at == null) return;
+
+    if (handle == _RectHandle.draw) {
+      _rectDrawUpdate(local, size);
+      return;
+    }
+
     final dx = (local.dx - start.dx) / size.width;
     final dy = (local.dy - start.dy) / size.height;
 
@@ -192,6 +279,8 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
         right = at.left + at.width,
         bottom = at.top + at.height;
     switch (handle) {
+      case _RectHandle.draw:
+        return; // handled above
       case _RectHandle.body:
         left = (at.left + dx).clamp(0.0, 1.0 - at.width);
         top = (at.top + dy).clamp(0.0, 1.0 - at.height);
@@ -240,21 +329,26 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
       return Stack(fit: StackFit.expand, children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
+          // Report the DOWN position, not the post-slop one. With the default
+          // (.start) a grabbed corner jumps ~18px the instant the drag is
+          // recognized, because the slop travel is discarded — very visible
+          // when you are trying to place a crop edge precisely.
+          dragStartBehavior: DragStartBehavior.down,
           onTapUp: isPolygon ? (d) => _polygonTap(d.localPosition, size) : null,
           onLongPressStart: isPolygon
               ? (d) => _polygonLongPress(d.localPosition, size)
               : null,
           onPanStart: (d) {
+            _panStart = d.localPosition;
             if (isPolygon) {
               _dragIndex = _vertexNear(d.localPosition, size);
               if (_dragIndex != null) setState(() => _selected = _dragIndex);
             } else {
-              _rectDrag = _handleNear(d.localPosition, size);
-              _rectDragStart = d.localPosition;
-              _rectAtDragStart = _rect;
+              _rectPanStart(d.localPosition, size);
             }
           },
           onPanUpdate: (d) {
+            _lastPanPosition = d.localPosition;
             if (isPolygon) {
               final index = _dragIndex;
               if (index == null) return;
@@ -265,8 +359,25 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
             }
           },
           onPanEnd: (_) {
+            if (isPolygon) {
+              // The pan recognizer claims any touch that drifts past
+              // kTouchSlop, so a real finger "tap" often arrives here rather
+              // than at onTapUp. If it grabbed no vertex and barely moved,
+              // it WAS a tap — replay it, otherwise the point is lost and the
+              // canvas appears dead.
+              final start = _panStart;
+              if (_dragIndex == null &&
+                  start != null &&
+                  (_lastPanPosition == null ||
+                      (_lastPanPosition! - start).distance <= _kTapSlopPx)) {
+                _polygonTap(start, size);
+              }
+            } else {
+              _rectPanEnd();
+            }
             _dragIndex = null;
-            _rectDrag = null;
+            _panStart = null;
+            _lastPanPosition = null;
           },
           child: CustomPaint(
             painter: isPolygon
@@ -417,7 +528,16 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
   }
 }
 
-enum _RectHandle { body, topLeft, topRight, bottomLeft, bottomRight }
+enum _RectHandle {
+  body,
+  topLeft,
+  topRight,
+  bottomLeft,
+  bottomRight,
+
+  /// Drawing a brand-new box from an anchor, not resizing an existing one.
+  draw,
+}
 
 // ── Painters ─────────────────────────────────────────────────────────────────
 

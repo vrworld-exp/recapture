@@ -1,8 +1,9 @@
 // lib/application/projects/image_prep_exporter.dart
 //
 // The Prepare-Images EXPORT pass: bakes one image's ImageEditState into a new
-// JPEG (rotate → crop → lighting → white fill), producing the edited COPY that
-// is uploaded for Meshy generation. The original bytes are never modified.
+// JPEG (rotate → crop → downscale → lighting → white fill), producing the
+// edited COPY that is uploaded for Meshy generation. The original bytes are
+// never modified.
 //
 // Fidelity contract: the math here consumes the SAME LightingAdjust linear map
 // and the SAME polygon/crop helpers the live preview renders with
@@ -13,8 +14,19 @@
 //
 // Pure-Dart `image` package on purpose (no native plugin); the decode+encode
 // of a 12MP capture takes seconds, so production wraps it in `compute` to stay
-// off the UI thread. Output is JPEG quality 90, never alpha. A crop below
-// kMinExportLongSidePx is flagged tight — NEVER upscaled.
+// off the UI thread. Output is JPEG quality 90, never alpha, long side capped
+// at kMaxExportLongSidePx. A crop below kMinExportLongSidePx is flagged tight
+// — NEVER upscaled.
+//
+// ORIENTATION, and why there is no bakeOrientation call: our captures carry
+// EXIF orientation as a TAG (CameraX never rotates the sensor buffer), and
+// img.decodeImage APPLIES that tag on decode, clearing it. So the buffer this
+// function works on is already display-oriented — the same space the screen's
+// Image.memory shows and the user drew their crop in. That is load-bearing and
+// pinned by test; anything that swaps this decoder must preserve it. (The
+// screen must obtain its dimensions the same way, which is why the LOADER
+// measures via dart:ui rather than a header-only read — a raw SOF read reports
+// these un-rotated and skews every normalized coordinate.)
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
@@ -125,7 +137,27 @@ ExportedImage exportEditedImage(Uint8List originalBytes, ImageEditState edit) {
     );
   }
 
-  // 3. Lighting — the same linear map the preview's ColorFilter.matrix runs.
+  // 3. Downscale to the upload budget. Done BEFORE lighting (the per-pixel
+  // pass then runs over far fewer pixels on a 12MP source) and BEFORE the
+  // white fill (so the polygon edge is drawn crisply at final resolution
+  // instead of being resampled into a grey fringe).
+  //
+  // NOTE the deliberate asymmetry: an UNTOUCHED photo never reaches this
+  // function at all — it keeps its original key and is not re-uploaded — so
+  // the cap applies only to edited images. Re-uploading untouched photos just
+  // to shrink them would cost S3 writes and break the "no edit → no upload"
+  // contract the screen tests pin.
+  final target = downscaleTarget(image.width, image.height);
+  if (target != null) {
+    image = img.copyResize(
+      image,
+      width: target.width,
+      height: target.height,
+      interpolation: img.Interpolation.average,
+    );
+  }
+
+  // 4. Lighting — the same linear map the preview's ColorFilter.matrix runs.
   if (!edit.lighting.isNeutral) {
     final scales = edit.lighting.channelScales;
     final offset = edit.lighting.channelOffset;
@@ -136,7 +168,7 @@ ExportedImage exportEditedImage(Uint8List originalBytes, ImageEditState edit) {
     }
   }
 
-  // 4. White fill outside the polygon — LAST, so the background is solid
+  // 5. White fill outside the polygon — LAST, so the background is solid
   // 255/255/255 no matter what lighting did. Scanline spans per row keep this
   // O(rows × vertices) instead of point-in-polygon per pixel.
   if (polygon != null && polygon.length >= 3 && window != null) {
@@ -154,6 +186,11 @@ ExportedImage exportEditedImage(Uint8List originalBytes, ImageEditState edit) {
 /// Fills every pixel of [cropped] that lies OUTSIDE [polygon] with solid
 /// white. [polygon] is normalized to the FULL rotated image; [window] locates
 /// the crop within it.
+///
+/// [cropped] may have been DOWNSCALED since the crop, so its dimensions are
+/// not assumed equal to [window]'s — the two scale factors below convert
+/// cropped-pixel ↔ full-image-pixel. When no resize happened both are exactly
+/// 1.0 and the arithmetic reduces to the plain window offset.
 void _whitenOutsidePolygon(
   img.Image cropped,
   List<EditPoint> polygon,
@@ -162,18 +199,24 @@ void _whitenOutsidePolygon(
   int fullHeight,
 ) {
   final white = img.ColorRgb8(255, 255, 255);
+  final scaleX = window.width / cropped.width;
+  final scaleY = window.height / cropped.height;
+
   for (var y = 0; y < cropped.height; y++) {
     // Sample the row at the pixel-center in full-image normalized space.
-    final yNorm = (window.y + y + 0.5) / fullHeight;
+    final yNorm = (window.y + (y + 0.5) * scaleY) / fullHeight;
     final spans = polygonRowSpans(yNorm, polygon);
 
     var x = 0;
     // Walk (outside, inside) alternating span pairs left → right.
     for (var i = 0; i < spans.length; i += 2) {
-      final insideStart =
-          (spans[i] * fullWidth - window.x).floor().clamp(0, cropped.width);
+      final insideStart = ((spans[i] * fullWidth - window.x) / scaleX)
+          .floor()
+          .clamp(0, cropped.width);
       final insideEnd = (i + 1 < spans.length)
-          ? (spans[i + 1] * fullWidth - window.x).ceil().clamp(0, cropped.width)
+          ? ((spans[i + 1] * fullWidth - window.x) / scaleX)
+              .ceil()
+              .clamp(0, cropped.width)
           : cropped.width;
       for (; x < insideStart; x++) {
         cropped.setPixel(x, y, white);

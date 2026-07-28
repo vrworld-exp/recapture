@@ -175,6 +175,37 @@ export async function getObjectText(bucket: string, key: string): Promise<Fetche
   }
 }
 
+/** Result of fetching a binary object: absent (404) or its bytes + type. */
+export type FetchedBytes =
+  | { outcome: 'absent' }
+  | { outcome: 'ok'; body: Buffer; contentType: string };
+
+/**
+ * Fetches an object's body as BYTES. Same absent-is-normal contract as
+ * {@link getObjectText}, but for images: used by the admin photo-bytes proxy,
+ * which streams a capture through the API so browser clients can read it
+ * without the raw bucket needing CORS.
+ *
+ * Reads the whole object into memory deliberately — callers are limited to
+ * single capture photos (a few MB), and buffering keeps the route's error
+ * mapping simple (a mid-stream S3 failure cannot corrupt an already-committed
+ * 200 response).
+ */
+export async function getObjectBytes(bucket: string, key: string): Promise<FetchedBytes> {
+  try {
+    const result = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const bytes = await result.Body?.transformToByteArray();
+    return {
+      outcome: 'ok',
+      body: Buffer.from(bytes ?? new Uint8Array()),
+      contentType: result.ContentType ?? 'application/octet-stream',
+    };
+  } catch (err) {
+    if (isNotFound(err)) return { outcome: 'absent' };
+    throw err;
+  }
+}
+
 /**
  * Writes [body] to (bucket, key), overwriting any existing object. S3 PutObject
  * is a full replace, so a re-run with the same deterministic key is idempotent —

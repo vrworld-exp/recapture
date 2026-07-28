@@ -19,6 +19,31 @@ import 'dart:math' as math;
 /// than small inputs), but the UI warns on the thumbnail.
 const int kMinExportLongSidePx = 1024;
 
+/// Exports are downscaled to this long side before upload. Matches the
+/// MESHY_TEXTURE_RESOLUTION ('2k') budget the worker requests — larger inputs
+/// cost upload time and Meshy discards the extra detail anyway. Only ever
+/// shrinks: a source already under this is left alone (never upscale, same
+/// reasoning as [kMinExportLongSidePx]).
+const int kMaxExportLongSidePx = 2048;
+
+/// The [width]×[height] an export should be resized to so its longest side is
+/// at most [kMaxExportLongSidePx], preserving aspect ratio (each side at least
+/// 1px). Returns null when the image is already within budget — the caller
+/// skips the resize entirely rather than round-tripping identical pixels.
+({int width, int height})? downscaleTarget(
+  int width,
+  int height, {
+  int maxLongSide = kMaxExportLongSidePx,
+}) {
+  final longSide = math.max(width, height);
+  if (longSide <= maxLongSide) return null;
+  final scale = maxLongSide / longSide;
+  return (
+    width: math.max(1, (width * scale).round()),
+    height: math.max(1, (height * scale).round()),
+  );
+}
+
 /// Padding added around a polygon's bounding box on export, as a fraction of
 /// the box's longer side — a small breathing margin so the white fill never
 /// clips the object's own outline.

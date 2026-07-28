@@ -20,7 +20,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image/image.dart' as img;
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -38,7 +37,8 @@ import 'preview_gallery_screen.dart' show failureCopy;
 enum _PrepTool { polygonCrop, rectCrop, lighting }
 
 /// One selected photo's session state: original bytes (never mutated), its
-/// pre-rotation pixel dimensions, and the pending edit.
+/// pre-rotation DISPLAY dimensions (EXIF orientation applied — see [_load]),
+/// and the pending edit.
 class _PrepImage {
   _PrepImage(this.photo);
 
@@ -111,16 +111,18 @@ class _ImagePrepScreenState extends ConsumerState<ImagePrepScreen> {
     final image = _images[index];
     if (image.loadFailed) setState(() => image.loadFailed = false);
     try {
-      final bytes = await ref.read(prepImageLoaderProvider).load(image.photo);
-      // Header-only decode (pure Dart, sync, cheap) — the pixel decode happens
-      // on the GPU path via Image.memory and in the export isolate.
-      final info = img.findDecoderForData(bytes)?.startDecode(bytes);
-      if (info == null) throw const FormatException('Undecodable image');
+      // The loader also MEASURES: its dimensions are EXIF-applied (what
+      // Image.memory will render), which is the box every normalized crop
+      // coordinate is measured against. A raw JPEG header read reports these
+      // swapped on a portrait capture and silently skews the whole crop.
+      final loaded = await ref
+          .read(prepImageLoaderProvider)
+          .load(widget.projectId, image.photo);
       if (!mounted) return;
       setState(() {
-        image.bytes = bytes;
-        image.width = info.width;
-        image.height = info.height;
+        image.bytes = loaded.bytes;
+        image.width = loaded.width;
+        image.height = loaded.height;
       });
     } catch (_) {
       if (!mounted) return;
@@ -130,10 +132,10 @@ class _ImagePrepScreenState extends ConsumerState<ImagePrepScreen> {
 
   _PrepImage get _current => _images[_active];
 
-  bool get _hasEdits =>
-      _images.any((i) => i.edit.isEdited) ||
-      _tool == _PrepTool.polygonCrop ||
-      _tool == _PrepTool.rectCrop;
+  /// Whether anything would actually be LOST by leaving. An open crop tool is
+  /// not an edit — treating it as one made Back prompt "Discard edits?" on a
+  /// screen where nothing had been changed.
+  bool get _hasEdits => _images.any((i) => i.edit.isEdited);
 
   bool get _cropEditorOpen =>
       _tool == _PrepTool.polygonCrop || _tool == _PrepTool.rectCrop;
@@ -209,8 +211,11 @@ class _ImagePrepScreenState extends ConsumerState<ImagePrepScreen> {
     if (_current.isTight) _snack(_tightCropCopy);
   }
 
+  /// Drops whichever crop shape is applied. Explicitly clears BOTH rather than
+  /// relying on withPolygon(null) also nulling the rect as a side effect.
   void _clearCrop() {
-    setState(() => _current.edit = _current.edit.withPolygon(null));
+    setState(() =>
+        _current.edit = _current.edit.withPolygon(null).withRect(null));
   }
 
   void _setLighting(LightingAdjust lighting) {
@@ -408,6 +413,13 @@ class _ImagePrepScreenState extends ConsumerState<ImagePrepScreen> {
               colorFilter: ColorFilter.matrix(edit.lighting.toColorMatrix()),
               child: RotatedBox(
                 quarterTurns: edit.quarterTurns,
+                // BoxFit.fill is LOAD-BEARING, not a shortcut: it guarantees
+                // the image occupies exactly the same rect as the overlay
+                // Stack above it, which is what makes the normalized [0,1]
+                // coordinate mapping valid. BoxFit.contain would letterbox and
+                // silently desynchronise the crop overlay from the pixels.
+                // Since `size` above now comes from the real (EXIF-applied)
+                // decode, fill and contain produce identical output anyway.
                 child: Image.memory(
                   image.bytes!,
                   fit: BoxFit.fill,
@@ -610,14 +622,24 @@ class _ImagePrepScreenState extends ConsumerState<ImagePrepScreen> {
   }
 
   Widget _bottomBar() {
+    // A failed load disables the CTA, so it has to SAY so — silently greying
+    // out the only button on the screen reads as the app being broken.
+    final failedCount = _images.where((i) => i.loadFailed).length;
+    final loadingCount =
+        _images.where((i) => !i.isLoaded && !i.loadFailed).length;
     final hint = _generating
         ? 'Preparing and uploading your edited photos…'
-        : _cropEditorOpen
-            ? 'Apply or cancel the crop to continue'
-            : _images.any((i) => i.edit.isEdited)
-                ? '${_images.where((i) => i.edit.isEdited).length} of '
-                    '${_images.length} photos edited'
-                : 'Editing is optional — photos are used as-is';
+        : failedCount > 0
+            ? '$failedCount of ${_images.length} photos failed to load — '
+                'tap a photo to retry'
+            : loadingCount > 0
+                ? 'Loading photos…'
+                : _cropEditorOpen
+                    ? 'Apply or cancel the crop to continue'
+                    : _images.any((i) => i.edit.isEdited)
+                        ? '${_images.where((i) => i.edit.isEdited).length} of '
+                            '${_images.length} photos edited'
+                        : 'Editing is optional — photos are used as-is';
     return Padding(
       padding: const EdgeInsets.all(AppSpacing.lg),
       child: Column(mainAxisSize: MainAxisSize.min, children: [

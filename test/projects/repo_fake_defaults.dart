@@ -62,6 +62,9 @@ mixin FakeModelImageUploadDefaults {
   Future<void> uploadModelImage(
           ModelImageUploadSlot slot, Uint8List bytes) async =>
       throw UnimplementedError('not used here');
+
+  Future<Uint8List> fetchPhotoBytes(String projectId, String key) async =>
+      throw UnimplementedError('not used here');
 }
 
 /// ADMIN curation members of `LiveProjectsRepository`.

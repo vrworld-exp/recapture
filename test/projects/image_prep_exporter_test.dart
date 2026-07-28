@@ -199,4 +199,147 @@ void main() {
       );
     });
   });
+
+  // ── EXIF orientation ───────────────────────────────────────────────────────
+  //
+  // Our captures carry orientation as a TAG (CameraX never rotates the sensor
+  // buffer; CaptureMetadataWriter preserves what it recorded). The screen
+  // previews through Image.memory, which APPLIES the tag — so the user draws
+  // the crop on an upright photo and every normalized coordinate is defined in
+  // that display space. The export must resolve to the SAME space or the crop
+  // lands on a differently-oriented buffer.
+  //
+  // It does, because img.decodeImage applies the tag on decode. That is an
+  // ASSUMPTION ABOUT A DEPENDENCY, load-bearing and previously untested — this
+  // suite had no EXIF-bearing fixture at all. These tests pin it, so swapping
+  // the decoder for one that does not bake fails here instead of silently
+  // rotating every staff crop.
+  group('EXIF-tagged sources export in DISPLAY orientation', () {
+    /// Splices a minimal APP1/Exif segment carrying only Orientation into
+    /// [jpeg]. Necessary because img.encodeJpg BAKES an in-memory orientation
+    /// and drops the tag — it cannot produce a tagged fixture for us.
+    Uint8List withOrientationTag(Uint8List jpeg, int orientation) {
+      const segment = [
+        0xFF, 0xE1, 0x00, 0x22, // APP1, length 34
+        0x45, 0x78, 0x69, 0x66, 0x00, 0x00, // "Exif\0\0"
+        0x49, 0x49, 0x2A, 0x00, // "II", 42 — little-endian TIFF
+        0x08, 0x00, 0x00, 0x00, // IFD0 at offset 8
+        0x01, 0x00, // one entry
+        0x12, 0x01, // tag 0x0112 Orientation
+        0x03, 0x00, // type SHORT
+        0x01, 0x00, 0x00, 0x00, // count 1
+      ];
+      return Uint8List.fromList([
+        ...jpeg.sublist(0, 2), // SOI
+        ...segment,
+        orientation, 0x00, 0x00, 0x00, // the value
+        0x00, 0x00, 0x00, 0x00, // no next IFD
+        ...jpeg.sublist(2),
+      ]);
+    }
+
+    /// A [width]×[height] JPEG tagged orientation 6 ("rotate 90° CW to
+    /// display") — what a portrait Android capture actually looks like. The
+    /// stored TOP-LEFT quadrant is red; after display rotation it is TOP-RIGHT.
+    Uint8List orientation6Jpeg(int width, int height) {
+      final image = img.Image(width: width, height: height, numChannels: 3);
+      img.fill(image, color: img.ColorRgb8(30, 30, 220));
+      img.fillRect(
+        image,
+        x1: 0,
+        y1: 0,
+        x2: (width ~/ 2) - 1,
+        y2: (height ~/ 2) - 1,
+        color: img.ColorRgb8(220, 30, 30),
+      );
+      return withOrientationTag(
+        Uint8List.fromList(img.encodeJpg(image, quality: 100)),
+        6,
+      );
+    }
+
+    test('dimensions are the DISPLAY ones, not the stored ones', () {
+      // Stored 200 wide × 100 tall; orientation 6 displays as 100 × 200.
+      final result =
+          exportEditedImage(orientation6Jpeg(200, 100), ImageEditState.none);
+      expect((result.width, result.height), (100, 200));
+    });
+
+    test('a crop lands on the region the user drew it over', () {
+      // In DISPLAY space (100 wide × 200 tall) the red quadrant is the TOP
+      // half's right side. Crop the top-right quadrant: it must be red.
+      final result = exportEditedImage(
+        orientation6Jpeg(200, 100),
+        const ImageEditState(
+          rect: RectCrop(left: 0.55, top: 0.05, width: 0.4, height: 0.4),
+        ),
+      );
+      final decoded = _decode(result);
+      final p = decoded.getPixel(decoded.width ~/ 2, decoded.height ~/ 2);
+      expect(p.r, greaterThan(150),
+          reason: 'sampling a non-display-oriented buffer returns blue here');
+      expect(p.b, lessThan(120));
+    });
+
+    test('the exported JPEG carries no orientation tag of its own', () {
+      // Re-tagging would make a downstream consumer rotate it a second time.
+      final result =
+          exportEditedImage(orientation6Jpeg(120, 80), ImageEditState.none);
+      final orientation = img.decodeJpg(result.jpegBytes)!.exif.imageIfd.orientation;
+      expect(orientation == null || orientation == 1, isTrue);
+    });
+  });
+
+  // ── Upload size budget ─────────────────────────────────────────────────────
+  group('downscale to the upload budget', () {
+    test('an oversized export is capped on its long side, aspect preserved',
+        () {
+      final result = exportEditedImage(
+        _solidJpeg(kMaxExportLongSidePx * 2, kMaxExportLongSidePx, 90, 90, 90),
+        ImageEditState.none,
+      );
+      expect(result.width, kMaxExportLongSidePx);
+      expect(result.height, kMaxExportLongSidePx ~/ 2);
+    });
+
+    test('a portrait oversize is capped on HEIGHT', () {
+      final result = exportEditedImage(
+        _solidJpeg(600, kMaxExportLongSidePx * 2, 90, 90, 90),
+        ImageEditState.none,
+      );
+      expect(result.height, kMaxExportLongSidePx);
+      expect(result.width, 300);
+    });
+
+    test('an already-small image is never upscaled', () {
+      final result =
+          exportEditedImage(_solidJpeg(640, 480, 90, 90, 90), ImageEditState.none);
+      expect((result.width, result.height), (640, 480));
+    });
+
+    test('the polygon white-fill still aligns after a downscale', () {
+      // Oversized source + a centered polygon: the fill is applied AFTER the
+      // resize, so its scanline math has to convert through the new
+      // dimensions. Corners must be white, the middle must not.
+      final bytes =
+          _solidJpeg(kMaxExportLongSidePx * 2, kMaxExportLongSidePx, 220, 30, 30);
+      const polygon = [
+        EditPoint(0.3, 0.3),
+        EditPoint(0.7, 0.3),
+        EditPoint(0.7, 0.7),
+        EditPoint(0.3, 0.7),
+      ];
+      final result = exportEditedImage(
+          bytes, const ImageEditState(polygon: polygon));
+      final decoded = _decode(result);
+
+      expect(_isWhite(decoded.getPixel(1, 1)), isTrue,
+          reason: 'outside the polygon must be white');
+      expect(
+        _isWhite(decoded.getPixel(decoded.width ~/ 2, decoded.height ~/ 2)),
+        isFalse,
+        reason: 'inside the polygon must keep the source pixels',
+      );
+    });
+  });
 }

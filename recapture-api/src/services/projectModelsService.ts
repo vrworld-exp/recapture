@@ -28,7 +28,7 @@ import {
   isContainedRelativeKey,
   MODEL_INPUT_KEY_PREFIX,
 } from '@/services/adminProjectsService';
-import { presignObjectPutUrl } from '@/services/s3ObjectStore';
+import { getObjectBytes, presignObjectPutUrl } from '@/services/s3ObjectStore';
 import { env } from '@/config/env';
 
 /**
@@ -471,6 +471,51 @@ export async function createModelImageUploadUrls(
     jobId: job.id as string,
     uploads,
     expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+  };
+}
+
+export type ReadProjectPhotoBytesResult =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  | { outcome: 'NOT_EXPORTABLE' }
+  | { outcome: 'INVALID_KEY' }
+  | { outcome: 'OBJECT_NOT_FOUND' }
+  | { outcome: 'OK'; projectId: string; body: Buffer; contentType: string };
+
+/**
+ * Reads ONE job-root-relative object's bytes for the staff Prepare-Images
+ * screen — a read-through proxy so browser clients can load a capture without
+ * the raw bucket serving CORS, and so a session outliving its presigned URL
+ * (~1h) can still fetch. Native clients keep using the presigned URL directly
+ * and only fall back here, so this stays off the hot path.
+ *
+ * Reuses the SAME `isContainedRelativeKey` guard as Create-Model: the key is
+ * caller-supplied, and without containment this route would become an
+ * arbitrary-object reader scoped only by bucket.
+ */
+export async function readProjectPhotoBytes(
+  projectId: string,
+  relativeKey: string
+): Promise<ReadProjectPhotoBytesResult> {
+  const project = await Project.findOne({
+    _id: new Types.ObjectId(projectId),
+    deletedAt: null,
+  }).exec();
+  if (!project) return { outcome: 'PROJECT_NOT_FOUND' };
+
+  const job = await findExportableJob(projectId);
+  if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
+
+  if (!isContainedRelativeKey(relativeKey)) return { outcome: 'INVALID_KEY' };
+
+  const { rawBucket, rawPrefix } = job.upload;
+  const fetched = await getObjectBytes(rawBucket, `${rawPrefix}${relativeKey}`);
+  if (fetched.outcome === 'absent') return { outcome: 'OBJECT_NOT_FOUND' };
+
+  return {
+    outcome: 'OK',
+    projectId: project.id as string,
+    body: fetched.body,
+    contentType: fetched.contentType,
   };
 }
 

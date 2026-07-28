@@ -86,14 +86,15 @@ class _NoopDownloader implements PreviewDownloader {
 }
 
 /// Prepare-Images sits between selection and the create request now — feed it
-/// a real (tiny) PNG so it can read dimensions and enable Generate.
+/// a real (tiny) PNG plus its dimensions so Generate enables.
 class _FakePrepLoader implements PrepImageLoader {
   static final Uint8List _png = Uint8List.fromList(
     img.encodePng(img.Image(width: 8, height: 6, numChannels: 3)),
   );
 
   @override
-  Future<Uint8List> load(PreviewPhoto photo) async => _png;
+  Future<LoadedPrepImage> load(String projectId, PreviewPhoto photo) async =>
+      LoadedPrepImage(bytes: _png, width: 8, height: 6);
 }
 
 Map<String, dynamic> _manifest(List<String> keys) => {

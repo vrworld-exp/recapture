@@ -18,6 +18,7 @@ import {
   adminAutoModelBodySchema,
   adminModelIdParamsSchema,
   adminModelImageUploadsBodySchema,
+  adminPhotoBytesQuerySchema,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
@@ -31,6 +32,7 @@ import {
   approveModel,
   createMeshyModelRequest,
   createModelImageUploadUrls,
+  readProjectPhotoBytes,
   findProjectModelById,
   latestSucceededModel,
   listProjectModels,
@@ -739,6 +741,79 @@ router.post(
       uploads: result.uploads,
       expiresAt: result.expiresAt,
     });
+  })
+);
+
+/**
+ * GET /admin/projects/:id/photo-bytes?key=… — read-through proxy for ONE
+ * capture photo, for the Prepare-Images screen.
+ *
+ * Exists because a presigned S3 GET is not always usable by the client: the
+ * browser build cannot read the raw bucket (no CORS on it), and a long prep
+ * session outlives the ~1h presign. The client tries the presigned URL first
+ * and only falls back here, so this is not the hot path.
+ *
+ * MODEL_ARTIST+ like the rest of the prep flow. The `key` is caller-supplied,
+ * so the service applies the SAME containment guard as Create-Model before
+ * touching S3 — without it this would be an arbitrary-object reader.
+ */
+router.get(
+  '/projects/:id/photo-bytes',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const query = adminPhotoBytesQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      const issue = query.error.issues[0];
+      const field = issue?.path.join('.') || 'query';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const result = await readProjectPhotoBytes(params.data.id, query.data.key);
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_EXPORTABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'This project has no finalized upload to read photos from.',
+      });
+      return;
+    }
+    if (result.outcome === 'INVALID_KEY') {
+      res.status(422).json({
+        status: 'error',
+        code: 'INVALID_KEY',
+        message: 'That photo does not belong to this project.',
+      });
+      return;
+    }
+    if (result.outcome === 'OBJECT_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Photo not found.' });
+      return;
+    }
+
+    // Private: this is authenticated staff-only imagery — never let a shared
+    // cache hold it.
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Content-Type', result.contentType);
+    res.status(200).send(result.body);
   })
 );
 
