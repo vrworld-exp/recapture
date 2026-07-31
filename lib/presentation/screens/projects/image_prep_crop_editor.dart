@@ -67,10 +67,13 @@ class PrepCropEditor extends StatefulWidget {
   final RectCrop? initialRect;
 
   @override
-  State<PrepCropEditor> createState() => _PrepCropEditorState();
+  PrepCropEditorState createState() => PrepCropEditorState();
 }
 
-class _PrepCropEditorState extends State<PrepCropEditor> {
+/// PUBLIC so the host screen can reach [PrepCropEditorState.applyDraft] through
+/// a [GlobalKey] — "Generate" with an open editor commits the crop instead of
+/// silently doing nothing.
+class PrepCropEditorState extends State<PrepCropEditor> {
   late List<EditPoint> _points;
   late bool _closed;
   int? _selected;
@@ -317,6 +320,28 @@ class _PrepCropEditorState extends State<PrepCropEditor> {
     }
     setState(() =>
         _rect = RectCrop(left: left, top: top, width: width, height: height));
+  }
+
+  // ── Applying from outside ──────────────────────────────────────────────────
+
+  /// Commits the current draft exactly as the Apply chip would, and reports
+  /// whether there WAS one to commit.
+  ///
+  /// The host screen calls this when the user presses "Generate 3D Model" with
+  /// the editor still open — the obvious reading of that press is "use what I
+  /// just drew", and the alternative (a dead CTA) is how this screen used to
+  /// look broken. A polygon of fewer than 3 points is not a shape yet, so that
+  /// is the one case this refuses; closing an un-closed 3+ point outline is
+  /// implicit, since Apply is only offered closed anyway.
+  bool applyDraft() {
+    if (widget.mode == PrepCropMode.rectangle) {
+      widget.onApplyRect(_rect);
+      return true;
+    }
+    if (_points.length < 3) return false;
+    _closed = true;
+    widget.onApplyPolygon(_points);
+    return true;
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────

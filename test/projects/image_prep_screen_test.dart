@@ -30,6 +30,14 @@ final Uint8List _pngBytes = Uint8List.fromList(
 );
 
 class _FakeLoader implements PrepImageLoader {
+  _FakeLoader({Map<String, int>? failuresFor})
+      : failuresFor = {...?failuresFor};
+
+  /// key → how many of ITS loads must fail before one succeeds. Models the
+  /// real thing: a photo whose first fetch dies (CORS, expired presign) and
+  /// then loads on retry.
+  final Map<String, int> failuresFor;
+
   int calls = 0;
   final projectIds = <String>[];
 
@@ -37,6 +45,11 @@ class _FakeLoader implements PrepImageLoader {
   Future<LoadedPrepImage> load(String projectId, PreviewPhoto photo) async {
     calls++;
     projectIds.add(projectId);
+    final remaining = failuresFor[photo.key] ?? 0;
+    if (remaining > 0) {
+      failuresFor[photo.key] = remaining - 1;
+      throw StateError('load failed');
+    }
     return LoadedPrepImage(bytes: _pngBytes, width: 8, height: 6);
   }
 }
@@ -53,10 +66,13 @@ class _FakeExporter implements ImagePrepExporter {
       Uint8List originalBytes, ImageEditState edit) async {
     calls++;
     await gate?.future;
+    // Real decodable bytes: after "Save" the screen DISPLAYS the bake, so a
+    // dummy byte list would blow up in the image codec rather than in a test
+    // expectation.
     return ExportedImage(
-      jpegBytes: Uint8List.fromList([1, 2, 3]),
-      width: 2000,
-      height: 1500,
+      jpegBytes: _pngBytes,
+      width: 8,
+      height: 6,
       isTight: false,
     );
   }
@@ -70,6 +86,9 @@ class _FakeRepo
   int uploadUrlRequests = 0;
   int uploadedImages = 0;
   List<String>? createdWithKeys;
+
+  /// When true, createModel fails the way a dead connection does.
+  bool failCreate = false;
 
   /// Keys the Prepare-Images loader fell back to the API proxy for.
   final proxyFetches = <String>[];
@@ -125,6 +144,9 @@ class _FakeRepo
     List<String> keys, {
     required String idempotencyKey,
   }) async {
+    if (failCreate) {
+      throw const LiveProjectsException(LiveProjectsFailure.network);
+    }
     createdWithKeys = keys;
     return model;
   }
@@ -180,6 +202,14 @@ Widget _app(
       ),
     ),
   );
+}
+
+/// Waits out a confirmation snackbar. It sits over the bottom bar, so a tap on
+/// the Generate CTA lands on the toast until it goes away — in the app as well
+/// as here, which is why the confirmations are short-lived.
+Future<void> _settleSnack(WidgetTester tester) async {
+  await tester.pump(const Duration(seconds: 3));
+  await tester.pumpAndSettle();
 }
 
 Future<void> _open(WidgetTester tester) async {
@@ -331,6 +361,277 @@ void main() {
       'model-input/session/photo_1.jpg',
       'images/TOP/c.jpg',
     ]);
+  });
+
+  testWidgets(
+      'REGRESSION: Generate with the crop editor still open APPLIES the draft '
+      'and generates — it used to be a dead button', (tester) async {
+    final repo = _FakeRepo();
+    final exporter = _FakeExporter();
+    ProjectModelView? result;
+    await tester.pumpWidget(
+        _app(repo, _FakeLoader(), exporter, onResult: (r) => result = r));
+    await _open(tester);
+
+    // Open the rectangle crop and DON'T tap Apply — the state a staff user is
+    // in the moment they decide the photo is ready.
+    await tester.tap(find.byKey(const ValueKey('prep_tool_rect')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('prep_rect_apply')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    // The draft was committed, baked, uploaded, and the model requested.
+    expect(exporter.calls, 1);
+    expect(repo.uploadedImages, 1);
+    expect(repo.createdWithKeys, [
+      'model-input/session/photo_1.jpg',
+      'images/EYE/b.jpg',
+      'images/TOP/c.jpg',
+    ]);
+    expect(result?.id, 'm1');
+  });
+
+  testWidgets(
+      'Generate with an unusable outline SAYS why instead of doing nothing',
+      (tester) async {
+    final repo = _FakeRepo();
+    final exporter = _FakeExporter();
+    await tester
+        .pumpWidget(_app(repo, _FakeLoader(), exporter, onResult: (_) {}));
+    await _open(tester);
+
+    // Outline tool open with no points drawn: nothing to apply.
+    await tester.tap(find.byKey(const ValueKey('prep_tool_polygon')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+    await tester.pump();
+
+    expect(
+      find.textContaining('at least 3 points'),
+      findsOneWidget,
+      reason: 'a refused press must explain itself',
+    );
+    expect(exporter.calls, 0);
+    expect(repo.createdWithKeys, isNull);
+  });
+
+  testWidgets('a photo that failed to load names itself and refuses out loud',
+      (tester) async {
+    final repo = _FakeRepo();
+    // Second photo fails its FIRST load only.
+    final loader = _FakeLoader(failuresFor: {'images/EYE/b.jpg': 1});
+    await tester
+        .pumpWidget(_app(repo, loader, _FakeExporter(), onResult: (_) {}));
+    await _open(tester);
+
+    // Stated in the bottom bar, next to a Retry affordance…
+    expect(
+      find.text('1 of 3 photos couldn’t be loaded. '
+          'Tap Retry to fetch them again.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('prep_retry_failed_loads')),
+        findsOneWidget);
+
+    // …and the CTA still RESPONDS: it explains itself rather than sitting
+    // greyed out doing nothing, which is what read as "the app is broken".
+    await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+    await tester.pump();
+    expect(find.widgetWithText(SnackBar, '1 of 3 photos couldn’t be loaded. '
+        'Tap Retry to fetch them again.'), findsOneWidget);
+    expect(repo.createdWithKeys, isNull);
+  });
+
+  testWidgets('Retry re-fetches the failed photo and Generate then works',
+      (tester) async {
+    final repo = _FakeRepo();
+    final loader = _FakeLoader(failuresFor: {'images/EYE/b.jpg': 1});
+    await tester
+        .pumpWidget(_app(repo, loader, _FakeExporter(), onResult: (_) {}));
+    await _open(tester);
+
+    await tester.tap(find.byKey(const ValueKey('prep_retry_failed_loads')));
+    await tester.pumpAndSettle();
+    expect(loader.calls, 4); // 3 initial + 1 retry
+    expect(find.byKey(const ValueKey('prep_retry_failed_loads')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(repo.createdWithKeys,
+        ['images/EYE/a.jpg', 'images/EYE/b.jpg', 'images/TOP/c.jpg']);
+  });
+
+  group('Save (app bar) — the edit becomes the photo', () {
+    testWidgets('bakes the active photo: edit clears, badge flips to saved',
+        (tester) async {
+      final exporter = _FakeExporter();
+      await tester.pumpWidget(
+          _app(_FakeRepo(), _FakeLoader(), exporter, onResult: (_) {}));
+      await _open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('prep_tool_rotate')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('prep_edited_badge_0')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('prep_save_edit')));
+      await tester.pumpAndSettle();
+
+      expect(exporter.calls, 1);
+      // The pending edit is gone — it lives in the pixels now — and the strip
+      // says "saved" rather than "edited".
+      expect(find.byKey(const ValueKey('prep_edited_badge_0')), findsNothing);
+      expect(find.byKey(const ValueKey('prep_saved_badge_0')), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Saved'), findsOneWidget);
+      expect(find.text('1 of 3 photos edited'), findsOneWidget);
+    });
+
+    testWidgets('Save with the crop editor open commits the draft first',
+        (tester) async {
+      final exporter = _FakeExporter();
+      await tester.pumpWidget(
+          _app(_FakeRepo(), _FakeLoader(), exporter, onResult: (_) {}));
+      await _open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('prep_tool_rect')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('prep_save_edit')));
+      await tester.pumpAndSettle();
+
+      expect(exporter.calls, 1);
+      expect(find.byKey(const ValueKey('prep_saved_badge_0')), findsOneWidget);
+      // The editor closed with the save.
+      expect(find.byKey(const ValueKey('prep_rect_apply')), findsNothing);
+    });
+
+    testWidgets('Generate uploads the SAVED bytes without re-baking them',
+        (tester) async {
+      final repo = _FakeRepo();
+      final exporter = _FakeExporter();
+      await tester
+          .pumpWidget(_app(repo, _FakeLoader(), exporter, onResult: (_) {}));
+      await _open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('prep_tool_rotate')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('prep_save_edit')));
+      await tester.pumpAndSettle();
+      await _settleSnack(tester);
+
+      await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(exporter.calls, 1, reason: 'the save WAS the bake');
+      expect(repo.uploadedImages, 1);
+      expect(repo.createdWithKeys, [
+        'model-input/session/photo_1.jpg',
+        'images/EYE/b.jpg',
+        'images/TOP/c.jpg',
+      ]);
+    });
+
+    testWidgets('editing again after a save stacks on the saved version',
+        (tester) async {
+      final repo = _FakeRepo();
+      final exporter = _FakeExporter();
+      await tester
+          .pumpWidget(_app(repo, _FakeLoader(), exporter, onResult: (_) {}));
+      await _open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('prep_tool_rotate')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('prep_save_edit')));
+      await tester.pumpAndSettle();
+      await _settleSnack(tester);
+
+      // A second edit on top of the saved pixels.
+      await tester.tap(find.byKey(const ValueKey('prep_tool_rotate')));
+      await tester.pump();
+      expect(find.byKey(const ValueKey('prep_edited_badge_0')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      // One bake for the save, one for the pending edit — but still ONE upload.
+      expect(exporter.calls, 2);
+      expect(repo.uploadedImages, 1);
+      expect(repo.createdWithKeys?.first, 'model-input/session/photo_1.jpg');
+    });
+
+    testWidgets('Revert restores the original and drops it from the upload set',
+        (tester) async {
+      final repo = _FakeRepo();
+      await tester.pumpWidget(
+          _app(repo, _FakeLoader(), _FakeExporter(), onResult: (_) {}));
+      await _open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('prep_tool_rotate')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('prep_save_edit')));
+      await tester.pumpAndSettle();
+      await _settleSnack(tester);
+      expect(find.byKey(const ValueKey('prep_tool_revert')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('prep_tool_revert')));
+      await tester.pumpAndSettle();
+      await _settleSnack(tester);
+      expect(find.byKey(const ValueKey('prep_saved_badge_0')), findsNothing);
+      expect(find.byKey(const ValueKey('prep_tool_revert')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      expect(repo.uploadedImages, 0);
+      expect(repo.createdWithKeys,
+          ['images/EYE/a.jpg', 'images/EYE/b.jpg', 'images/TOP/c.jpg']);
+    });
+
+    testWidgets('Save with nothing to save says so instead of sitting inert',
+        (tester) async {
+      final exporter = _FakeExporter();
+      await tester.pumpWidget(
+          _app(_FakeRepo(), _FakeLoader(), exporter, onResult: (_) {}));
+      await _open(tester);
+
+      await tester.tap(find.byKey(const ValueKey('prep_save_edit')));
+      await tester.pump();
+
+      expect(find.text('Crop, rotate or adjust the photo first, then save.'),
+          findsOneWidget);
+      expect(exporter.calls, 0);
+    });
+  });
+
+  testWidgets('a failed generation shows a dialog, not a fading toast',
+      (tester) async {
+    final repo = _FakeRepo()..failCreate = true;
+    await tester.pumpWidget(
+        _app(repo, _FakeLoader(), _FakeExporter(), onResult: (_) {}));
+    await _open(tester);
+
+    await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('prep_generate_error')), findsOneWidget);
+    expect(find.text('You’re offline — check your connection and try again.'),
+        findsOneWidget);
+
+    await tester
+        .tap(find.byKey(const ValueKey('prep_generate_error_dismiss')));
+    await tester.pumpAndSettle();
+    // Dismissing returns to the screen with the CTA live for another attempt.
+    expect(find.byKey(const ValueKey('prep_generate_cta')), findsOneWidget);
   });
 
   testWidgets('Generate is disabled (loading) while the export is in flight',

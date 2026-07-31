@@ -42,6 +42,16 @@ void main() {
           ),
         );
 
+    /// Drives a load failure all the way to the FAILURE BODY. The first error
+    /// is spent on the silent cache-busted retry, so reaching the dead end
+    /// deliberately takes two — see [ModelRenderViewState.srcFor].
+    Future<void> failLoad(WidgetTester tester) async {
+      key.currentState!.handleEvent('error');
+      await tester.pump();
+      key.currentState!.handleEvent('error');
+      await tester.pump();
+    }
+
     testWidgets('shows the loading skin until the model reports load',
         (tester) async {
       await tester.pumpWidget(app());
@@ -141,8 +151,7 @@ void main() {
       await tester.pumpWidget(app());
       key.currentState!.handleEvent('loaded:ar');
       await tester.pump();
-      key.currentState!.handleEvent('error');
-      await tester.pump();
+      await failLoad(tester);
 
       await tester.tap(find.byKey(const ValueKey('model_retry_cta')));
       await tester.pump();
@@ -171,8 +180,7 @@ void main() {
     testWidgets('a failed load shows mapped copy — never the URL — and retry '
         'returns to loading', (tester) async {
       await tester.pumpWidget(app());
-      key.currentState!.handleEvent('error');
-      await tester.pump();
+      await failLoad(tester);
 
       expect(
         find.text(
@@ -196,8 +204,66 @@ void main() {
       await tester.pumpWidget(app());
       key.currentState!.handleEvent('error:loadfailure');
       await tester.pump();
+      key.currentState!.handleEvent('error:loadfailure');
+      await tester.pump();
 
       expect(find.byKey(const ValueKey('model_retry_cta')), findsOneWidget);
+    });
+
+    testWidgets('the FIRST load failure retries silently on a fresh URL — a '
+        'truncated cached GLB must not be replayed forever', (tester) async {
+      await tester.pumpWidget(app());
+      final first = key.currentState!.srcFor(_model.glbUrl!);
+
+      key.currentState!.handleEvent('error:loadfailure');
+      await tester.pump();
+
+      // No dead end: back to the loading skin, on a URL the WebView cache has
+      // never seen — so the retry is a real network fetch, not the same bytes.
+      expect(find.byKey(const ValueKey('model_loading')), findsOneWidget);
+      expect(find.byKey(const ValueKey('model_retry_cta')), findsNothing);
+      expect(key.currentState!.srcFor(_model.glbUrl!), isNot(first));
+
+      // And it can still recover on its own.
+      key.currentState!.handleEvent('loaded');
+      await tester.pump();
+      expect(find.byKey(const ValueKey('model_loading')), findsNothing);
+    });
+
+    testWidgets('srcFor: the first attempt is untouched, every retry carries a '
+        'distinct cache-buster', (tester) async {
+      await tester.pumpWidget(app());
+      const url = 'https://cdn/model.glb';
+      final state = key.currentState!;
+
+      expect(state.srcFor(url), url);
+
+      await failLoad(tester);
+      await tester.tap(find.byKey(const ValueKey('model_retry_cta')));
+      await tester.pump();
+      final retried = state.srcFor(url);
+
+      // Same object, different cache key — and the original URL is intact so
+      // it still resolves to the same bytes on S3/CloudFront.
+      expect(retried, startsWith('$url?'));
+      expect(retried, contains('rcRetry='));
+      expect(Uri.parse(retried).path, Uri.parse(url).path);
+    });
+
+    testWidgets('a user retry re-arms the silent one — a later transient '
+        'failure still self-heals', (tester) async {
+      await tester.pumpWidget(app());
+      await failLoad(tester);
+
+      await tester.tap(find.byKey(const ValueKey('model_retry_cta')));
+      await tester.pump();
+
+      // One error after the manual retry must NOT go straight back to the
+      // failure body: the silent attempt was reset along with the phase.
+      key.currentState!.handleEvent('error');
+      await tester.pump();
+      expect(find.byKey(const ValueKey('model_loading')), findsOneWidget);
+      expect(find.byKey(const ValueKey('model_retry_cta')), findsNothing);
     });
 
     testWidgets('a WebGL context loss does NOT strand a loaded model on the '
@@ -237,7 +303,11 @@ void main() {
       await tester.pumpWidget(app());
       key.currentState!.handleEvent('error:something-new');
       await tester.pump();
+      key.currentState!.handleEvent('error:something-new');
+      await tester.pump();
 
+      // Unlike webglcontextlost it is never forgiven: it spends the silent
+      // retry and then lands on the failure body.
       expect(find.byKey(const ValueKey('model_retry_cta')), findsOneWidget);
     });
   });

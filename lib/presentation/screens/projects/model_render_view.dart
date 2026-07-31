@@ -138,11 +138,40 @@ class ModelRenderViewState extends State<ModelRenderView> {
   @visibleForTesting
   static const loadingFallback = Duration(seconds: 15);
 
+  /// Query parameter carrying [_cacheBustToken]. Namespaced so it can never
+  /// collide with a parameter the URL already carries.
+  static const _cacheBustParam = 'rcRetry';
+
   _RenderPhase _phase = _RenderPhase.loading;
   bool _arAvailable = false;
 
   /// Bumped on retry so the [ValueKey] rebuilds the webview from scratch.
   int _attempt = 0;
+
+  /// Cache-buster mixed into the GLB URL for every attempt AFTER the first.
+  ///
+  /// On mobile the plugin does NOT stream the model itself: its local proxy
+  /// answers `/model` with a 302 to our CloudFront URL, so the WEBVIEW fetches
+  /// the GLB and the WebView's own HTTP cache decides what those bytes are. A
+  /// fetch cut short mid-download (backgrounded app, dropped Wi-Fi) can leave a
+  /// truncated entry behind that keeps being served from cache — a model that
+  /// rendered yesterday then fails to parse forever, surviving app restarts.
+  /// Rebuilding the webview cannot shake that off: same URL, same cache key,
+  /// same corrupt bytes, so "Try again" was unable to fix the one failure it
+  /// most needed to. A per-attempt token changes the cache key and forces a
+  /// real network fetch. It stays null on the first attempt so the normal path
+  /// keeps hitting the cache (and CloudFront's edge) as before.
+  ///
+  /// S3 ignores unknown query parameters and CloudFront serves the object
+  /// either way, so the retry URL resolves to exactly the same bytes.
+  String? _cacheBustToken;
+
+  /// Whether the silent one-shot retry has been spent for the current user
+  /// session with this model. A single `loadfailure` is far more often a
+  /// transient fetch (or the stale-cache case above) than a genuinely broken
+  /// model, and recovering silently beats handing the user a retry button that
+  /// re-runs what already failed.
+  bool _autoRetried = false;
 
   /// Runs JS inside the viewer's webview once it exists. Held as a closure
   /// over the controller so this file needs no direct webview_flutter import.
@@ -216,6 +245,15 @@ class ModelRenderViewState extends State<ModelRenderView> {
       if (_recoverableErrorKinds.contains(kind)) return;
       message = 'error';
     }
+    // Spend the silent retry before the failure is ever rendered: the second
+    // attempt re-fetches on a fresh cache key (see [_cacheBustToken]), which is
+    // the difference between recovering from a truncated cached GLB and being
+    // stuck on it permanently.
+    if (message == 'error' && !_autoRetried) {
+      _autoRetried = true;
+      _restart();
+      return;
+    }
     setState(() {
       switch (message) {
         // A standalone AR flip: does NOT touch the load wait — it can arrive
@@ -241,16 +279,40 @@ class ModelRenderViewState extends State<ModelRenderView> {
     });
   }
 
+  /// The user tapped "Try again". Re-arms the silent retry too: a transient
+  /// failure that happens again later deserves the same self-healing attempt
+  /// rather than going straight back to the dead end.
   void _retry() {
+    _autoRetried = false;
+    _restart();
+  }
+
+  /// Rebuilds the webview from scratch on a NEW cache key. Shared by the user's
+  /// retry and the silent one — both must re-fetch rather than replay whatever
+  /// the WebView already has for this URL.
+  void _restart() {
     _stopLoadWatch();
     _stopArWatch();
     setState(() {
       _attempt++;
+      _cacheBustToken = DateTime.now().microsecondsSinceEpoch.toString();
       _phase = _RenderPhase.loading;
       _arAvailable = false;
       _runJs = null;
     });
     _beginLoadWatch();
+  }
+
+  /// The GLB URL for the current attempt — untouched on the first, cache-busted
+  /// on every retry. See [_cacheBustToken] for why.
+  @visibleForTesting
+  String srcFor(String glbUrl) {
+    final token = _cacheBustToken;
+    if (token == null) return glbUrl;
+    final uri = Uri.parse(glbUrl);
+    return uri.replace(
+      queryParameters: {...uri.queryParameters, _cacheBustParam: token},
+    ).toString();
   }
 
   void _activateAr() {
@@ -280,7 +342,10 @@ class ModelRenderViewState extends State<ModelRenderView> {
     final usdzUrl = widget.model.usdzUrl;
     return ModelViewer(
       key: ValueKey('model_viewer_$_attempt'),
-      src: glbUrl,
+      src: srcFor(glbUrl),
+      // Deliberately NOT cache-busted: the plugin's Quick Look intercept
+      // matches this string EXACTLY against the navigation it sees, so a URL
+      // that changes per attempt would break AR instead of fixing a load.
       iosSrc: usdzUrl,
       alt: 'A 3D model of the captured object',
       ar: true,
