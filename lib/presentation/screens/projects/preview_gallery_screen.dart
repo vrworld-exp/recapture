@@ -16,14 +16,13 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/model_generation_notifier.dart';
 import '../../../application/projects/preview_download_service.dart';
 import '../../../application/projects/preview_gallery_notifier.dart';
 import '../../../data/repositories/live_projects_repository.dart';
 import '../../../domain/entities/preview_manifest.dart';
-import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/delete_confirmation_modal.dart';
-import 'image_prep_screen.dart';
 import 'model_generation_screen.dart';
 
 class PreviewGalleryScreen extends ConsumerStatefulWidget {
@@ -78,6 +77,11 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
   /// server resolves against the job prefix.
   final Set<String> _selected = <String>{};
 
+  /// Create-Model in-flight guard. The press spends Meshy credits, so a fast
+  /// double-tap must not fire a second request before the first lands (the
+  /// server's idempotency key is the backstop, this is the front one).
+  bool _creating = false;
+
   bool get _canCreate =>
       _selected.length >= kMinModelPhotos &&
       _selected.length <= kMaxModelPhotos;
@@ -97,43 +101,74 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
     });
   }
 
-  /// Opens the Prepare-Images step for the current selection. That screen owns
-  /// export/upload and the Create-Model request itself (same idempotency
-  /// contract as before); it pops with the created record, and THIS screen
-  /// opens the status view — backing out of prep keeps the selection intact.
-  Future<void> _createModel() async {
-    if (!_canCreate) return;
-    final manifest =
-        ref.read(previewGalleryProvider(widget.projectId)).valueOrNull;
-    if (manifest == null) return;
-    final photos = [
-      for (final photo in manifest.files)
-        if (_selected.contains(photo.key)) photo,
-    ];
-
-    final model = await Navigator.of(context).push<ProjectModelView>(
-      MaterialPageRoute<ProjectModelView>(
-        builder: (_) => ImagePrepScreen(
-          projectId: widget.projectId,
-          photos: photos,
-        ),
-      ),
-    );
-    if (model == null || !mounted) return;
-
-    setState(() {
-      _selecting = false;
-      _selected.clear();
-    });
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ModelGenerationScreen(
-          projectId: widget.projectId,
-          modelId: model.id,
-        ),
-      ),
-    );
+  /// A stable key for one (project, keys) request: a double-tap resolves to the
+  /// SAME record server-side instead of a second PAID generation.
+  String _idempotencyKeyFor(List<String> keys) {
+    final sorted = [...keys]..sort();
+    return '${widget.projectId}:${sorted.join('|')}'.hashCode.toRadixString(16);
   }
+
+  /// Sends the selected photos to Maya AI and opens the generation screen.
+  Future<void> _createModel() async {
+    if (!_canCreate || _creating) return;
+    // Walk the MANIFEST and filter, never the Set: selection order is request
+    // order, and a Set has none — the photo order reaching Meshy would be
+    // arbitrary.
+    final keys = [
+      for (final photo in ref
+              .read(previewGalleryProvider(widget.projectId))
+              .valueOrNull
+              ?.files ??
+          const <PreviewPhoto>[])
+        if (_selected.contains(photo.key)) photo.key,
+    ];
+    if (keys.length < kMinModelPhotos) return;
+
+    setState(() => _creating = true);
+    try {
+      final model = await ref
+          .read(modelGenerationProvider(widget.projectId).notifier)
+          .createModel(keys, idempotencyKey: _idempotencyKeyFor(keys));
+      if (!mounted) return;
+      // Cleared only on SUCCESS — a failed create must leave the picked photos
+      // alone so a retry doesn't start with re-picking them.
+      setState(() {
+        _selecting = false;
+        _selected.clear();
+      });
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelGenerationScreen(
+            projectId: widget.projectId,
+            modelId: model.id,
+          ),
+        ),
+      );
+    } catch (e) {
+      // A dialog, not a snackbar: this press spends credits and a toast that
+      // fades in four seconds is how a real failure gets reported as "nothing
+      // happened".
+      if (mounted) await _showCreateFailure(failureCopy(e));
+    } finally {
+      if (mounted) setState(() => _creating = false);
+    }
+  }
+
+  /// Mapped copy only — never a raw error, code or URL.
+  Future<void> _showCreateFailure(String message) => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          key: const ValueKey('create_model_error'),
+          title: const Text('Couldn’t start the model'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
 
   void _snack(String message) {
     if (!mounted) return;
@@ -291,7 +326,8 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
               key: const ValueKey('create_model_cta'),
               label: 'Create Model',
               icon: Icons.auto_awesome,
-              onPressed: _canCreate ? _createModel : null,
+              isLoading: _creating,
+              onPressed: (_canCreate && !_creating) ? _createModel : null,
             ),
           ],
         ),

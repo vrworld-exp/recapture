@@ -41,10 +41,7 @@ Project _project(ProjectStatus status) => Project(
 // ── Fakes ────────────────────────────────────────────────────────────────────
 
 class _StubLiveRepo
-    with
-        FakeModelGenerationDefaults,
-        FakeAdminDeleteDefaults,
-        FakeModelImageUploadDefaults
+    with FakeModelGenerationDefaults, FakeAdminDeleteDefaults
     implements LiveProjectsRepository {
   _StubLiveRepo({this.page, this.result, this.failure, this.gate});
 

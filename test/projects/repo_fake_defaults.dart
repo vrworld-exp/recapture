@@ -8,10 +8,8 @@
 // file with an identical throwing stub. A fake mixes these in and overrides
 // only what its test actually drives — so the next repository addition touches
 // this file, not seven others.
-import 'dart:typed_data';
-
 import 'package:recapture/data/repositories/live_projects_repository.dart'
-    show AdminDeleteMode, AutoGenerationRequest, ModelImageUploadSlot;
+    show AdminDeleteMode, AutoGenerationRequest;
 import 'package:recapture/data/repositories/projects_repository.dart'
     show
         OwnerGenerationRequestOutcome,
@@ -48,22 +46,6 @@ mixin FakeAutoGenerationDefaults {
     String projectId, {
     bool force = false,
   }) async =>
-      throw UnimplementedError('not used here');
-}
-
-/// Prepare-Images (edited model-input upload) members of `LiveProjectsRepository`.
-mixin FakeModelImageUploadDefaults {
-  Future<List<ModelImageUploadSlot>> requestModelImageUploads(
-    String projectId,
-    int count,
-  ) async =>
-      throw UnimplementedError('not used here');
-
-  Future<void> uploadModelImage(
-          ModelImageUploadSlot slot, Uint8List bytes) async =>
-      throw UnimplementedError('not used here');
-
-  Future<Uint8List> fetchPhotoBytes(String projectId, String key) async =>
       throw UnimplementedError('not used here');
 }
 

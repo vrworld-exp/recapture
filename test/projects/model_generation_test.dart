@@ -9,15 +9,11 @@
 //
 // Hermetic: fake repo, no network. Images/ModelViewer are never loaded — taps
 // hit the GestureDetector/button, which exist regardless of network state.
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image/image.dart' as img;
 import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
-import 'package:recapture/application/projects/image_prep_image_loader.dart';
 import 'package:recapture/application/projects/preview_download_service.dart';
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
@@ -30,9 +26,7 @@ import 'package:recapture/presentation/screens/projects/preview_gallery_screen.d
 import 'repo_fake_defaults.dart';
 
 class _FakeRepo
-    with FakeAdminDeleteDefaults,
-        FakeModelImageUploadDefaults,
-        FakeAutoGenerationDefaults
+    with FakeAdminDeleteDefaults, FakeAutoGenerationDefaults
     implements LiveProjectsRepository {
   _FakeRepo({this.models = const []});
 
@@ -85,18 +79,6 @@ class _NoopDownloader implements PreviewDownloader {
   Future<void> download(PreviewPhoto photo) async {}
 }
 
-/// Prepare-Images sits between selection and the create request now — feed it
-/// a real (tiny) PNG plus its dimensions so Generate enables.
-class _FakePrepLoader implements PrepImageLoader {
-  static final Uint8List _png = Uint8List.fromList(
-    img.encodePng(img.Image(width: 8, height: 6, numChannels: 3)),
-  );
-
-  @override
-  Future<LoadedPrepImage> load(String projectId, PreviewPhoto photo) async =>
-      LoadedPrepImage(bytes: _png, width: 8, height: 6);
-}
-
 Map<String, dynamic> _manifest(List<String> keys) => {
       'expiresAt': '2099-01-01T00:00:00.000Z',
       'fileCount': keys.length,
@@ -116,7 +98,6 @@ Widget _gallery(_FakeRepo repo, {bool staff = true, int instance = 0}) =>
       overrides: [
         liveProjectsRepositoryProvider.overrideWithValue(repo),
         previewDownloaderProvider.overrideWithValue(_NoopDownloader()),
-        prepImageLoaderProvider.overrideWithValue(_FakePrepLoader()),
         isStaffProvider.overrideWithValue(staff),
         isAdminProvider.overrideWithValue(false),
       ],
@@ -146,19 +127,16 @@ Future<void> _select(WidgetTester tester, List<String> keys, int n) async {
   }
 }
 
-/// Taps Create Model — which now opens Prepare-Images — then taps Generate
-/// there without editing anything, and lets the request + navigation resolve.
+/// Taps Create Model — which now sends the request straight away — and lets it
+/// plus the navigation that follows resolve.
 ///
 /// Deliberately NOT pumpAndSettle: a successful create pushes the generation
-/// status screen, whose progress indicator animates forever — settling would
-/// time out rather than tell us anything.
+/// status screen, whose progress indicator animates forever, and a FAILED one
+/// leaves the CTA spinning behind its dialog — settling would time out rather
+/// than tell us anything.
 Future<void> _tapCreate(WidgetTester tester) async {
   await tester.tap(find.byKey(const ValueKey('create_model_cta')));
-  // Prepare-Images push + photo loads. Safe to settle: nothing loops once
-  // the (fake) loads land.
-  await tester.pumpAndSettle();
-  await tester.tap(find.byKey(const ValueKey('prep_generate_cta')));
-  for (var i = 0; i < 6; i++) {
+  for (var i = 0; i < 8; i++) {
     await tester.pump(const Duration(milliseconds: 50));
   }
 }
@@ -266,8 +244,13 @@ void main() {
       await _select(tester, _keys, 3);
       await _tapCreate(tester);
 
+      // A dialog, not a snackbar — a press that spends credits cannot report
+      // its failure in something that fades away on its own.
+      expect(find.byKey(const ValueKey('create_model_error')), findsOneWidget);
       expect(find.textContaining('limit reached'), findsOneWidget);
       expect(find.textContaining('LiveProjectsException'), findsNothing);
+      // The selection survives the failure so a retry doesn't start over.
+      expect(find.text('3 of 4 selected'), findsOneWidget);
     });
   });
 

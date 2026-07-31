@@ -25,7 +25,6 @@ class _ScriptedLiveRepo
     with
         FakeModelGenerationDefaults,
         FakeAdminDeleteDefaults,
-        FakeModelImageUploadDefaults,
         FakeAutoGenerationDefaults
     implements LiveProjectsRepository {
   /// Pages keyed by cursor (null key = first page).

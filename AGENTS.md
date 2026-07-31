@@ -176,18 +176,15 @@ do not remove it).
   is no streaming and nothing to poll (the minutes-long half is `progress`).
   The trace is **staff-only**: it is on `ProjectModelDto` and on NEITHER owner
   DTO, because it names our S3 key layout and our pipeline's internals.
-- **Prepare-Images (edited model inputs).** Before Create-Model the client's
-  ImagePrepScreen lets staff crop/relight COPIES of the selected photos. Edited
-  JPEGs are PUT via `POST /admin/projects/:id/model-images/upload-urls`
-  (presigned, staff-only, stateless — no credits, no DB writes) into the
-  exportable job's **reserved `model-input/` namespace** under `rawPrefix`,
-  then selected by relative key like any capture photo. That namespace is a
-  sibling of `deleted/`: excluded from the export manifest AND from the
-  capture processor's object-count re-verification (finalize needs no
-  exclusion — it only counts for CREATED/UPLOADING jobs, and this namespace is
-  only writable post-finalize). Original captures are never modified; the
-  admin hard-delete purge covers the namespace for free (it lives under
-  `rawPrefix`).
+- **`model-input/` namespace (reserved, currently unused by the client).**
+  `POST /admin/projects/:id/model-images/upload-urls` presigns PUTs into the
+  exportable job's reserved `model-input/` namespace under `rawPrefix`, and
+  `GET /admin/projects/:id/photo-bytes` reads one capture photo through the
+  API. Both exist for staff-edited model inputs; the client's editing screen
+  was removed on 2026-07-31 (selection now goes straight to Create-Model), so
+  nothing calls them today. The namespace rules stay: sibling of `deleted/`,
+  excluded from the export manifest and from the capture processor's
+  object-count re-verification, covered by the admin hard-delete purge.
 - **`jobType` is now a real discriminator.** A project owns jobs of more than one
   type, so any query meaning "the capture job" MUST filter
   `jobType: CAPTURE_PROCESSING` (`models/types/job.types.ts`) — see

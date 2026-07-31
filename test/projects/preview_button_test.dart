@@ -31,7 +31,6 @@ class _StubLiveRepo
     with
         FakeModelGenerationDefaults,
         FakeAdminDeleteDefaults,
-        FakeModelImageUploadDefaults,
         FakeAutoGenerationDefaults
     implements LiveProjectsRepository {
   _StubLiveRepo(this._page);
