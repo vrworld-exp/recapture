@@ -153,7 +153,7 @@ describe('User.role', () => {
 // ── GET /auth/me ──────────────────────────────────────────────────────────────
 
 describe('GET /auth/me', () => {
-  it('returns id/role/flags/createdAt — and NO raw phone/email', async () => {
+  it('returns id/role/flags/createdAt + the profile fields — and NO raw phone/email', async () => {
     const { id, auth } = await makeUser('MODEL_ARTIST', {
       phone: '+919876543210',
       email: 'artist@example.com',
@@ -163,12 +163,22 @@ describe('GET /auth/me', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('success');
+    // The Profile screen added displayName/contactMasked/contactChannel; the
+    // profile PICTURE added avatarUrl/avatarUrlExpiresAt (null until one is
+    // committed — auth-me-avatar.test.ts owns that surface). The contact is
+    // MASKED-ONLY — the raw identifier still never ships (asserted below, and
+    // exhaustively in auth-me-profile.test.ts).
     expect(res.body.user).toEqual({
       id,
       role: 'MODEL_ARTIST',
+      displayName: null,
+      contactMasked: '+91 ••••• ••210',
+      contactChannel: 'sms',
       phoneVerified: false,
       emailVerified: false,
       createdAt: expect.any(String),
+      avatarUrl: null,
+      avatarUrlExpiresAt: null,
     });
     const serialized = JSON.stringify(res.body);
     expect(serialized).not.toContain('+919876543210');

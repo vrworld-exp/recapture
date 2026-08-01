@@ -73,6 +73,33 @@ const envSchema = z.object({
   /** Sliding window for the export cap (seconds). */
   ADMIN_EXPORT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // ── Profile pictures (/auth/me/avatar — docs/prompts/profile-avatar-prompt.md) ─
+  /**
+   * Hard ceiling on a stored avatar object, in bytes. The client downscales to
+   * 512×512 / q85 natively before uploading, so 2 MiB is generous headroom for
+   * that while still refusing a full-resolution phone photo someone PUT by
+   * hand. Presigning cannot enforce a size, so this is only real at COMMIT
+   * time, where the route HEADs the object and deletes an oversized one.
+   */
+  AVATAR_MAX_BYTES: z.coerce.number().int().positive().default(2_097_152), // 2 MiB
+  /**
+   * Presigned-PUT TTL for an avatar upload slot (seconds). Short on purpose:
+   * the picker uploads immediately after requesting the slot — 15 min covers a
+   * slow connection with margin, and the URL is a WRITE credential.
+   */
+  AVATAR_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /**
+   * Presigned-GET TTL for the avatarUrl on the account snapshot (seconds).
+   * Matches ADMIN_EXPORT_URL_TTL_SECONDS. A backgrounded app WILL outlive it,
+   * which is why the client degrades an expired URL to initials rather than to
+   * a broken image.
+   */
+  AVATAR_GET_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /** Max avatar upload slots one user may request per window. */
+  AVATAR_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
+  /** Sliding window for the avatar upload-slot cap (seconds). */
+  AVATAR_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // ── Meshy AI model generation (staff-triggered — docs/meshy-integration-*.md) ─
   /**
    * Meshy API key — a SECRET (env only, never logged, never shipped to the

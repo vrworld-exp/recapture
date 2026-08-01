@@ -30,6 +30,36 @@ export async function objectExists(bucket: string, key: string): Promise<boolean
   }
 }
 
+/** Result of HEADing an object: absent (404) or its metadata. */
+export type HeadResult =
+  | { outcome: 'absent' }
+  | { outcome: 'ok'; contentLength: number; contentType: string };
+
+/**
+ * HEADs one object and returns its size + content type, or 'absent' for a 404.
+ * Same absent-is-normal contract as {@link objectExists}, but it also answers
+ * "how big is it" in the SAME round trip — which is what the avatar commit
+ * needs, since S3 presigning has no size condition and the byte ceiling can
+ * only be enforced after the object exists.
+ *
+ * A missing ContentLength (S3 always sends one for a real object) reads as 0
+ * rather than throwing: a size check must fail OPEN on a weird response, never
+ * reject a legitimate upload over a missing header.
+ */
+export async function headObject(bucket: string, key: string): Promise<HeadResult> {
+  try {
+    const result = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return {
+      outcome: 'ok',
+      contentLength: result.ContentLength ?? 0,
+      contentType: result.ContentType ?? 'application/octet-stream',
+    };
+  } catch (err) {
+    if (isNotFound(err)) return { outcome: 'absent' };
+    throw err;
+  }
+}
+
 /**
  * Counts the objects under [prefix], following continuation tokens to the end —
  * a truncated first page must never undercount a large upload. "Folder marker"

@@ -25,6 +25,29 @@ export interface IUser extends Document {
   authUid: string;
   email?: string;
   phone?: string;
+  /**
+   * User-chosen display name, shown on the Profile screen. Optional and
+   * unverified — the OTP flow never collects one, so every pre-existing user
+   * reads as `undefined` (no migration needed, same reasoning as the `role`
+   * default below). Set only via PATCH /auth/me.
+   */
+  displayName?: string;
+  /**
+   * The S3 KEY of the user's profile picture — `{env}/avatars/{id}/{uuid}.jpg`
+   * (utils/avatarKeys.ts) — NEVER a URL.
+   *
+   * The raw bucket is private, so the only readable URL is a PRESIGNED one, and
+   * a presigned URL is a bearer credential that dies within the hour.
+   * Persisting one would put a short-lived credential in a document that gets
+   * logged, exported and backed up. The URL is therefore DERIVED per response
+   * (see accountSnapshot) and exists nowhere else.
+   *
+   * Absent on every pre-existing document; materializes as undefined on read,
+   * so there is no migration (same reasoning as the `role` default below).
+   */
+  avatarKey?: string;
+  /** When the avatar was last set. Absent — not null — when never set. */
+  avatarUpdatedAt?: Date;
   emailVerified: boolean;
   phoneVerified: boolean;
   role: UserRole;
@@ -53,6 +76,18 @@ const UserSchema = new Schema<IUser>(
       type: String,
       trim: true,
     },
+    // Absent on every pre-existing document; materializes as undefined on read.
+    displayName: {
+      type: String,
+      trim: true,
+      maxlength: 60,
+    },
+    // The S3 key, never a URL — see the interface comment above.
+    avatarKey: {
+      type: String,
+      trim: true,
+    },
+    avatarUpdatedAt: { type: Date },
     // Set true once the identifier is proven via a successful OTP verification.
     emailVerified: { type: Boolean, required: true, default: false },
     phoneVerified: { type: Boolean, required: true, default: false },
