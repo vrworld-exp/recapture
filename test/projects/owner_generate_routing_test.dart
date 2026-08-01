@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:recapture/application/auth/profile_provider.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
 import 'package:recapture/data/repositories/projects_repository.dart';
@@ -102,6 +103,9 @@ void main() {
         isStaffProvider.overrideWithValue(false),
         // The role chain would otherwise open Hive for the admin flag.
         isAdminProvider.overrideWithValue(false),
+        // The app-bar avatar watches this; the real one would reach /auth/me
+        // through the account repository. No picture → the plain glyph.
+        avatarBytesProvider.overrideWith((ref) async => null),
       ],
       child: const MaterialApp(home: ProjectsScreen()),
     ));

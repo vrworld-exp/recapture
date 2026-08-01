@@ -12,6 +12,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/application/auth/profile_provider.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
 import 'package:recapture/dev/dev_probe/dev_probe_service.dart';
@@ -84,6 +85,9 @@ void main() {
             // Keep the P7-A staff gate inert: the real role chain reads the
             // Hive-backed role store, which needs an initialized Hive.
             isStaffProvider.overrideWithValue(false),
+            // Same for the app-bar avatar: the real provider would reach
+            // /auth/me through the account repository.
+            avatarBytesProvider.overrideWith((ref) async => null),
           ],
           child: const MaterialApp(home: ProjectsScreen()),
         ),

@@ -33,7 +33,15 @@ dependencies:
   flutter_dotenv: ^6.0.1
 
   # Device permissions
-  permission_handler: ^12.0.3
+  permission_handler: ^13.0.0
+
+  # Gallery picker for the profile picture. Chosen over an image-processing
+  # package because its maxWidth/maxHeight/imageQuality arguments resize and
+  # re-encode NATIVELY — no `image` package, no isolate, no extra binary weight
+  # for the downscale. Gallery only; the camera stays the bespoke native
+  # pipeline. Android 13+ reaches the system photo picker with no runtime
+  # permission, so this adds no manifest permission either.
+  image_picker: ^1.1.2
 
   # Connectivity
   connectivity_plus: ^7.1.1

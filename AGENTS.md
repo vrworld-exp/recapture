@@ -123,8 +123,38 @@ do not remove it).
   `MODEL_ARTIST`): cross-user live-projects list/detail, a presigned-GET
   **export manifest**, an ADMIN-only photo soft-delete, and the **Meshy model
   generation** surface (below). Staff DTOs carry an opaque `ownerId` — **never**
-  owner phone/email. The client learns its own role via `GET /auth/me` (also
-  PII-free).
+  owner phone/email. The client learns its own role via `GET /auth/me`.
+- **`GET`/`PATCH /auth/me` are MASKED-ONLY, not PII-free.** The raw phone/email
+  still never leaves the API. The account snapshot adds `contactMasked`
+  (`+91 ••••• ••210` / `a•••@gmail.com`), `contactChannel`, and an optional
+  `displayName`, so the Profile screen can say *which* account is signed in
+  without ever receiving the identifier. The one mask lives in
+  `utils/maskIdentifier.ts` and mirrors the client's
+  `OtpRequest.maskedDestination`; an unmaskable identifier returns `null`, never
+  a partial raw value. `PATCH /auth/me` (`.strict()`, display name only) is the
+  ONLY writable field on an account — role stays DB-flag-only. The guardrail is
+  `tests/auth-me-profile.test.ts`, which asserts no raw identifier substring
+  appears in either response body.
+- **Profile pictures: the DB stores the S3 KEY, the API derives the URL.**
+  `User.avatarKey` holds `{env}/avatars/{userId}/{uuid}.{jpg|png}`
+  (`utils/avatarKeys.ts` — a SEPARATE key space from the capture-job
+  `utils/s3Keys.ts`, whose parser is strict about its own 7-segment scheme).
+  A presigned URL is a bearer credential that expires within the hour, so it is
+  never persisted: `accountSnapshot` presigns per response and ships
+  `avatarUrl` + `avatarUrlExpiresAt`, and `avatarKey` appears in NO response
+  body. Avatars live in **`BUCKET_RAW` (private)**, never
+  `BUCKET_ARTIFACTS`/CloudFront — a face photo attached to an account is PII,
+  and moving it behind the CDN is a policy change that belongs in this file.
+  Upload is **three steps** (presign → client PUTs straight to S3 → commit):
+  the commit is where the server re-derives ownership from the token,
+  `parseAvatarKey`s the caller-supplied key (**a key belonging to another user
+  is a 403** — the security boundary of the feature), HEADs the object, and
+  enforces `AVATAR_MAX_BYTES`, which presigning cannot. The pointer flips
+  BEFORE the best-effort prefix sweep, so a crash orphans an object rather than
+  breaking an avatar. `GET /auth/me/avatar/bytes` is the web-only fallback (the
+  raw bucket has no CORS), reading the key from the token's user document, never
+  from the caller. Guardrails: `tests/avatar-keys.test.ts` +
+  `tests/auth-me-avatar.test.ts`.
 - Export URLs are presigned S3 GETs with TTL `ADMIN_EXPORT_URL_TTL_SECONDS`
   (default 3600), rate-limited per user via the generic `consumeRateWindow`
   (`ADMIN_EXPORT_MAX_PER_WINDOW`/`ADMIN_EXPORT_WINDOW_SECONDS`). A presigned URL

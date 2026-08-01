@@ -5,6 +5,8 @@
 // failure (fail-closed — the staff UI must never appear on error), and resets
 // on logout. Hermetic: fake account repository + in-memory role store + a
 // driveable auth notifier.
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
@@ -13,6 +15,7 @@ import 'package:recapture/data/local/user_role_store.dart';
 import 'package:recapture/data/repositories/account_repository.dart';
 import 'package:recapture/domain/entities/auth_session.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
+import 'package:recapture/domain/entities/user_profile.dart';
 import 'package:recapture/domain/entities/user_role.dart';
 
 class _FakeAccountRepository implements AccountRepository {
@@ -26,6 +29,28 @@ class _FakeAccountRepository implements AccountRepository {
     if (fail) throw Exception('auth/me failed');
     return role ?? UserRole.user;
   }
+
+  // The Profile-screen half of the repository. Unused here — this suite is
+  // about role gating, which reads ONLY fetchRole (deliberately: its
+  // throw-on-failure contract is what makes staff access fail-closed).
+  @override
+  Future<UserProfile> fetchProfile() async =>
+      throw UnimplementedError('not exercised by the role tests');
+
+  @override
+  Future<UserProfile> updateDisplayName(String name) async =>
+      throw UnimplementedError('not exercised by the role tests');
+
+  @override
+  Future<UserProfile> uploadAvatar(Uint8List bytes, {required String contentType}) =>
+      throw UnimplementedError('not exercised by the role tests');
+
+  @override
+  Future<UserProfile> removeAvatar() =>
+      throw UnimplementedError('not exercised by the role tests');
+
+  @override
+  Future<Uint8List?> fetchAvatarBytes() async => null;
 }
 
 class _FakeUserRoleStore implements UserRoleStore {

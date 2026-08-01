@@ -23,6 +23,7 @@ import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
+import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
@@ -60,6 +61,10 @@ abstract final class AppRoutes {
   static const otpVerify = '/auth/otp';
   static const projects = '/projects';
   static const createProject = '/projects/new';
+
+  /// The signed-in user's own account screen (avatar, name, masked contact,
+  /// Sign out). Protected like every non-auth route.
+  static const profile = '/profile';
 
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
@@ -100,6 +105,7 @@ abstract final class AppRouteNames {
   static const otpVerify = 'otpVerify';
   static const projects = 'projects';
   static const createProject = 'createProject';
+  static const profile = 'profile';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const modelViewer = 'modelViewer';
@@ -192,6 +198,19 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.createProject,
         name: AppRouteNames.createProject,
         builder: (_, __) => const FlowBackScope(child: CreateProjectScreen()),
+      ),
+      // The account screen — a STANDALONE top-level destination, deliberately
+      // not nested under /projects: the Projects app bar go()es here, so the
+      // location is plain `/profile` and a cold deep-link to it behaves
+      // identically to the in-app entry. FlowBackScope + the screen's AppBar
+      // arrow both funnel through navigateBack, which maps /profile → /projects
+      // (flowBackRouteFor) when there is nothing to pop — so back never exits
+      // the app. Auth is enforced by the router guard alone — the screen must
+      // not re-check it.
+      GoRoute(
+        path: AppRoutes.profile,
+        name: AppRouteNames.profile,
+        builder: (_, __) => const FlowBackScope(child: ProfileScreen()),
       ),
       // Staff-only per-project Preview gallery. Reached via push (hardware back
       // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel

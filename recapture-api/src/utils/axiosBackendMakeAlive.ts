@@ -8,6 +8,12 @@ async function ping(): Promise<HealthResponse> {
         const backendUrl = process.env.backedendMakeAliveUrl || 'https://recapture-apis-dev.onrender.com/health';
         // console.log(backendUrl)
 
+
+        if (!backendUrl.startsWith('http://')) {
+            console.log('Backend health check URL is not http://, skipping ping:', backendUrl);
+            return { ok: false, message: 'Backend health check URL is not http://, skipping ping' } as HealthResponse;
+        }
+
         const res: AxiosResponse<HealthResponse> = await axios.get(
             backendUrl,
         );

@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/auth/profile_provider.dart';
 import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/model_generation_request_notifier.dart';
 import '../../../application/projects/owner_generation_request_notifier.dart';
@@ -537,13 +538,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
         elevation: 0,
         automaticallyImplyLeading: false,
         title: Text('Projects', style: Theme.of(context).textTheme.titleLarge),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined,
-                color: AppColors.textSecondary),
-            onPressed: () {},
-          ),
-        ],
+        actions: const [_ProfileAvatarAction()],
       ),
       // Creating a project belongs to My projects; the Live tab is read-only.
       floatingActionButton: showLive
@@ -641,6 +636,77 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       backgroundColor: AppColors.surface1,
       onRefresh: _refresh,
       child: child,
+    );
+  }
+}
+
+/// The app-bar entry point to /profile.
+///
+/// Renders the signed-in user's ACTUAL profile picture when the account has one
+/// on the server, and the previous `account_circle_outlined` glyph when it does
+/// not. Loading and failure both resolve to the glyph — a picture that cannot be
+/// fetched must never leave the app bar emptier than it was before.
+///
+/// BYTES, not the snapshot's `avatarUrl`: that URL is a short-lived presigned
+/// credential the browser build cannot fetch at all (cross-origin to a bucket
+/// with no CORS). [avatarBytesProvider] is the one display path that works on
+/// web and native alike, and it is the SAME provider the Profile screen watches,
+/// so opening Projects and then Profile costs one fetch between them, not two.
+class _ProfileAvatarAction extends ConsumerWidget {
+  const _ProfileAvatarAction();
+
+  /// Fits the default IconButton box exactly (48 − 2×8 padding), so swapping the
+  /// glyph for a picture does not resize the app bar's tap target.
+  static const double _size = 32;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final bytes = ref.watch(avatarBytesProvider).valueOrNull;
+    final hasPicture = bytes != null && bytes.isNotEmpty;
+
+    return IconButton(
+      tooltip: 'Profile',
+      icon: hasPicture
+          ? _picture(bytes)
+          : const Icon(Icons.account_circle_outlined,
+              color: AppColors.textSecondary),
+      // go(), not push: /profile is a standalone top-level destination, not a
+      // page stacked on Projects — the location REPLACES /projects so the
+      // address bar reads exactly what a direct /profile deep-link would. BACK
+      // is not lost: FlowBackScope on the route maps /profile → /projects (see
+      // flowBackRouteFor), and a fresh Projects mount re-pulls the list in
+      // initState.
+      onPressed: () => context.goNamed(AppRouteNames.profile),
+    );
+  }
+
+  /// The picture inside the same 1px royalGold ring the Profile screen's avatar
+  /// wears — the one gold accent on this screen, and the visual link between the
+  /// two surfaces. Clipped so the photo can never paint over the stroke.
+  Widget _picture(Uint8List bytes) {
+    return Container(
+      width: _size,
+      height: _size,
+      decoration: BoxDecoration(
+        color: AppColors.surface1,
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.royalGold, width: 1),
+      ),
+      child: ClipOval(
+        child: Image.memory(
+          bytes,
+          width: _size,
+          height: _size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true, // a changed picture must not flash the glyph
+          // Undecodable bytes degrade to the plain glyph, never to a
+          // broken-image icon in the app bar.
+          errorBuilder: (context, error, stack) => const Icon(
+            Icons.account_circle_outlined,
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ),
     );
   }
 }

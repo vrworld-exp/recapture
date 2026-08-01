@@ -537,6 +537,9 @@ Client (widget + unit):
 7. Crop img then, send to generate the 3d is not working fine. But direction get changed so no need work more on this. ✅/2
 
 
-8. model_render_view.dart :- line number 124 , we are controlling the size of model.
+8. model_render_view.dart :- line number 124 , we are controlling the size of model. ✅
 
+
+
+9. Also replace the logo of profile from projects page with actual avatar url, so ui look more enhanced, if avatar url present on db then only. ✅
 

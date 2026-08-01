@@ -115,6 +115,44 @@ abstract final class AnalyticsEvents {
   static const String bottomCaptureOptionSelected =
       'bottom_capture_option_selected';
 
+  // ── Profile / account screen ───────────────────────────────────────────────
+  // The account surface reached from the Projects app bar. Both events carry
+  // ONLY the name + device_type — no user id, no display name, no masked
+  // contact. The mask still identifies an account, so it is PII for this
+  // purpose and never leaves the device.
+  // TODO(analytics): mirror these two names + props in the shared server schema
+  // (recapture-api/src/validation/analyticsSchemas.ts) + the tracking-plan doc
+  // when the analytics destination lands.
+
+  /// The Profile screen became visible. Fires once per screen entry, never on
+  /// rebuilds. Props: { device_type }.
+  static const String profileScreenOpened = 'profile_screen_opened';
+
+  /// A sign-out was CONFIRMED and executed (never on a dismissed confirmation,
+  /// and once per sign-out — the in-flight guard makes a double-tap one event).
+  /// Props: { device_type }.
+  static const String profileSignOut = 'profile_sign_out';
+
+  // ── Profile picture ────────────────────────────────────────────────────────
+  // Same PII posture as the two events above, and then some: an avatar is a
+  // photograph of the user's face. These carry ONLY device_type (plus a mapped
+  // `reason` enum on the failure). NEVER the S3 key, the presigned URL, the
+  // local file path, a byte size, or a user id — the key and the URL are
+  // credentials, and the rest re-identifies the account.
+
+  /// A profile picture was successfully committed (once per successful upload;
+  /// the in-flight guard makes a double-tap one event). Props: { device_type }.
+  static const String profileAvatarUpdated = 'profile_avatar_updated';
+
+  /// A profile picture was CONFIRMED removed and the removal succeeded (never on
+  /// a dismissed confirmation). Props: { device_type }.
+  static const String profileAvatarRemoved = 'profile_avatar_removed';
+
+  /// An avatar change failed. Props: { reason: too_large|unsupported_type|
+  /// rate_limited|network|unknown, device_type }. `reason` is the MAPPED
+  /// [AvatarUploadFailure] bucket — never a status code, never a raw error.
+  static const String profileAvatarFailed = 'profile_avatar_failed';
+
   // ── Level A (Eye Ring) intro ────────────────────────────────────────────────
   // TODO(analytics): mirror these two names + props in the shared server schema
   // (recapture-api/src/validation/analyticsSchemas.ts) and the tracking-plan doc
