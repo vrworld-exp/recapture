@@ -134,11 +134,18 @@ const envSchema = z.object({
    * succeeded. Asking for a fixed budget is what keeps every result viewable on
    * the device it was captured with.
    *
-   * 100k sits well inside Meshy's own 100–300,000 range: high enough to keep the
-   * surface detail of a captured object, low enough to load on a mid-range phone
-   * (~8 MB GLB). Raise it only alongside a device test.
+   * 12k is the Mirage Menu mobile budget — deliberately far below Meshy's own
+   * 30k default. A menu viewer shows a dish on a low-end Android over café
+   * Wi-Fi, often several cards on one screen, so the triangle count is a
+   * page-weight decision, not just a render-cost one. At this budget the
+   * downstream asset pipeline's simplify stage is usually a no-op and the whole
+   * remaining win is texture-side, which is the intended shape: Meshy does the
+   * decimation once, well, on its own remesher.
+   *
+   * Raise it only alongside a device test — and remember Meshy's accepted range
+   * is 100–300,000, so anything outside it comes back as a 400 (terminal).
    */
-  MESHY_TARGET_POLYCOUNT: z.coerce.number().int().min(100).max(300_000).default(100_000),
+  MESHY_TARGET_POLYCOUNT: z.coerce.number().int().min(100).max(300_000).default(12_000),
   /**
    * Base-colour texture resolution requested from Meshy. '2k' is Meshy's own
    * default and the one a phone can hold comfortably; '4k'/'8k' multiply the

@@ -207,7 +207,7 @@ describe('meshyModelProcessor — happy path', () => {
       getTask: vi.fn().mockResolvedValue(
         task({
           modelUrls: { glb: 'https://meshy.example/o.glb', usdz: 'https://meshy.example/o.usdz' },
-          thumbnailUrl: 'https://meshy.example/o.jpg',
+          thumbnailUrl: 'https://meshy.example/o.png',
         })
       ),
     });
@@ -216,11 +216,16 @@ describe('meshyModelProcessor — happy path', () => {
 
     await meshyModelProcessor(workerJob);
 
+    // The poster is PNG because MESHY_PRESET sets alpha_thumbnail: true — the
+    // filename and that flag are one decision, so this pins both.
     const p = `${prefix}models/${record.id}/`;
-    expect(puts).toEqual([`${p}model.glb`, `${p}model.usdz`, `${p}preview.jpg`]);
+    expect(puts).toEqual([`${p}model.glb`, `${p}model.usdz`, `${p}preview.png`]);
     const saved = await ProjectModel.findById(record.id).exec();
     expect(saved!.artifacts!.usdzKey).toBe(`${p}model.usdz`);
-    expect(saved!.artifacts!.previewImageKey).toBe(`${p}preview.jpg`);
+    expect(saved!.artifacts!.previewImageKey).toBe(`${p}preview.png`);
+    expect(saved!.artifacts!.cdnUrls.preview).toBe(
+      `${env.CLOUDFRONT_BASE_URL}/${p}preview.png`
+    );
   });
 
   it('polls until the task leaves PENDING/IN_PROGRESS, renewing the lease each tick', async () => {

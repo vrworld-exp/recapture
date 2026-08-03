@@ -290,8 +290,13 @@ async function rehostArtifacts(
     ...(task.modelUrls.usdz
       ? [{ url: task.modelUrls.usdz, filename: 'model.usdz', contentType: 'model/vnd.usdz+zip' }]
       : []),
+    // PNG, not JPEG: the generation preset sets `alpha_thumbnail: true`, so
+    // Meshy's poster comes back with a transparent background (what the dark
+    // menu cards need). Serving those bytes as image/jpeg from CloudFront under
+    // an immutable cache header would be wrong and uncacheable to undo — this
+    // filename and MESHY_PRESET.alpha_thumbnail must change together.
     ...(task.thumbnailUrl
-      ? [{ url: task.thumbnailUrl, filename: 'preview.jpg', contentType: 'image/jpeg' }]
+      ? [{ url: task.thumbnailUrl, filename: 'preview.png', contentType: 'image/png' }]
       : []),
   ];
 
@@ -304,11 +309,11 @@ async function rehostArtifacts(
   return {
     glbKey: `${prefix}model.glb`,
     ...(has('model.usdz') ? { usdzKey: `${prefix}model.usdz` } : {}),
-    ...(has('preview.jpg') ? { previewImageKey: `${prefix}preview.jpg` } : {}),
+    ...(has('preview.png') ? { previewImageKey: `${prefix}preview.png` } : {}),
     cdnUrls: {
       glb: `${CLOUDFRONT_BASE}/${prefix}model.glb`,
       ...(has('model.usdz') ? { usdz: `${CLOUDFRONT_BASE}/${prefix}model.usdz` } : {}),
-      ...(has('preview.jpg') ? { preview: `${CLOUDFRONT_BASE}/${prefix}preview.jpg` } : {}),
+      ...(has('preview.png') ? { preview: `${CLOUDFRONT_BASE}/${prefix}preview.png` } : {}),
     },
   };
 }
