@@ -1,0 +1,189 @@
+{
+  "source": {
+    "totalBytes": 7918404,
+    "triangles": 7938,
+    "vertices": 4096,
+    "meshCount": 1,
+    "materialCount": 1,
+    "nodeCount": 1,
+    "textureCount": 3,
+    "drawCallEstimate": 1,
+    "textures": [
+      {
+        "name": "baseColor",
+        "slots": [
+          "baseColorTexture"
+        ],
+        "mimeType": "image/png",
+        "width": 2048,
+        "height": 2048,
+        "bytes": 7196137,
+        "isConstantColor": false
+      },
+      {
+        "name": "metallicRoughness",
+        "slots": [
+          "metallicRoughnessTexture"
+        ],
+        "mimeType": "image/png",
+        "width": 1024,
+        "height": 1024,
+        "bytes": 15809,
+        "isConstantColor": true,
+        "constantColor": [
+          0,
+          128,
+          0,
+          255
+        ]
+      },
+      {
+        "name": "orphan",
+        "slots": [],
+        "mimeType": "image/png",
+        "width": 512,
+        "height": 512,
+        "bytes": 478528,
+        "isConstantColor": false
+      }
+    ],
+    "unusedTextureCount": 1,
+    "boundingBox": {
+      "min": [
+        0,
+        0,
+        0
+      ],
+      "max": [
+        0.28,
+        0.08394779086112977,
+        0.28
+      ],
+      "widthMeters": 0.28,
+      "heightMeters": 0.08394779086112977,
+      "depthMeters": 0.28,
+      "longestDimMeters": 0.28
+    },
+    "pivotOffset": [
+      0.14,
+      0.041973895430564886,
+      0.14
+    ],
+    "uvChannelCount": 1,
+    "hasAnimations": false,
+    "hasSkins": false,
+    "hasMorphTargets": false,
+    "extensions": []
+  },
+  "plan": {
+    "profileName": "food",
+    "pipelineVersion": 1,
+    "skip": false,
+    "textureRules": [
+      {
+        "label": "baseColor",
+        "slotPattern": "baseColor",
+        "maxSize": 1024,
+        "quality": 82
+      },
+      {
+        "label": "metallicRoughness/occlusion/emissive",
+        "slotPattern": "(metallicRoughness|occlusion|emissive)",
+        "maxSize": 512,
+        "quality": 80
+      },
+      {
+        "label": "normal",
+        "slotPattern": "normal",
+        "maxSize": 512,
+        "quality": 92
+      }
+    ],
+    "dropTextures": [
+      "orphan"
+    ],
+    "collapseConstantSlots": [
+      "metallicRoughnessTexture"
+    ],
+    "scaleFactor": 1,
+    "scaleReason": "measured 0.280 m is within the expected 0.02–0.6 m range (auto_size worked)",
+    "recentrePivot": true,
+    "meshoptLevel": "high",
+    "gates": {
+      "maxOutputBytes": 3145728,
+      "maxTriangles": 50000,
+      "minTriangles": 100,
+      "sizeTolerance": 0.02
+    },
+    "notes": [
+      "1 texture(s) referenced by no material — dropped.",
+      "Constant-colour map(s) on metallicRoughnessTexture collapsed to material factors — removes a whole texture and its per-draw bind.",
+      "Pivot is off by 0.0% of height / 70.7% of footprint — recentring to XZ centre, Y=0."
+    ]
+  },
+  "optimized": {
+    "totalBytes": 317924,
+    "triangles": 7938,
+    "vertices": 4096,
+    "meshCount": 1,
+    "materialCount": 1,
+    "nodeCount": 1,
+    "textureCount": 1,
+    "drawCallEstimate": 1,
+    "textures": [
+      {
+        "name": "baseColor",
+        "slots": [
+          "baseColorTexture"
+        ],
+        "mimeType": "image/webp",
+        "width": 1024,
+        "height": 1024,
+        "bytes": 286080,
+        "isConstantColor": false
+      }
+    ],
+    "unusedTextureCount": 0,
+    "boundingBox": {
+      "min": [
+        -0.14,
+        -0.0000043143536692588635,
+        -0.14
+      ],
+      "max": [
+        0.14,
+        0.08395210521479904,
+        0.14
+      ],
+      "widthMeters": 0.28,
+      "heightMeters": 0.0839564195684683,
+      "depthMeters": 0.28,
+      "longestDimMeters": 0.28
+    },
+    "pivotOffset": [
+      0,
+      0.041973895430564886,
+      0
+    ],
+    "uvChannelCount": 1,
+    "hasAnimations": false,
+    "hasSkins": false,
+    "hasMorphTargets": false,
+    "extensions": [
+      "EXT_texture_webp",
+      "KHR_mesh_quantization",
+      "EXT_meshopt_compression"
+    ]
+  },
+  "validation": {
+    "ok": true,
+    "failures": []
+  },
+  "durationsMs": {
+    "inspect": 219,
+    "plan": 0,
+    "execute": 649,
+    "validate": 9,
+    "total": 878
+  }
+}
