@@ -17,6 +17,15 @@
 export const CAPTURE_PROCESSING_JOB_TYPE = 'CAPTURE_PROCESSING';
 /** Staff-triggered Meshy AI generation — carries `payload.modelId`, no upload. */
 export const MESHY_MODEL_GENERATION_JOB_TYPE = 'MESHY_MODEL_GENERATION';
+/**
+ * Post-generation web optimization — carries `payload.modelId`, no upload.
+ *
+ * A SEPARATE job type rather than a stage of MESHY_MODEL_GENERATION so that
+ * optimization failing can never retract a generation the user already paid
+ * for: the Meshy job completes, the original GLB is already serving, and this
+ * job retries (or fails terminally) entirely on its own.
+ */
+export const ASSET_OPTIMIZATION_JOB_TYPE = 'ASSET_OPTIMIZATION';
 
 /**
  * Job processing lifecycle states.

@@ -236,6 +236,17 @@ export async function getObjectBytes(bucket: string, key: string): Promise<Fetch
   }
 }
 
+/** Optional per-object write settings. Omitted fields fall back to S3 defaults. */
+export interface PutObjectOptions {
+  /**
+   * Cache-Control header stored WITH the object, so CloudFront and the browser
+   * honour it on every later GET. Only meaningful for objects written at a
+   * version-scoped, never-overwritten key — an immutable directive on a
+   * mutable key hands clients bytes they can never refresh.
+   */
+  cacheControl?: string;
+}
+
 /**
  * Writes [body] to (bucket, key), overwriting any existing object. S3 PutObject
  * is a full replace, so a re-run with the same deterministic key is idempotent —
@@ -245,10 +256,17 @@ export async function putObjectBytes(
   bucket: string,
   key: string,
   body: Uint8Array,
-  contentType: string
+  contentType: string,
+  options: PutObjectOptions = {}
 ): Promise<void> {
   await s3Client.send(
-    new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType })
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ...(options.cacheControl ? { CacheControl: options.cacheControl } : {}),
+    })
   );
 }
 

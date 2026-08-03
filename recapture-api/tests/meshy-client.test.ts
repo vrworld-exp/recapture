@@ -13,6 +13,7 @@ import { NonRetryableJobError } from '@/worker/workerTypes';
 import {
   meshyClient,
   MeshyErrorCode,
+  MESHY_PRESET,
   resetMeshyTransport,
 } from '@/worker/engine/meshy/meshyClient';
 
@@ -58,8 +59,7 @@ describe('meshyClient — request shape', () => {
     // Field name is the live contract's: `image_urls`, not `images`/`image_url`.
     expect(post).toHaveBeenCalledWith('/openapi/v1/multi-image-to-3d', {
       image_urls: ['https://s3/a', 'https://s3/b'],
-      should_remesh: true,
-      topology: 'triangle',
+      ...MESHY_PRESET,
       target_polycount: env.MESHY_TARGET_POLYCOUNT,
       texture_resolution: env.MESHY_TEXTURE_RESOLUTION,
     });
@@ -71,9 +71,10 @@ describe('meshyClient — request shape', () => {
 
   it('pins a mesh budget the phone can render instead of taking Meshy defaults', async () => {
     // The regression this guards: with should_remesh left to Meshy's default
-    // (false on its newer models) the returned GLB was unbounded — live results
-    // reached 1.2M triangles / 38 MB, which the app's WebView cannot load, so a
-    // successful generation surfaced to the owner as "couldn't load this model".
+    // (false on its newer models — including the meshy-6 that ai_model 'latest'
+    // resolves to) the returned GLB was unbounded — live results reached 1.2M
+    // triangles / 38 MB, which the app's WebView cannot load, so a successful
+    // generation surfaced to the owner as "couldn't load this model".
     stubTransport({ status: 200, data: { result: 'task-abc' } });
 
     await meshyClient.createMultiImageTask(['https://s3/a']);
@@ -84,6 +85,33 @@ describe('meshyClient — request shape', () => {
     // Meshy's own accepted range — a budget outside it is rejected at 400.
     expect(env.MESHY_TARGET_POLYCOUNT).toBeGreaterThanOrEqual(100);
     expect(env.MESHY_TARGET_POLYCOUNT).toBeLessThanOrEqual(300_000);
+  });
+
+  it('sends the Mirage Menu preset verbatim — every field Meshy would otherwise default', () => {
+    // A value table, not a shape check: each of these overrides a Meshy default
+    // that would silently change the product. `alpha_thumbnail` in particular is
+    // coupled to meshyModelProcessor re-hosting the poster as preview.png.
+    expect(MESHY_PRESET).toEqual({
+      ai_model: 'latest',
+      should_remesh: true,
+      topology: 'triangle',
+      should_texture: true,
+      enable_pbr: true,
+      remove_lighting: true,
+      auto_size: true,
+      origin_at: 'bottom',
+      moderation: false,
+      alpha_thumbnail: true,
+      multi_view_thumbnails: false,
+      target_formats: ['glb', 'usdz'],
+    });
+  });
+
+  it('leaves the two device-tunable knobs on env, not baked into the preset', () => {
+    // These are the fields an operator retunes against a real phone, so they
+    // must stay overridable per environment.
+    expect(MESHY_PRESET).not.toHaveProperty('target_polycount');
+    expect(MESHY_PRESET).not.toHaveProperty('texture_resolution');
   });
 
   it('normalizes the retrieve response into a typed MeshyTask', async () => {

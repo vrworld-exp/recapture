@@ -1,0 +1,35 @@
+{
+  "name": "food",
+  "skipUnderBytes": 512000,
+  "textureRules": [
+    {
+      "label": "baseColor",
+      "slotPattern": "baseColor",
+      "maxSize": 1024,
+      "quality": 82
+    },
+    {
+      "label": "metallicRoughness/occlusion/emissive",
+      "slotPattern": "(metallicRoughness|occlusion|emissive)",
+      "maxSize": 512,
+      "quality": 80
+    },
+    {
+      "label": "normal",
+      "slotPattern": "normal",
+      "maxSize": 512,
+      "quality": 92
+    }
+  ],
+  "expectedLongestDimMeters": {
+    "min": 0.02,
+    "max": 0.6
+  },
+  "gates": {
+    "maxOutputBytes": 3145728,
+    "maxTriangles": 50000,
+    "minTriangles": 100,
+    "sizeTolerance": 0.02
+  },
+  "meshoptLevel": "high"
+}

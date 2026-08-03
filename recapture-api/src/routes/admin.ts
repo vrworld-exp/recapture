@@ -19,6 +19,7 @@ import {
   adminModelIdParamsSchema,
   adminModelImageUploadsBodySchema,
   adminPhotoBytesQuerySchema,
+  setModelVariantSchema,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
@@ -36,7 +37,9 @@ import {
   findProjectModelById,
   latestSucceededModel,
   listProjectModels,
+  setActiveModelVariant,
   toProjectModelDto,
+  toProjectModelDtos,
   MAX_SELECTED_PHOTOS,
   MIN_SELECTED_PHOTOS,
 } from '@/services/projectModelsService';
@@ -836,7 +839,10 @@ router.get(
     }
 
     const models = await listProjectModels(params.data.id);
-    res.status(200).json({ status: 'success', models: models.map(toProjectModelDto) });
+    // flatMap, not map: a generation whose optimization succeeded surfaces as
+    // TWO entries (the Meshy original and the web build) sharing one id, so an
+    // artist can compare them. See toProjectModelDtos.
+    res.status(200).json({ status: 'success', models: models.flatMap(toProjectModelDtos) });
   })
 );
 
@@ -885,6 +891,71 @@ router.post(
     });
 
     res.status(200).json({ status: 'success', model });
+  })
+);
+
+/**
+ * PATCH /admin/projects/:id/models/:modelId/variant — choose which rendition
+ * owners are served: the untouched Meshy original, or the web-optimized build.
+ *
+ * This is the human half of the asset pipeline. Optimization never promotes
+ * itself: an admin compares the two on a real device and decides. Reverting to
+ * 'original' is always permitted, and is the escape hatch for a variant that
+ * passes every automated gate and still looks wrong.
+ */
+router.patch(
+  '/projects/:id/models/:modelId/variant',
+  asyncHandler(async (req, res) => {
+    const params = adminModelIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const body = setModelVariantSchema.safeParse(req.body ?? {});
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [issue?.path.join('.') || 'body']: issue?.message ?? 'Invalid' },
+      });
+      return;
+    }
+
+    const result = await setActiveModelVariant(
+      params.data.id,
+      params.data.modelId,
+      body.data.variant
+    );
+
+    switch (result.outcome) {
+      case 'MODEL_NOT_FOUND':
+        res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Model not found.' });
+        return;
+      case 'NOT_OPTIMIZED':
+        res.status(409).json({
+          status: 'error',
+          code: 'NOT_OPTIMIZED',
+          message: 'This model has no optimized variant to switch to yet.',
+        });
+        return;
+      case 'VARIANT_UNAVAILABLE':
+        res.status(409).json({
+          status: 'error',
+          code: 'VARIANT_UNAVAILABLE',
+          message: `The "${result.variant}" variant was not produced for this model.`,
+        });
+        return;
+      case 'UPDATED':
+        res.status(200).json({ status: 'success', model: toProjectModelDto(result.model) });
+        return;
+    }
   })
 );
 
