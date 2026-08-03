@@ -37,6 +37,7 @@ import {
 import { enterStage, recordStageProgress } from '@/worker/stageTransitions';
 import { log } from '@/worker/workerLog';
 import {
+  ASSET_OPTIMIZATION_JOB_TYPE,
   DEFAULT_MAX_ATTEMPTS,
   NonRetryableJobError,
   type JobProcessor,
@@ -141,6 +142,13 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
       modelId,
       projectId: record.projectId,
     });
+
+    // Hand off to the web-optimization pipeline. STRICTLY BEST-EFFORT and
+    // deliberately AFTER the record is already SUCCEEDED: the generation is
+    // paid for and complete, and a queueing hiccup here must not fail it or
+    // trigger a retry that re-downloads a model we already have. If the enqueue
+    // is lost, the model simply serves un-optimized until someone re-runs it.
+    await enqueueAssetOptimization(job, record);
     // Only OUR keys/URLs — a Meshy URL must never reach the DB (they expire).
     return { source: 'meshy', modelId, artifacts: artifacts.cdnUrls };
   } catch (err: unknown) {
@@ -148,6 +156,50 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
     throw err;
   }
 };
+
+/**
+ * Queues the ASSET_OPTIMIZATION job for a model that has just succeeded.
+ *
+ * Swallows its own failures on purpose (see the call site): this runs after the
+ * money has been spent and the record is already terminal, so the worst case
+ * must be "the model serves un-optimized", never "the generation failed".
+ *
+ * Idempotent by construction — one optimization job per model id, so a
+ * re-claimed generation that re-runs this line does not queue a second one.
+ */
+async function enqueueAssetOptimization(job: WorkerJob, record: IProjectModel): Promise<void> {
+  try {
+    const existing = await Job.findOne({
+      jobType: ASSET_OPTIMIZATION_JOB_TYPE,
+      'payload.modelId': record.id as string,
+    })
+      .select({ _id: 1 })
+      .lean()
+      .exec();
+    if (existing) return;
+
+    await Job.create({
+      projectId: record.projectId,
+      userId: record.createdByUserId,
+      jobType: ASSET_OPTIMIZATION_JOB_TYPE,
+      state: 'QUEUED',
+      queuedAt: new Date(),
+      payload: { modelId: record.id as string },
+    });
+
+    log('info', 'Asset optimization queued', {
+      jobId: job._id,
+      modelId: record.id,
+      projectId: record.projectId,
+    });
+  } catch (err: unknown) {
+    log('warn', 'Could not queue asset optimization — model serves un-optimized', {
+      jobId: job._id,
+      modelId: record.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 /**
  * The resume guard. If the record already names a Meshy task, that task was

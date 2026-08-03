@@ -5,6 +5,7 @@
 // the AGENTS.md convention — these routes have no bodies.
 import { z } from 'zod';
 import { PROJECT_STATUS_VALUES } from '@/models/Project';
+import { ASSET_VARIANT_IDS } from '@/models/types/assetManifest.types';
 
 /**
  * GET /admin/projects query. Same limit bounds as the owner list (1-100,
@@ -142,3 +143,16 @@ export const adminModelIdParamsSchema = z
     modelId: z.string().regex(OBJECT_ID_RE, 'Invalid model id'),
   })
   .strict();
+
+/**
+ * Body for PATCH /admin/projects/:id/models/:modelId/variant — which rendition
+ * owners are served. Strict, so a typo'd field is a 400 rather than a silent
+ * no-op that leaves an admin believing they promoted a variant.
+ */
+export const setModelVariantSchema = z
+  .object({
+    variant: z.enum(ASSET_VARIANT_IDS),
+  })
+  .strict();
+
+export type SetModelVariantBody = z.infer<typeof setModelVariantSchema>;

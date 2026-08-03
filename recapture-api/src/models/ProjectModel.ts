@@ -12,6 +12,11 @@
 import { Schema, model, Document, Types } from 'mongoose';
 import { USER_ROLES, type UserRole } from '@/models/User';
 import {
+  ASSET_OPTIMIZATION_STATUSES,
+  ASSET_VARIANT_IDS,
+  type OptimizedAsset,
+} from '@/models/types/assetManifest.types';
+import {
   GENERATION_REQUESTED_BY,
   GENERATION_STEP_NAMES,
   GENERATION_STEP_STATUSES,
@@ -55,6 +60,16 @@ export interface IProjectModel extends Document {
   progress?: ModelProgress;
   /** Populated on SUCCEEDED — our S3 keys + CloudFront URLs only. */
   artifacts?: ModelArtifacts;
+  /**
+   * The web-optimization result, produced by a SEPARATE job after this record
+   * already reached SUCCEEDED (see worker/processors/assetOptimizationProcessor).
+   *
+   * Absent on every record predating the pipeline, and on any record whose
+   * optimization has not run yet — readers must treat missing as "original
+   * only". A FAILED optimization is deliberately NOT a failed model: the
+   * untouched Meshy GLB in `artifacts` still serves.
+   */
+  optimized?: OptimizedAsset;
   /** The "we're satisfied, skip manual creation" gate. SUCCEEDED records only. */
   approved?: ModelApproval;
   /** Populated on FAILED. */
@@ -163,6 +178,39 @@ const ModelGenerationTraceSchema = new Schema<ModelGenerationTrace>(
   { _id: false }
 );
 
+/**
+ * The manifest is stored as Mixed rather than a strict sub-schema, on the same
+ * reasoning as ModelGenerationTrace.selection: it is a VERSIONED document whose
+ * shape is allowed to grow with the pipeline version that wrote it. A strict
+ * sub-schema would silently strip any field a newer pipeline added, which would
+ * corrupt exactly the record a client needs to render the variant it cached.
+ * The manifest's real contract is enforced at the type level
+ * (models/types/assetManifest.types.ts), not by Mongoose.
+ */
+const OptimizedAssetSchema = new Schema<OptimizedAsset>(
+  {
+    status: { type: String, enum: ASSET_OPTIMIZATION_STATUSES, required: true },
+    pipelineVersion: { type: Number, required: true },
+    manifest: { type: Schema.Types.Mixed },
+    error: {
+      type: new Schema(
+        { code: { type: String, required: true }, message: { type: String, required: true } },
+        { _id: false }
+      ),
+    },
+    // Defaults to 'original': producing an optimized variant must never, by
+    // itself, change what users are served. Promotion is an admin action.
+    activeVariant: {
+      type: String,
+      enum: ASSET_VARIANT_IDS,
+      required: true,
+      default: 'original',
+    },
+    reportKey: { type: String },
+  },
+  { _id: false }
+);
+
 const ProjectModelSchema = new Schema<IProjectModel>(
   {
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
@@ -173,6 +221,7 @@ const ProjectModelSchema = new Schema<IProjectModel>(
     meshyTaskId: { type: String },
     progress: { type: ModelProgressSchema },
     artifacts: { type: ModelArtifactsSchema },
+    optimized: { type: OptimizedAssetSchema },
     approved: { type: ModelApprovalSchema },
     error: { type: ModelErrorSchema },
     idempotencyKey: { type: String, maxlength: 128 },

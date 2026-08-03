@@ -87,7 +87,14 @@ class ModelHistoryScreen extends ConsumerWidget {
                   itemBuilder: (context, index) {
                     final model = models[index];
                     return _ModelRow(
-                      key: ValueKey('model_row_${model.id}'),
+                      // "Serving" only means something when there is a CHOICE.
+                      // A generation with a single rendition is trivially the
+                      // one being served, so labelling it would be noise.
+                      showServing: _hasTwoRenditions(models, model),
+                      // Keyed by id AND variant: one generation can appear as
+                      // two rows sharing an id (original + optimized), and
+                      // duplicate sibling keys are a Flutter error.
+                      key: ValueKey('model_row_${model.id}_${model.variant.name}'),
                       model: model,
                       onTap: model.isViewable
                           ? () => _openViewer(context, model)
@@ -101,11 +108,34 @@ class ModelHistoryScreen extends ConsumerWidget {
   }
 }
 
+/// Whether [model]'s generation appears in [models] as more than one rendition.
+///
+/// Two entries can share an `id` — the Meshy original and the optimized build
+/// are one record — so "is there a choice to make here?" is a property of the
+/// LIST, not of a single row.
+bool _hasTwoRenditions(List<ProjectModelView> models, ProjectModelView model) {
+  var count = 0;
+  for (final other in models) {
+    if (other.id == model.id) count++;
+    if (count > 1) return true;
+  }
+  return false;
+}
+
 /// One generation attempt: when it ran, how it ended, what it was built from.
 class _ModelRow extends StatelessWidget {
-  const _ModelRow({super.key, required this.model, this.onTap});
+  const _ModelRow({
+    super.key,
+    required this.model,
+    this.onTap,
+    this.showServing = false,
+  });
 
   final ProjectModelView model;
+
+  /// Whether to mark this row as the rendition owners actually load. Only set
+  /// when the generation has more than one rendition — see [_hasTwoRenditions].
+  final bool showServing;
 
   /// Null for a record with nothing to open — a FAILED one, a pending one, or a
   /// SUCCEEDED one whose GLB is somehow missing. A null onTap is what makes the
@@ -142,6 +172,10 @@ class _ModelRow extends StatelessWidget {
                             style: text.bodyMedium,
                           ),
                         ),
+                        if (model.variant.badgeLabel case final label?) ...[
+                          const SizedBox(width: AppSpacing.sm),
+                          _VariantBadge(label: label),
+                        ],
                         if (model.approved) ...[
                           const SizedBox(width: AppSpacing.sm),
                           const _ApprovedBadge(),
@@ -150,7 +184,7 @@ class _ModelRow extends StatelessWidget {
                     ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
-                      _detail(model),
+                      _detail(model, showServing),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: muted,
@@ -181,7 +215,7 @@ class _ModelRow extends StatelessWidget {
   /// The secondary line: why it failed, or what it was built from — the photo
   /// count is the main thing that differs between attempts, and usually the
   /// reason one succeeded where another didn't.
-  static String _detail(ProjectModelView model) {
+  static String _detail(ProjectModelView model, bool showServing) {
     if (model.error case final error?) return error.message;
     if (model.status.isPending) {
       // Surface the worker's live phase when the backend reports one, so the
@@ -196,9 +230,18 @@ class _ModelRow extends StatelessWidget {
           'Generating — this takes a few minutes.',
       };
     }
-    final n = model.selectedKeys.length;
-    if (n == 0) return '';
-    return n == 1 ? '1 photo' : '$n photos';
+    // Size first when we have it: with two rows for one generation, the weight
+    // IS the difference, and "7.92 MB" next to "318 KB" says more than any
+    // badge can. "Serving" marks the one owners actually load — deliberately
+    // NOT implied by the OPT badge, because an optimized build is never
+    // promoted until a human says so.
+    final parts = <String>[
+      if (model.metrics case final m?) m.sizeLabel,
+      if (showServing && model.isActiveVariant) 'Serving',
+      if (model.selectedKeys.length case final n when n > 0)
+        n == 1 ? '1 photo' : '$n photos',
+    ];
+    return parts.join(' · ');
   }
 
   static String _statusLabel(ModelStatus status) => switch (status) {
@@ -261,6 +304,40 @@ class _ThumbPlaceholder extends StatelessWidget {
       alignment: Alignment.center,
       child: const Icon(Icons.view_in_ar_outlined,
           color: AppColors.textMuted, size: 20),
+    );
+  }
+}
+
+/// The "this is the optimized build" pill.
+///
+/// Gold, not red: red is the CTA colour and this is a label, not an action.
+/// Only the optimized row is badged — badging the original too would double the
+/// ink for the same one-bit distinction.
+class _VariantBadge extends StatelessWidget {
+  const _VariantBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: 2,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.royalGold.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: AppColors.royalGold.withValues(alpha: 0.5)),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppColors.royalGold,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.5,
+            ),
+      ),
     );
   }
 }

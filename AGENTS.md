@@ -222,6 +222,76 @@ do not remove it).
 - **`MESHY_API_KEY` is optional in `config/env.ts` and required at WORKER boot**
   (`assertMeshyConfigured()`): only the worker calls Meshy, so the API must not
   fail to boot over a secret it never uses.
+- **The generation recipe is ONE preset, not scattered defaults.**
+  `MESHY_PRESET` (`worker/engine/meshy/meshyClient.ts`) is sent verbatim on
+  every task so a result is reproducible across environments and across Meshy
+  changing its own defaults — which has bitten this repo once already
+  (`should_remesh` defaults to FALSE on meshy-6, which `ai_model: 'latest'`
+  resolves to; omitting it returns an unbounded mesh the WebView cannot load).
+  Only `target_polycount` and `texture_resolution` stay env-tunable, because
+  those are what an operator retunes against a device test.
+  **Coupled fields:** `alpha_thumbnail: true` means the poster is a transparent
+  PNG, so `meshyModelProcessor` re-hosts it as `preview.png` / `image/png`.
+  Change one and you must change the other.
+
+### Asset optimization (`src/modules/asset-pipeline/`)
+- **`src/modules/` is a THIRD backend directory kind**, alongside `services/`
+  and `worker/`. It holds **pure libraries**: no Express, no Mongoose, no AWS,
+  no queue. `asset-pipeline` takes bytes and returns bytes, which is what lets
+  its CLI run on a local GLB with no credentials and its tests run without a
+  database. The single exception is `publish.ts` (the S3 writer), which the CLI
+  deliberately never imports. Do not put business logic that reads the database
+  here — that is still `services/`.
+- **Four separated stages, not one `optimize()`:** `inspect` (pure read) →
+  `plan` (pure function: report + profile → decisions) → `execute` (the only
+  side-effecting stage) → `validate` (hard gates). Meshy output varies enormously
+  per object, so every decision must be traceable to a measurement and both must
+  land in `report.json`. `plan()` is pure specifically so it is unit-testable
+  without a GLB — keep it that way.
+- **Optimization NEVER gates a generation.** It runs as its own
+  **`ASSET_OPTIMIZATION`** job, enqueued by `meshyModelProcessor` only after the
+  record is already `SUCCEEDED` with a usable original. A pipeline failure marks
+  `optimized.status = 'FAILED'` and leaves the model `SUCCEEDED` — the untouched
+  Meshy GLB keeps serving. Nothing in the optimization path may write the
+  model's own `status`.
+- **Producing a variant is not promoting it.** `optimized.activeVariant`
+  defaults to `'original'` and only an admin changes it
+  (`PATCH /admin/projects/:id/models/:modelId/variant`). "Passed the gates" and
+  "looks right" are different claims and only a human can make the second.
+  Reverting to `'original'` must always be permitted.
+- **The original is immutable and load-bearing.** `…/models/{modelId}/model.glb`
+  is never rewritten: it is the only way to re-run an improved recipe later.
+  Variants go under a version prefix `…/models/{modelId}/v{n}/` served
+  `public, max-age=31536000, immutable`; a changed recipe means a NEW
+  `ASSET_PIPELINE_VERSION` and a new prefix, never an overwrite.
+- **`AssetManifest` lives in `models/types/assetManifest.types.ts`**, not in the
+  module — the pipeline is one producer of that shape, but the shape outlives it
+  and is the contract the Flutter app and the Mirage Menu viewer read. It is
+  written to S3 as `manifest.json` AND persisted on the record.
+- **Two list entries, ONE record, ONE paid generation.**
+  `GET /admin/projects/:id/models` `flatMap`s each record through
+  `toProjectModelDtos`, so an optimized generation surfaces as two entries —
+  `variant: 'original'` and `variant: 'web'` — carrying the SAME `id`, each with
+  its own `artifacts.glb` and `metrics`. That is a VIEW, not a second row:
+  `ProjectModel` stays one row per PAID generation because
+  `countServerSelectedGenerationsInLast24h` counts rows, and a second row would
+  double-count Meshy spend against the daily ceiling. Never dedupe this list by
+  `id`, and never turn the second entry into a real record.
+  The client mirrors this in `ProjectModelView` (`variant` / `isActiveVariant` /
+  `metrics`), and the history row badges the optimized one **OPT** plus its
+  size. Rows are keyed `model_row_{id}_{variant}` — keyed by id alone they
+  would be duplicate sibling keys, which is a Flutter error, not a cosmetic bug.
+  "Serving" is shown only when a generation actually has TWO renditions: with
+  one rendition there is no choice to label.
+  **Remaining client sync debt (2026-08-03):** the OWNER DTO's
+  `originalGlbUrl` / `optimizedGlbUrl` / `isOptimized` are not parsed by
+  `tryFromOwnerMap` yet — no owner surface needs them until the viewer offers a
+  compare toggle.
+- **`sharp` must be a single version in the tree.** `@gltf-transform/functions`
+  pulls `sharp` transitively via `ndarray-pixels`; two copies means two libvips
+  binaries in one process and image ops fail with
+  `colourspace: parameter space not set`. If that error appears, check for a
+  nested `node_modules/*/node_modules/sharp` and align the top-level version.
 
 ### Config & secrets
 - **All tunables and secrets come from env.** `config/env.ts` validates them with
@@ -307,6 +377,14 @@ npm run type-check   # tsc --noEmit (must be clean)
 npm run lint         # eslint
 npm run build        # tsc + tsc-alias → dist/
 npm start            # node dist/index.js
+npm run worker       # the job-queue worker process
+
+# Asset pipeline, offline — no AWS, no DB. Positional args, because npm claims
+# --input/--profile as its own config and never forwards them:
+npx tsx scripts/make-sample-glb.ts        # synthesize a Meshy-shaped GLB (~8 MB)
+npm run pipeline -- ./samples/dish.glb food
+# flag form works only when invoked directly:
+npx tsx src/modules/asset-pipeline/cli.ts --input ./samples/dish.glb --profile food
 ```
 
 **Client** (repo root):

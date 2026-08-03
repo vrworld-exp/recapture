@@ -14,10 +14,15 @@
 import { env } from '@/config/env';
 import { assertMeshyConfigured } from '@/worker/engine/meshy/meshyClient';
 import { registerProcessor } from '@/worker/processorRegistry';
+import { assetOptimizationProcessor } from '@/worker/processors/assetOptimizationProcessor';
 import { captureProcessingProcessor } from '@/worker/processors/captureProcessingProcessor';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
 import { startWorker } from '@/worker/worker';
-import { DEFAULT_JOB_TYPE, MESHY_MODEL_GENERATION_JOB_TYPE } from '@/worker/workerTypes';
+import {
+  ASSET_OPTIMIZATION_JOB_TYPE,
+  DEFAULT_JOB_TYPE,
+  MESHY_MODEL_GENERATION_JOB_TYPE,
+} from '@/worker/workerTypes';
 
 /**
  * Registers every job type this codebase can process.
@@ -30,6 +35,9 @@ export function registerAllProcessors(): void {
   // Staff-triggered Meshy generation — a PEER of the capture pipeline, not a
   // replacement for it (docs/meshy-integration-implementation-prompt.md).
   registerProcessor(MESHY_MODEL_GENERATION_JOB_TYPE, meshyModelProcessor);
+  // Post-generation web optimization. Enqueued BY the Meshy processor once a
+  // model already exists, so it can fail without retracting that model.
+  registerProcessor(ASSET_OPTIMIZATION_JOB_TYPE, assetOptimizationProcessor);
 }
 
 /**

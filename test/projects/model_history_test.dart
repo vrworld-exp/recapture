@@ -137,8 +137,11 @@ void main() {
 
       // The backend already sorts; assert we render that order rather than
       // inventing our own.
-      final rows = tester.getTopLeft(find.byKey(const ValueKey('model_row_m2')));
-      final older = tester.getTopLeft(find.byKey(const ValueKey('model_row_m1')));
+      // Rows are keyed by id AND rendition: one generation can appear twice
+      // (Meshy original + optimized build) sharing an id, and duplicate sibling
+      // keys are a Flutter error. See model_variant_badge_test.dart.
+      final rows = tester.getTopLeft(find.byKey(const ValueKey('model_row_m2_original')));
+      final older = tester.getTopLeft(find.byKey(const ValueKey('model_row_m1_original')));
       expect(rows.dy, lessThan(older.dy));
     });
 
@@ -168,7 +171,7 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(find.byKey(const ValueKey('model_row_m1')));
+      await tester.tap(find.byKey(const ValueKey('model_row_m1_original')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
       // A failed attempt has nothing to open — the tap must go nowhere.
@@ -186,7 +189,7 @@ void main() {
       );
       await _load(tester);
 
-      await tester.tap(find.byKey(const ValueKey('model_row_m1')));
+      await tester.tap(find.byKey(const ValueKey('model_row_m1_original')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
       expect(routed, isNull);
@@ -211,13 +214,13 @@ void main() {
       expect(find.text('Jul 17, 09:58 · Processing…'), findsOneWidget);
       expect(
         find.descendant(
-          of: find.byKey(const ValueKey('model_row_m1')),
+          of: find.byKey(const ValueKey('model_row_m1_original')),
           matching: find.byType(CircularProgressIndicator),
         ),
         findsOneWidget,
       );
 
-      await tester.tap(find.byKey(const ValueKey('model_row_m1')));
+      await tester.tap(find.byKey(const ValueKey('model_row_m1_original')));
       await tester.pump();
       expect(routed, isNull);
     });
@@ -254,7 +257,7 @@ void main() {
 
       // The OLDER row — an artist comparing attempts picks by timestamp, so the
       // tap must carry that row's id, not the newest record's.
-      await tester.tap(find.byKey(const ValueKey('model_row_m1')));
+      await tester.tap(find.byKey(const ValueKey('model_row_m1_original')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
