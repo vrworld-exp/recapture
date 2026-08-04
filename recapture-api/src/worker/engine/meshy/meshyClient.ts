@@ -80,12 +80,23 @@ const MULTI_IMAGE_PATH = '/openapi/v1/multi-image-to-3d';
  *
  * The two remaining knobs, `target_polycount` and `texture_resolution`, stay in
  * config/env.ts because they are the ones an operator retunes against a device
- * test without a deploy.
+ * test without a deploy. Both are now tuned for FIDELITY (200k triangles, 4k
+ * maps), not for what a phone can hold: this request produces the SOURCE, and
+ * src/modules/asset-pipeline produces the asset that is actually served. Nothing
+ * in this preset should be traded away for file size — that is the pipeline's
+ * job, and it is much better at it than a generator hitting a hard cap in one
+ * step.
  *
  * Field by field, and why:
  *   ai_model 'latest'        — resolves to meshy-6, the best organic/food geometry.
  *   should_remesh true       — MUST be explicit: meshy-6 defaults this to FALSE,
  *                              which returns the raw unbounded mesh (see below).
+ *                              Kept true even though we now ask for a HIGH
+ *                              budget: false makes target_polycount ignored
+ *                              entirely and output non-deterministic (observed
+ *                              55k–1.2M triangles for the same kind of object).
+ *                              A high PINNED budget is the goal, not an
+ *                              unbounded one.
  *   topology 'triangle'      — GLB triangulates on export anyway.
  *   should_texture true      — Meshy's default; pinned so a default flip is inert.
  *   enable_pbr true          — a roughness map is what separates glossy gravy
@@ -233,10 +244,20 @@ export const meshyClient: MeshyClient = {
    * one is `should_remesh`: it defaults to false on Meshy's newer models
    * (including the meshy-6 that `ai_model: 'latest'` resolves to), which returns
    * the raw generated mesh — unbounded in practice (observed 55k–1.2M triangles
-   * for the same kind of captured object), and the large end simply does not
-   * render in the app's WebView. Pinning remesh + target_polycount +
-   * texture_resolution is what makes "the generation succeeded" and "the owner
-   * can see it" the same statement. See MESHY_TARGET_POLYCOUNT in config/env.ts.
+   * for the same kind of captured object). Pinning remesh + target_polycount +
+   * texture_resolution is what makes one generation REPRODUCIBLE.
+   *
+   * What it no longer makes true, deliberately, is "the result is directly
+   * servable". This request asks for 200k triangles and 4k textures because a
+   * low generation budget was breaking thin geometry at the source. The GLB it
+   * returns is the ARCHIVE and the pipeline's input; the asset an owner loads is
+   * the 'web' variant produced by src/modules/asset-pipeline and auto-promoted
+   * once it passes its gates. See MESHY_TARGET_POLYCOUNT in config/env.ts for
+   * the full policy and the WebView history behind it.
+   *
+   * Adding a field here is not free: an unknown parameter is a 400, which this
+   * client classifies as TERMINAL. Check docs/meshy-integration.md and the live
+   * /openapi/v1/multi-image-to-3d reference before adding one.
    */
   async createMultiImageTask(imageUrls: string[]): Promise<{ taskId: string }> {
     const res = await transport().post(MULTI_IMAGE_PATH, {

@@ -198,14 +198,17 @@ const OptimizedAssetSchema = new Schema<OptimizedAsset>(
         { _id: false }
       ),
     },
-    // Defaults to 'original': producing an optimized variant must never, by
-    // itself, change what users are served. Promotion is an admin action.
+    // Defaults to 'original' — the safe fallback for a record with no validated
+    // variant. A successful pipeline run raises it to 'web' itself (the source
+    // GLB is now too heavy to serve), unless variantPinnedByAdmin says a human
+    // already decided. See OptimizedAsset in types/assetManifest.types.ts.
     activeVariant: {
       type: String,
       enum: ASSET_VARIANT_IDS,
       required: true,
       default: 'original',
     },
+    variantPinnedByAdmin: { type: Boolean },
     reportKey: { type: String },
   },
   { _id: false }

@@ -9,10 +9,24 @@
 // If this job fails every attempt, the model still renders — just heavier.
 // Nothing here may ever move the ProjectModel's own `status` off SUCCEEDED.
 //
-// ── WHAT IT DOES NOT DECIDE ──────────────────────────────────────────────────
-// It never promotes the optimized variant. `optimized.activeVariant` stays
-// 'original' until an admin flips it, because "passed the gates" and "looks
-// right" are different claims and only a human can make the second one.
+// ── WHAT IT DECIDES: THE SERVING POLICY ──────────────────────────────────────
+// A validated run AUTO-PROMOTES `optimized.activeVariant` to 'web'.
+//
+// This reversed with pipeline v2, and the reason is worth keeping: promotion
+// used to be manual because the untouched Meshy GLB was itself servable, so
+// producing a variant could never be urgent. Generation now asks for ~200k
+// triangles and 4k textures — deliberately, because a low budget was breaking
+// thin geometry at the source — and that original is past what an Android
+// WebView can parse. Leaving 'original' active would ship the crash
+// ("We couldn't load this model") to every viewer until an admin noticed.
+//
+// So the default flipped, but the human's authority did not: an admin who used
+// PATCH …/variant sets `variantPinnedByAdmin`, and this job never overrides a
+// pinned choice in EITHER direction. Auto-promotion is a default, not a
+// verdict — "passed the gates" and "looks right" are still different claims.
+//
+// Everything ambiguous still falls back to 'original': a skipped run, a gate
+// failure, a manifest with no 'web' entry.
 //
 // The heavy lifting (gltf-transform, sharp, meshopt) lives in
 // src/modules/asset-pipeline — a pure library. This file is the seam between
@@ -119,13 +133,15 @@ export const assetOptimizationProcessor: JobProcessor = async (job) => {
         : {}),
     });
 
+    const pinnedByAdmin = record.optimized?.variantPinnedByAdmin === true;
+    const activeVariant = resolveActiveVariant(record, run.variant !== undefined);
+
     record.optimized = {
       status: run.plan.skip ? 'SKIPPED' : 'SUCCEEDED',
       pipelineVersion: ASSET_PIPELINE_VERSION,
       manifest,
-      // Preserved across re-runs: if an admin already promoted a variant, a
-      // later pipeline run must not silently demote it back to the original.
-      activeVariant: record.optimized?.activeVariant ?? 'original',
+      activeVariant,
+      ...(pinnedByAdmin ? { variantPinnedByAdmin: true } : {}),
       reportKey,
     };
     record.markModified('optimized');
@@ -136,6 +152,8 @@ export const assetOptimizationProcessor: JobProcessor = async (job) => {
       modelId,
       projectId: record.projectId,
       skipped: run.plan.skip,
+      activeVariant,
+      variantPinnedByAdmin: pinnedByAdmin,
       bytesBefore: manifest.reduction.bytesBefore,
       bytesAfter: manifest.reduction.bytesAfter,
       ratio: Number(manifest.reduction.ratio.toFixed(4)),
@@ -156,12 +174,42 @@ export const assetOptimizationProcessor: JobProcessor = async (job) => {
 };
 
 /**
+ * Which rendition owners get after this run.
+ *
+ * Three states, in precedence order:
+ *   1. an admin pinned a choice     → theirs, untouched, in either direction;
+ *   2. this run produced a variant  → 'web' (see the serving-policy note above);
+ *   3. anything else                → 'original', the safe fallback.
+ *
+ * Case 3 covers a skipped run and a re-run that produced nothing, and it
+ * deliberately does NOT preserve a previous auto-promotion: if this run has no
+ * validated 'web' entry, the manifest being written has no 'web' entry either,
+ * and pointing at a variant that is not in the manifest is how a client ends up
+ * resolving nothing.
+ */
+function resolveActiveVariant(
+  record: IProjectModel,
+  producedVariant: boolean
+): OptimizedAsset['activeVariant'] {
+  if (record.optimized?.variantPinnedByAdmin === true) {
+    return record.optimized.activeVariant;
+  }
+  return producedVariant ? 'web' : 'original';
+}
+
+/**
  * Records a terminal optimization failure on the record — WITHOUT touching the
  * model's own status, which stays SUCCEEDED because the original still serves.
  *
  * Mirrors meshyModelProcessor.failRecordIfTerminal: only writes when nothing
  * more will run (terminal error, or the last attempt), and stays silent on
  * cancel/claim-loss because another owner now decides the outcome.
+ *
+ * A PREVIOUS run's manifest and active variant survive this write. That matters
+ * much more now that promotion is automatic: a model already serving a validated
+ * 'web' variant must not be knocked back to a 200k original — the exact GLB the
+ * WebView cannot load — because a later re-run of the same recipe failed. The
+ * failure is recorded; nothing that already worked is retracted.
  */
 async function failOptimizationIfTerminal(
   job: WorkerJob,
@@ -176,10 +224,16 @@ async function failOptimizationIfTerminal(
   const maxAttempts = job.maxAttempts ?? 3;
   if (!isTerminal && attemptsSoFar + 1 < maxAttempts) return;
 
+  const previous = record.optimized;
   record.optimized = {
     status: 'FAILED',
     pipelineVersion: ASSET_PIPELINE_VERSION,
-    activeVariant: 'original',
+    ...(previous?.manifest ? { manifest: previous.manifest } : {}),
+    ...(previous?.reportKey ? { reportKey: previous.reportKey } : {}),
+    // Only meaningful when the preserved manifest actually contains it;
+    // resolveActiveModelUrl falls back to the original otherwise.
+    activeVariant: previous?.manifest ? (previous.activeVariant ?? 'original') : 'original',
+    ...(previous?.variantPinnedByAdmin ? { variantPinnedByAdmin: true } : {}),
     error: {
       code: isTerminal
         ? (err as NonRetryableJobError).code

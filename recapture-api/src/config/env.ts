@@ -118,40 +118,78 @@ const envSchema = z.object({
    * WORKER_CLAIM_TIMEOUT_MS or a live generation gets re-claimed mid-flight.
    */
   MESHY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
-  /** Hard cap on total wait for one generation before giving up (ms). */
-  MESHY_TASK_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
+  /**
+   * Hard cap on total wait for one generation before giving up (ms).
+   *
+   * 30 min, not the 10 it used to be. MESHY_TARGET_POLYCOUNT now asks for 200k
+   * triangles and MESHY_TEXTURE_RESOLUTION for 4k maps, and both cost Meshy
+   * wall-clock time. Blowing this budget raises MESHY_TIMEOUT, and the worker's
+   * retry SPENDS CREDITS AGAIN — so the budget must be generous enough that a
+   * slow-but-succeeding task is never killed just short of the finish line.
+   *
+   * This is a total budget only: it does NOT change the poll cadence.
+   * MESHY_POLL_INTERVAL_MS stays at 5 s because each poll doubles as the claim
+   * lease renewal against WORKER_CLAIM_TIMEOUT_MS (120 s) — see below.
+   */
+  MESHY_TASK_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
   /** Presigned-GET TTL for the source images handed to Meshy (seconds). */
   MESHY_SOURCE_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
   /**
-   * Triangle budget for a generated model — the size the phone has to render.
+   * Triangle budget asked of Meshy's remesher — a GENERATION-QUALITY knob, not
+   * the phone's budget. Those used to be the same number; they are not anymore.
    *
-   * NOT cosmetic. Meshy's remesh phase defaults to OFF on its newer models, and
-   * the raw mesh it returns for a captured object is unbounded: live results
-   * ranged from 55k to 1.2M triangles (4 MB to 38 MB GLB). Past roughly a few
-   * hundred thousand triangles an Android WebView runs out of heap or loses its
-   * WebGL context while parsing the GLB, model-viewer fires `error`, and the
-   * owner sees "We couldn't load this model" for a generation that in fact
-   * succeeded. Asking for a fixed budget is what keeps every result viewable on
-   * the device it was captured with.
+   * ── The policy, in one line ─────────────────────────────────────────────────
+   * Meshy generates HIGH, the asset pipeline delivers LOW. Generation optimizes
+   * for fidelity; src/modules/asset-pipeline optimizes for delivery, and its
+   * simplify stage is what produces the mesh a phone actually loads.
    *
-   * 12k is the Mirage Menu mobile budget — deliberately far below Meshy's own
-   * 30k default. A menu viewer shows a dish on a low-end Android over café
-   * Wi-Fi, often several cards on one screen, so the triangle count is a
-   * page-weight decision, not just a render-cost one. At this budget the
-   * downstream asset pipeline's simplify stage is usually a no-op and the whole
-   * remaining win is texture-side, which is the intended shape: Meshy does the
-   * decimation once, well, on its own remesher.
+   * ── Why it moved off 12k ────────────────────────────────────────────────────
+   * A 12k budget made the raw GLB directly servable, but it was destroying
+   * geometry at the source: thin features — handles, rims, stems, cup lips —
+   * came back holed or broken, and no downstream stage can put back detail the
+   * generator never produced. Decimating a good 200k mesh with meshoptimizer
+   * (which optimizes for silhouette error) beats asking Meshy to hit 12k in one
+   * step, because the simplifier gets to see the real surface first.
    *
-   * Raise it only alongside a device test — and remember Meshy's accepted range
-   * is 100–300,000, so anything outside it comes back as a 400 (terminal).
+   * ── The WebView history, which is WHY the pipeline must now decimate ────────
+   * Meshy's remesh phase defaults to OFF on its newer models, and the raw mesh
+   * it returns for a captured object is unbounded: live results ranged from 55k
+   * to 1.2M triangles (4 MB to 38 MB GLB). Past roughly a few hundred thousand
+   * triangles an Android WebView runs out of heap or loses its WebGL context
+   * while parsing the GLB, model-viewer fires `error`, and the owner sees "We
+   * couldn't load this model" for a generation that in fact succeeded.
+   *
+   * That failure has NOT gone away — it has moved. At 200k the untouched
+   * original is on the wrong side of that line, so it is no longer what an owner
+   * is served: a validated pipeline run auto-promotes `optimized.activeVariant`
+   * to 'web' (see worker/processors/assetOptimizationProcessor.ts). Raising this
+   * number WITHOUT that promotion, or without the pipeline's simplify stage,
+   * reintroduces the crash for every model.
+   *
+   * ── The number ──────────────────────────────────────────────────────────────
+   * 200k leaves headroom under Meshy's hard 300k cap (anything outside
+   * 100–300,000 comes back a terminal 400) and is a PINNED budget, which is the
+   * point: `should_remesh: true` plus a fixed target is what makes output
+   * deterministic. Turning remesh off would give the raw unbounded mesh and make
+   * this value ignored entirely — see MESHY_PRESET.
    */
-  MESHY_TARGET_POLYCOUNT: z.coerce.number().int().min(100).max(300_000).default(12_000),
+  MESHY_TARGET_POLYCOUNT: z.coerce.number().int().min(100).max(300_000).default(200_000),
   /**
-   * Base-colour texture resolution requested from Meshy. '2k' is Meshy's own
-   * default and the one a phone can hold comfortably; '4k'/'8k' multiply the
-   * decoded texture memory that the same WebView has to find.
+   * Base-colour texture resolution requested from Meshy — again a SOURCE
+   * quality knob, not what ships. The pipeline resamples every texture to the
+   * active profile's per-slot budget (profiles/food.json), so this decides how
+   * much real detail that resample has to work from, not how much decoded
+   * texture memory the WebView has to find.
+   *
+   * '4k' rather than Meshy's own '2k' default: the served baseColor is 2048, and
+   * downsampling 4096 → 2048 keeps visibly more of the dish's surface than
+   * asking Meshy for 2048 directly. '8k' is not worth it — it costs generation
+   * time against MESHY_TASK_TIMEOUT_MS for detail two resamples throw away.
+   *
+   * If a profile's baseColor budget ever drops back to 1024, drop this to '2k'
+   * with it: paying for source detail nothing samples is pure latency.
    */
-  MESHY_TEXTURE_RESOLUTION: z.enum(['2k', '4k', '8k']).default('2k'),
+  MESHY_TEXTURE_RESOLUTION: z.enum(['2k', '4k', '8k']).default('4k'),
   /** Max Create-Model requests one staff user may make per window (credits!). */
   MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
   /** Sliding window for the Create-Model cap (seconds). */

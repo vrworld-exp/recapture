@@ -50,6 +50,9 @@ export function plan(
       textureRules: [],
       dropTextures: [],
       collapseConstantSlots: [],
+      simplifyRatio: 1,
+      simplifyError: profile.simplify.errorTolerance,
+      simplifyReason: 'skipped',
       scaleFactor: 1,
       scaleReason: 'skipped',
       recentrePivot: false,
@@ -95,13 +98,19 @@ export function plan(
     );
   }
 
-  // ── Question 5: is the real-world scale believable? ────────────────────────
+  // ── Question 5: is the geometry over the phone's budget? ───────────────────
+  // The stage that pays for high-fidelity generation. Meshy is asked for ~200k
+  // triangles so thin features survive; nothing renders that on a phone, so
+  // this is where it comes back down.
+  const { simplifyRatio, simplifyError, simplifyReason } = planSimplify(report, profile, notes);
+
+  // ── Question 6: is the real-world scale believable? ────────────────────────
   // The generation preset asks Meshy for `auto_size`, so the source SHOULD
   // already be in metres. This is the check on whether it was — not a blanket
   // renormalization. Rescaling a correctly-sized model would be the bug.
   const { scaleFactor, scaleReason } = planScale(report, profile, notes);
 
-  // ── Question 6: is the pivot where AR needs it? ────────────────────────────
+  // ── Question 7: is the pivot where AR needs it? ────────────────────────────
   // The preset asks for `origin_at: bottom`, so Y should already be ~0. We
   // still recentre when it drifted, because a model placed at an AR hit-test
   // point pivots about its origin: a bad pivot sinks it through the table.
@@ -133,12 +142,70 @@ export function plan(
     textureRules,
     dropTextures,
     collapseConstantSlots,
+    simplifyRatio,
+    simplifyError,
+    simplifyReason,
     scaleFactor,
     scaleReason,
     recentrePivot,
     meshoptLevel: profile.meshoptLevel,
     gates: profile.gates,
     notes,
+  };
+}
+
+/**
+ * Decides how far to decimate the mesh, if at all.
+ *
+ * Two ways to come back with "don't": the source is already at or under the
+ * budget, or it has no triangles to reduce. Both matter — running a lossy
+ * simplifier over a model that is already small spends silhouette quality for a
+ * saving that does not exist, which is the same trade the skip-under-bytes floor
+ * refuses to make. Only an OVER-budget model pays for decimation.
+ *
+ * The ratio is derived from triangles rather than from `report.vertices` even
+ * though meshoptimizer describes it as a vertex ratio: triangles are what the
+ * profile budgets, what `gates.maxTriangles` measures, and what a GPU costs.
+ * Welding (which runs immediately before simplify) changes the vertex count and
+ * not the triangle count, so a vertex-derived ratio would aim at the wrong
+ * number by whatever the weld happened to merge.
+ */
+function planSimplify(
+  report: InspectionReport,
+  profile: OptimizationProfile,
+  notes: string[]
+): { simplifyRatio: number; simplifyError: number; simplifyReason: string } {
+  const target = profile.simplify.targetTriangles;
+  const errorTolerance = profile.simplify.errorTolerance;
+
+  if (report.triangles <= 0) {
+    return {
+      simplifyRatio: 1,
+      simplifyError: errorTolerance,
+      simplifyReason: 'source reports no triangles; nothing to decimate',
+    };
+  }
+
+  if (report.triangles <= target) {
+    return {
+      simplifyRatio: 1,
+      simplifyError: errorTolerance,
+      simplifyReason: `${report.triangles} triangles is already at or under the ${target} budget; decimating would only cost quality`,
+    };
+  }
+
+  const simplifyRatio = target / report.triangles;
+  notes.push(
+    `Source is ${report.triangles} triangles against a ${target} budget — simplifying to ${(
+      simplifyRatio * 100
+    ).toFixed(1)}% (error ceiling ${errorTolerance}).`
+  );
+  return {
+    simplifyRatio,
+    simplifyError: errorTolerance,
+    simplifyReason: `${report.triangles} triangles over the ${target} budget; keeping ${(
+      simplifyRatio * 100
+    ).toFixed(1)}%`,
   };
 }
 

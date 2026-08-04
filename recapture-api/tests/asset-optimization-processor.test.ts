@@ -5,10 +5,17 @@
 // THE LOAD-BEARING ASSERTIONS, in priority order:
 //   1. optimization failing NEVER moves the model off SUCCEEDED — the paid
 //      generation and its original GLB survive any pipeline bug;
-//   2. producing an optimized variant does NOT promote it — activeVariant stays
-//      'original' until a human decides;
+//   2. a VALIDATED run auto-promotes to 'web', and a pinned admin choice is
+//      never overridden in either direction;
 //   3. the original GLB is never overwritten — it is the only way to re-run an
 //      improved recipe later.
+//
+// Assertion 2 reversed with pipeline v2. Promotion used to be purely manual
+// because Meshy's own GLB was servable; generation now asks for ~200k triangles
+// and 4k textures (thin geometry was being destroyed at a low budget), so the
+// original is past what an Android WebView can parse. Leaving 'original' active
+// would ship "We couldn't load this model" to every viewer until an admin
+// noticed. The human's authority survives as `variantPinnedByAdmin`.
 //
 // Hermetic: in-memory MongoDB and a scripted S3 client. The pipeline itself is
 // real (real GLB bytes through real encoders) because a mocked pipeline would
@@ -22,6 +29,7 @@ import { Job } from '@/models/Job';
 import { Project } from '@/models/Project';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
 import { ASSET_PIPELINE_VERSION } from '@/models/types/assetManifest.types';
+import { setActiveModelVariant } from '@/services/projectModelsService';
 import { buildJobKeyPrefix } from '@/utils/s3Keys';
 import {
   assetOptimizationProcessor,
@@ -199,14 +207,21 @@ describe('assetOptimizationProcessor — happy path', () => {
     expect(manifest.posterUrl).toMatch(/preview\.png$/);
   }, 180_000);
 
-  it('does NOT promote the optimized variant — that stays an admin decision', async () => {
+  it('auto-promotes the validated variant — the source GLB is no longer servable', async () => {
+    // The serving policy. Without this a high-fidelity generation ships a GLB
+    // the WebView cannot load, and stays that way until an admin intervenes.
     const { workerJob, record } = await seed();
     mockS3(heavyGlb);
 
     await assetOptimizationProcessor(workerJob);
 
     const saved = await ProjectModel.findById(record.id).exec();
-    expect(saved!.optimized!.activeVariant).toBe('original');
+    expect(saved!.optimized!.activeVariant).toBe('web');
+    // The promotion must point at something the manifest actually contains,
+    // or a client resolves nothing.
+    expect(saved!.optimized!.manifest!.variants.map((v) => v.id)).toContain('web');
+    // Auto, not pinned: a human has still made no decision here.
+    expect(saved!.optimized!.variantPinnedByAdmin).toBeFalsy();
   }, 180_000);
 
   it('preserves an admin promotion across a re-run', async () => {
@@ -217,15 +232,41 @@ describe('assetOptimizationProcessor — happy path', () => {
     // Admin promotes, then the job is re-claimed and re-runs.
     await ProjectModel.updateOne(
       { _id: record._id },
-      { $set: { 'optimized.activeVariant': 'web' } }
+      { $set: { 'optimized.activeVariant': 'web', 'optimized.variantPinnedByAdmin': true } }
     ).exec();
     await assetOptimizationProcessor(workerJob);
 
     const saved = await ProjectModel.findById(record.id).exec();
     expect(saved!.optimized!.activeVariant).toBe('web');
+    expect(saved!.optimized!.variantPinnedByAdmin).toBe(true);
   }, 240_000);
 
-  it('marks an already-small model SKIPPED and publishes only the original', async () => {
+  it('never re-promotes over an admin who deliberately reverted to the original', async () => {
+    // THE no-silent-demote rule, in the direction that auto-promotion makes
+    // dangerous. An admin who looked at both renditions and chose 'original' —
+    // because the optimized one passed every gate and still looked wrong — must
+    // not be overruled by the next run of the same deterministic recipe. This is
+    // exactly why a bare `activeVariant === 'web'` check is not enough: it
+    // cannot tell a deliberate 'original' from the never-touched default.
+    const { workerJob, record } = await seed();
+    mockS3(heavyGlb);
+    await assetOptimizationProcessor(workerJob);
+
+    const demoted = await setActiveModelVariant(
+      record.projectId.toString(),
+      record.id as string,
+      'original'
+    );
+    expect(demoted.outcome).toBe('UPDATED');
+
+    await assetOptimizationProcessor(workerJob);
+
+    const saved = await ProjectModel.findById(record.id).exec();
+    expect(saved!.optimized!.activeVariant).toBe('original');
+    expect(saved!.optimized!.variantPinnedByAdmin).toBe(true);
+  }, 240_000);
+
+  it('marks an already-small model SKIPPED, publishes only the original, and does not promote', async () => {
     const { workerJob, record } = await seed();
     const { puts } = mockS3(tinyGlb);
 
@@ -234,6 +275,9 @@ describe('assetOptimizationProcessor — happy path', () => {
     const saved = await ProjectModel.findById(record.id).exec();
     expect(saved!.optimized!.status).toBe('SKIPPED');
     expect(saved!.optimized!.manifest!.variants.map((v) => v.id)).toEqual(['original']);
+    // Nothing to promote TO — pointing at an absent variant is how a client ends
+    // up resolving nothing, so the fallback holds.
+    expect(saved!.optimized!.activeVariant).toBe('original');
     // No web.glb, but the report still explains WHY nothing happened.
     expect(puts.map((p) => p.key).some((k) => k.endsWith('web.glb'))).toBe(false);
     expect(puts.map((p) => p.key).some((k) => k.endsWith('report.json'))).toBe(true);
@@ -254,6 +298,32 @@ describe('assetOptimizationProcessor — failure never retracts the model', () =
     expect(saved!.optimized!.status).toBe('FAILED');
     expect(saved!.optimized!.activeVariant).toBe('original');
   }, 180_000);
+
+  it('does not retract a variant that already worked when a re-run fails', async () => {
+    // Auto-promotion makes this load-bearing. If a failing re-run wiped the
+    // manifest and reset activeVariant, a model that was happily serving its
+    // optimized build would be knocked back to the ~200k original — the exact
+    // GLB the WebView cannot load. The failure is recorded; nothing is retracted.
+    const { workerJob, record } = await seed();
+    mockS3(heavyGlb);
+    await assetOptimizationProcessor(workerJob);
+    expect((await ProjectModel.findById(record.id).exec())!.optimized!.activeVariant).toBe('web');
+
+    vi.restoreAllMocks();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    mockS3(new Uint8Array([1, 2, 3, 4])); // not a GLB
+
+    await expect(
+      assetOptimizationProcessor({ ...workerJob, attempts: 2, maxAttempts: 3 })
+    ).rejects.toThrow();
+
+    const saved = await ProjectModel.findById(record.id).exec();
+    expect(saved!.status).toBe('SUCCEEDED');
+    expect(saved!.optimized!.status).toBe('FAILED');
+    expect(saved!.optimized!.activeVariant).toBe('web');
+    expect(saved!.optimized!.manifest!.variants.map((v) => v.id)).toContain('web');
+    expect(saved!.optimized!.error!.code).toBeDefined();
+  }, 240_000);
 
   it('is terminal (no retry) when the record has no GLB to optimize', async () => {
     const { workerJob } = await seed();

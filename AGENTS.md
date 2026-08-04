@@ -233,6 +233,18 @@ do not remove it).
   **Coupled fields:** `alpha_thumbnail: true` means the poster is a transparent
   PNG, so `meshyModelProcessor` re-hosts it as `preview.png` / `image/png`.
   Change one and you must change the other.
+- **Generation optimizes for QUALITY; the pipeline optimizes for DELIVERY.**
+  `MESHY_TARGET_POLYCOUNT` is **200,000** and `MESHY_TEXTURE_RESOLUTION` is
+  **4k** — a low generation budget (the old 12k) was destroying thin features
+  (handles, rims, stems) at the source, and no downstream stage can restore
+  detail that was never generated. The GLB Meshy returns is therefore an
+  **archive and a pipeline input, not a deliverable**: what a viewer loads is the
+  `web` variant produced by `src/modules/asset-pipeline`. These two numbers move
+  together with that module's `simplify` stage and the profile's texture rules —
+  raising them without it ships a GLB the WebView cannot parse.
+  `MESHY_TASK_TIMEOUT_MS` is **1,800,000** (30 min) to fit those tasks;
+  `MESHY_POLL_INTERVAL_MS` stays 5 s regardless, because each poll is also the
+  claim-lease renewal against `WORKER_CLAIM_TIMEOUT_MS`.
 
 ### Asset optimization (`src/modules/asset-pipeline/`)
 - **`src/modules/` is a THIRD backend directory kind**, alongside `services/`
@@ -253,12 +265,31 @@ do not remove it).
   record is already `SUCCEEDED` with a usable original. A pipeline failure marks
   `optimized.status = 'FAILED'` and leaves the model `SUCCEEDED` — the untouched
   Meshy GLB keeps serving. Nothing in the optimization path may write the
-  model's own `status`.
-- **Producing a variant is not promoting it.** `optimized.activeVariant`
-  defaults to `'original'` and only an admin changes it
-  (`PATCH /admin/projects/:id/models/:modelId/variant`). "Passed the gates" and
-  "looks right" are different claims and only a human can make the second.
-  Reverting to `'original'` must always be permitted.
+  model's own `status`. A failing re-run also **preserves** any manifest and
+  active variant a previous successful run produced: it records the failure, it
+  does not retract something that already worked.
+- **The `web` variant is what a viewer receives, and promotion is automatic.**
+  A run that passes its gates sets `optimized.activeVariant = 'web'` itself.
+  This reversed with `ASSET_PIPELINE_VERSION` 2: promotion was manual while the
+  Meshy GLB was directly servable, and at 200k triangles it is not — leaving
+  `'original'` active would ship "We couldn't load this model" to every viewer.
+  Everything ambiguous still falls back to `'original'` (a skipped run, a gate
+  failure, a manifest with no `web` entry).
+- **An admin's choice is PINNED and beats the automation.**
+  `PATCH /admin/projects/:id/models/:modelId/variant` sets
+  `variantPinnedByAdmin`, and no later pipeline run may move a pinned variant in
+  **either** direction. That flag exists because `activeVariant === 'original'`
+  cannot distinguish a deliberate demotion from the untouched default — without
+  it, a re-run would silently re-promote over a human's decision. "Passed the
+  gates" and "looks right" are still different claims; reverting to `'original'`
+  must always be permitted.
+- **The pipeline is what makes high-fidelity generation shippable.** `plan()`
+  decides the decimation (`simplifyRatio`, from `profile.simplify.targetTriangles`
+  — 35k against a 50k gate) and `execute()` runs `simplify` **after `weld`**
+  (split vertices are seams it cannot collapse across) and **before `meshopt`**
+  (which quantizes and reorders geometry). Remove that stage and a 200k source
+  produces a variant that fails `gates.maxTriangles`, is discarded, and nothing
+  optimized ever ships.
 - **The original is immutable and load-bearing.** `…/models/{modelId}/model.glb`
   is never rewritten: it is the only way to re-run an improved recipe later.
   Variants go under a version prefix `…/models/{modelId}/v{n}/` served
