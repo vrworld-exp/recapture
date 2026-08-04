@@ -12,6 +12,12 @@
 //               so we never spend encoder time on an image we then delete.
 //   dropTex   — remove textures no UV channel can sample (prune cannot see these).
 //   weld      — merge bitwise-identical vertices; Meshy leaves a lot of splits.
+//               MUST precede simplify: split vertices are seams the simplifier
+//               cannot collapse across, so an unwelded mesh decimates badly.
+//   simplify  — the geometry budget. Runs only when plan() says the source is
+//               over it (plan.simplifyRatio < 1). Sits AFTER weld for the reason
+//               above and BEFORE meshopt, which quantizes and reorders geometry:
+//               anything that rewrites vertices has to happen first.
 //   scale     — correct auto_size only if plan() says it misfired.
 //   recentre  — put the pivot on the table.
 //   texture×N — per-slot budgets; base colour does the visual work, the rest
@@ -20,15 +26,22 @@
 //   meshopt   — LAST. It quantizes and reorders geometry, so anything that
 //               rewrites vertices must already have happened.
 //
-// Deliberately ABSENT — flatten, join, simplify:
-//   simplify is a no-op at our budget (the generation preset already asks Meshy
-//   for 12k triangles via its own remesher, which is better at it), and both
-//   flatten and join rewrite the node hierarchy that carries auto_size's scale.
-//   The size win here is entirely texture-side; spending silhouette quality for
-//   nothing would be a bad trade. Add them behind a plan flag if that changes.
+// SIMPLIFY IS NOW LOAD-BEARING, and it used to be deliberately absent. The old
+// reasoning was that Meshy's own remesher already hit a 12k budget, so there was
+// nothing left to reduce and the whole win was texture-side. That premise is
+// gone: generation now asks for ~200k triangles because a low budget was
+// breaking thin geometry at the source (see MESHY_TARGET_POLYCOUNT in
+// config/env.ts), and this stage is what turns that into something a low-end
+// Android can load. Without it a high-poly source produces a variant that fails
+// `gates.maxTriangles` and is discarded — i.e. nothing optimized ever ships.
+//
+// Deliberately ABSENT — flatten, join:
+//   both rewrite the node hierarchy that carries auto_size's scale, and the
+//   pipeline's own physicalSize gate is what would catch that as a failure.
+//   Add them behind a plan flag if that ever changes.
 import type { Document, Transform } from '@gltf-transform/core';
-import { dedup, meshopt, prune, textureCompress, weld } from '@gltf-transform/functions';
-import { MeshoptEncoder } from 'meshoptimizer';
+import { dedup, meshopt, prune, simplify, textureCompress, weld } from '@gltf-transform/functions';
+import { MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer';
 import sharp from 'sharp';
 
 import { createIO, inspectDocument, readDocument } from './inspect';
@@ -52,7 +65,11 @@ export async function execute(
   plan: OptimizationPlan,
   sourceReport: InspectionReport
 ): Promise<OptimizedVariant> {
-  await MeshoptEncoder.ready;
+  // Both WASM modules, always: the simplifier is only USED when the plan says
+  // so, but awaiting it unconditionally keeps this the one place readiness is
+  // handled — a lazily-awaited encoder is exactly the kind of race that shows up
+  // once in production and never in a test.
+  await Promise.all([MeshoptEncoder.ready, MeshoptSimplifier.ready]);
 
   const doc = await readDocument(glb);
   await doc.transform(...buildTransforms(plan, sourceReport));
@@ -83,6 +100,19 @@ export function buildTransforms(
     dropTextures(plan.dropTextures),
     weld(),
   ];
+
+  // Ratio 1 means plan() found the source already within the profile's triangle
+  // budget. Skipping the transform entirely (rather than passing ratio: 1) keeps
+  // a small model out of a lossy encoder altogether.
+  if (plan.simplifyRatio < 1) {
+    transforms.push(
+      simplify({
+        simplifier: MeshoptSimplifier,
+        ratio: plan.simplifyRatio,
+        error: plan.simplifyError,
+      })
+    );
+  }
 
   if (plan.scaleFactor !== 1) transforms.push(normalizeScale(plan.scaleFactor));
   if (plan.recentrePivot) transforms.push(recentrePivot());

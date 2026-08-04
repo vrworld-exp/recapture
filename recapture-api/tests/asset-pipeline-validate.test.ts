@@ -59,9 +59,12 @@ describe('validate — hard gates', () => {
     expect(result.failures).toEqual([]);
   });
 
-  it('fails an asset over the 3 MB size budget', () => {
+  it('fails an asset over the profile byte budget', () => {
+    // Read from the profile, not hard-coded: the budget moved with the 2048
+    // baseColor rule and will move again against a device test.
+    const over = food.gates.maxOutputBytes + 1_000_000;
     const result = validate(
-      report({ totalBytes: 4_000_000 }),
+      report({ totalBytes: over }),
       basePlan,
       emptyDoc,
       report({ totalBytes: 30_000_000 })
@@ -69,7 +72,7 @@ describe('validate — hard gates', () => {
 
     expect(result.ok).toBe(false);
     expect(result.failures.map((f) => f.gate)).toContain('maxOutputBytes');
-    expect(result.failures[0].message).toMatch(/4\.00 MB/);
+    expect(result.failures[0].message).toMatch(new RegExp(`${(over / 1e6).toFixed(2)} MB`));
   });
 
   it('fails an asset over the 50k triangle budget', () => {
@@ -81,6 +84,25 @@ describe('validate — hard gates', () => {
     );
 
     expect(result.failures.map((f) => f.gate)).toContain('maxTriangles');
+  });
+
+  it('passes the simplify target with headroom — the aim must clear the gate', () => {
+    // The relationship the whole recipe depends on: plan() aims at
+    // simplify.targetTriangles, validate() rejects above gates.maxTriangles. If
+    // the aim were ever raised to or past the gate, every high-poly model would
+    // produce a variant that is then discarded, and owners would keep being
+    // served the ~200k original the WebView cannot load.
+    expect(food.simplify.targetTriangles).toBeLessThan(food.gates.maxTriangles);
+    expect(food.simplify.targetTriangles).toBeGreaterThan(food.gates.minTriangles);
+
+    const result = validate(
+      report({ triangles: food.simplify.targetTriangles }),
+      basePlan,
+      emptyDoc,
+      report({ totalBytes: 30_000_000 })
+    );
+
+    expect(result.failures.map((f) => f.gate)).not.toContain('maxTriangles');
   });
 
   it('fails an asset whose geometry was DESTROYED rather than reduced', () => {

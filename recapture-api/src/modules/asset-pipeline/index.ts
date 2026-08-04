@@ -4,8 +4,22 @@
 //
 // Takes the GLB Meshy produced and returns a smaller one that renders on a
 // low-end Android over café Wi-Fi, plus the measurements that justify serving
-// it. It NEVER decides to serve it: promotion is an admin action (see
-// OptimizedAsset.activeVariant).
+// it.
+//
+// ── WHAT AN END USER'S WEBVIEW ACTUALLY RECEIVES ─────────────────────────────
+// The 'web' variant this module produces — not Meshy's output. Generation is
+// tuned for FIDELITY (~200k triangles, 4k textures) because a low generation
+// budget was breaking thin features at the source, so the original GLB is an
+// archive and a re-run input, not a deliverable. The worker auto-promotes
+// `optimized.activeVariant` to 'web' as soon as a run passes its gates
+// (worker/processors/assetOptimizationProcessor.ts).
+//
+// This module still does not make that decision — it takes bytes and returns
+// bytes, and a caller is free to ignore the result. But the shape of the
+// decision it enables has changed, and the gates are load-bearing for it: a
+// variant that fails validation is discarded, the record keeps serving
+// 'original', and on a high-poly source that means a viewer that cannot load
+// the model. `plan.simplifyRatio` is what keeps that from happening.
 //
 // This module is a PURE LIBRARY: no Express, no Mongoose, no AWS, no direct
 // filesystem access. It takes bytes and returns bytes. That is what lets the

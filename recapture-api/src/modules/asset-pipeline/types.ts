@@ -71,12 +71,39 @@ export interface TextureRule {
   quality: number;
 }
 
+/**
+ * The GEOMETRY budget: what the served variant may cost to render, and how much
+ * silhouette error buying that is allowed to introduce.
+ *
+ * This exists because generation no longer produces a servable mesh. Meshy is
+ * asked for ~200k triangles so thin features survive (see MESHY_TARGET_POLYCOUNT
+ * in config/env.ts); turning that into something a low-end Android can load is
+ * this profile's job, not the generator's.
+ */
+export interface SimplifyBudget {
+  /**
+   * Triangle target for the produced variant. Must sit comfortably UNDER
+   * `gates.maxTriangles` — the gate is the hard stop, this is the aim, and a
+   * simplifier that lands slightly over its target must not fail the run.
+   */
+  targetTriangles: number;
+  /**
+   * meshoptimizer's error ceiling, as a fraction of the mesh radius. The
+   * simplifier stops early rather than exceed it, so a conservative value means
+   * "reduce as far as you can WITHOUT visibly moving the silhouette" — the
+   * model comes out above target instead of deformed.
+   */
+  errorTolerance: number;
+}
+
 /** A profile is the POLICY half of planning — see profiles/food.json. */
 export interface OptimizationProfile {
   name: string;
   /** Skip the whole pipeline when the source is already this small (bytes). */
   skipUnderBytes: number;
   textureRules: TextureRule[];
+  /** Triangle budget for the served variant, and the error it may cost. */
+  simplify: SimplifyBudget;
   /** Plausible real-world size range, in metres, for this class of object. */
   expectedLongestDimMeters: { min: number; max: number };
   /** Hard gates — a produced asset outside these fails the job. */
@@ -110,6 +137,18 @@ export interface OptimizationPlan {
    * removes one texture AND one texture bind from every draw using it.
    */
   collapseConstantSlots: string[];
+  /**
+   * Fraction of the geometry to KEEP, or 1 when the source is already within
+   * the profile's triangle budget and must not be degraded for nothing.
+   *
+   * Expressed as a ratio rather than an absolute count because that is what
+   * meshoptimizer takes, and because it keeps this decision readable next to
+   * the report that produced it: "keep 17% of a 200k mesh" is the whole story.
+   */
+  simplifyRatio: number;
+  /** Error ceiling handed to the simplifier (fraction of mesh radius). */
+  simplifyError: number;
+  simplifyReason: string;
   /** Rescale factor to apply, or 1 when the source scale is already sane. */
   scaleFactor: number;
   scaleReason: string;

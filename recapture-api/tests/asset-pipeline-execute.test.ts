@@ -12,8 +12,13 @@ import { describe, it, expect } from 'vitest';
 
 import { runPipeline, largestTexture } from '@/modules/asset-pipeline';
 import { inspect } from '@/modules/asset-pipeline/inspect';
+import { buildTransforms } from '@/modules/asset-pipeline/execute';
+import { plan } from '@/modules/asset-pipeline/plan';
+import { getProfile } from '@/modules/asset-pipeline/profiles';
 import { readGlb, makeMeshyLikeGlb } from './fixtures/glbFactory';
 import type { InspectionReport } from '@/modules/asset-pipeline/types';
+
+const food = getProfile('food');
 
 /** The before/after table the pipeline is judged by. */
 function table(label: string, before: InspectionReport, after: InspectionReport): void {
@@ -68,9 +73,12 @@ describe('asset pipeline — a typical oversized Meshy dish', () => {
     }
     const baseColor = after.textures.find((t) => t.slots.includes('baseColorTexture'));
     expect(baseColor).toBeDefined();
-    // 2048 → the profile's 1024 baseColor budget.
-    expect(baseColor!.width).toBeLessThanOrEqual(1024);
-    expect(baseColor!.height).toBeLessThanOrEqual(1024);
+    // The profile's baseColor budget, whatever it currently is. Read from the
+    // profile rather than pinned to a literal: generation now asks Meshy for 4k
+    // maps precisely so this budget can move against a device test.
+    const rule = food.textureRules.find((r) => r.label === 'baseColor')!;
+    expect(baseColor!.width).toBeLessThanOrEqual(rule.maxSize);
+    expect(baseColor!.height).toBeLessThanOrEqual(rule.maxSize);
   }, 120_000);
 
   it('preserves real-world scale through the whole recipe', async () => {
@@ -85,6 +93,105 @@ describe('asset pipeline — a typical oversized Meshy dish', () => {
     expect(run.sourceReport.boundingBox.longestDimMeters).toBeCloseTo(0.3, 2);
     expect(after.boundingBox.longestDimMeters).toBeCloseTo(0.3, 2);
   }, 120_000);
+});
+
+describe('asset pipeline — the geometry budget (high-poly source)', () => {
+  // THE change that makes high-fidelity generation shippable. Meshy is now asked
+  // for ~200k triangles so thin features (handles, rims, stems) are not
+  // destroyed at the source. Nothing renders that on a phone, so the pipeline
+  // has to bring it down — and before the simplify stage existed, a high-poly
+  // source produced a variant that failed gates.maxTriangles and was DISCARDED,
+  // leaving owners on the original the WebView cannot load.
+
+  it('brings a source well over the gate down to something that passes it', async () => {
+    // 2*(160-1)^2 = 50,562 triangles — over the 50k gate on purpose, so this
+    // asserts the end-to-end behaviour and not just a smaller number.
+    const { glb } = await makeMeshyLikeGlb({ gridSize: 160, baseColorSize: 1024 });
+
+    const run = await runPipeline(glb, { profileName: 'food' });
+
+    expect(run.sourceReport.triangles).toBeGreaterThan(food.gates.maxTriangles);
+    expect(run.plan.simplifyRatio).toBeLessThan(1);
+
+    const after = run.variant!.report;
+    table('high-poly dish', run.sourceReport, after);
+
+    // The headline: the variant EXISTS (it was not withheld) and clears the gate.
+    expect(run.validation.ok).toBe(true);
+    expect(run.variant).toBeDefined();
+    expect(after.triangles).toBeLessThanOrEqual(food.gates.maxTriangles);
+    expect(after.triangles).toBeLessThan(run.sourceReport.triangles);
+
+    // ...and it was REDUCED, not destroyed — the floor gate's whole purpose,
+    // which only became live with this stage.
+    expect(after.triangles).toBeGreaterThan(food.gates.minTriangles);
+    expect(after.totalBytes).toBeLessThanOrEqual(food.gates.maxOutputBytes);
+  }, 180_000);
+
+  it('leaves an already-in-budget mesh at full density', async () => {
+    // The inverse guard: decimating a small model spends silhouette quality for
+    // a saving that does not exist.
+    const { glb } = await makeMeshyLikeGlb({ gridSize: 32, baseColorSize: 2048 });
+
+    const run = await runPipeline(glb, { profileName: 'food' });
+
+    expect(run.sourceReport.triangles).toBeLessThan(food.simplify.targetTriangles);
+    expect(run.plan.simplifyRatio).toBe(1);
+    // Welding may merge duplicate vertices, so triangles must not COLLAPSE.
+    expect(run.variant!.report.triangles).toBeGreaterThan(run.sourceReport.triangles * 0.9);
+  }, 180_000);
+});
+
+describe('asset pipeline — recipe order', () => {
+  // Order is load-bearing and easy to break by appending to the wrong array:
+  //   • simplify AFTER weld — split vertices are seams it cannot collapse
+  //     across, so an unwelded mesh decimates badly;
+  //   • simplify BEFORE meshopt — meshopt quantizes and reorders geometry, so
+  //     anything that rewrites vertices has to have happened already.
+  const highPoly: InspectionReport = {
+    totalBytes: 33_000_000,
+    triangles: 200_704,
+    vertices: 101_000,
+    meshCount: 1,
+    materialCount: 1,
+    nodeCount: 1,
+    textureCount: 0,
+    drawCallEstimate: 1,
+    textures: [],
+    unusedTextureCount: 0,
+    boundingBox: {
+      min: [-0.1, 0, -0.1],
+      max: [0.1, 0.08, 0.1],
+      widthMeters: 0.2,
+      heightMeters: 0.08,
+      depthMeters: 0.2,
+      longestDimMeters: 0.2,
+    },
+    pivotOffset: [0, 0.04, 0],
+    uvChannelCount: 1,
+    hasAnimations: false,
+    hasSkins: false,
+    hasMorphTargets: false,
+    extensions: [],
+  };
+
+  it('emits simplify after weld and before meshopt', () => {
+    const names = buildTransforms(plan(highPoly, food), highPoly).map((t) => t.name);
+
+    expect(names).toContain('simplify');
+    expect(names.indexOf('weld')).toBeLessThan(names.indexOf('simplify'));
+    expect(names.indexOf('simplify')).toBeLessThan(names.indexOf('meshopt'));
+    // meshopt stays LAST, whatever else moves.
+    expect(names[names.length - 1]).toBe('meshopt');
+  });
+
+  it('omits simplify entirely when the plan did not ask for it', () => {
+    const inBudget = { ...highPoly, triangles: 12_000 };
+    const names = buildTransforms(plan(inBudget, food), inBudget).map((t) => t.name);
+
+    expect(names).not.toContain('simplify');
+    expect(names).toContain('weld');
+  });
 });
 
 describe('asset pipeline — constant metallicRoughness collapse', () => {

@@ -788,11 +788,17 @@ export type SetActiveVariantResult =
 /**
  * Promotes (or demotes) which rendition owners are served.
  *
- * THE POINT OF THE WHOLE PIPELINE: producing an optimized variant never changes
- * what anyone sees. A human compares the two on a real device and flips this.
- * Demoting back to 'original' must therefore always be allowed — it is the
- * escape hatch when an optimized model passes every automated gate and still
- * looks wrong, which no gate can detect.
+ * THE HUMAN OVERRIDE. A validated pipeline run promotes itself to 'web' now —
+ * the untouched Meshy GLB is a ~200k-triangle archive that a phone's WebView
+ * cannot load, so leaving it active would ship a broken viewer. This endpoint is
+ * what a human uses when the automated verdict is wrong: demoting back to
+ * 'original' must always be allowed, because "passed every gate" and "looks
+ * right" are different claims and no gate can check the second.
+ *
+ * Whichever way it goes, the choice is PINNED (`variantPinnedByAdmin`) and no
+ * later pipeline run may move it. Without that flag a re-run could not tell a
+ * deliberate 'original' from the never-touched default, and would silently
+ * re-promote over the top of a human's decision.
  *
  * Fenced on the variant actually existing in the stored manifest, so a client
  * cannot promote a rendition that was never produced and leave owners pointing
@@ -823,6 +829,7 @@ export async function setActiveModelVariant(
   }
 
   record.optimized.activeVariant = variant;
+  record.optimized.variantPinnedByAdmin = true;
   record.markModified('optimized');
   await record.save();
   return { outcome: 'UPDATED', model: record };

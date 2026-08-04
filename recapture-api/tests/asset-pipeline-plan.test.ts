@@ -194,6 +194,65 @@ describe('plan — model with animations', () => {
   });
 });
 
+describe('plan — geometry budget (the simplify decision)', () => {
+  // This decision is what pays for high-fidelity generation. Meshy is asked for
+  // ~200k triangles so thin features survive; without a decimation here the
+  // produced variant fails gates.maxTriangles, is discarded, and owners keep
+  // being served an original their WebView cannot load.
+
+  it('decimates a high-triangle source down to the profile budget', () => {
+    const result = plan(report({ triangles: 200_704 }), food);
+
+    expect(result.simplifyRatio).toBeCloseTo(food.simplify.targetTriangles / 200_704, 6);
+    expect(result.simplifyRatio).toBeLessThan(1);
+    expect(result.simplifyError).toBe(food.simplify.errorTolerance);
+    expect(result.simplifyReason).toMatch(/over the 35000 budget/);
+    expect(result.notes.join(' ')).toMatch(/simplifying to 17\.4%/);
+  });
+
+  it('lands the target under the gate, so a decimated model is not then discarded', () => {
+    const result = plan(report({ triangles: 200_704 }), food);
+
+    const projected = 200_704 * result.simplifyRatio;
+    expect(projected).toBeLessThan(result.gates.maxTriangles);
+    expect(projected).toBeGreaterThan(result.gates.minTriangles);
+  });
+
+  it('skips simplify entirely for a source already inside the budget', () => {
+    // A small model must not be degraded for a saving that does not exist —
+    // the same trade the skip-under-bytes floor refuses to make.
+    const result = plan(report({ triangles: 12_000 }), food);
+
+    expect(result.simplifyRatio).toBe(1);
+    expect(result.simplifyReason).toMatch(/already at or under/);
+    // No note either: nothing happened, so there is nothing to explain.
+    expect(result.notes.join(' ')).not.toMatch(/simplif/i);
+  });
+
+  it('treats exactly-at-the-budget as inside it (boundary is inclusive)', () => {
+    const target = food.simplify.targetTriangles;
+    expect(plan(report({ triangles: target }), food).simplifyRatio).toBe(1);
+    expect(plan(report({ triangles: target + 1 }), food).simplifyRatio).toBeLessThan(1);
+  });
+
+  it('never divides by zero on a report with no triangles', () => {
+    const result = plan(report({ triangles: 0 }), food);
+
+    expect(result.simplifyRatio).toBe(1);
+    expect(Number.isFinite(result.simplifyRatio)).toBe(true);
+  });
+
+  it('carries the error tolerance even on the skip-everything path', () => {
+    // The plan lands in report.json verbatim, so "which tolerance would have
+    // applied" must be answerable for a skipped model too.
+    const result = plan(report({ totalBytes: 400_000, triangles: 200_000 }), food);
+
+    expect(result.skip).toBe(true);
+    expect(result.simplifyRatio).toBe(1);
+    expect(result.simplifyError).toBe(food.simplify.errorTolerance);
+  });
+});
+
 describe('plan — auto_size sanity correction', () => {
   it('rescales a model that came back absurdly large, snapping to the near bound', () => {
     // 3 m dish → the max plausible 0.6 m. Snapping to the BOUND (not the range

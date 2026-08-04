@@ -23,8 +23,12 @@
  * prefix and can never overwrite the variant a client already cached under the
  * old one (everything is served `immutable`). Never reuse a version number for
  * a changed recipe.
+ *
+ * v2 (2026-08-04): generation moved to a high-fidelity budget (200k triangles,
+ * 4k source textures) and the pipeline gained a `simplify` stage plus a 2048
+ * baseColor budget. Same input, very different bytes — hence a new prefix.
  */
-export const ASSET_PIPELINE_VERSION = 1;
+export const ASSET_PIPELINE_VERSION = 2;
 
 /**
  * Which rendition of a model a URL points at.
@@ -127,19 +131,43 @@ export interface AssetOptimizationError {
 /**
  * The `optimized` sub-doc on a ProjectModel.
  *
- * `activeVariant` is the ADMIN'S DECISION, not the pipeline's: the pipeline
- * only ever produces and measures: it never promotes. Optimization completing
- * successfully does not by itself change what users are served — a human looks
- * at both renditions and flips this. That keeps a bad-looking (but
- * gate-passing) optimization from silently replacing a good model.
+ * ── SERVING POLICY (changed with pipeline v2) ────────────────────────────────
+ * `activeVariant` used to default to 'original' and move only when an admin
+ * flipped it. That was the right default while generation produced a servable
+ * GLB. It no longer does: Meshy is asked for ~200k triangles and 4k textures so
+ * thin geometry survives, and that original is on the wrong side of the
+ * WebView's heap/WebGL-context limit — the failure an owner sees as "We
+ * couldn't load this model" (see MESHY_TARGET_POLYCOUNT in config/env.ts).
+ *
+ * So a validated pipeline run now AUTO-PROMOTES to 'web'. "Passed the gates" is
+ * still not the same claim as "looks right", which is why the admin action
+ * survives unchanged and is now RECORDED: `variantPinnedByAdmin` marks a human's
+ * deliberate choice, and no later pipeline run may override it in either
+ * direction. Auto-promotion is the default, never an overrule.
+ *
+ * 'original' remains the fallback everywhere it is ambiguous — a skipped run, a
+ * failed run, a manifest with no 'web' entry. An un-optimized heavy model that
+ * struggles beats a broken one that cannot resolve.
  */
 export interface OptimizedAsset {
   status: AssetOptimizationStatus;
   pipelineVersion: number;
   manifest?: AssetManifest;
   error?: AssetOptimizationError;
-  /** Which variant clients should render. Defaults to 'original'. */
+  /**
+   * Which variant clients should render. Set to 'web' automatically when a run
+   * validates, 'original' otherwise — unless `variantPinnedByAdmin` is set.
+   */
   activeVariant: AssetVariantId;
+  /**
+   * True once a human chose a variant through the admin endpoint. Set by
+   * `setActiveModelVariant`, read only by the optimization processor, and never
+   * cleared by it: an admin who deliberately reverted to 'original' must not be
+   * silently re-promoted by the next re-run, which is the whole reason a plain
+   * `activeVariant === 'web'` check is not enough (it cannot tell a deliberate
+   * 'original' from the default one).
+   */
+  variantPinnedByAdmin?: boolean;
   /** Key of the audit report (inspection + plan + metrics) under the version prefix. */
   reportKey?: string;
 }

@@ -5,7 +5,7 @@
     {
       "label": "baseColor",
       "slotPattern": "baseColor",
-      "maxSize": 1024,
+      "maxSize": 2048,
       "quality": 82
     },
     {
@@ -21,12 +21,16 @@
       "quality": 92
     }
   ],
+  "simplify": {
+    "targetTriangles": 35000,
+    "errorTolerance": 0.01
+  },
   "expectedLongestDimMeters": {
     "min": 0.02,
     "max": 0.6
   },
   "gates": {
-    "maxOutputBytes": 3145728,
+    "maxOutputBytes": 4194304,
     "maxTriangles": 50000,
     "minTriangles": 100,
     "sizeTolerance": 0.02
