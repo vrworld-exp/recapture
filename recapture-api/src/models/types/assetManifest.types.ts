@@ -27,8 +27,17 @@
  * v2 (2026-08-04): generation moved to a high-fidelity budget (200k triangles,
  * 4k source textures) and the pipeline gained a `simplify` stage plus a 2048
  * baseColor budget. Same input, very different bytes — hence a new prefix.
+ *
+ * v3 (2026-08-06): the DELIVERY budget was raised — the generation preset was
+ * already maxed at v2, so the only thing still costing visible quality was how
+ * hard this pipeline cut afterwards. 35k → 60k triangles, normal maps 512 →
+ * 1024, baseColor quality 82 → 90 (still 2048: 4096 is 64 MB decoded in a
+ * WebView, which is the heap that broke before). Gates moved with the targets —
+ * 50k → 80k triangles, 4 → 8 MB — because a target above its gate fails
+ * validation, and a failed optimization serves the raw original, which is the
+ * worst of both worlds.
  */
-export const ASSET_PIPELINE_VERSION = 2;
+export const ASSET_PIPELINE_VERSION = 3;
 
 /**
  * Which rendition of a model a URL points at.

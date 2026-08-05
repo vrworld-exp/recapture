@@ -6,7 +6,7 @@
       "label": "baseColor",
       "slotPattern": "baseColor",
       "maxSize": 2048,
-      "quality": 82
+      "quality": 90
     },
     {
       "label": "metallicRoughness/occlusion/emissive",
@@ -17,12 +17,12 @@
     {
       "label": "normal",
       "slotPattern": "normal",
-      "maxSize": 512,
+      "maxSize": 1024,
       "quality": 92
     }
   ],
   "simplify": {
-    "targetTriangles": 35000,
+    "targetTriangles": 60000,
     "errorTolerance": 0.01
   },
   "expectedLongestDimMeters": {
@@ -30,8 +30,8 @@
     "max": 0.6
   },
   "gates": {
-    "maxOutputBytes": 4194304,
-    "maxTriangles": 50000,
+    "maxOutputBytes": 8388608,
+    "maxTriangles": 80000,
     "minTriangles": 100,
     "sizeTolerance": 0.02
   },

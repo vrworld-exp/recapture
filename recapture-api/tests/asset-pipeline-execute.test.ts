@@ -104,9 +104,14 @@ describe('asset pipeline — the geometry budget (high-poly source)', () => {
   // leaving owners on the original the WebView cannot load.
 
   it('brings a source well over the gate down to something that passes it', async () => {
-    // 2*(160-1)^2 = 50,562 triangles — over the 50k gate on purpose, so this
-    // asserts the end-to-end behaviour and not just a smaller number.
-    const { glb } = await makeMeshyLikeGlb({ gridSize: 160, baseColorSize: 1024 });
+    // Sized off the PROFILE rather than pinned to a grid: the gate has moved
+    // once already (50k → 80k with pipeline v3), and a hardcoded source would
+    // quietly stop being over-budget and stop testing anything. 20% headroom
+    // over the gate; the first assertion below fails loudly if that ever stops
+    // holding. Grid n yields 2*(n-1)^2 triangles.
+    const overGate = Math.round(food.gates.maxTriangles * 1.2);
+    const gridSize = Math.ceil(Math.sqrt(overGate / 2)) + 1;
+    const { glb } = await makeMeshyLikeGlb({ gridSize, baseColorSize: 1024 });
 
     const run = await runPipeline(glb, { profileName: 'food' });
 
