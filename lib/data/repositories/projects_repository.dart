@@ -57,6 +57,19 @@ abstract interface class ProjectsRepository {
   /// blank the screen every time a regenerate started.
   Future<OwnerModelState> fetchModelState(String id);
 
+  /// EVERY finished model the project has, newest first — `GET /projects/:id/models`.
+  ///
+  /// [fetchModel] and [fetchModelState] answer "what does this project serve
+  /// right now?", which is the newest run and nothing else. This answers "what
+  /// has this project ever produced?", so the owner can open an older version
+  /// and judge it against the newest — a regenerate is not guaranteed to be an
+  /// improvement, and without this list a worse one silently replaces a better
+  /// one.
+  ///
+  /// SUCCEEDED models only (the backend filters): every entry is openable. An
+  /// empty list means no generation has ever finished — never an error.
+  Future<List<ProjectModelView>> fetchModels(String id);
+
   /// Asks the server to pick this project's photos and start a 3D model —
   /// `POST /projects/:id/model`, the OWNER-facing "Generate 3D model" press.
   ///
@@ -256,6 +269,20 @@ class RemoteProjectsRepository implements ProjectsRepository {
       model: ProjectModelView.tryFromOwnerMap(res.data?['model']),
       generation: OwnerGenerationView.tryParse(res.data?['generation']),
     );
+  }
+
+  @override
+  Future<List<ProjectModelView>> fetchModels(String id) async {
+    final res = await _dio.get<Map<String, dynamic>>('/projects/$id/models');
+    final items = res.data?['models'];
+    if (items is! List) return const <ProjectModelView>[];
+    // Server order is authoritative (newest first) — re-sorting here would only
+    // risk disagreeing with it. An unparsable entry is skipped rather than
+    // failing the whole list: one bad row must not hide the other models.
+    return [
+      for (final item in items)
+        if (ProjectModelView.tryFromOwnerMap(item) case final model?) model,
+    ];
   }
 
   @override

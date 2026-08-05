@@ -69,6 +69,12 @@ mixin FakeProjectModelDefaults {
 
   Future<OwnerModelState> fetchModelState(String id) async => const OwnerModelState();
 
+  /// "This project has produced no models" — matching the two above, so a fake
+  /// that doesn't care about the models list behaves exactly as it did before
+  /// the list existed.
+  Future<List<ProjectModelView>> fetchModels(String id) async =>
+      const <ProjectModelView>[];
+
   /// Throws rather than pretending to succeed: this one SPENDS MONEY, so a test
   /// that reaches it by accident must fail loudly instead of quietly recording a
   /// generation nobody meant to ask for.

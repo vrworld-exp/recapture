@@ -13,6 +13,7 @@ import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
 import '../../../data/repositories/projects_repository.dart';
 import '../../../domain/entities/project.dart';
+import '../../../domain/entities/project_model.dart';
 import '../../../domain/entities/project_status.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
@@ -25,6 +26,7 @@ import 'live_projects_view.dart';
 import 'capture_mode_sheet.dart';
 import 'model_building_screen.dart';
 import 'model_viewer_screen.dart';
+import 'owner_models_screen.dart';
 
 /// Which list the (staff-only) segmented control shows. Non-staff users never
 /// see the control and always get [mine].
@@ -201,19 +203,51 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     context.goNamed(AppRouteNames.preCapture, extra: p.id);
   }
 
-  /// Opens the project's finished 3D model when it has one.
+  /// Opens the project's 3D models when it has any.
   ///
   /// The model is fetched HERE, on tap, rather than watched per card: the
   /// projects list DTO doesn't carry it (see ProjectsRepository.fetchModel), and
   /// one request per completed card would be an N+1 across the whole list.
   /// Projects without a generated model keep the previous behaviour exactly.
+  ///
+  /// Where the tap lands depends on whether there is a CHOICE to make. One
+  /// finished model opens straight into the viewer, as it always did. Two or
+  /// more open the list, because a regenerate is not guaranteed to be an
+  /// improvement and handing the owner only the newest one hides that.
+  ///
+  /// "How many?" is asked of the models endpoint, NOT of the card's
+  /// [Project.modelCount]. That count is one per GENERATION, and a single
+  /// generation routinely offers two openable models — the original build and
+  /// the optimized one. Routing on the card's count sent an owner who had both
+  /// straight into whichever one happened to be served, which is exactly the
+  /// state this screen exists to get them out of.
   Future<void> _onView(Project p) async {
     if (!_claim(p)) return;
     _logAction('view', p);
     try {
-      final state = await ref.read(projectsRepositoryProvider).fetchModelState(p.id);
+      final repo = ref.read(projectsRepositoryProvider);
+      // Started together so the second question costs no extra wait. The models
+      // list NEVER fails the tap: if only it fails we fall back to opening the
+      // served model, which is exactly the old behaviour.
+      final modelsFuture = repo
+          .fetchModels(p.id)
+          .catchError((Object _) => const <ProjectModelView>[]);
+      final state = await repo.fetchModelState(p.id);
+      final models = await modelsFuture;
       if (!mounted) return;
       if (state.hasViewableModel) {
+        if (models.length > 1) {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => OwnerModelsScreen(
+                projectId: p.id,
+                projectName: p.name,
+                onRegenerate: _regenerateHandlerFor(p),
+              ),
+            ),
+          );
+          return;
+        }
         await Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => ModelViewerScreen(
@@ -414,13 +448,25 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   /// The button carries no NUMBER on purpose — the count exists to decide
   /// whether to render it, and the very next tap shows the full history anyway.
   void _onModels(Project p) {
-    // Role-split by what each audience can reach. STAFF open the full
-    // generation HISTORY (the `/admin/projects/:id/models` endpoint the history
-    // screen polls). An OWNER has no history endpoint — that route would 403 —
-    // so their "Models" opens the newest finished model directly through the
-    // owner path, identical to [_onView].
+    // Role-split by AUDIENCE, not by capability any more. STAFF open the full
+    // generation HISTORY (`/admin/projects/:id/models`: failed attempts, photo
+    // counts, both renditions of each model). An OWNER opens their own list
+    // (`/projects/:id/models`) — every finished model, newest first.
+    //
+    // Always the list here, unlike [_onView]: this button says "Models", and
+    // the count that decides whether it renders (one per generation) cannot
+    // tell whether there are two openable builds behind it.
     if (!ref.read(isStaffProvider)) {
-      _onView(p);
+      _logAction('models', p);
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => OwnerModelsScreen(
+            projectId: p.id,
+            projectName: p.name,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
       return;
     }
     _logAction('models', p);

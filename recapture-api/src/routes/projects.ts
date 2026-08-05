@@ -20,6 +20,7 @@ import {
 import {
   findProjectModelById,
   latestOwnerModelFor,
+  listOwnerModelsFor,
   pendingOwnerGenerationFor,
   MIN_SELECTED_PHOTOS,
 } from '@/services/projectModelsService';
@@ -163,6 +164,54 @@ router.get(
     ]);
 
     res.status(200).json({ status: 'success', project, model, generation });
+  })
+);
+
+/**
+ * GET /projects/:id/models — EVERY finished 3D model this project has, newest
+ * first, so the owner can compare versions instead of only ever seeing the
+ * latest one.
+ *
+ * The owner counterpart to `GET /admin/projects/:id/models`, and deliberately a
+ * different payload: owner DTOs (URL + origin flag + approved), one entry per
+ * generation, no keys, no selection, no failure copy, no rendition expansion.
+ * Staff get the full history including failed attempts and both builds of each
+ * model; an owner gets the models they can actually open.
+ *
+ * Ownership is proven the same way as `GET /projects/:id` — missing, not-owned
+ * and soft-deleted all answer an identical 404, so this route cannot be used to
+ * probe for the existence of someone else's project.
+ */
+router.get(
+  '/:id/models',
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const project = await getProject(userId, params.data.id);
+    if (!project) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Project not found.',
+      });
+      return;
+    }
+
+    // Ownership proven above, so the lookup is by project alone. No analytics
+    // event: this is a read the user can repeat freely (pull-to-refresh), and
+    // `project_resumed` already marks the open that led here.
+    const models = await listOwnerModelsFor(project.id);
+
+    res.status(200).json({ status: 'success', models });
   })
 );
 
