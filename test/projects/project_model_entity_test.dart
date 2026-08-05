@@ -116,4 +116,59 @@ void main() {
       expect(model, isNull);
     });
   });
+
+  // `optimizationPending` is the flag that tells a SUCCEEDED model apart from a
+  // FINISHED one: the asset pipeline runs as a second job, and until it lands
+  // both shapes' URLs still point at the untouched original.
+  group('optimizationPending', () {
+    test('staff shape carries the flag', () {
+      final model = ProjectModelView.tryFromStaffMap({
+        'id': 'm1',
+        'source': 'meshy',
+        'status': 'SUCCEEDED',
+        'artifacts': {'glb': 'https://cdn/model.glb'},
+        'optimizationPending': true,
+      });
+
+      expect(model?.optimizationPending, isTrue);
+      // Openable, but not something to open yet.
+      expect(model?.isViewable, isTrue);
+      expect(model?.isSettled, isFalse);
+    });
+
+    test('owner shape carries the flag', () {
+      final model = ProjectModelView.tryFromOwnerMap({
+        'id': 'm1',
+        'source': 'meshy',
+        'glbUrl': 'https://cdn/model.glb',
+        'optimizationPending': true,
+      });
+
+      expect(model?.optimizationPending, isTrue);
+      expect(model?.isSettled, isFalse);
+    });
+
+    // A backend that predates the flag, and every record generated before the
+    // pipeline existed, must read as settled — nothing is ever going to write
+    // an optimization for them, so waiting would be waiting forever.
+    test('absent reads as settled, on both shapes', () {
+      expect(
+        ProjectModelView.tryFromStaffMap({
+          'id': 'm1',
+          'source': 'meshy',
+          'status': 'SUCCEEDED',
+          'artifacts': {'glb': 'https://cdn/model.glb'},
+        })?.isSettled,
+        isTrue,
+      );
+      expect(
+        ProjectModelView.tryFromOwnerMap({
+          'id': 'm1',
+          'source': 'meshy',
+          'glbUrl': 'https://cdn/model.glb',
+        })?.isSettled,
+        isTrue,
+      );
+    });
+  });
 }

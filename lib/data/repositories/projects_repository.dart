@@ -149,10 +149,20 @@ class OwnerModelState {
   final OwnerGenerationView? generation;
 
   /// Whether something is happening that the user should be told about.
-  bool get isGenerating => generation?.isPending ?? false;
+  ///
+  /// Includes the OPTIMIZATION half. A generation turning SUCCEEDED is not the
+  /// end of the work: the backend then runs the asset pipeline, and until it
+  /// lands [model]'s URL is still the untouched original. Treating that window
+  /// as "done" is what made the post-capture flow open the un-optimized build.
+  bool get isGenerating =>
+      (generation?.isPending ?? false) || (model?.optimizationPending ?? false);
 
   /// A finished model exists and can be opened.
-  bool get hasViewableModel => model?.isViewable ?? false;
+  ///
+  /// Deliberately [ProjectModelView.isSettled], not `isViewable`: a model whose
+  /// optimization is still running IS openable, but opening it now serves bytes
+  /// we are about to replace. See [isGenerating].
+  bool get hasViewableModel => model?.isSettled ?? false;
 
   /// Nothing to show and nothing coming — the pre-generation empty state.
   bool get isEmpty => model == null && generation == null;

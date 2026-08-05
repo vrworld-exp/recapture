@@ -23,6 +23,7 @@ import type {
 } from '@/models/types/projectModel.types';
 import type { UserRole } from '@/models/User';
 import {
+  isOptimizationPending,
   resolveActiveModelUrl,
   type AssetVariantId,
   type OptimizedAsset,
@@ -89,6 +90,16 @@ export interface ProjectModelDto {
    */
   optimized?: OptimizedAsset;
   /**
+   * True while the ASSET_OPTIMIZATION job for this generation is queued or
+   * running — i.e. this list is NOT final yet, and a second (`web`) entry is
+   * still expected to appear.
+   *
+   * Derivable from `optimized.status`, and sent anyway: the poll loops on both
+   * clients key off exactly this question, and a boolean they cannot get wrong
+   * is worth more than the byte it costs.
+   */
+  optimizationPending: boolean;
+  /**
    * WHICH RENDITION THIS ENTRY DESCRIBES.
    *
    * One generation can surface as TWO list entries — the untouched Meshy
@@ -146,6 +157,17 @@ export interface OwnerModelDto {
   optimizedGlbUrl?: string;
   /** Whether `glbUrl` is currently the optimized variant. */
   isOptimized: boolean;
+  /**
+   * True while the optimization job for this model is still queued or running.
+   *
+   * The owner surface needs this MORE than the staff one does. A generation
+   * turning SUCCEEDED used to mean "finished", and the app acted on it —
+   * stopped polling and opened the viewer on `glbUrl`, which at that instant is
+   * still the untouched 200k-triangle original (the "We couldn't load this
+   * model" build). This flag is what lets the app wait out the last minute and
+   * open the model the pipeline actually produced.
+   */
+  optimizationPending: boolean;
   createdAt: string;
 }
 
@@ -203,6 +225,7 @@ export function toProjectModelDto(record: IProjectModel): ProjectModelDto {
     ...(record.approved ? { approved: { at: record.approved.at.toISOString() } } : {}),
     ...(record.error ? { error: { code: record.error.code, message: record.error.message } } : {}),
     ...(record.optimized ? { optimized: flattenOptimized(record.optimized) } : {}),
+    optimizationPending: isOptimizationPending(record.optimized),
     // The base DTO always describes the ORIGINAL. toProjectModelDtos() derives
     // the optimized sibling from it — see there for why they share an id.
     variant: 'original',
@@ -325,6 +348,7 @@ function toOwnerModelDto(record: IProjectModel): OwnerModelDto | null {
     originalGlbUrl: originalUrl,
     ...(optimizedVariant ? { optimizedGlbUrl: optimizedVariant.url } : {}),
     isOptimized: record.optimized?.activeVariant === 'web',
+    optimizationPending: isOptimizationPending(record.optimized),
     createdAt: record.createdAt.toISOString(),
   };
 }

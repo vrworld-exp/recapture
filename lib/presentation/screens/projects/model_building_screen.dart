@@ -354,6 +354,12 @@ class _ModelBuildingScreenState extends ConsumerState<ModelBuildingScreen> {
           isStalled: _looksStalled,
           hasStoppedChecking:
               ref.read(ownerModelStateProvider(widget.projectId).notifier).pollsExhausted,
+          // The optimization tail gave up. The model is finished and openable —
+          // show it, un-optimized, rather than waiting on a job that is not
+          // reporting.
+          showUnoptimized: ref
+              .read(ownerModelStateProvider(widget.projectId).notifier)
+              .optimizationWaitExhausted,
           requestDone: requestDone,
           expectGeneration: expectGeneration,
           onView: _openViewer,
@@ -374,6 +380,7 @@ class _Body extends StatelessWidget {
     required this.onView,
     this.onRegenerate,
     this.expectGeneration = false,
+    this.showUnoptimized = false,
   });
 
   final OwnerModelState state;
@@ -381,6 +388,11 @@ class _Body extends StatelessWidget {
   final bool isStalled;
   final bool hasStoppedChecking;
   final bool requestDone;
+
+  /// Show a model whose optimization never reported, rather than keep waiting.
+  /// The fail-open half of the optimization wait — see
+  /// [OwnerModelStateNotifier.optimizationWaitExhausted].
+  final bool showUnoptimized;
   final void Function(ProjectModelView model) onView;
   final VoidCallback? onRegenerate;
 
@@ -397,10 +409,17 @@ class _Body extends StatelessWidget {
     // Order matters. A finished model wins over an in-flight run: if a
     // regenerate is going, the user should still be able to open the model they
     // already have rather than being made to wait again for one they own.
-    if (model != null && model.isViewable) {
+    //
+    // `isSettled`, not `isViewable`: a model whose web build is still running is
+    // openable but not FINISHED — its URL still resolves to the untouched
+    // original, which is the heavy build the viewer struggles with. Waiting out
+    // that last step is the difference between the user getting the optimized
+    // model and never getting it. [showUnoptimized] is the escape hatch when the
+    // optimization job stops reporting.
+    if (model != null && (model.isSettled || (model.isViewable && showUnoptimized))) {
       return _Ready(
         model: model,
-        isRegenerating: state.isGenerating,
+        isRegenerating: state.generation?.isPending ?? false,
         onView: () => onView(model),
         onRegenerate: onRegenerate,
       );
@@ -420,7 +439,13 @@ class _Body extends StatelessWidget {
       return Column(
         children: [
           _Waiting(percent: percent, isStalled: isStalled),
-          _Timeline(requestDone: requestDone, percent: percent),
+          _Timeline(
+            requestDone: requestDone,
+            percent: percent,
+            // The model exists and only the web build is left — the one moment
+            // "Finishing up" is a fact rather than a placeholder.
+            finishingUp: model?.optimizationPending ?? false,
+          ),
         ],
       );
     }
@@ -522,13 +547,24 @@ class _Waiting extends StatelessWidget {
 /// the whole body with [_Ready], so there is no "all five ticked" state to
 /// build for.
 class _Timeline extends StatelessWidget {
-  const _Timeline({required this.requestDone, required this.percent});
+  const _Timeline({
+    required this.requestDone,
+    required this.percent,
+    this.finishingUp = false,
+  });
 
   /// The server has finished picking photos and queued the job.
   final bool requestDone;
   final int? percent;
 
+  /// The 3D engine is done and the web build is running. Unlike rows 3–4, this
+  /// one IS a distinct server-reported fact (`optimizationPending`), so the
+  /// last row stops being a permanent placeholder and the rows above it are
+  /// genuinely complete.
+  final bool finishingUp;
+
   StepRowStatus _statusFor(int lowerBound, int upperBound) {
+    if (finishingUp) return StepRowStatus.done;
     final p = percent;
     if (p == null) return lowerBound == 0 ? StepRowStatus.running : StepRowStatus.pending;
     if (p >= upperBound) return StepRowStatus.done;
@@ -554,14 +590,16 @@ class _Timeline extends StatelessWidget {
           ),
           StepChecklistRow(
             status: _statusFor(0, 70),
-            label: p == null ? 'Building the model' : 'Building the model — $p%',
+            label: p == null || finishingUp
+                ? 'Building the model'
+                : 'Building the model — $p%',
           ),
           StepChecklistRow(
             status: _statusFor(70, 100),
             label: 'Adding textures',
           ),
-          const StepChecklistRow(
-            status: StepRowStatus.pending,
+          StepChecklistRow(
+            status: finishingUp ? StepRowStatus.running : StepRowStatus.pending,
             label: 'Finishing up',
           ),
         ],

@@ -32,9 +32,24 @@ const _maxInterval = Duration(seconds: 10);
 /// and polling forever would not fix it.
 const _maxPolls = 120;
 
+/// A much SHORTER cap for the optimization tail — the polls after the model is
+/// already generated and we are only waiting for the web build.
+///
+/// It is short because the downside is asymmetric. The model already exists and
+/// can be shown; every extra poll is a user staring at a progress screen for a
+/// model that is sitting there. ~20 polls is a couple of minutes at this
+/// cadence, which comfortably covers a real pipeline run, and if the
+/// optimization worker is down we fail OPEN to the original rather than hiding
+/// a finished model behind a job that is never going to report.
+const _maxOptimizationPolls = 20;
+
 class OwnerModelStateNotifier extends FamilyAsyncNotifier<OwnerModelState, String> {
   Timer? _timer;
   int _polls = 0;
+
+  /// Polls spent waiting on the optimization tail specifically — counted apart
+  /// from [_polls] because it has its own, much smaller budget.
+  int _optimizationPolls = 0;
   Duration _interval = _initialInterval;
 
   @override
@@ -58,6 +73,17 @@ class OwnerModelStateNotifier extends FamilyAsyncNotifier<OwnerModelState, Strin
   bool get pollsExhausted =>
       _polls >= _maxPolls && (state.valueOrNull?.isGenerating ?? false);
 
+  /// We gave up waiting for the web-optimized build, but the model itself is
+  /// finished and openable.
+  ///
+  /// The screen's cue to stop waiting and show the ORIGINAL: a heavier model
+  /// the user can open beats a progress bar for a job that is not reporting.
+  /// Distinct from [pollsExhausted], which means the GENERATION itself never
+  /// resolved and there is nothing to show at all.
+  bool get optimizationWaitExhausted =>
+      _optimizationPolls >= _maxOptimizationPolls &&
+      (state.valueOrNull?.model?.optimizationPending ?? false);
+
   void _stop() {
     _timer?.cancel();
     _timer = null;
@@ -67,11 +93,25 @@ class OwnerModelStateNotifier extends FamilyAsyncNotifier<OwnerModelState, Strin
     _stop();
     if (!modelState.isGenerating) return;
     if (_polls >= _maxPolls) return;
+    // Only the optimization tail is left, and its own budget is spent. Stop:
+    // [optimizationWaitExhausted] now tells the screen to show what we have.
+    if (_isOnlyOptimizing(modelState) && _optimizationPolls >= _maxOptimizationPolls) {
+      return;
+    }
     _timer = Timer(_interval, _poll);
   }
 
+  /// The generation is done and only the web build is outstanding — the state
+  /// the short budget applies to.
+  static bool _isOnlyOptimizing(OwnerModelState modelState) =>
+      !(modelState.generation?.isPending ?? false) &&
+      (modelState.model?.optimizationPending ?? false);
+
   Future<void> _poll() async {
     _polls++;
+    if (_isOnlyOptimizing(state.valueOrNull ?? const OwnerModelState())) {
+      _optimizationPolls++;
+    }
     try {
       final next = await ref.read(projectsRepositoryProvider).fetchModelState(arg);
       state = AsyncData(next);
@@ -90,6 +130,7 @@ class OwnerModelStateNotifier extends FamilyAsyncNotifier<OwnerModelState, Strin
   /// returning to the screen after a regenerate.
   Future<void> refresh() async {
     _polls = 0;
+    _optimizationPolls = 0;
     _interval = _initialInterval;
     final next = await AsyncValue.guard(
       () => ref.read(projectsRepositoryProvider).fetchModelState(arg),

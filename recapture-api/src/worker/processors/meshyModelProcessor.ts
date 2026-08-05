@@ -27,6 +27,7 @@ import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
 import { Job } from '@/models/Job';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
+import { ASSET_PIPELINE_VERSION } from '@/models/types/assetManifest.types';
 import type { ModelArtifacts, ModelProgressPhase } from '@/models/types/projectModel.types';
 import { presignObjectGetUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import {
@@ -166,6 +167,16 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
  *
  * Idempotent by construction — one optimization job per model id, so a
  * re-claimed generation that re-runs this line does not queue a second one.
+ *
+ * ── WHY IT STAMPS `optimized.status = 'QUEUED'` ─────────────────────────────
+ * A SUCCEEDED record with no `optimized` block is ambiguous in the one way that
+ * matters to every reader: it could be a model whose optimization is seconds
+ * away, or one generated before the pipeline existed that will never have one.
+ * Clients that cannot tell them apart stop watching immediately and serve the
+ * untouched original forever (see isOptimizationPending). Writing the QUEUED
+ * marker BEFORE the job makes the difference observable — and makes the wire
+ * field it feeds true from the same instant the work is promised, never a
+ * moment where the API says "nothing more is coming" while a job is in flight.
  */
 async function enqueueAssetOptimization(job: WorkerJob, record: IProjectModel): Promise<void> {
   try {
@@ -178,14 +189,23 @@ async function enqueueAssetOptimization(job: WorkerJob, record: IProjectModel): 
       .exec();
     if (existing) return;
 
-    await Job.create({
-      projectId: record.projectId,
-      userId: record.createdByUserId,
-      jobType: ASSET_OPTIMIZATION_JOB_TYPE,
-      state: 'QUEUED',
-      queuedAt: new Date(),
-      payload: { modelId: record.id as string },
-    });
+    await markOptimizationQueued(record);
+
+    try {
+      await Job.create({
+        projectId: record.projectId,
+        userId: record.createdByUserId,
+        jobType: ASSET_OPTIMIZATION_JOB_TYPE,
+        state: 'QUEUED',
+        queuedAt: new Date(),
+        payload: { modelId: record.id as string },
+      });
+    } catch (err: unknown) {
+      // The promise the marker made is not going to be kept — retract it, or
+      // every client waits out its grace period on work that will never run.
+      await unmarkOptimizationQueued(record);
+      throw err;
+    }
 
     log('info', 'Asset optimization queued', {
       jobId: job._id,
@@ -198,6 +218,45 @@ async function enqueueAssetOptimization(job: WorkerJob, record: IProjectModel): 
       modelId: record.id,
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+/**
+ * Publishes "an optimization is coming" onto the record.
+ *
+ * Fenced on there being NO optimized block yet: a re-claimed generation must
+ * never knock a completed optimization (or an admin's pinned variant) back to
+ * QUEUED. `activeVariant` starts at 'original' because that is what is being
+ * served right now — promotion is the optimization job's call, once it has
+ * something validated to promote.
+ */
+async function markOptimizationQueued(record: IProjectModel): Promise<void> {
+  await ProjectModel.updateOne(
+    { _id: record._id, optimized: { $exists: false } },
+    {
+      $set: {
+        optimized: {
+          status: 'QUEUED',
+          pipelineVersion: ASSET_PIPELINE_VERSION,
+          activeVariant: 'original',
+        },
+      },
+    }
+  ).exec();
+}
+
+/** Undoes {@link markOptimizationQueued}, and only its own marker: the fence on
+ * `status: 'QUEUED'` means a processor that already started (PROCESSING) or
+ * finished keeps its state. */
+async function unmarkOptimizationQueued(record: IProjectModel): Promise<void> {
+  try {
+    await ProjectModel.updateOne(
+      { _id: record._id, 'optimized.status': 'QUEUED' },
+      { $unset: { optimized: 1 } }
+    ).exec();
+  } catch {
+    // Best-effort: the caller is already reporting the enqueue failure, and a
+    // stale QUEUED marker only costs clients a bounded wait.
   }
 }
 

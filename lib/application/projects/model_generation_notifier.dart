@@ -57,7 +57,14 @@ class ModelGenerationNotifier
 
   void _scheduleIfPending(List<ProjectModelView> models) {
     _stop();
-    if (!models.any((m) => m.status.isPending)) return;
+    // `optimizationPending` as well as the record's own status: a generation
+    // reaching SUCCEEDED is not the end of the list. The ASSET_OPTIMIZATION job
+    // runs afterwards and adds the second (OPT) entry, so stopping at SUCCEEDED
+    // left the artist looking at a one-row history that only a manual
+    // pull-to-refresh would ever complete.
+    final pending =
+        models.any((m) => m.status.isPending || m.optimizationPending);
+    if (!pending) return;
     if (_polls >= _maxPolls) return;
     _timer = Timer(_interval, _poll);
   }

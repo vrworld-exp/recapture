@@ -173,6 +173,27 @@ export interface OptimizedAsset {
 }
 
 /**
+ * Whether an optimization run is still expected to change which bytes this
+ * model serves — the window between a generation finishing and the
+ * ASSET_OPTIMIZATION job reaching a terminal status.
+ *
+ * This exists because a SUCCEEDED model is NOT yet a finished model: the
+ * generation and the optimization are two jobs, and for the minute or so
+ * between them `resolveActiveModelUrl` still returns the untouched original.
+ * Every surface that stops watching on `status === 'SUCCEEDED'` therefore
+ * hands out the heavy original and never corrects itself.
+ *
+ * ABSENT reads as NOT pending, deliberately: a record generated before the
+ * pipeline existed has no `optimized` block and nothing will ever write one, so
+ * treating absence as "pending" would leave those models waiting forever.
+ * `meshyModelProcessor` stamps QUEUED at enqueue time precisely so that absence
+ * and "queued" are distinguishable.
+ */
+export function isOptimizationPending(optimized: OptimizedAsset | undefined): boolean {
+  return optimized?.status === 'QUEUED' || optimized?.status === 'PROCESSING';
+}
+
+/**
  * Resolves the URL a client should actually load, honouring the admin's choice
  * and falling back safely. Exported so the API, and any future consumer, agree
  * on the fallback rather than each re-deriving it.
