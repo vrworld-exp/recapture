@@ -306,8 +306,8 @@ class _OwnerModelRow extends StatelessWidget {
       // on many phones it is the "We couldn't load this model" build. Saying so
       // before the tap beats an unexplained failure after it. Owner-only: staff
       // read that off the triangle count.
-      if (model.variant == ModelVariant.original && !model.isActiveVariant)
-        'May not load on every phone',
+      // if (model.variant == ModelVariant.original && !model.isActiveVariant)
+      //   'May not load on every phone',
     ];
     return parts.join(' · ');
   }
