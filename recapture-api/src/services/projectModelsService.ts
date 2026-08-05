@@ -23,6 +23,7 @@ import type {
 } from '@/models/types/projectModel.types';
 import type { UserRole } from '@/models/User';
 import {
+  isOptimizationPending,
   resolveActiveModelUrl,
   type AssetVariantId,
   type OptimizedAsset,
@@ -89,6 +90,16 @@ export interface ProjectModelDto {
    */
   optimized?: OptimizedAsset;
   /**
+   * True while the ASSET_OPTIMIZATION job for this generation is queued or
+   * running — i.e. this list is NOT final yet, and a second (`web`) entry is
+   * still expected to appear.
+   *
+   * Derivable from `optimized.status`, and sent anyway: the poll loops on both
+   * clients key off exactly this question, and a boolean they cannot get wrong
+   * is worth more than the byte it costs.
+   */
+  optimizationPending: boolean;
+  /**
    * WHICH RENDITION THIS ENTRY DESCRIBES.
    *
    * One generation can surface as TWO list entries — the untouched Meshy
@@ -146,6 +157,45 @@ export interface OwnerModelDto {
   optimizedGlbUrl?: string;
   /** Whether `glbUrl` is currently the optimized variant. */
   isOptimized: boolean;
+  /**
+   * True while the optimization job for this model is still queued or running.
+   *
+   * The owner surface needs this MORE than the staff one does. A generation
+   * turning SUCCEEDED used to mean "finished", and the app acted on it —
+   * stopped polling and opened the viewer on `glbUrl`, which at that instant is
+   * still the untouched 200k-triangle original (the "We couldn't load this
+   * model" build). This flag is what lets the app wait out the last minute and
+   * open the model the pipeline actually produced.
+   */
+  optimizationPending: boolean;
+  /**
+   * WHICH RENDITION this entry describes — 'original' (the untouched generated
+   * GLB) or 'web' (the optimized build).
+   *
+   * Only meaningful in a LIST: `listOwnerModelsFor` expands one generation into
+   * one entry PER RENDITION, because an owner who was told "your model was
+   * optimized" reasonably expects to find both and see the difference. The
+   * single-model projection (`latestOwnerModelFor`) always describes the served
+   * rendition and sets this to whichever that is.
+   *
+   * Two entries can therefore share an `id`. That is not two models: there is
+   * still exactly ONE generation (and one charge) behind them. Never dedupe an
+   * owner model list by id.
+   */
+  variant: AssetVariantId;
+  /** True when this is the rendition the project currently serves. */
+  isActiveVariant: boolean;
+  /**
+   * This rendition's weight — the one objective number an owner can compare the
+   * two builds on ("7.92 MB" against "318 KB"). Absent until the pipeline has
+   * measured them, and on every model generated before it existed.
+   */
+  metrics?: {
+    bytes: number;
+    triangles: number;
+    textureCount: number;
+    largestTextureBytes: number;
+  };
   createdAt: string;
 }
 
@@ -203,6 +253,7 @@ export function toProjectModelDto(record: IProjectModel): ProjectModelDto {
     ...(record.approved ? { approved: { at: record.approved.at.toISOString() } } : {}),
     ...(record.error ? { error: { code: record.error.code, message: record.error.message } } : {}),
     ...(record.optimized ? { optimized: flattenOptimized(record.optimized) } : {}),
+    optimizationPending: isOptimizationPending(record.optimized),
     // The base DTO always describes the ORIGINAL. toProjectModelDtos() derives
     // the optimized sibling from it — see there for why they share an id.
     variant: 'original',
@@ -302,20 +353,45 @@ export function toProjectModelDtos(record: IProjectModel): ProjectModelDto[] {
   ];
 }
 
-function toOwnerModelDto(record: IProjectModel): OwnerModelDto | null {
+/**
+ * The owner projection of one generation.
+ *
+ * [variant] selects WHICH RENDITION the entry describes. Omitted — the
+ * single-model projection — it describes the SERVED one, resolved through
+ * `resolveActiveModelUrl`, which fails soft to the original in every ambiguous
+ * case (an un-optimized, heavier-but-correct model beats a broken one).
+ */
+function toOwnerModelDto(record: IProjectModel, variant?: AssetVariantId): OwnerModelDto | null {
   if (!record.artifacts) return null;
 
   const originalUrl = record.artifacts.cdnUrls.glb;
-  // The admin's choice decides what the owner loads. resolveActiveModelUrl
-  // fails SOFT to the original in every ambiguous case — an un-optimized,
-  // heavier-but-correct model beats a broken one.
-  const activeUrl = resolveActiveModelUrl(record.optimized, originalUrl);
   const optimizedVariant = record.optimized?.manifest?.variants.find((v) => v.id === 'web');
+  // Which rendition is SERVED, derived from the URL resolver rather than from
+  // `activeVariant` directly, so the id can never disagree with the bytes: the
+  // resolver falls back to the original for a manifest that has no 'web' entry,
+  // and this must fall back with it.
+  const activeUrl = resolveActiveModelUrl(record.optimized, originalUrl);
+  const activeVariant: AssetVariantId =
+    optimizedVariant && activeUrl === optimizedVariant.url ? 'web' : 'original';
+
+  const shown = variant ?? activeVariant;
+  // A caller asking for 'web' when none was produced would otherwise be handed
+  // the original under an optimized label — the one lie this projection cannot
+  // afford, since telling the two apart is the whole point of the two entries.
+  if (shown === 'web' && !optimizedVariant) return null;
+  const shownUrl = shown === 'web' ? optimizedVariant!.url : originalUrl;
 
   return {
     id: record.id as string,
     source: record.source,
-    glbUrl: activeUrl,
+    glbUrl: shownUrl,
+    variant: shown,
+    isActiveVariant: shown === activeVariant,
+    // The same measurements the staff DTO carries, and safe to share: a file
+    // size and a triangle count describe the asset the owner is about to
+    // download, not our pipeline. It is also the only objective number they can
+    // compare the two renditions on.
+    ...(variantMetrics(record, shown) ?? {}),
     ...(record.artifacts.cdnUrls.usdz ? { usdzUrl: record.artifacts.cdnUrls.usdz } : {}),
     ...(record.artifacts.cdnUrls.preview ? { previewUrl: record.artifacts.cdnUrls.preview } : {}),
     approved: record.approved !== undefined,
@@ -324,7 +400,8 @@ function toOwnerModelDto(record: IProjectModel): OwnerModelDto | null {
     // them. Owner-safe: these are CloudFront URLs, never keys or internals.
     originalGlbUrl: originalUrl,
     ...(optimizedVariant ? { optimizedGlbUrl: optimizedVariant.url } : {}),
-    isOptimized: record.optimized?.activeVariant === 'web',
+    isOptimized: shown === 'web',
+    optimizationPending: isOptimizationPending(record.optimized),
     createdAt: record.createdAt.toISOString(),
   };
 }
@@ -694,6 +771,57 @@ export async function latestSucceededModel(projectId: string): Promise<IProjectM
 export async function latestOwnerModelFor(projectId: string): Promise<OwnerModelDto | null> {
   const record = await latestSucceededModel(projectId);
   return record ? toOwnerModelDto(record) : null;
+}
+
+/**
+ * EVERY finished model the project has, as the OWNER may see them, newest first.
+ *
+ * The owner surface used to expose only {@link latestOwnerModelFor} — one model
+ * per project, chosen by recency. That is the right DEFAULT (the newest run is
+ * usually the best one) but a poor final answer: a regenerate can come back
+ * worse than what it replaced, and an owner who cannot open the older version
+ * has no way to tell, let alone to keep using it. This lists all of them so they
+ * can compare and choose.
+ *
+ * SUCCEEDED only, like the single-model projection: a queued or failed attempt
+ * has nothing to open, and a failure carries staff-authored copy the owner
+ * surface deliberately never shows — a waiting owner learns about an in-flight
+ * run from {@link pendingOwnerGenerationFor} instead.
+ *
+ * ONE ENTRY PER RENDITION, like the staff history — not one per generation.
+ * A capture that produced a model and then optimized it is, to the person who
+ * made it, TWO models: they were told the second one exists, and "your model
+ * was optimized" is a claim they can only check by opening both. Collapsing
+ * them to the served one hid the very comparison this list exists for.
+ *
+ * The two entries share an `id` (one generation, one charge — see
+ * {@link toProjectModelDtos}), so clients must key rows by id AND variant and
+ * must never dedupe by id.
+ *
+ * The SERVED rendition comes first within a generation: it is the one the
+ * project actually opens, and the alternative reads as "…and here is the other
+ * build" rather than as an unexplained duplicate.
+ */
+export async function listOwnerModelsFor(projectId: string): Promise<OwnerModelDto[]> {
+  const records = await ProjectModel.find({
+    projectId: new Types.ObjectId(projectId),
+    status: 'SUCCEEDED',
+  })
+    .sort({ createdAt: -1 })
+    .exec();
+
+  return records.flatMap((record) => {
+    // A SUCCEEDED record with no artifacts should not exist; if one does it is
+    // dropped rather than sent as an unopenable row — the whole point of this
+    // list is that every entry can be viewed. `served` is null only in that case.
+    const served = toOwnerModelDto(record);
+    if (!served) return [];
+    const other = served.variant === 'web' ? 'original' : 'web';
+    // toOwnerModelDto returns null for a 'web' entry that was never produced,
+    // which is exactly the "nothing to compare" case: one row, as before.
+    const alternative = toOwnerModelDto(record, other);
+    return alternative ? [served, alternative] : [served];
+  });
 }
 
 /**

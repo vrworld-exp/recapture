@@ -18,6 +18,10 @@ import { s3Client } from '@/config/s3';
 import { Job } from '@/models/Job';
 import { Project } from '@/models/Project';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
+import {
+  latestOwnerModelFor,
+  toProjectModelDto,
+} from '@/services/projectModelsService';
 import { buildJobKeyPrefix } from '@/utils/s3Keys';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
 import {
@@ -378,5 +382,91 @@ describe('meshyModelProcessor — malformed jobs', () => {
     await ProjectModel.deleteMany({});
 
     await expect(meshyModelProcessor(workerJob)).rejects.toBeInstanceOf(NonRetryableJobError);
+  });
+});
+
+// ── The optimization hand-off ───────────────────────────────────────────────
+//
+// Every Meshy generation reaches this processor, whichever surface started it
+// (the capture's automatic path, the owner's "Generate 3D model" button, and
+// the staff explicit-keys Create Model all enqueue the SAME job type). So the
+// hand-off asserted here is what makes "optimize every generated model" true in
+// all three places at once — and the QUEUED marker is what lets a client tell
+// "optimization is coming" apart from "this model will never have one".
+describe('meshyModelProcessor — asset optimization hand-off', () => {
+  it('queues ASSET_OPTIMIZATION and marks the record as awaiting it', async () => {
+    fakeClient();
+    mockS3();
+    const { workerJob, record } = await seed();
+
+    await meshyModelProcessor(workerJob);
+
+    const queued = await Job.find({ jobType: 'ASSET_OPTIMIZATION' }).exec();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.state).toBe('QUEUED');
+    expect((queued[0]!.payload as { modelId: string }).modelId).toBe(record.id);
+
+    const saved = await ProjectModel.findById(record.id).exec();
+    // SUCCEEDED but not finished — the distinction the clients poll on.
+    expect(saved!.status).toBe('SUCCEEDED');
+    expect(saved!.optimized!.status).toBe('QUEUED');
+    // Still serving the original: promotion is the optimization job's call.
+    expect(saved!.optimized!.activeVariant).toBe('original');
+  });
+
+  it('surfaces the wait as optimizationPending on the staff AND owner shapes', async () => {
+    fakeClient();
+    mockS3();
+    const { workerJob, record } = await seed();
+
+    await meshyModelProcessor(workerJob);
+
+    const saved = await ProjectModel.findById(record.id).exec();
+    expect(toProjectModelDto(saved!).optimizationPending).toBe(true);
+
+    const owner = await latestOwnerModelFor(saved!.projectId.toHexString());
+    expect(owner!.optimizationPending).toBe(true);
+    // The owner is still handed the original meanwhile — a heavy model that
+    // works beats no model at all.
+    expect(owner!.glbUrl).toBe(owner!.originalGlbUrl);
+  });
+
+  it('a re-claimed generation neither double-queues nor retracts a finished optimization', async () => {
+    fakeClient();
+    mockS3();
+    const { workerJob, record } = await seed();
+    await meshyModelProcessor(workerJob);
+
+    // The optimization has since run to completion and promoted the web build.
+    await ProjectModel.updateOne(
+      { _id: record._id },
+      { $set: { 'optimized.status': 'SUCCEEDED', 'optimized.activeVariant': 'web' } }
+    ).exec();
+
+    // The worker re-runs the generation (crash, lease takeover, retry).
+    await meshyModelProcessor(workerJob);
+
+    expect(await Job.countDocuments({ jobType: 'ASSET_OPTIMIZATION' })).toBe(1);
+    const saved = await ProjectModel.findById(record.id).exec();
+    expect(saved!.optimized!.status).toBe('SUCCEEDED');
+    expect(saved!.optimized!.activeVariant).toBe('web');
+    expect(toProjectModelDto(saved!).optimizationPending).toBe(false);
+  });
+
+  it('retracts the marker when the job could not be queued, and never fails the generation', async () => {
+    fakeClient();
+    mockS3();
+    const { workerJob, record } = await seed();
+    // Only the optimization enqueue calls Job.create in this flow.
+    vi.spyOn(Job, 'create').mockRejectedValue(new Error('queue unavailable'));
+
+    // The money is already spent — a queueing failure must not surface here.
+    await expect(meshyModelProcessor(workerJob)).resolves.toBeDefined();
+
+    const saved = await ProjectModel.findById(record.id).exec();
+    expect(saved!.status).toBe('SUCCEEDED');
+    // No marker: nothing is coming, so no client should sit and wait for it.
+    expect(saved!.optimized).toBeUndefined();
+    expect(toProjectModelDto(saved!).optimizationPending).toBe(false);
   });
 });

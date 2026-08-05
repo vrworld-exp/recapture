@@ -206,8 +206,16 @@ describe('plan — geometry budget (the simplify decision)', () => {
     expect(result.simplifyRatio).toBeCloseTo(food.simplify.targetTriangles / 200_704, 6);
     expect(result.simplifyRatio).toBeLessThan(1);
     expect(result.simplifyError).toBe(food.simplify.errorTolerance);
-    expect(result.simplifyReason).toMatch(/over the 35000 budget/);
-    expect(result.notes.join(' ')).toMatch(/simplifying to 17\.4%/);
+    // Read off the profile, not pinned to a number: the budget is a tuning
+    // knob that has moved once already (35k → 60k with pipeline v3), and a
+    // literal here fails the retune rather than the behaviour.
+    expect(result.simplifyReason).toMatch(
+      new RegExp(`over the ${food.simplify.targetTriangles} budget`)
+    );
+    // Same reason the reason string is derived: the note quotes the ratio, so
+    // pinning the percentage pins the budget.
+    const expectedPercent = ((food.simplify.targetTriangles / 200_704) * 100).toFixed(1);
+    expect(result.notes.join(' ')).toContain(`simplifying to ${expectedPercent}%`);
   });
 
   it('lands the target under the gate, so a decimated model is not then discarded', () => {

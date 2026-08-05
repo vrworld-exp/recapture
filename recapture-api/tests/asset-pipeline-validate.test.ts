@@ -75,9 +75,11 @@ describe('validate — hard gates', () => {
     expect(result.failures[0].message).toMatch(new RegExp(`${(over / 1e6).toFixed(2)} MB`));
   });
 
-  it('fails an asset over the 50k triangle budget', () => {
+  it('fails an asset over the triangle budget', () => {
     const result = validate(
-      report({ triangles: 80_000 }),
+      // Derived from the profile so a retune of the gate cannot quietly turn
+      // this into an under-budget asset that proves nothing.
+      report({ triangles: food.gates.maxTriangles + 1 }),
       basePlan,
       emptyDoc,
       report({ totalBytes: 30_000_000 })
