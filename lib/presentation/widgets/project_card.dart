@@ -287,6 +287,14 @@ class _Thumbnail extends StatelessWidget {
             : Image.network(
                 url!,
                 fit: BoxFit.cover,
+                // WEB: the byte-fetch path needs CORS headers, which a CDN
+                // object only carries if a browser (not the mobile app, whose
+                // HttpClient sends no `Origin`) was the request that populated
+                // the edge cache. `fallback` keeps the normal fetch and drops
+                // to an <img> element — exempt from CORS — only when it fails,
+                // so a header-less cache entry degrades to a slower render
+                // instead of a permanent placeholder. No-op off the web.
+                webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
                 errorBuilder: (_, __, ___) => const _ThumbnailPlaceholder(),
               ),
       ),

@@ -287,6 +287,11 @@ class _RowThumbnail extends StatelessWidget {
             : Image.network(
                 url,
                 fit: BoxFit.cover,
+                // See _Thumbnail in project_card.dart: on web this falls back to
+                // an <img> element when the CORS-dependent byte fetch fails, so
+                // a CDN entry cached without `Access-Control-Allow-Origin` still
+                // renders. No-op on mobile.
+                webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
                 errorBuilder: (_, __, ___) => const _ThumbPlaceholder(),
               ),
       ),

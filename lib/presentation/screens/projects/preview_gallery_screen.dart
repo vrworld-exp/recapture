@@ -458,6 +458,11 @@ class _PhotoTile extends StatelessWidget {
               Image.network(
                 photo.url,
                 fit: BoxFit.cover,
+                // See _Thumbnail in project_card.dart. These are presigned raw
+                // bucket URLs rather than CDN ones, so they bypass the edge
+                // cache entirely — but the byte fetch still needs CORS on the
+                // bucket, and the <img> fallback costs nothing when it is there.
+                webHtmlElementStrategy: WebHtmlElementStrategy.fallback,
                 loadingBuilder: (context, child, progress) => progress == null
                     ? child
                     : const _TilePlaceholder(loading: true),

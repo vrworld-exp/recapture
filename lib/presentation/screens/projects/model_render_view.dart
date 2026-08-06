@@ -80,6 +80,36 @@ class ModelRenderView extends StatefulWidget {
 class ModelRenderViewState extends State<ModelRenderView> {
   static const _channelName = 'RecaptureModelViewer';
 
+  /// Turns on model-viewer's meshopt support — WITHOUT this, every OPTIMIZED
+  /// (`OPT`) rendition fails to load and nothing says why.
+  ///
+  /// The asset pipeline's last transform is always `meshopt()`, and
+  /// gltf-transform lists `EXT_meshopt_compression` in the GLB's
+  /// `extensionsRequired`. three.js' GLTFLoader then THROWS
+  /// ("setMeshoptDecoder must be called before loading compressed files")
+  /// unless a decoder was wired in — and meshopt is the one compression
+  /// extension model-viewer has no default location for (DRACO and KTX2 both
+  /// point at gstatic out of the box). The throw arrives as a `loadfailure`,
+  /// which is indistinguishable from a dead link: the retry below re-fetches
+  /// bytes that were never the problem, so the OPT row could only ever fail.
+  ///
+  /// The decoder is ALREADY BUNDLED in model-viewer.min.js (its WASM is
+  /// inlined); this URL is merely the trigger that makes model-viewer attach
+  /// it, which is why the pinned version here need not track the backend's
+  /// encoder version.
+  ///
+  /// ORDERING IS LOAD-BEARING: model-viewer reads `self.ModelViewerElement`
+  /// exactly once, when its module executes. `relatedJs` lands in a classic
+  /// inline `<script>` in the body and the viewer's own tag is
+  /// `type="module" defer`, so this runs first — but only on MOBILE. On web
+  /// `relatedJs` never executes at all (the package injects its page via
+  /// `innerHTML`), which is why web/index.html carries its own copy.
+  static const _meshoptConfigJs = '''
+window.ModelViewerElement = window.ModelViewerElement || {};
+window.ModelViewerElement.meshoptDecoderLocation =
+  'https://unpkg.com/meshoptimizer@0.20.0/meshopt_decoder.js';
+''';
+
   /// Injected after the `<model-viewer>` element: reports the model's load
   /// lifecycle (and AR availability) back over the [_channelName] channel.
   /// The `loaded` re-check covers a load that finished before this script ran.
@@ -376,7 +406,9 @@ class ModelRenderViewState extends State<ModelRenderView> {
       // The in-page AR button is replaced by our own CTA (same canActivateAR
       // gate), so it must never show.
       relatedCss: 'model-viewer::part(default-ar-button) { display: none; }',
-      relatedJs: _lifecycleJs,
+      // Config FIRST: it has to be in place before model-viewer's module runs
+      // (see [_meshoptConfigJs]), and the lifecycle script only observes.
+      relatedJs: '$_meshoptConfigJs\n$_lifecycleJs',
       javascriptChannels: {
         JavascriptChannel(
           _channelName,

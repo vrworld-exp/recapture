@@ -32,6 +32,26 @@
   <title>recapture</title>
   <link rel="manifest" href="manifest.json">
 
+  <!-- model-viewer reads `self.ModelViewerElement` ONCE, when its module runs,
+       so this classic script MUST stay above the module tag below.
+
+       Why it exists: our OPTIMIZED (`OPT`) renditions are meshopt-compressed,
+       and gltf-transform lists EXT_meshopt_compression in `extensionsRequired`.
+       Unlike DRACO and KTX2 — which model-viewer points at gstatic by default —
+       meshopt has NO default decoder location, so without this the loader
+       throws "setMeshoptDecoder must be called before loading compressed files"
+       and every optimized model dies as an unexplained "couldn't load".
+
+       The decoder itself is already BUNDLED (its WASM is inlined in
+       model-viewer.min.js); the URL is only the trigger that makes
+       model-viewer wire it into the loader, which is why the pinned version
+       here need not match the backend's encoder. -->
+  <script>
+    window.ModelViewerElement = window.ModelViewerElement || {};
+    window.ModelViewerElement.meshoptDecoderLocation =
+      'https://unpkg.com/meshoptimizer@0.20.0/meshopt_decoder.js';
+  </script>
+
   <!-- model_viewer_plus (3D model viewer): on web the package strips the
        <script> from its own HTML template and requires the <model-viewer>
        custom element to be registered here instead — without this line the

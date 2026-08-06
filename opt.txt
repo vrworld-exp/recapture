@@ -1,0 +1,636 @@
+
+
+
+
+
+
+
+
+{
+    "status": "success",
+    "models": [
+        {
+            "id": "6a7456e4fd0c83929a901e87",
+            "projectId": "6a745603fd0c83929a901e19",
+            "jobId": "6a7456c2fd0c83929a901e44",
+            "source": "meshy",
+            "status": "SUCCEEDED",
+            "selectedKeys": [
+                "images/EYE/eye_0001.jpg",
+                "images/EYE/eye_0003.jpg",
+                "images/EYE/eye_0004.jpg",
+                "images/EYE/eye_0002.jpg"
+            ],
+            "artifacts": {
+                "glb": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/model.glb",
+                "usdz": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/model.usdz",
+                "preview": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/preview.png"
+            },
+            "optimized": {
+                "status": "SUCCEEDED",
+                "pipelineVersion": 3,
+                "manifest": {
+                    "modelId": "6a7456e4fd0c83929a901e87",
+                    "pipelineVersion": 3,
+                    "generatedAt": "2026-08-06T09:50:04.354Z",
+                    "variants": [
+                        {
+                            "id": "original",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/model.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/model.glb",
+                            "bytes": 24527524,
+                            "triangles": 195751,
+                            "textureCount": 4,
+                            "largestTextureBytes": 9861634,
+                            "meshoptCompressed": false
+                        },
+                        {
+                            "id": "web",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/v3/web.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/v3/web.glb",
+                            "bytes": 847012,
+                            "triangles": 59999,
+                            "textureCount": 3,
+                            "largestTextureBytes": 216854,
+                            "meshoptCompressed": true
+                        }
+                    ],
+                    "posterUrl": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/preview.png",
+                    "physicalSize": {
+                        "widthMeters": 0.07600932933655494,
+                        "heightMeters": 0.09999589249491692,
+                        "depthMeters": 0.07631450189582162,
+                        "longestDimMeters": 0.09999589249491692
+                    },
+                    "reduction": {
+                        "bytesBefore": 24527524,
+                        "bytesAfter": 847012,
+                        "ratio": 0.03453312287045362,
+                        "trianglesBefore": 195751,
+                        "trianglesAfter": 59999
+                    }
+                },
+                "activeVariant": "web",
+                "reportKey": "dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/v3/report.json"
+            },
+            "optimizationPending": false,
+            "variant": "original",
+            "isActiveVariant": false,
+            "metrics": {
+                "bytes": 24527524,
+                "triangles": 195751,
+                "textureCount": 4,
+                "largestTextureBytes": 9861634
+            },
+            "generationTrace": {
+                "steps": [
+                    {
+                        "step": "RESOLVE_JOB",
+                        "status": "OK",
+                        "detail": "job 6a7456c2fd0c83929a901e44 (OPTIMIZING)",
+                        "at": "2026-08-06T09:41:55.755Z",
+                        "durationMs": 562
+                    },
+                    {
+                        "step": "LOAD_MANIFEST",
+                        "status": "OK",
+                        "detail": "6788 bytes",
+                        "at": "2026-08-06T09:41:56.017Z",
+                        "durationMs": 262
+                    },
+                    {
+                        "step": "LIST_OBJECTS",
+                        "status": "OK",
+                        "detail": "6 objects under the job prefix",
+                        "at": "2026-08-06T09:41:56.039Z",
+                        "durationMs": 22
+                    },
+                    {
+                        "step": "SELECT_PHOTOS",
+                        "status": "OK",
+                        "detail": "4 photos from 3 of 4 yaw quadrants (pool=5, usable=5)",
+                        "at": "2026-08-06T09:41:56.041Z",
+                        "durationMs": 2
+                    },
+                    {
+                        "step": "GUARDS",
+                        "status": "OK",
+                        "detail": "0/5 in the last 24h",
+                        "at": "2026-08-06T09:41:56.230Z",
+                        "durationMs": 189
+                    },
+                    {
+                        "step": "ENQUEUE",
+                        "status": "OK",
+                        "detail": "4 photos queued for generation",
+                        "at": "2026-08-06T09:41:56.991Z",
+                        "durationMs": 761
+                    }
+                ],
+                "selection": {
+                    "ringUsed": "EYE",
+                    "photosInManifest": 5,
+                    "poolSize": 5,
+                    "droppedUnresolvableKey": 0,
+                    "droppedMissingObject": 0,
+                    "droppedNoBlurScore": 0,
+                    "belowBlurFloor": 0,
+                    "warnedExcluded": 0,
+                    "minBlurScoreUsed": 40,
+                    "segmentCountUsed": 6,
+                    "quadrantHistogram": [
+                        2,
+                        1,
+                        2,
+                        0
+                    ],
+                    "unplacedCount": 0,
+                    "chosen": [
+                        {
+                            "key": "images/EYE/eye_0001.jpg",
+                            "blurScore": 100,
+                            "quadrant": 0
+                        },
+                        {
+                            "key": "images/EYE/eye_0003.jpg",
+                            "blurScore": 100,
+                            "quadrant": 1
+                        },
+                        {
+                            "key": "images/EYE/eye_0004.jpg",
+                            "blurScore": 100,
+                            "quadrant": 2
+                        },
+                        {
+                            "key": "images/EYE/eye_0002.jpg",
+                            "blurScore": 100,
+                            "quadrant": 0
+                        }
+                    ]
+                },
+                "requestedBy": "MANUAL"
+            },
+            "createdAt": "2026-08-06T09:41:56.609Z",
+            "updatedAt": "2026-08-06T09:50:04.447Z"
+        },
+        {
+            "id": "6a7456e4fd0c83929a901e87",
+            "projectId": "6a745603fd0c83929a901e19",
+            "jobId": "6a7456c2fd0c83929a901e44",
+            "source": "meshy",
+            "status": "SUCCEEDED",
+            "selectedKeys": [
+                "images/EYE/eye_0001.jpg",
+                "images/EYE/eye_0003.jpg",
+                "images/EYE/eye_0004.jpg",
+                "images/EYE/eye_0002.jpg"
+            ],
+            "artifacts": {
+                "glb": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/v3/web.glb",
+                "usdz": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/model.usdz",
+                "preview": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/preview.png"
+            },
+            "optimized": {
+                "status": "SUCCEEDED",
+                "pipelineVersion": 3,
+                "manifest": {
+                    "modelId": "6a7456e4fd0c83929a901e87",
+                    "pipelineVersion": 3,
+                    "generatedAt": "2026-08-06T09:50:04.354Z",
+                    "variants": [
+                        {
+                            "id": "original",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/model.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/model.glb",
+                            "bytes": 24527524,
+                            "triangles": 195751,
+                            "textureCount": 4,
+                            "largestTextureBytes": 9861634,
+                            "meshoptCompressed": false
+                        },
+                        {
+                            "id": "web",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/v3/web.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/v3/web.glb",
+                            "bytes": 847012,
+                            "triangles": 59999,
+                            "textureCount": 3,
+                            "largestTextureBytes": 216854,
+                            "meshoptCompressed": true
+                        }
+                    ],
+                    "posterUrl": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/preview.png",
+                    "physicalSize": {
+                        "widthMeters": 0.07600932933655494,
+                        "heightMeters": 0.09999589249491692,
+                        "depthMeters": 0.07631450189582162,
+                        "longestDimMeters": 0.09999589249491692
+                    },
+                    "reduction": {
+                        "bytesBefore": 24527524,
+                        "bytesAfter": 847012,
+                        "ratio": 0.03453312287045362,
+                        "trianglesBefore": 195751,
+                        "trianglesAfter": 59999
+                    }
+                },
+                "activeVariant": "web",
+                "reportKey": "dev/6a62f1764aea11b224e24bb2/6a745603fd0c83929a901e19/6a7456c2fd0c83929a901e44/models/6a7456e4fd0c83929a901e87/v3/report.json"
+            },
+            "optimizationPending": false,
+            "variant": "web",
+            "isActiveVariant": true,
+            "metrics": {
+                "bytes": 847012,
+                "triangles": 59999,
+                "textureCount": 3,
+                "largestTextureBytes": 216854
+            },
+            "generationTrace": {
+                "steps": [
+                    {
+                        "step": "RESOLVE_JOB",
+                        "status": "OK",
+                        "detail": "job 6a7456c2fd0c83929a901e44 (OPTIMIZING)",
+                        "at": "2026-08-06T09:41:55.755Z",
+                        "durationMs": 562
+                    },
+                    {
+                        "step": "LOAD_MANIFEST",
+                        "status": "OK",
+                        "detail": "6788 bytes",
+                        "at": "2026-08-06T09:41:56.017Z",
+                        "durationMs": 262
+                    },
+                    {
+                        "step": "LIST_OBJECTS",
+                        "status": "OK",
+                        "detail": "6 objects under the job prefix",
+                        "at": "2026-08-06T09:41:56.039Z",
+                        "durationMs": 22
+                    },
+                    {
+                        "step": "SELECT_PHOTOS",
+                        "status": "OK",
+                        "detail": "4 photos from 3 of 4 yaw quadrants (pool=5, usable=5)",
+                        "at": "2026-08-06T09:41:56.041Z",
+                        "durationMs": 2
+                    },
+                    {
+                        "step": "GUARDS",
+                        "status": "OK",
+                        "detail": "0/5 in the last 24h",
+                        "at": "2026-08-06T09:41:56.230Z",
+                        "durationMs": 189
+                    },
+                    {
+                        "step": "ENQUEUE",
+                        "status": "OK",
+                        "detail": "4 photos queued for generation",
+                        "at": "2026-08-06T09:41:56.991Z",
+                        "durationMs": 761
+                    }
+                ],
+                "selection": {
+                    "ringUsed": "EYE",
+                    "photosInManifest": 5,
+                    "poolSize": 5,
+                    "droppedUnresolvableKey": 0,
+                    "droppedMissingObject": 0,
+                    "droppedNoBlurScore": 0,
+                    "belowBlurFloor": 0,
+                    "warnedExcluded": 0,
+                    "minBlurScoreUsed": 40,
+                    "segmentCountUsed": 6,
+                    "quadrantHistogram": [
+                        2,
+                        1,
+                        2,
+                        0
+                    ],
+                    "unplacedCount": 0,
+                    "chosen": [
+                        {
+                            "key": "images/EYE/eye_0001.jpg",
+                            "blurScore": 100,
+                            "quadrant": 0
+                        },
+                        {
+                            "key": "images/EYE/eye_0003.jpg",
+                            "blurScore": 100,
+                            "quadrant": 1
+                        },
+                        {
+                            "key": "images/EYE/eye_0004.jpg",
+                            "blurScore": 100,
+                            "quadrant": 2
+                        },
+                        {
+                            "key": "images/EYE/eye_0002.jpg",
+                            "blurScore": 100,
+                            "quadrant": 0
+                        }
+                    ]
+                },
+                "requestedBy": "MANUAL"
+            },
+            "createdAt": "2026-08-06T09:41:56.609Z",
+            "updatedAt": "2026-08-06T09:50:04.447Z"
+        }
+    ]
+}
+
+
+
+
+
+
+
+
+
+
+
+{
+    "status": "success",
+    "models": [
+        {
+            "id": "6a71ee216042a1c5a436f342",
+            "projectId": "6a71ed8e6042a1c5a436f2e2",
+            "jobId": "6a71ee056042a1c5a436f2fe",
+            "source": "meshy",
+            "status": "SUCCEEDED",
+            "selectedKeys": [
+                "images/EYE/eye_0001.jpg",
+                "images/EYE/eye_0002.jpg",
+                "images/EYE/eye_0003.jpg",
+                "images/EYE/eye_0005.jpg"
+            ],
+            "artifacts": {
+                "glb": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/model.glb",
+                "usdz": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/model.usdz",
+                "preview": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/preview.png"
+            },
+            "optimized": {
+                "status": "SUCCEEDED",
+                "pipelineVersion": 2,
+                "manifest": {
+                    "modelId": "6a71ee216042a1c5a436f342",
+                    "pipelineVersion": 2,
+                    "generatedAt": "2026-08-04T13:58:49.410Z",
+                    "variants": [
+                        {
+                            "id": "original",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/model.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/model.glb",
+                            "bytes": 25142972,
+                            "triangles": 199538,
+                            "textureCount": 4,
+                            "largestTextureBytes": 10315180,
+                            "meshoptCompressed": false
+                        },
+                        {
+                            "id": "web",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/v2/web.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/v2/web.glb",
+                            "bytes": 343364,
+                            "triangles": 35000,
+                            "textureCount": 4,
+                            "largestTextureBytes": 89336,
+                            "meshoptCompressed": true
+                        }
+                    ],
+                    "posterUrl": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/preview.png",
+                    "physicalSize": {
+                        "widthMeters": 0.024667807004564314,
+                        "heightMeters": 0.09000000357627869,
+                        "depthMeters": 0.02484359362613119,
+                        "longestDimMeters": 0.09000000357627869
+                    },
+                    "reduction": {
+                        "bytesBefore": 25142972,
+                        "bytesAfter": 343364,
+                        "ratio": 0.013656460342078892,
+                        "trianglesBefore": 199538,
+                        "trianglesAfter": 35000
+                    }
+                },
+                "activeVariant": "web",
+                "reportKey": "dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/v2/report.json"
+            },
+            "optimizationPending": false,
+            "variant": "original",
+            "isActiveVariant": false,
+            "metrics": {
+                "bytes": 25142972,
+                "triangles": 199538,
+                "textureCount": 4,
+                "largestTextureBytes": 10315180
+            },
+            "generationTrace": {
+                "steps": [
+                    {
+                        "step": "SELECT_PHOTOS",
+                        "status": "OK",
+                        "detail": "4 photos from 4 of 4 yaw quadrants (pool=5, usable=5)",
+                        "at": "2026-08-04T13:50:26.381Z",
+                        "durationMs": 0
+                    },
+                    {
+                        "step": "ENQUEUE",
+                        "status": "OK",
+                        "detail": "4 photos queued for generation",
+                        "at": "2026-08-04T13:50:26.381Z",
+                        "durationMs": 0
+                    }
+                ],
+                "selection": {
+                    "ringUsed": "EYE",
+                    "photosInManifest": 5,
+                    "poolSize": 5,
+                    "droppedUnresolvableKey": 0,
+                    "droppedMissingObject": 0,
+                    "droppedNoBlurScore": 0,
+                    "belowBlurFloor": 0,
+                    "warnedExcluded": 0,
+                    "minBlurScoreUsed": 40,
+                    "segmentCountUsed": 6,
+                    "quadrantHistogram": [
+                        1,
+                        1,
+                        2,
+                        1
+                    ],
+                    "unplacedCount": 0,
+                    "chosen": [
+                        {
+                            "key": "images/EYE/eye_0001.jpg",
+                            "blurScore": 100,
+                            "quadrant": 0
+                        },
+                        {
+                            "key": "images/EYE/eye_0002.jpg",
+                            "blurScore": 100,
+                            "quadrant": 1
+                        },
+                        {
+                            "key": "images/EYE/eye_0003.jpg",
+                            "blurScore": 100,
+                            "quadrant": 2
+                        },
+                        {
+                            "key": "images/EYE/eye_0005.jpg",
+                            "blurScore": 100,
+                            "quadrant": 3
+                        }
+                    ]
+                },
+                "requestedBy": "AUTO"
+            },
+            "createdAt": "2026-08-04T13:50:25.997Z",
+            "updatedAt": "2026-08-04T13:58:49.478Z"
+        },
+        {
+            "id": "6a71ee216042a1c5a436f342",
+            "projectId": "6a71ed8e6042a1c5a436f2e2",
+            "jobId": "6a71ee056042a1c5a436f2fe",
+            "source": "meshy",
+            "status": "SUCCEEDED",
+            "selectedKeys": [
+                "images/EYE/eye_0001.jpg",
+                "images/EYE/eye_0002.jpg",
+                "images/EYE/eye_0003.jpg",
+                "images/EYE/eye_0005.jpg"
+            ],
+            "artifacts": {
+                "glb": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/v2/web.glb",
+                "usdz": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/model.usdz",
+                "preview": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/preview.png"
+            },
+            "optimized": {
+                "status": "SUCCEEDED",
+                "pipelineVersion": 2,
+                "manifest": {
+                    "modelId": "6a71ee216042a1c5a436f342",
+                    "pipelineVersion": 2,
+                    "generatedAt": "2026-08-04T13:58:49.410Z",
+                    "variants": [
+                        {
+                            "id": "original",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/model.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/model.glb",
+                            "bytes": 25142972,
+                            "triangles": 199538,
+                            "textureCount": 4,
+                            "largestTextureBytes": 10315180,
+                            "meshoptCompressed": false
+                        },
+                        {
+                            "id": "web",
+                            "url": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/v2/web.glb",
+                            "key": "dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/v2/web.glb",
+                            "bytes": 343364,
+                            "triangles": 35000,
+                            "textureCount": 4,
+                            "largestTextureBytes": 89336,
+                            "meshoptCompressed": true
+                        }
+                    ],
+                    "posterUrl": "https://d3ap77f0m6kfrr.cloudfront.net/dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/preview.png",
+                    "physicalSize": {
+                        "widthMeters": 0.024667807004564314,
+                        "heightMeters": 0.09000000357627869,
+                        "depthMeters": 0.02484359362613119,
+                        "longestDimMeters": 0.09000000357627869
+                    },
+                    "reduction": {
+                        "bytesBefore": 25142972,
+                        "bytesAfter": 343364,
+                        "ratio": 0.013656460342078892,
+                        "trianglesBefore": 199538,
+                        "trianglesAfter": 35000
+                    }
+                },
+                "activeVariant": "web",
+                "reportKey": "dev/6a62f1764aea11b224e24bb2/6a71ed8e6042a1c5a436f2e2/6a71ee056042a1c5a436f2fe/models/6a71ee216042a1c5a436f342/v2/report.json"
+            },
+            "optimizationPending": false,
+            "variant": "web",
+            "isActiveVariant": true,
+            "metrics": {
+                "bytes": 343364,
+                "triangles": 35000,
+                "textureCount": 4,
+                "largestTextureBytes": 89336
+            },
+            "generationTrace": {
+                "steps": [
+                    {
+                        "step": "SELECT_PHOTOS",
+                        "status": "OK",
+                        "detail": "4 photos from 4 of 4 yaw quadrants (pool=5, usable=5)",
+                        "at": "2026-08-04T13:50:26.381Z",
+                        "durationMs": 0
+                    },
+                    {
+                        "step": "ENQUEUE",
+                        "status": "OK",
+                        "detail": "4 photos queued for generation",
+                        "at": "2026-08-04T13:50:26.381Z",
+                        "durationMs": 0
+                    }
+                ],
+                "selection": {
+                    "ringUsed": "EYE",
+                    "photosInManifest": 5,
+                    "poolSize": 5,
+                    "droppedUnresolvableKey": 0,
+                    "droppedMissingObject": 0,
+                    "droppedNoBlurScore": 0,
+                    "belowBlurFloor": 0,
+                    "warnedExcluded": 0,
+                    "minBlurScoreUsed": 40,
+                    "segmentCountUsed": 6,
+                    "quadrantHistogram": [
+                        1,
+                        1,
+                        2,
+                        1
+                    ],
+                    "unplacedCount": 0,
+                    "chosen": [
+                        {
+                            "key": "images/EYE/eye_0001.jpg",
+                            "blurScore": 100,
+                            "quadrant": 0
+                        },
+                        {
+                            "key": "images/EYE/eye_0002.jpg",
+                            "blurScore": 100,
+                            "quadrant": 1
+                        },
+                        {
+                            "key": "images/EYE/eye_0003.jpg",
+                            "blurScore": 100,
+                            "quadrant": 2
+                        },
+                        {
+                            "key": "images/EYE/eye_0005.jpg",
+                            "blurScore": 100,
+                            "quadrant": 3
+                        }
+                    ]
+                },
+                "requestedBy": "AUTO"
+            },
+            "createdAt": "2026-08-04T13:50:25.997Z",
+            "updatedAt": "2026-08-04T13:58:49.478Z"
+        }
+    ]
+}
+
+
+
+
+
+
+
