@@ -63,6 +63,18 @@ mixin FakeModelOptimizeDefaults {
       throw UnimplementedError('not used here');
 }
 
+/// The OWNER-facing model LIST member of `LiveProjectsRepository`.
+///
+/// Its own mixin for the same reason [FakeAutoGenerationDefaults] is: fakes
+/// that hand-roll `listModels` (the STAFF list) still want a default for this
+/// one, and two mixins cannot both supply the same member. The two lists are
+/// separate members precisely because they are separate routes with separate
+/// payloads — a fake that stubs one must not accidentally answer the other.
+mixin FakeOwnerModelListDefaults {
+  Future<List<ProjectModelView>> listOwnerModels(String projectId) async =>
+      throw UnimplementedError('not used here');
+}
+
 /// ADMIN curation members of `LiveProjectsRepository`.
 mixin FakeAdminDeleteDefaults {
   Future<void> deleteProject(

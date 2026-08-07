@@ -55,8 +55,9 @@ class ModelViewerScreen extends StatelessWidget {
   /// model whose [ProjectModelView.canOptimize] is false — the SERVER's
   /// verdict, never a size rule re-derived here.
   ///
-  /// This is the OWNER's entry point to optimization: there is no owner-facing
-  /// models list, so the viewer is the only surface they can act from.
+  /// Reached by BOTH audiences, always through their own route: the owner's
+  /// caller wires it to the owner-scoped endpoint, staff to the admin one. The
+  /// viewer itself never picks — it only renders the action it was handed.
   final Future<void> Function()? onOptimize;
 
   /// Staff-only "we're satisfied — skip manual creation" action. Null hides it
@@ -286,8 +287,9 @@ class _ExportButtonState extends ConsumerState<_ExportButton> {
   }
 }
 
-/// The app-bar "Optimize" action — the owner's only entry point to making a
-/// smaller copy of their model, since there is no owner-facing models list.
+/// The app-bar "Optimize" action — available wherever a model is open, so a
+/// model reached by deep link or straight from the project card can be
+/// optimized without first going back out to a list.
 ///
 /// Goes disabled with a spinner while in flight, and reports only MAPPED copy
 /// on failure: the server's 409 reasons are internal rule ids.

@@ -40,7 +40,8 @@ const _eightMiB = 8 * 1024 * 1024;
 class _FakeRepo
     with
         FakeAdminDeleteDefaults,
-        FakeAutoGenerationDefaults
+        FakeAutoGenerationDefaults,
+        FakeOwnerModelListDefaults
     implements LiveProjectsRepository {
   _FakeRepo(this.models);
 

@@ -44,7 +44,8 @@ class _StubLiveRepo
     with
         FakeModelGenerationDefaults,
         FakeAdminDeleteDefaults,
-        FakeModelOptimizeDefaults
+        FakeModelOptimizeDefaults,
+        FakeOwnerModelListDefaults
     implements LiveProjectsRepository {
   _StubLiveRepo({this.page, this.result, this.failure, this.gate});
 

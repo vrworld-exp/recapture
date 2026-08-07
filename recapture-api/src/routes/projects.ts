@@ -21,6 +21,7 @@ import {
 import {
   findProjectModelById,
   latestOwnerModelFor,
+  listOwnerProjectModels,
   pendingOwnerGenerationFor,
   requestModelOptimization,
   MIN_SELECTED_PHOTOS,
@@ -384,6 +385,48 @@ const OWNER_DECLINE_MESSAGES: Record<
   INSUFFICIENT_SPREAD:
     'This capture only shows one side of the object. Walk all the way around it and capture again.',
 };
+
+/**
+ * GET /projects/:id/models — the OWNER-facing model history for their own
+ * project, newest first.
+ *
+ * The owner counterpart of `GET /admin/projects/:id/models`, and deliberately
+ * NOT the same payload: it returns {@link OwnerModelListItemDto} rows, which
+ * carry no selectedKeys, no generationTrace, no actor ids, no S3 keys and no
+ * job/project ids. Staff keep their route; this one exists so an owner never
+ * has to be handed the staff projection to see their own models.
+ *
+ * Scoped by `getProject(userId, id)` — the same ownership proof every other
+ * route in this router uses — so "no such project" and "not your project"
+ * collapse into one identical 404 and a model list cannot be enumerated across
+ * users.
+ *
+ * Read-only, so it takes no rate window of its own; the optimize action below
+ * keeps the one that guards real work.
+ */
+router.get(
+  '/:id/models',
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const project = await getProject(req.user!.userId, params.data.id);
+    if (!project) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+
+    const models = await listOwnerProjectModels(project.id);
+    res.json({ status: 'success', models });
+  })
+);
 
 /**
  * POST /projects/:id/models/:modelId/optimize — the OWNER-facing "Optimize"

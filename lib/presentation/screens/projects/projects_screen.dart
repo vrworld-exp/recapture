@@ -26,6 +26,7 @@ import 'live_projects_view.dart';
 import 'capture_mode_sheet.dart';
 import 'model_building_screen.dart';
 import 'model_viewer_screen.dart';
+import 'owner_model_history_screen.dart';
 
 /// Which list the (staff-only) segmented control shows. Non-staff users never
 /// see the control and always get [mine].
@@ -407,10 +408,10 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     );
   }
 
-  /// Staff-only per-project model history — the persistent way back to a
-  /// generated model once you've left the screen that created it. Pushed, like
-  /// Preview, and likewise unclaimed: pure navigation, and the history screen
-  /// owns its own load/empty/error states.
+  /// Per-project model history — the persistent way back to a generated model
+  /// once you've left the screen that created it. Pushed, like Preview, and
+  /// likewise unclaimed: pure navigation, and the history screen owns its own
+  /// load/empty/error states.
   ///
   /// Shown only for a project with a VIEWABLE model (`modelCount > 0` on the
   /// Project DTO — one aggregation per list page server-side, never a request
@@ -420,17 +421,29 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   ///
   /// The button carries no NUMBER on purpose — the count exists to decide
   /// whether to render it, and the very next tap shows the full history anyway.
+  /// Role-split by ROUTE, not by feature: both audiences now get a list, but
+  /// they poll different endpoints with different payloads. Staff open the
+  /// staff history (`/admin/projects/:id/models`, which carries the trace and
+  /// the selected keys); an owner opens [OwnerModelHistoryScreen], which polls
+  /// the owner-scoped `/projects/:id/models` and can only ever see their own
+  /// project. Sending an owner to the staff screen would just 403.
   void _onModels(Project p) {
-    // Role-split by what each audience can reach. STAFF open the full
-    // generation HISTORY (the `/admin/projects/:id/models` endpoint the history
-    // screen polls). An OWNER has no history endpoint — that route would 403 —
-    // so their "Models" opens the newest finished model directly through the
-    // owner path, identical to [_onView].
+    _logAction('models', p);
     if (!ref.read(isStaffProvider)) {
-      _onView(p);
+      // Pushed directly rather than through a named route, for the same reason
+      // the owner viewer is: the `modelHistory` route is registered under
+      // `/admin/...` and resolves against the staff provider.
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => OwnerModelHistoryScreen(
+            projectId: p.id,
+            projectName: p.name,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
       return;
     }
-    _logAction('models', p);
     context.pushNamed(
       AppRouteNames.modelHistory,
       pathParameters: {'id': p.id},

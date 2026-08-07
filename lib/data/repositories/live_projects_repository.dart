@@ -105,9 +105,18 @@ abstract interface class LiveProjectsRepository {
     bool force = false,
   });
 
-  /// The project's generation history, newest first. Throws
-  /// [LiveProjectsException].
+  /// STAFF: the project's generation history, newest first, in the staff shape
+  /// (trace, selected keys, actor data). Throws [LiveProjectsException].
   Future<List<ProjectModelView>> listModels(String projectId);
+
+  /// OWNER: the same history for a project the caller OWNS, newest first, in
+  /// the owner-safe shape — no trace, no selected keys, no actor ids.
+  ///
+  /// A separate call rather than a role flag on [listModels] because they are
+  /// different routes returning different payloads; collapsing them would mean
+  /// one of the two parsers silently reading fields the other never sends.
+  /// Throws [LiveProjectsException].
+  Future<List<ProjectModelView>> listOwnerModels(String projectId);
 
   /// Marks [modelId] approved ("we're satisfied — skip manual creation").
   /// Throws [LiveProjectsException].
@@ -124,9 +133,12 @@ abstract interface class LiveProjectsRepository {
   /// [LiveProjectsFailure.notOptimizable] when the server refuses the rule.
   Future<ProjectModelView> optimizeModel(String projectId, String modelId);
 
-  /// OWNER: the same request against the owner-scoped route, for the viewer's
-  /// Optimize action. Returns nothing — the owner surface has no model list to
-  /// insert a row into; it re-reads the project instead.
+  /// OWNER: the same request against the owner-scoped route, for the owner's
+  /// Optimize action on the viewer and the model list.
+  ///
+  /// Returns nothing, unlike [optimizeModel]: the owner route answers with a
+  /// minimal `{id, status}` rather than a model DTO, so callers re-read the
+  /// list (see OwnerModelHistoryNotifier.optimize) instead of splicing a row.
   /// Throws [LiveProjectsException].
   Future<void> optimizeOwnerModel(String projectId, String modelId);
 
@@ -365,6 +377,24 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
         if (models is List)
           for (final m in models)
             if (ProjectModelView.tryFromStaffMap(m) case final model?) model,
+      ];
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<List<ProjectModelView>> listOwnerModels(String projectId) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/projects/$projectId/models',
+      );
+      final models = res.data?['models'];
+      return [
+        if (models is List)
+          for (final m in models)
+            if (ProjectModelView.tryFromOwnerListMap(m) case final model?)
+              model,
       ];
     } on DioException catch (e) {
       throw _translate(e);

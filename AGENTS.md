@@ -244,8 +244,21 @@ do not remove it).
   six synchronous request steps and the selector's counters. Those steps all
   run INSIDE one sub-second request and arrive complete in the response — there
   is no streaming and nothing to poll (the minutes-long half is `progress`).
-  The trace is **staff-only**: it is on `ProjectModelDto` and on NEITHER owner
+  The trace is **staff-only**: it is on `ProjectModelDto` and on NO owner
   DTO, because it names our S3 key layout and our pipeline's internals.
+- **A project's models are read through TWO parallel surfaces, never one with a
+  role flag.** Staff read `GET /admin/projects/:id/models` → `ProjectModelDto`;
+  an owner reads `GET /projects/:id/models` → `OwnerModelListItemDto`, scoped by
+  `getProject(userId, id)` so a foreign project is an identical 404 (an ADMIN
+  who does not own it gets that 404 too — privilege lives on `/admin`, and this
+  route must not become a second, weaker door). The owner projections are built
+  FIELD BY FIELD, never by spreading a record: a spread is how a staff-only
+  field reaches an owner the next time the schema grows. Same rule for the
+  write side — the owner's Optimize goes to `POST /projects/:id/models/:modelId/
+  optimize`, never the `/admin` twin. On the client this is mirrored as two
+  repository methods (`listModels` / `listOwnerModels`), two notifiers, and two
+  parsers (`tryFromStaffMap` / `tryFromOwnerListMap`); only the ROW WIDGET is
+  shared, because it renders no staff-only action.
 - **`model-input/` namespace (reserved, currently unused by the client).**
   `POST /admin/projects/:id/model-images/upload-urls` presigns PUTs into the
   exportable job's reserved `model-input/` namespace under `rawPrefix`, and
