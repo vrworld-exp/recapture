@@ -15,10 +15,10 @@ import 'package:recapture/application/capture/ledger/captured_photo_record.dart'
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry.dart';
 import 'package:recapture/application/capture/ledger/level_capture_ledger_registry_provider.dart';
 import 'package:recapture/application/capture/ledger/warned_photo_record.dart';
-import 'package:recapture/application/capture/capture_shape_mode_provider.dart';
+import 'package:recapture/application/capture/capture_mode_provider.dart';
 import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/application/upload/upload_flow.dart';
-import 'package:recapture/domain/capture/capture_shape_mode.dart';
+import 'package:recapture/domain/capture/capture_mode.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/presentation/screens/capture/capture_summary_screen.dart';
 import 'package:recapture/utils/analytics.dart';
@@ -99,11 +99,11 @@ class _NoLowBandConfigNotifier extends ConfigNotifier {
       );
 }
 
-/// Puts the session in MESHY shape mode — one Level A ring of 6, 100% coverage
-/// floor, both gates at 6 (see CaptureConfig.meshy).
-class _MeshyShapeModeController extends CaptureShapeModeController {
+/// Puts the session in MESHY capture mode — one Level A ring of 6, 100%
+/// coverage floor, both gates at 6 (see CaptureConfig.meshy).
+class _MeshyModeController extends CaptureModeController {
   @override
-  CaptureShapeMode build() => CaptureShapeMode.meshy;
+  CaptureMode build() => CaptureMode.meshy;
 }
 
 CapturedPhotoRecord _accepted(int seg, String path) => CapturedPhotoRecord(
@@ -198,7 +198,7 @@ void main() {
           // Level A ring of 6, 100% floor) via effectiveCaptureConfigProvider —
           // the real production path, not a hand-installed config.
           if (meshy)
-            captureShapeModeProvider.overrideWith(_MeshyShapeModeController.new),
+            captureModeProvider.overrideWith(_MeshyModeController.new),
         ],
         child: MaterialApp.router(routerConfig: router),
       ),
@@ -427,10 +427,11 @@ void main() {
 
   // ── MESHY: the friction-free Summary ────────────────────────────────────────
   //
-  // A Meshy session is ONE ring of 6 that cannot reach this screen short of 6/6
-  // (the one-shot-per-wedge gate + the 100% completion floor), so "Fix Issues" is
-  // unreachable-by-construction and Upload never has anything to warn about. The
-  // correctness guards (offline block, live gate re-check, double-tap latch) stay.
+  // A Meshy session is ONE ring of 6 that reaches this screen only once the
+  // one-shot-per-wedge gate and the mode's 80% coverage floor are satisfied —
+  // 5 of 6 wedges, not 6 — so "Fix Issues" is unreachable-by-construction and
+  // Upload never has anything to warn about. The correctness guards (offline
+  // block, live gate re-check, double-tap latch) stay.
   group('meshy mode', () {
     ProviderContainer containerOf(WidgetTester tester) =>
         ProviderScope.containerOf(tester.element(find.byType(MaterialApp)));
@@ -469,7 +470,9 @@ void main() {
 
     testWidgets('the live hard gate still refuses a short session',
         (tester) async {
-      await pump(tester, registryWith({'mid': 5}), meshy: true); // 5 of 6
+      // 4 of 6 — below the mode's 80% floor. (5 of 6 CLEARS it: the ring
+      // auto-advances there, so a 5-shot session is a complete Meshy capture.)
+      await pump(tester, registryWith({'mid': 4}), meshy: true);
       final container = containerOf(tester);
 
       await tester.tap(find.byKey(const Key('summary_upload')));

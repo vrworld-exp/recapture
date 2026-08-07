@@ -126,7 +126,6 @@ class _FakeBackend implements UploadJobsBackend {
     required String projectId,
     required String objectSize,
     required String captureVariant,
-    required String captureMode,
     required int expectedFilesCount,
     required String idempotencyKey,
     String captureMode = 'full',

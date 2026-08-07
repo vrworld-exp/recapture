@@ -7,7 +7,7 @@ import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
-import '../../application/capture/capture_shape_mode_provider.dart';
+import '../../application/capture/effective_capture_config_provider.dart';
 import '../../application/capture/current_tilt_provider.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/tilt_target.dart';

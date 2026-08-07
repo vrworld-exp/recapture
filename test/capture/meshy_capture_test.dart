@@ -15,7 +15,7 @@ import 'package:recapture/application/capture/analytics/capture_level_events.dar
 import 'package:recapture/application/capture/progression/level_progression_builder.dart';
 import 'package:recapture/application/capture/progression/level_segment_machines.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
-import 'package:recapture/domain/capture/capture_shape_mode.dart';
+import 'package:recapture/domain/capture/capture_mode.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/domain/entities/capture_photo_metadata.dart';
 import 'package:recapture/domain/entities/capture_pitch_guide.dart';
@@ -77,24 +77,24 @@ void main() {
   group('activeCaptureLevels under Meshy mode', () {
     test('meshy → [A] for both variants (no B/C ever)', () {
       expect(
-        activeCaptureLevels(CaptureFlowVariant.withBottom, CaptureShapeMode.meshy),
+        activeCaptureLevels(CaptureFlowVariant.withBottom, CaptureMode.meshy),
         const [CaptureLevel.a],
       );
       expect(
         activeCaptureLevels(
-            CaptureFlowVariant.withoutBottom, CaptureShapeMode.meshy),
+            CaptureFlowVariant.withoutBottom, CaptureMode.meshy),
         const [CaptureLevel.a],
       );
     });
 
     test('full mode is UNCHANGED — defers to the variant level list', () {
       expect(
-        activeCaptureLevels(CaptureFlowVariant.withBottom, CaptureShapeMode.full),
+        activeCaptureLevels(CaptureFlowVariant.withBottom, CaptureMode.full),
         CaptureFlowVariant.withBottom.levels,
       );
       expect(
         activeCaptureLevels(
-            CaptureFlowVariant.withoutBottom, CaptureShapeMode.full),
+            CaptureFlowVariant.withoutBottom, CaptureMode.full),
         CaptureFlowVariant.withoutBottom.levels,
       );
     });
@@ -106,7 +106,7 @@ void main() {
       final progression = initialProgressionFromConfig(
         CaptureConfig.meshy,
         variant: CaptureFlowVariant.withBottom,
-        mode: CaptureShapeMode.meshy,
+        mode: CaptureMode.meshy,
       );
       expect(progression.levels, hasLength(1));
       final level = progression.levels.single;
@@ -120,7 +120,7 @@ void main() {
       final machines = levelSegmentMachinesFromConfig(
         CaptureConfig.meshy,
         variant: CaptureFlowVariant.withoutBottom,
-        mode: CaptureShapeMode.meshy,
+        mode: CaptureMode.meshy,
       );
       expect(machines, hasLength(1));
       expect(machines.single.segmentCount, 6);
@@ -203,20 +203,22 @@ void main() {
     });
   });
 
-  // ── 6. CaptureShapeMode id / parse round-trips (the wire value) ─────────────
-  group('CaptureShapeMode wire id', () {
+  // ── 6. CaptureMode id / parse round-trips (the wire value) ─────────────
+  group('CaptureMode wire id', () {
     test('ids match the backend enum and round-trip', () {
-      expect(CaptureShapeMode.meshy.id, 'meshy');
-      expect(CaptureShapeMode.full.id, 'full');
-      expect(CaptureShapeMode.meshy.isMeshy, isTrue);
-      expect(CaptureShapeMode.full.isMeshy, isFalse);
+      expect(CaptureMode.meshy.id, 'meshy');
+      expect(CaptureMode.full.id, 'full');
+      // The winning design discriminates by BEHAVIOUR getters rather than the
+      // old `isMeshy` flag — meshy is the shutter-only mode, full runs the loop.
+      expect(CaptureMode.meshy.usesAutoCapture, isFalse);
+      expect(CaptureMode.full.usesAutoCapture, isTrue);
     });
 
     test('fromId is tolerant — unknown/null → full', () {
-      expect(CaptureShapeMode.fromId('meshy'), CaptureShapeMode.meshy);
-      expect(CaptureShapeMode.fromId('full'), CaptureShapeMode.full);
-      expect(CaptureShapeMode.fromId(null), CaptureShapeMode.full);
-      expect(CaptureShapeMode.fromId('bogus'), CaptureShapeMode.full);
+      expect(CaptureMode.fromId('meshy'), CaptureMode.meshy);
+      expect(CaptureMode.fromId('full'), CaptureMode.full);
+      expect(CaptureMode.fromId(null), CaptureMode.full);
+      expect(CaptureMode.fromId('bogus'), CaptureMode.full);
     });
   });
 }

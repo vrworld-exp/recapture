@@ -23,8 +23,8 @@ import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/capture_readiness.dart' show CaptureMode;
 import '../../domain/entities/tilt_target.dart';
 import '../../utils/analytics.dart';
-import 'capture_shape_mode_provider.dart';
 import 'current_tilt_provider.dart';
+import 'effective_capture_config_provider.dart';
 import 'ring_progress_provider.dart' show ringDirectionStateProvider;
 import 'stability_provider.dart';
 

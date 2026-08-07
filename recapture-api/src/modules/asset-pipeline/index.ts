@@ -6,26 +6,24 @@
 // low-end Android over café Wi-Fi, plus the measurements that justify serving
 // it.
 //
-// ── WHAT AN END USER'S WEBVIEW ACTUALLY RECEIVES ─────────────────────────────
-// The 'web' variant this module produces — not Meshy's output. Generation is
-// tuned for FIDELITY (~200k triangles, 4k textures) because a low generation
-// budget was breaking thin features at the source, so the original GLB is an
-// archive and a re-run input, not a deliverable. The worker auto-promotes
-// `optimized.activeVariant` to 'web' as soon as a run passes its gates
-// (worker/processors/assetOptimizationProcessor.ts).
+// ── NO QUEUE CONSUMER TODAY ──────────────────────────────────────────────────
+// The ASSET_OPTIMIZATION job that used to drive this module is gone: shrinking
+// a generated model now runs through services/modelOptimizerService.ts and the
+// MODEL_OPTIMIZATION job, which writes its output as a SEPARATE OPT record
+// (`ProjectModel.optimizedFrom`) rather than an `optimized.activeVariant` field
+// on the source record. This module survives as a library and a CLI — the
+// tuning ground for texture budgets and simplify ratios against real Meshy
+// samples — with no worker seam and no S3 publisher.
 //
-// This module still does not make that decision — it takes bytes and returns
-// bytes, and a caller is free to ignore the result. But the shape of the
-// decision it enables has changed, and the gates are load-bearing for it: a
-// variant that fails validation is discarded, the record keeps serving
-// 'original', and on a high-poly source that means a viewer that cannot load
-// the model. `plan.simplifyRatio` is what keeps that from happening.
+// The gates remain the load-bearing part of it: a variant that fails validation
+// is discarded rather than served, and on a high-poly source serving the
+// original means a viewer that cannot load the model. `plan.simplifyRatio` is
+// what keeps that from happening.
 //
 // This module is a PURE LIBRARY: no Express, no Mongoose, no AWS, no direct
 // filesystem access. It takes bytes and returns bytes. That is what lets the
 // CLI run it on a local file with no credentials, and what keeps it testable
-// without standing up a queue. All I/O lives in publish.ts (S3) and the
-// worker's processor.
+// without standing up a queue.
 import { inspect } from './inspect';
 import { plan as planStage } from './plan';
 import { execute } from './execute';
