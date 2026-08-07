@@ -26,7 +26,10 @@ import 'package:recapture/presentation/screens/projects/preview_gallery_screen.d
 import 'repo_fake_defaults.dart';
 
 class _FakeRepo
-    with FakeAdminDeleteDefaults, FakeAutoGenerationDefaults
+    with
+        FakeAdminDeleteDefaults,
+        FakeAutoGenerationDefaults,
+        FakeModelOptimizeDefaults
     implements LiveProjectsRepository {
   _FakeRepo({this.models = const []});
 

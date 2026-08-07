@@ -59,6 +59,18 @@ export const projectIdParamsSchema = z
 export type ProjectIdParams = z.infer<typeof projectIdParamsSchema>;
 
 /**
+ * `:id`/`:modelId` params for the owner-facing model actions (optimize).
+ * Mirrors the admin router's adminModelIdParamsSchema — same shape, separate
+ * declaration, because the two routers validate their own surfaces.
+ */
+export const ownerModelIdParamsSchema = z
+  .object({
+    id: z.string().regex(OBJECT_ID_RE, 'Invalid project id'),
+    modelId: z.string().regex(OBJECT_ID_RE, 'Invalid model id'),
+  })
+  .strict();
+
+/**
  * DELETE /projects/:id body. The client must echo the project's exact current
  * `name` as `confirmName` — a server-enforced guard against accidental
  * destructive deletes. Presence is validated here; the value is matched against

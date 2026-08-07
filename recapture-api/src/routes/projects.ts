@@ -6,6 +6,7 @@ import {
   listProjectsQuerySchema,
   createProjectSchema,
   projectIdParamsSchema,
+  ownerModelIdParamsSchema,
   deleteProjectBodySchema,
   renameProjectSchema,
 } from '@/validation/projectSchemas';
@@ -21,7 +22,10 @@ import {
   findProjectModelById,
   latestOwnerModelFor,
   pendingOwnerGenerationFor,
+  requestModelOptimization,
   MIN_SELECTED_PHOTOS,
+  NOT_OPTIMIZABLE_CODES,
+  NOT_OPTIMIZABLE_MESSAGES,
 } from '@/services/projectModelsService';
 import {
   generateModelOnDemand,
@@ -380,6 +384,97 @@ const OWNER_DECLINE_MESSAGES: Record<
   INSUFFICIENT_SPREAD:
     'This capture only shows one side of the object. Walk all the way around it and capture again.',
 };
+
+/**
+ * POST /projects/:id/models/:modelId/optimize — the OWNER-facing "Optimize"
+ * action: make a smaller copy of a model this project already has.
+ *
+ * Costs no Meshy credits, so none of the generation spend guards apply — but it
+ * IS CPU-expensive (glTF-Transform holds the whole document in memory and
+ * re-encodes every buffer), so it keeps its own rate window.
+ *
+ * ENUMERATION-SAFE: "no such project", "not your project" and "no such model in
+ * this project" are ONE identical 404, the same stance every other owner route
+ * takes. An owner must not be able to probe which model ids exist.
+ */
+router.post(
+  '/:id/models/:modelId/optimize',
+  asyncHandler(async (req, res) => {
+    const params = ownerModelIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    // Ownership proven the same way as everywhere else — and the ONLY way the
+    // service is ever reached, so a cross-user model id can never be optimized.
+    const project = await getProject(userId, params.data.id);
+    if (!project) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+
+    const rate = await consumeRateWindow(
+      `model-optimize:${userId}`,
+      env.MODEL_OPTIMIZE_MAX_PER_WINDOW,
+      env.MODEL_OPTIMIZE_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await requestModelOptimization({
+      projectId: project.id,
+      modelId: params.data.modelId,
+      actor: { userId, role: 'USER' },
+    });
+
+    if (result.outcome === 'PROJECT_NOT_FOUND' || result.outcome === 'MODEL_NOT_FOUND') {
+      // Collapsed on purpose — see the route comment.
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_OPTIMIZABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: NOT_OPTIMIZABLE_CODES[result.reason],
+        message: NOT_OPTIMIZABLE_MESSAGES[result.reason],
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.MODEL_OPTIMIZE_REQUESTED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(project.id),
+      model_id_hash: hashIdentifier(params.data.modelId),
+      optimized_model_id_hash: hashIdentifier(result.model.id as string),
+      source_bytes: result.sourceBytes,
+      was_replay: result.outcome === 'REPLAYED',
+      surface: 'owner',
+    });
+
+    // The owner gets the same minimal projection the rest of this router uses:
+    // the id to poll and the status, never the staff DTO.
+    res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({
+      status: 'success',
+      optimization: {
+        id: result.model.id as string,
+        status: result.model.status,
+      },
+    });
+  })
+);
 
 /**
  * PATCH /projects/:id — rename a project owned by the authenticated user.

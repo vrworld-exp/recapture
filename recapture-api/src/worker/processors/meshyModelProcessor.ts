@@ -27,63 +27,28 @@ import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
 import { Job } from '@/models/Job';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
-import type { ModelArtifacts, ModelProgressPhase } from '@/models/types/projectModel.types';
+import type { ModelArtifacts } from '@/models/types/projectModel.types';
 import { presignObjectGetUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import {
   getMeshyClient,
   MeshyErrorCode,
   type MeshyTask,
 } from '@/worker/engine/meshy/meshyClient';
+import {
+  clearProgress,
+  failRecordIfTerminal,
+  reportProgress,
+  setStatus,
+} from '@/worker/processors/modelRecordState';
 import { enterStage, recordStageProgress } from '@/worker/stageTransitions';
 import { log } from '@/worker/workerLog';
-import {
-  DEFAULT_MAX_ATTEMPTS,
-  NonRetryableJobError,
-  type JobProcessor,
-  type WorkerJob,
-} from '@/worker/workerTypes';
+import { NonRetryableJobError, type JobProcessor, type WorkerJob } from '@/worker/workerTypes';
 
 /** Per-model artifact prefix — keeps each generation's output separate, so a
  * regenerate never overwrites the attempt an artist may still want to compare
  * (and makes a record's storage self-contained). */
 function modelArtifactPrefix(rawPrefix: string, modelId: string): string {
   return `${rawPrefix}models/${modelId}/`;
-}
-
-/**
- * Publishes "what the worker is doing right now" onto the record, for the staff
- * progress UI (the admin app polls the models list while a record is pending).
- *
- * STRICTLY BEST-EFFORT: display data must never fail or delay a paid
- * generation, so errors are swallowed and the write is fenced on
- * `status: 'PROCESSING'` — it can never resurrect a record that has already
- * reached a terminal state.
- */
-async function reportProgress(
-  record: IProjectModel,
-  phase: ModelProgressPhase,
-  percent: number
-): Promise<void> {
-  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
-  try {
-    await ProjectModel.updateOne(
-      { _id: record._id, status: 'PROCESSING' },
-      { $set: { progress: { phase, percent: clamped } } }
-    ).exec();
-  } catch {
-    // Ignored by design — the next tick (or the terminal status) supersedes it.
-  }
-}
-
-/** Removes the live progress once the record is terminal — SUCCEEDED/FAILED
- * carry their own truth and a stale "FINALIZING 100%" would only confuse. */
-async function clearProgress(record: IProjectModel): Promise<void> {
-  try {
-    await ProjectModel.updateOne({ _id: record._id }, { $unset: { progress: 1 } }).exec();
-  } catch {
-    // Best-effort for the same reason as reportProgress; clients ignore
-    // `progress` on terminal statuses anyway.
-  }
 }
 
 export const meshyModelProcessor: JobProcessor = async (job) => {
@@ -144,7 +109,7 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
     // Only OUR keys/URLs — a Meshy URL must never reach the DB (they expire).
     return { source: 'meshy', modelId, artifacts: artifacts.cdnUrls };
   } catch (err: unknown) {
-    await failRecordIfTerminal(job, record, err);
+    await failRecordIfTerminal(job, record, err, 'PROCESSING_FAILED', 'Model generation failed.');
     throw err;
   }
 };
@@ -295,14 +260,20 @@ async function rehostArtifacts(
       : []),
   ];
 
+  // The GLB's size is recorded as it goes by — it is the only input to the
+  // "is this worth optimizing?" rule, and the bytes are already in hand here,
+  // so measuring it later would mean a needless HEAD round trip per record.
+  let glbBytes: number | undefined;
   for (const target of targets) {
     const bytes = await download(target.url);
+    if (target.filename === 'model.glb') glbBytes = bytes.byteLength;
     await putObjectBytes(BUCKET_ARTIFACTS, `${prefix}${target.filename}`, bytes, target.contentType);
   }
 
   const has = (filename: string): boolean => targets.some((t) => t.filename === filename);
   return {
     glbKey: `${prefix}model.glb`,
+    ...(glbBytes !== undefined ? { glbBytes } : {}),
     ...(has('model.usdz') ? { usdzKey: `${prefix}model.usdz` } : {}),
     ...(has('preview.jpg') ? { previewImageKey: `${prefix}preview.jpg` } : {}),
     cdnUrls: {
@@ -328,46 +299,6 @@ async function download(url: string): Promise<Uint8Array> {
   } catch {
     throw new Error('Failed to download a generated model artifact from Meshy');
   }
-}
-
-/**
- * Moves the record to FAILED only when nothing more will run for it: either the
- * error is terminal, or this was the job's last attempt. On a retryable error
- * with attempts remaining, the record stays PROCESSING — which is the truth,
- * since the worker will pick it up again after the backoff.
- *
- * Cancel/claim-loss are neither: another owner now decides the outcome, so the
- * record is left exactly as it is.
- */
-async function failRecordIfTerminal(
-  job: WorkerJob,
-  record: IProjectModel,
-  err: unknown
-): Promise<void> {
-  const isTerminal = err instanceof NonRetryableJobError;
-  const attemptsSoFar = job.attempts ?? 0;
-  const maxAttempts = job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const isFinalAttempt = attemptsSoFar + 1 >= maxAttempts;
-
-  const name = (err as { name?: string })?.name;
-  if (name === 'JobCanceledError' || name === 'ClaimLostError') return;
-  if (!isTerminal && !isFinalAttempt) return;
-
-  record.status = 'FAILED';
-  record.error = {
-    code: isTerminal ? (err as NonRetryableJobError).code : 'PROCESSING_FAILED',
-    // Our own messages only (meshyClient never interpolates a response body or
-    // a presigned URL into one), so this is safe to show staff.
-    message: err instanceof Error ? err.message : 'Model generation failed.',
-  };
-  await record.save();
-  await clearProgress(record);
-}
-
-async function setStatus(record: IProjectModel, status: IProjectModel['status']): Promise<void> {
-  if (record.status === status) return;
-  record.status = status;
-  await record.save();
 }
 
 function sleep(ms: number): Promise<void> {

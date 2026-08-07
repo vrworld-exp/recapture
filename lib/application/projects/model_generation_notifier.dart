@@ -103,6 +103,20 @@ class ModelGenerationNotifier
     return model;
   }
 
+  /// Asks the backend to optimize [modelId], then refreshes so the new pending
+  /// `OPT` row appears immediately.
+  ///
+  /// The refresh is the ONLY wiring this needs: the existing poll loop already
+  /// drives any pending record to done, and the OPT record is pending like any
+  /// other. A second loop for optimization would be two things racing to write
+  /// the same state.
+  ///
+  /// Rethrows [LiveProjectsException] so the caller can render mapped copy.
+  Future<void> optimize(String modelId) async {
+    await ref.read(liveProjectsRepositoryProvider).optimizeModel(arg, modelId);
+    await refresh();
+  }
+
   /// Approves [modelId] and reflects it locally without a re-fetch.
   Future<void> approve(String modelId) async {
     final approved =

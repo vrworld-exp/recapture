@@ -36,6 +36,12 @@ enum LiveProjectsFailure {
   /// button-triggered generations share. Retryable tomorrow, not now.
   dailyLimitReached,
 
+  /// 409 from an Optimize request — the server re-checked the rule and refused
+  /// (already optimized, already small, size unknown, not finished yet). Never
+  /// a transport problem, and never worth retrying as-is: the row is stale, so
+  /// the copy tells the user to refresh rather than to try again.
+  notOptimizable,
+
   /// Transport-level failure (offline, timeout).
   network,
 
@@ -106,6 +112,23 @@ abstract interface class LiveProjectsRepository {
   /// Marks [modelId] approved ("we're satisfied — skip manual creation").
   /// Throws [LiveProjectsException].
   Future<ProjectModelView> approveModel(String projectId, String modelId);
+
+  /// STAFF: asks the backend to shrink [modelId] and add the result to this
+  /// project's model list as its own `OPT` record. Returns that record —
+  /// QUEUED on the first call, and the EXISTING one on a repeat (the server
+  /// replays rather than creating a second).
+  ///
+  /// Costs no generation credits, so unlike [createModel] it carries no
+  /// idempotency key: the server's unique index on the source model is what
+  /// makes a double-tap a replay. Throws [LiveProjectsException] —
+  /// [LiveProjectsFailure.notOptimizable] when the server refuses the rule.
+  Future<ProjectModelView> optimizeModel(String projectId, String modelId);
+
+  /// OWNER: the same request against the owner-scoped route, for the viewer's
+  /// Optimize action. Returns nothing — the owner surface has no model list to
+  /// insert a row into; it re-reads the project instead.
+  /// Throws [LiveProjectsException].
+  Future<void> optimizeOwnerModel(String projectId, String modelId);
 
   /// ADMIN-only: deletes [projectId] — [AdminDeleteMode.soft] hides it
   /// (recoverable), [AdminDeleteMode.hard] permanently erases the project,
@@ -185,6 +208,16 @@ class PreviewDeleteResult {
   final List<String> deleted;
   final List<String> missing;
 }
+
+/// The stable `code`s the backend's optimize routes answer a refused rule
+/// with. Hand-synced with NOT_OPTIMIZABLE_CODES in
+/// recapture-api/src/services/projectModelsService.ts.
+const _kNotOptimizableCodes = {
+  'MODEL_NOT_READY',
+  'MODEL_SIZE_UNKNOWN',
+  'MODEL_ALREADY_SMALL',
+  'ALREADY_OPTIMIZED',
+};
 
 class RemoteLiveProjectsRepository implements LiveProjectsRepository {
   const RemoteLiveProjectsRepository(this._dio);
@@ -356,6 +389,34 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
   }
 
   @override
+  Future<ProjectModelView> optimizeModel(
+      String projectId, String modelId) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/admin/projects/$projectId/models/$modelId/optimize',
+      );
+      final model = ProjectModelView.tryFromStaffMap(res.data?['model']);
+      if (model == null) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return model;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<void> optimizeOwnerModel(String projectId, String modelId) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/projects/$projectId/models/$modelId/optimize',
+      );
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
   Future<void> deleteProject(
     String projectId, {
     required AdminDeleteMode mode,
@@ -395,6 +456,12 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
     }
     if (status == 409 && code == 'USER_CAP_REACHED') {
       return const LiveProjectsException(LiveProjectsFailure.dailyLimitReached);
+    }
+    // The Optimize route's refusals. Matched on the CODE rather than on 409
+    // alone so a future 409 from another route can't silently inherit this
+    // copy — and the raw code never reaches the UI either way.
+    if (status == 409 && _kNotOptimizableCodes.contains(code)) {
+      return const LiveProjectsException(LiveProjectsFailure.notOptimizable);
     }
     if (status == 422 && code == 'CONFIRMATION_REQUIRED') {
       return const LiveProjectsException(

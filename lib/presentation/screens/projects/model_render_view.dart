@@ -77,6 +77,33 @@ class ModelRenderView extends StatefulWidget {
   State<ModelRenderView> createState() => ModelRenderViewState();
 }
 
+/// Trigger URL for `<model-viewer>`'s meshopt decoder. **Load-bearing — read
+/// this before touching it.**
+///
+/// The backend's optimizer runs `meshopt()`, which writes
+/// `EXT_meshopt_compression` into the GLB's **`extensionsRequired`**.
+/// `<model-viewer>` ships DRACO and KTX2 decoder locations by DEFAULT but not a
+/// meshopt one, so with no configuration `GLTFLoader` refuses the file and the
+/// user gets the generic "we couldn't load this model" — for EVERY optimized
+/// model, on every platform.
+///
+/// The decoder itself is already BUNDLED inside `model-viewer.min.js` (the WASM
+/// is inlined). `setMeshoptDecoderLocation(url)` only appends a `<script
+/// src=url>` and waits for it to load before using the bundled decoder — the
+/// URL is a TRIGGER, not a download. A no-op `data:` script satisfies it with
+/// no network request, which matters because the mobile viewer is served by the
+/// plugin's local proxy: that proxy answers only `/`, `/model-viewer.min.js`
+/// and `/model`, and REDIRECTS any other path to the GLB's CloudFront origin,
+/// where a real decoder file would 404 — and a 404 rejects the decoder promise,
+/// which fails the load exactly as if nothing had been configured.
+///
+/// Must be kept IDENTICAL to the value in `web/index.html`; the two are
+/// separate pages (the plugin's WebView template inherits nothing from the web
+/// build's HTML) and `test/projects/meshopt_decoder_test.dart` asserts they
+/// still agree.
+@visibleForTesting
+const kMeshoptDecoderLocation = 'data:text/javascript,0';
+
 class ModelRenderViewState extends State<ModelRenderView> {
   static const _channelName = 'RecaptureModelViewer';
 
@@ -87,6 +114,15 @@ class ModelRenderViewState extends State<ModelRenderView> {
   /// resolves AR support asynchronously, so a one-shot sample at `load` can
   /// race it false and permanently hide a button the device supports.
   static const _lifecycleJs = '''
+// ── meshopt decoder (see kMeshoptDecoderLocation) ──────────────────────────
+// model-viewer reads `self.ModelViewerElement` ONCE, when its module
+// evaluates. This script is a CLASSIC inline <script> in the body, and the
+// plugin's template loads model-viewer as `type="module"` — which is deferred
+// until after parsing — so this always runs FIRST. Without it, every optimized
+// GLB fails to load in the app's WebView.
+window.ModelViewerElement = window.ModelViewerElement || {};
+window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
+
 (function () {
   var viewer = document.querySelector('model-viewer');
   function post(msg) {
@@ -118,6 +154,12 @@ class ModelRenderViewState extends State<ModelRenderView> {
   });
 })();
 ''';
+
+  /// The injected page script, for the meshopt-decoder guardrail test — the
+  /// one piece of this file whose absence is invisible until a real optimized
+  /// model fails to load on a device. See [kMeshoptDecoderLocation].
+  @visibleForTesting
+  static String get lifecycleJsForTest => _lifecycleJs;
 
   /// Uniform scale applied to the model. Meshy GLBs carry no calibrated
   /// real-world size and render ~2.5× too large in AR (Scene Viewer / Quick

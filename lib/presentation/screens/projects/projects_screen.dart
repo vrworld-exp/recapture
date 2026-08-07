@@ -11,6 +11,7 @@ import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/model_generation_request_notifier.dart';
 import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
+import '../../../data/repositories/live_projects_repository.dart';
 import '../../../data/repositories/projects_repository.dart';
 import '../../../domain/entities/project.dart';
 import '../../../domain/entities/project_status.dart';
@@ -222,6 +223,12 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
               // Owners can spin a fresh version straight from the viewer; staff
               // regenerate through Prepare-Images (see _regenerateHandlerFor).
               onRegenerate: _regenerateHandlerFor(p),
+              // The owner's ONLY route to optimization: there is no
+              // owner-facing models list, so the viewer is the surface. The
+              // button itself only renders when the server says canOptimize.
+              onOptimize: () => ref
+                  .read(liveProjectsRepositoryProvider)
+                  .optimizeOwnerModel(p.id, state.model!.id),
             ),
           ),
         );

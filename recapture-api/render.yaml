@@ -38,6 +38,15 @@ services:
       # separate worker service to deploy or pay for. Only valid while every
       # processor is I/O-bound (the Meshy path is HTTP + sleep); when the
       # capture pipeline does real CPU work, split it out and set this false.
+      #
+      # ⚠ THAT CONDITION IS NOW BROKEN. MODEL_OPTIMIZATION is the first genuinely
+      # CPU-BOUND processor: glTF-Transform, meshopt and sharp all run
+      # synchronously on the event loop, so a large model stalls THIS API for the
+      # duration. It is bounded (MODEL_OPTIMIZE_MAX_INPUT_BYTES caps the input at
+      # 250 MiB, and the owner route is rate-limited), but the right shape is a
+      # separate worker service: set this false here and deploy `npm run worker`
+      # alongside. Left true only because flipping it with no worker deployed
+      # would mean NOTHING processes jobs at all.
       - key: RUN_WORKER_IN_PROCESS
         value: true
       # Required BECAUSE of the flag above — the process running the loop is the

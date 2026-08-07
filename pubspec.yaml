@@ -24,7 +24,7 @@ dependencies:
   hive: ^2.2.3
 
   # Secure storage (auth tokens — OS Keychain / Keystore)
-  flutter_secure_storage: ^10.3.1
+  flutter_secure_storage: ^11.0.0
 
   # Networking
   dio: ^5.4.3

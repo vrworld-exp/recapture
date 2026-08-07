@@ -13,11 +13,11 @@ import '../../domain/entities/auth_session.dart';
 /// undecodable blob is treated as "no session" — it is cleared and `null` is
 /// returned, never thrown, so a bad blob can never crash app startup.
 class AuthStorage {
+  // flutter_secure_storage 11 always encrypts on Android (AES-GCM with RSA-OAEP
+  // key wrapping), so the old `encryptedSharedPreferences` opt-in is gone and
+  // the default options are the secure ones.
   AuthStorage([FlutterSecureStorage? storage])
-      : _storage = storage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            );
+      : _storage = storage ?? const FlutterSecureStorage();
 
   final FlutterSecureStorage _storage;
 

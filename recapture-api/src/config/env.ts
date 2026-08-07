@@ -162,6 +162,40 @@ const envSchema = z.object({
   /** Sliding window for the model-image upload-urls cap (seconds). */
   MODEL_IMAGE_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // ── Model optimization (docs/prompts/model-optimization-opt-variant.md) ─────
+  /**
+   * GLB size above which a model is worth optimizing — the ONLY gate on the
+   * Optimize button, and the server's own verdict (`canOptimize`) is what the
+   * client renders, so the two can never disagree.
+   *
+   * BINARY, NOT DECIMAL: 8 MiB = 8 * 1024 * 1024 = 8,388,608 bytes. "8 MB" is
+   * ambiguous and the client formats displayed sizes with the SAME 1024 divisor
+   * — mix the two and a 8,200,000-byte model reads "8.2 MB" with no button, or
+   * "7.8 MB" with one.
+   */
+  MODEL_OPTIMIZE_THRESHOLD_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(8 * 1024 * 1024),
+  /**
+   * Hard ceiling on the GLB the optimizer will even open (bytes).
+   *
+   * glTF-Transform holds the WHOLE document in memory (and meshopt re-encodes
+   * every buffer), so a pathological input does not fail slowly — it OOMs the
+   * process. When RUN_WORKER_IN_PROCESS is on that process is the API, so this
+   * is the difference between one failed optimization and an outage.
+   */
+  MODEL_OPTIMIZE_MAX_INPUT_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(250 * 1024 * 1024),
+  /** Max optimize requests one OWNER may make per window (CPU, not credits). */
+  MODEL_OPTIMIZE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  /** Sliding window for the owner optimize cap (seconds). */
+  MODEL_OPTIMIZE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // ── Automatic model generation (docs/auto-model-generation-*.md) ───────────
   /**
    * The HARD gate on generating a model automatically when a capture finishes.

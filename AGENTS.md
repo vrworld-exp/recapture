@@ -167,6 +167,46 @@ do not remove it).
   one). Its **`source`** flag is the origin: `'meshy'` (built) or `'manual'`
   (RESERVED for the in-house pipeline). The client's "Created by Meshy AI" badge
   reads that flag and nothing else.
+- **`source: 'optimized'` is the exception that proves the rule: it is a
+  DERIVATIVE, not an origin.** One tap on **Optimize** (staff row action, or the
+  owner's viewer) inserts a SECOND `ProjectModel` — `optimizedFrom` naming its
+  parent — and enqueues a **`MODEL_OPTIMIZATION`** worker job that runs the
+  parent's GLB through glTF-Transform (`services/modelOptimizerService.ts`:
+  dedup → weld → prune → texture recompress → prune → meshopt) and writes the
+  result under the NEW record's own artifact prefix. A separate record, not a
+  `variants[]` array, because the ask is that the small model *appear in the
+  model list* — which `listProjectModels` then gives for free, with `approve`
+  semantics unchanged. Consequences to hold in mind:
+  - it **costs CPU, never Meshy credits**: it sets neither `createdBySystem` nor
+    `createdByManualButton`, so `countServerSelectedGenerationsInLast24h` cannot
+    see it, and an optimization must never consume the 24h spend ceiling;
+  - it is **not a generation**: `pendingOwnerGenerationFor` filters
+    `source != 'optimized'`, or the owner sees "creating your 3D model…" for a
+    model they already have;
+  - `latestSucceededModel` **now returns the OPT record** once one succeeds
+    (intended — the owner should get the small file), which is why the processor
+    `copyObject`s the parent's USDZ and preview onto it. Skip that and the first
+    optimization silently kills iOS AR Quick Look and the project thumbnail;
+  - eligibility is the SERVER's verdict, shipped as `canOptimize` on both DTOs.
+    The client never re-derives it. `artifacts.glbBytes` is the only input, and
+    **absent means UNKNOWN, not small** — no size, no button.
+  - `MODEL_OPTIMIZE_THRESHOLD_BYTES` is **binary** (8 MiB). The client's
+    `formatBytes` uses the same 1024 divisor deliberately; mix them and a model
+    reads "8.0 MB" with no button beside it.
+- ⚠ **`meshopt()` puts `EXT_meshopt_compression` in `extensionsRequired`, and
+  `<model-viewer>` has NO default meshopt decoder location** (it does have DRACO
+  and KTX2 ones). Unconfigured, `GLTFLoader` throws and EVERY optimized model
+  shows the generic "couldn't load this model". The decoder is already bundled
+  inside `model-viewer.min.js`; the URL is only a trigger, so a no-op `data:`
+  script is enough. It must be set in **both** `web/index.html` and
+  `_lifecycleJs` in `model_render_view.dart` — two separate pages, and fixing
+  one ships the feature broken on the other platform.
+  `test/projects/meshopt_decoder_test.dart` guards the pair.
+- **`sharp` must resolve to ONE copy in `node_modules`.** `@gltf-transform/functions`
+  pulls it in transitively via `ndarray-pixels`; two libvips native addons in one
+  process break GObject type registration and every texture pass fails with
+  `colourspace: parameter space not set`. Our `sharp` range is pinned to match
+  `ndarray-pixels`' so npm hoists a single copy — check that before bumping either.
 - **Meshy generation is ADDITIVE and human-triggered**, never automatic: staff
   pick 3–4 Preview-gallery photos → `POST /admin/projects/:id/model` → a
   **`MESHY_MODEL_GENERATION`** worker job (a peer job type, registered beside

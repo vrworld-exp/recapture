@@ -32,6 +32,27 @@ class ModelHistoryScreen extends ConsumerWidget {
 
   final String projectId;
 
+  /// Fires the Optimize request and reports the outcome.
+  ///
+  /// Deliberately quiet on success: the refresh inside the notifier puts a
+  /// pending `OPT` row at the head of the list, which says more than a snackbar
+  /// could. Only a FAILURE needs words, and they are mapped copy — never a raw
+  /// code (the server's 409 reasons are internal rule ids).
+  Future<void> _optimize(
+    BuildContext context,
+    WidgetRef ref,
+    ProjectModelView model,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref
+          .read(modelGenerationProvider(projectId).notifier)
+          .optimize(model.id);
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(failureCopy(error))));
+    }
+  }
+
   void _openViewer(BuildContext context, ProjectModelView model) {
     // Guarded here as well as on the row's onTap: a non-viewable record has
     // nothing to render, and the viewer resolves by id rather than trusting a
@@ -92,6 +113,7 @@ class ModelHistoryScreen extends ConsumerWidget {
                       onTap: model.isViewable
                           ? () => _openViewer(context, model)
                           : null,
+                      onOptimize: () => _optimize(context, ref, model),
                     );
                   },
                 ),
@@ -102,8 +124,8 @@ class ModelHistoryScreen extends ConsumerWidget {
 }
 
 /// One generation attempt: when it ran, how it ended, what it was built from.
-class _ModelRow extends StatelessWidget {
-  const _ModelRow({super.key, required this.model, this.onTap});
+class _ModelRow extends StatefulWidget {
+  const _ModelRow({super.key, required this.model, this.onTap, this.onOptimize});
 
   final ProjectModelView model;
 
@@ -112,8 +134,39 @@ class _ModelRow extends StatelessWidget {
   /// row inert; the chevron follows it so the affordance can't lie.
   final VoidCallback? onTap;
 
+  /// Runs the Optimize request. Only ever called from the trailing button,
+  /// which only exists when [ProjectModelView.canOptimize] — the SERVER's
+  /// verdict, never a rule re-derived here.
+  final Future<void> Function()? onOptimize;
+
+  @override
+  State<_ModelRow> createState() => _ModelRowState();
+}
+
+class _ModelRowState extends State<_ModelRow> {
+  /// True between the tap and the response. The button goes disabled and shows
+  /// a spinner: the request is not free (it enqueues real CPU work), and a
+  /// second tap before the first lands would only produce a replay the user
+  /// cannot distinguish from a bug.
+  bool _optimizing = false;
+
+  Future<void> _handleOptimize() async {
+    final callback = widget.onOptimize;
+    if (callback == null || _optimizing) return;
+    setState(() => _optimizing = true);
+    try {
+      await callback();
+    } finally {
+      // The list rebuilds after a successful request, so this row may already
+      // be gone — guard before touching state.
+      if (mounted) setState(() => _optimizing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final model = widget.model;
+    final onTap = widget.onTap;
     final text = Theme.of(context).textTheme;
     final muted = text.bodySmall?.copyWith(color: AppColors.textMuted);
     return Material(
@@ -142,6 +195,14 @@ class _ModelRow extends StatelessWidget {
                             style: text.bodyMedium,
                           ),
                         ),
+                        if (model.isOptimized) ...[
+                          const SizedBox(width: AppSpacing.sm),
+                          // Flexible because an OPT record CAN also be
+                          // approved: "OPT · 21.4 MB (−68%)" plus the Approved
+                          // chip plus a timestamp does not fit a 360dp phone,
+                          // and the badge shrinking is better than an overflow.
+                          Flexible(child: _OptBadge(model: model)),
+                        ],
                         if (model.approved) ...[
                           const SizedBox(width: AppSpacing.sm),
                           const _ApprovedBadge(),
@@ -159,6 +220,9 @@ class _ModelRow extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: AppSpacing.sm),
+              // Exactly ONE trailing affordance, in this order: the work
+              // indicator wins over everything, then the action, then the
+              // "you can open this" chevron.
               if (model.status.isPending)
                 const SizedBox(
                   width: 16,
@@ -167,6 +231,14 @@ class _ModelRow extends StatelessWidget {
                     strokeWidth: 2,
                     color: AppColors.textMuted,
                   ),
+                )
+              // `canOptimize` is the SERVER's verdict. The client never
+              // re-derives it from the size, so the button and the endpoint
+              // cannot disagree.
+              else if (model.canOptimize && widget.onOptimize != null)
+                _OptimizeButton(
+                  busy: _optimizing,
+                  onPressed: _handleOptimize,
                 )
               else if (onTap != null)
                 const Icon(Icons.chevron_right,
@@ -178,12 +250,19 @@ class _ModelRow extends StatelessWidget {
     );
   }
 
-  /// The secondary line: why it failed, or what it was built from — the photo
-  /// count is the main thing that differs between attempts, and usually the
-  /// reason one succeeded where another didn't.
+  /// The secondary line: why it failed, what it is doing, or what it was built
+  /// from plus how big it is — the photo count is the main thing that differs
+  /// between attempts, and the size is what the Optimize decision hangs on.
   static String _detail(ProjectModelView model) {
     if (model.error case final error?) return error.message;
     if (model.status.isPending) {
+      // A pending OPT record runs through the SAME progress phases as a
+      // generation (the backend reuses the vocabulary on purpose), so the
+      // phase alone cannot tell the two apart — the source can. Generation
+      // copy on an optimization would promise a new model that is not coming.
+      if (model.isOptimized) {
+        return 'Optimizing — shrinking textures and geometry…';
+      }
       // Surface the worker's live phase when the backend reports one, so the
       // history row tells staff what is actually happening right now.
       return switch (model.progress?.phase) {
@@ -196,9 +275,14 @@ class _ModelRow extends StatelessWidget {
           'Generating — this takes a few minutes.',
       };
     }
-    final n = model.selectedKeys.length;
-    if (n == 0) return '';
-    return n == 1 ? '1 photo' : '$n photos';
+    final parts = [
+      if (model.selectedKeys.length case final n when n > 0)
+        n == 1 ? '1 photo' : '$n photos',
+      // Only when KNOWN. A null size renders nothing at all — see
+      // ProjectModelView.sizeBytes: absent means unknown, never zero.
+      if (formatBytes(model.sizeBytes) case final size?) size,
+    ];
+    return parts.join(' · ');
   }
 
   static String _statusLabel(ModelStatus status) => switch (status) {
@@ -261,6 +345,108 @@ class _ThumbPlaceholder extends StatelessWidget {
       alignment: Alignment.center,
       child: const Icon(Icons.view_in_ar_outlined,
           color: AppColors.textMuted, size: 20),
+    );
+  }
+}
+
+/// Human-readable size, or null when the size is UNKNOWN.
+///
+/// Uses the BINARY divisor (1024), which is the same one
+/// MODEL_OPTIMIZE_THRESHOLD_BYTES is expressed in on the backend. That is not
+/// cosmetic: mix the two and an 8,200,000-byte model reads "8.2 MB" while the
+/// server, measuring against 8 MiB = 8,388,608, still calls it below threshold
+/// and shows no button — a display that contradicts the affordance next to it.
+///
+/// Returns null rather than "0 B" for an absent size: absent means unknown.
+@visibleForTesting
+String? formatBytes(int? bytes) {
+  if (bytes == null || bytes <= 0) return null;
+  const kb = 1024;
+  const mb = kb * 1024;
+  if (bytes >= mb) return '${(bytes / mb).toStringAsFixed(1)} MB';
+  if (bytes >= kb) return '${(bytes / kb).toStringAsFixed(0)} KB';
+  return '$bytes B';
+}
+
+/// The `OPT` chip — a STATE LABEL, not an action.
+///
+/// Everything about it is chosen to keep it from reading as a button: it is a
+/// filled pill with no ripple, no border, no chevron and no tap target. Its
+/// colour is deliberately NOT [AppColors.mirageRed] — that already means
+/// "Approved" one chip along this same row, and two different facts wearing the
+/// same colour is how a row starts lying.
+class _OptBadge extends StatelessWidget {
+  const _OptBadge({required this.model});
+
+  final ProjectModelView model;
+
+  @override
+  Widget build(BuildContext context) {
+    final saving = model.optimizationSavingPercent;
+    final size = formatBytes(model.sizeBytes);
+    // "OPT · 6.8 MB (−68%)" when everything is known, degrading term by term.
+    final label = [
+      'OPT',
+      if (size != null) size,
+    ].join(' · ');
+    return Container(
+      key: const ValueKey('model_opt_badge'),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: 2,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.success,
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+      ),
+      child: Text(
+        saving == null ? label : '$label (−$saving%)',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              // On the light-green fill, the app's dark background is the
+              // readable foreground.
+              color: AppColors.bgPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
+    );
+  }
+}
+
+/// The Optimize action — unmistakably a BUTTON, and unmistakably not the badge.
+///
+/// It sits where the chevron would be, is outlined rather than filled, and
+/// carries a leading compress icon. While [busy] it goes disabled and swaps the
+/// icon for a spinner, so a second tap cannot fire before the first lands.
+class _OptimizeButton extends StatelessWidget {
+  const _OptimizeButton({required this.busy, required this.onPressed});
+
+  final bool busy;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      key: const ValueKey('model_optimize_button'),
+      onPressed: busy ? null : onPressed,
+      icon: busy
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.textMuted,
+              ),
+            )
+          : const Icon(Icons.compress, size: 16),
+      label: const Text('Optimize'),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(0, 32),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+        visualDensity: VisualDensity.compact,
+        textStyle: Theme.of(context).textTheme.bodySmall,
+      ),
     );
   }
 }

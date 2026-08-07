@@ -32,6 +32,27 @@
   <title>recapture</title>
   <link rel="manifest" href="manifest.json">
 
+  <!-- model-viewer configuration. MUST come BEFORE the module script below:
+       model-viewer reads `self.ModelViewerElement` exactly once, when its
+       module evaluates, and a value set afterwards is ignored.
+
+       meshoptDecoderLocation is LOAD-BEARING, not an optimization. The backend
+       optimizer emits EXT_meshopt_compression in `extensionsRequired`, and
+       model-viewer ships DRACO/KTX2 decoder locations by default but NOT a
+       meshopt one — unconfigured, GLTFLoader rejects every optimized model and
+       the app shows "we couldn't load this model". The decoder is already
+       bundled inside model-viewer.min.js; this URL is only the trigger that
+       makes it load it, so a no-op data: script is enough and costs no request.
+
+       Keep this value IDENTICAL to kMeshoptDecoderLocation in
+       lib/presentation/screens/projects/model_render_view.dart — the mobile
+       WebView builds its own page and inherits nothing from this file.
+       test/projects/meshopt_decoder_test.dart asserts the two still agree. -->
+  <script>
+    window.ModelViewerElement = window.ModelViewerElement || {};
+    window.ModelViewerElement.meshoptDecoderLocation = 'data:text/javascript,0';
+  </script>
+
   <!-- model_viewer_plus (3D model viewer): on web the package strips the
        <script> from its own HTML template and requires the <model-viewer>
        custom element to be registered here instead — without this line the

@@ -54,6 +54,10 @@ String failureCopy(Object error) => switch (error) {
         'Your account no longer has staff access.',
       LiveProjectsException(failure: LiveProjectsFailure.network) =>
         'You’re offline — check your connection and try again.',
+      // The row the button was on is out of date — retrying the same request
+      // would fail identically, so the copy asks for a refresh instead.
+      LiveProjectsException(failure: LiveProjectsFailure.notOptimizable) =>
+        'This model can’t be optimized — pull down to refresh the list.',
       _ => 'Something went wrong. Please try again.',
     };
 

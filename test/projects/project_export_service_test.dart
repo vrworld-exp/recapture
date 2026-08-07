@@ -19,7 +19,8 @@ class _FakeLiveRepo
     with
         FakeModelGenerationDefaults,
         FakeAdminDeleteDefaults,
-        FakeAutoGenerationDefaults
+        FakeAutoGenerationDefaults,
+        FakeModelOptimizeDefaults
     implements LiveProjectsRepository {
   Map<String, dynamic>? exportResult;
   LiveProjectsException? failWith;

@@ -36,9 +36,13 @@ import {
   findProjectModelById,
   latestSucceededModel,
   listProjectModels,
+  optimizedSourceIdsFor,
+  requestModelOptimization,
   toProjectModelDto,
   MAX_SELECTED_PHOTOS,
   MIN_SELECTED_PHOTOS,
+  NOT_OPTIMIZABLE_CODES,
+  NOT_OPTIMIZABLE_MESSAGES,
 } from '@/services/projectModelsService';
 import {
   generateModelOnDemand,
@@ -137,7 +141,9 @@ router.get(
     // The latest SUCCEEDED generation, so the staff detail can link straight to
     // the viewer. Full history stays behind GET /admin/projects/:id/models.
     const latestModel = await latestSucceededModel(params.data.id);
-    const model = latestModel ? toProjectModelDto(latestModel) : null;
+    const model = latestModel
+      ? toProjectModelDto(latestModel, await optimizedSourceIdsFor(params.data.id))
+      : null;
 
     res.status(200).json({
       status: 'success',
@@ -836,7 +842,80 @@ router.get(
     }
 
     const models = await listProjectModels(params.data.id);
-    res.status(200).json({ status: 'success', models: models.map(toProjectModelDto) });
+    // ONE lookup of "which models already have an optimized derivative" for the
+    // whole page — the per-row `canOptimize` verdict is derived from it, never
+    // from a query per row.
+    const optimizedSourceIds = await optimizedSourceIdsFor(params.data.id);
+    res.status(200).json({
+      status: 'success',
+      models: models.map((m) => toProjectModelDto(m, optimizedSourceIds)),
+    });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/models/:modelId/optimize — shrink a generated model
+ * and add the result to this project's model list as its own OPT record.
+ *
+ * MODEL_ARTIST+ (the router-level gate), beside `…/approve`. Costs CPU, never
+ * Meshy credits, so it carries none of Create-Model's spend guards; what it
+ * does carry is the unique `optimizedFrom` index, which is why a double-tap
+ * REPLAYS (200) instead of creating a second record.
+ */
+router.post(
+  '/projects/:id/models/:modelId/optimize',
+  asyncHandler(async (req, res) => {
+    const params = adminModelIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const result = await requestModelOptimization({
+      projectId: params.data.id,
+      modelId: params.data.modelId,
+      actor: { userId, role: req.user!.role ?? 'MODEL_ARTIST' },
+    });
+
+    if (result.outcome === 'PROJECT_NOT_FOUND' || result.outcome === 'MODEL_NOT_FOUND') {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: result.outcome === 'PROJECT_NOT_FOUND' ? 'Project not found.' : 'Model not found.',
+      });
+      return;
+    }
+    if (result.outcome === 'NOT_OPTIMIZABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: NOT_OPTIMIZABLE_CODES[result.reason],
+        message: NOT_OPTIMIZABLE_MESSAGES[result.reason],
+      });
+      return;
+    }
+
+    // The response describes the OPT record, whose own canOptimize is false by
+    // definition — the set is passed for consistency, not because it can matter.
+    const optimizedSourceIds = await optimizedSourceIdsFor(params.data.id);
+    const model = toProjectModelDto(result.model, optimizedSourceIds);
+    track(AnalyticsEvent.MODEL_OPTIMIZE_REQUESTED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(model.projectId),
+      model_id_hash: hashIdentifier(params.data.modelId),
+      optimized_model_id_hash: hashIdentifier(model.id),
+      source_bytes: result.sourceBytes,
+      was_replay: result.outcome === 'REPLAYED',
+      surface: 'staff',
+    });
+
+    // 200 for a replay, 201 for a record that actually enqueued work — the same
+    // distinction Create-Model draws.
+    res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({ status: 'success', model });
   })
 );
 
@@ -876,7 +955,10 @@ router.post(
       return;
     }
 
-    const model = toProjectModelDto(result.model);
+    // The client swaps this row in without re-fetching, so `canOptimize` has to
+    // be right here — a fail-closed `false` would make the Optimize button
+    // vanish the moment a model was approved.
+    const model = toProjectModelDto(result.model, await optimizedSourceIdsFor(params.data.id));
     track(AnalyticsEvent.MODEL_APPROVED, {
       actor_id_hash: hashIdentifier(userId),
       project_id_hash: hashIdentifier(model.projectId),

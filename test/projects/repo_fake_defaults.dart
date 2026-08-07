@@ -49,6 +49,20 @@ mixin FakeAutoGenerationDefaults {
       throw UnimplementedError('not used here');
 }
 
+/// The OPTIMIZE members of `LiveProjectsRepository` (the staff row action and
+/// the owner-facing viewer action).
+///
+/// Its own mixin, like [FakeAutoGenerationDefaults], so a fake that supplies
+/// create/list/approve by hand can still take these defaults.
+mixin FakeModelOptimizeDefaults {
+  Future<ProjectModelView> optimizeModel(
+          String projectId, String modelId) async =>
+      throw UnimplementedError('not used here');
+
+  Future<void> optimizeOwnerModel(String projectId, String modelId) async =>
+      throw UnimplementedError('not used here');
+}
+
 /// ADMIN curation members of `LiveProjectsRepository`.
 mixin FakeAdminDeleteDefaults {
   Future<void> deleteProject(

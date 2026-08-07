@@ -27,6 +27,7 @@ import {
   type ModelCdnUrls,
   type ModelError,
   type ModelGenerationTrace,
+  type ModelOptimization,
   type ModelProgress,
   type ModelSource,
   type ModelStatus,
@@ -61,6 +62,19 @@ export interface IProjectModel extends Document {
   error?: ModelError;
   /** Client-supplied Idempotency-Key — unique per actor when present. */
   idempotencyKey?: string;
+  /**
+   * Set on an OPTIMIZED record: the id of the model it was derived from. A
+   * record carrying this is a DERIVATIVE, never a paid generation — it costs no
+   * Meshy credits and must be excluded from anything that counts or waits on
+   * generations.
+   *
+   * The UNIQUE PARTIAL INDEX below is what makes "a model is optimized at most
+   * once" true: a concurrent double-tap loses with E11000 and is resolved to a
+   * replay of the winner, exactly like the Idempotency-Key path.
+   */
+  optimizedFrom?: Types.ObjectId;
+  /** Byte savings of the pass, for the UI's "OPT · 4.2 MB (−68%)" label. */
+  optimization?: ModelOptimization;
   /**
    * Who the generation is attributed to. For a staff "Create Model" tap this is
    * the staff actor; for an AUTOMATIC generation there is no actor, so it is the
@@ -112,6 +126,18 @@ const ModelArtifactsSchema = new Schema<ModelArtifacts>(
     usdzKey: { type: String },
     previewImageKey: { type: String },
     cdnUrls: { type: ModelCdnUrlsSchema, required: true },
+    // Optional: pre-existing records have none, and absent means UNKNOWN size,
+    // never "small" — see ModelArtifacts.glbBytes.
+    glbBytes: { type: Number, min: 0 },
+  },
+  { _id: false }
+);
+
+const ModelOptimizationSchema = new Schema<ModelOptimization>(
+  {
+    sourceBytes: { type: Number, required: true, min: 0 },
+    outputBytes: { type: Number, required: true, min: 0 },
+    at: { type: Date, required: true },
   },
   { _id: false }
 );
@@ -176,6 +202,8 @@ const ProjectModelSchema = new Schema<IProjectModel>(
     approved: { type: ModelApprovalSchema },
     error: { type: ModelErrorSchema },
     idempotencyKey: { type: String, maxlength: 128 },
+    optimizedFrom: { type: Schema.Types.ObjectId, ref: 'ProjectModel' },
+    optimization: { type: ModelOptimizationSchema },
     createdByUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     createdByRole: { type: String, enum: USER_ROLES, required: true },
     createdBySystem: { type: Boolean },
@@ -203,6 +231,17 @@ ProjectModelSchema.index(
 // counted before every automatic AND button-triggered generation.
 ProjectModelSchema.index({ createdByUserId: 1, createdAt: -1 });
 
+// "A model is optimized at most once." Partial so the overwhelming majority of
+// records — which have no optimizedFrom — never collide. This index is the RACE
+// AUTHORITY for the Optimize button exactly as the Idempotency-Key index is for
+// Create-Model: two simultaneous taps both try to insert, one wins, and the
+// loser's E11000 is resolved to a REPLAY of the winner rather than a second
+// (CPU-expensive, duplicate-row-producing) optimization.
+ProjectModelSchema.index(
+  { optimizedFrom: 1 },
+  { unique: true, partialFilterExpression: { optimizedFrom: { $exists: true } } }
+);
+
 export const ProjectModel = model<IProjectModel>('ProjectModel', ProjectModelSchema);
 
 export {
@@ -221,6 +260,7 @@ export {
   type ModelArtifacts,
   type ModelCdnUrls,
   type ModelError,
+  type ModelOptimization,
   type ModelProgress,
   type ModelSource,
   type ModelStatus,
