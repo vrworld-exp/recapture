@@ -11,9 +11,9 @@
 // jobQueue.ts + worker.ts.
 import type { Types } from 'mongoose';
 import {
-  ASSET_OPTIMIZATION_JOB_TYPE,
   CAPTURE_PROCESSING_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
+  MODEL_OPTIMIZATION_JOB_TYPE,
   type ExecutableStage,
   type JobState,
   type StageProgress,
@@ -26,9 +26,9 @@ import type { CaptureFlowVariant, CaptureMode } from '@/models/types/captureVari
 export const DEFAULT_JOB_TYPE = CAPTURE_PROCESSING_JOB_TYPE;
 
 export {
-  ASSET_OPTIMIZATION_JOB_TYPE,
   CAPTURE_PROCESSING_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
+  MODEL_OPTIMIZATION_JOB_TYPE,
 };
 
 /** Fallback for job documents created before the worker fields existed. */

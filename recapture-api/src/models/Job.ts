@@ -9,6 +9,7 @@ import {
 import {
   CAPTURE_PROCESSING_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
+  MODEL_OPTIMIZATION_JOB_TYPE,
   JobState,
   StageProgress,
   StageTimestamps,
@@ -217,7 +218,9 @@ export interface IJob extends Document {
    * capture fields. CAPTURE_PROCESSING leaves this unset — it carries
    * everything it needs in `upload`/`objectSize`/`captureVariant`.
    * MESHY_MODEL_GENERATION uses it for `{ modelId }` (the ProjectModel record
-   * holding the selected keys and the resume-critical meshyTaskId).
+   * holding the selected keys and the resume-critical meshyTaskId), and
+   * MODEL_OPTIMIZATION for `{ modelId }` (the OPT record, which names its
+   * source through `optimizedFrom`).
    */
   payload?: Record<string, unknown>;
 
@@ -399,7 +402,11 @@ export const Job = model<IJob>('Job', JobSchema);
 
 // Re-export shared types for convenience — controllers/services can import
 // from '../models/Job' instead of reaching into models/types/ directly.
-export { CAPTURE_PROCESSING_JOB_TYPE, MESHY_MODEL_GENERATION_JOB_TYPE };
+export {
+  CAPTURE_PROCESSING_JOB_TYPE,
+  MESHY_MODEL_GENERATION_JOB_TYPE,
+  MODEL_OPTIMIZATION_JOB_TYPE,
+};
 
 export type {
   JobState,

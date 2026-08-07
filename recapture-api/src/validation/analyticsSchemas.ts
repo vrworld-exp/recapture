@@ -64,6 +64,9 @@ export const AnalyticsEvent = {
   MODEL_GENERATION_DECLINED: 'model_generation_declined',
   MODEL_APPROVED: 'model_approved',
   MODEL_IMAGE_UPLOADS_GENERATED: 'model_image_uploads_generated',
+  // ── Model optimization (the OPT variant) ──────────────────────────────────
+  MODEL_OPTIMIZE_REQUESTED: 'model_optimize_requested',
+  MODEL_OPTIMIZE_COMPLETED: 'model_optimize_completed',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -440,6 +443,42 @@ const modelApprovedProps = z
   })
   .strict();
 
+/**
+ * Someone asked for a model to be optimized.
+ *
+ * `source_bytes` is the whole point of the event: it is the distribution that
+ * says whether the 8 MiB threshold is set anywhere near the right place. Ids
+ * are hashed; no keys, no URLs.
+ */
+const modelOptimizeRequestedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    /** The SOURCE model — the one the button was on. */
+    model_id_hash: z.string().min(1),
+    /** The OPT record created (or replayed). */
+    optimized_model_id_hash: z.string().min(1),
+    source_bytes: z.number().int().nonnegative(),
+    /** True when an OPT record already existed (no new work enqueued). */
+    was_replay: z.boolean(),
+    /** Which surface asked — staff history list, or the owner's viewer. */
+    surface: z.enum(['staff', 'owner']),
+  })
+  .strict();
+
+/** An optimization finished. The saving is what says the feature is worth its
+ * CPU; `degraded` says whether the texture passes actually ran. */
+const modelOptimizeCompletedProps = z
+  .object({
+    project_id_hash: z.string().min(1),
+    model_id_hash: z.string().min(1),
+    source_bytes: z.number().int().nonnegative(),
+    output_bytes: z.number().int().nonnegative(),
+    /** Passes skipped for a missing optional dependency (usually `sharp`). */
+    degraded: z.array(z.string()).optional(),
+  })
+  .strict();
+
 /** requireRole rejected an authenticated caller (role below the minimum). */
 const adminAccessDeniedProps = z
   .object({
@@ -483,6 +522,8 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.MODEL_GENERATION_DECLINED]: modelGenerationDeclinedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,
   [AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED]: modelImageUploadsGeneratedProps,
+  [AnalyticsEvent.MODEL_OPTIMIZE_REQUESTED]: modelOptimizeRequestedProps,
+  [AnalyticsEvent.MODEL_OPTIMIZE_COMPLETED]: modelOptimizeCompletedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

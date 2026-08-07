@@ -9,8 +9,15 @@
  * the in-house capture/reconstruction pipeline so both origins can coexist
  * under one shape without a later schema change. This flag is what drives the
  * client's "Created by Meshy AI" badge — never infer origin from anything else.
+ *
+ * `optimized` is the odd one out and deliberately so: it is not an ORIGIN but a
+ * DERIVATIVE — a record produced by re-processing another record's GLB through
+ * the glTF-Transform pipeline (services/modelOptimizerService.ts). It costs no
+ * Meshy credits, is never a paid generation, and always carries
+ * {@link IProjectModel.optimizedFrom}. Anything that means "a generation" must
+ * therefore exclude it explicitly — see `pendingOwnerGenerationFor`.
  */
-export const MODEL_SOURCES = ['meshy', 'manual'] as const;
+export const MODEL_SOURCES = ['meshy', 'manual', 'optimized'] as const;
 export type ModelSource = (typeof MODEL_SOURCES)[number];
 
 /**
@@ -58,6 +65,29 @@ export interface ModelArtifacts {
   usdzKey?: string;
   previewImageKey?: string;
   cdnUrls: ModelCdnUrls;
+  /**
+   * Byte length of the GLB in S3. Written when the artifact is stored; the ONLY
+   * input to the "is this worth optimizing?" rule (MODEL_OPTIMIZE_THRESHOLD_BYTES).
+   *
+   * Optional because every record written before this field existed has none —
+   * and ABSENT MEANS UNKNOWN, NOT SMALL. Treating a missing size as 0 would
+   * silently hide the Optimize button on exactly the large legacy models the
+   * feature exists for, so every reader must branch on `undefined` explicitly
+   * rather than defaulting it. `listProjectModels` backfills it best-effort.
+   */
+  glbBytes?: number;
+}
+
+/**
+ * What one optimization pass achieved, for the UI's "OPT · 4.2 MB (−68%)" label.
+ * Present only on a record whose `source` is `optimized`.
+ */
+export interface ModelOptimization {
+  /** GLB size of the SOURCE record at the time the pass ran. */
+  sourceBytes: number;
+  /** GLB size this record's optimized artifact was written at. */
+  outputBytes: number;
+  at: Date;
 }
 
 /** Who signed off on a generated model, and when. */

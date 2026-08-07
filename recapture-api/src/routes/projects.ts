@@ -6,6 +6,7 @@ import {
   listProjectsQuerySchema,
   createProjectSchema,
   projectIdParamsSchema,
+  ownerModelIdParamsSchema,
   deleteProjectBodySchema,
   renameProjectSchema,
 } from '@/validation/projectSchemas';
@@ -20,9 +21,12 @@ import {
 import {
   findProjectModelById,
   latestOwnerModelFor,
-  listOwnerModelsFor,
+  listOwnerProjectModels,
   pendingOwnerGenerationFor,
+  requestModelOptimization,
   MIN_SELECTED_PHOTOS,
+  NOT_OPTIMIZABLE_CODES,
+  NOT_OPTIMIZABLE_MESSAGES,
 } from '@/services/projectModelsService';
 import {
   generateModelOnDemand,
@@ -164,54 +168,6 @@ router.get(
     ]);
 
     res.status(200).json({ status: 'success', project, model, generation });
-  })
-);
-
-/**
- * GET /projects/:id/models — EVERY finished 3D model this project has, newest
- * first, so the owner can compare versions instead of only ever seeing the
- * latest one.
- *
- * The owner counterpart to `GET /admin/projects/:id/models`, and deliberately a
- * different payload: owner DTOs (URL + origin flag + approved), one entry per
- * generation, no keys, no selection, no failure copy, no rendition expansion.
- * Staff get the full history including failed attempts and both builds of each
- * model; an owner gets the models they can actually open.
- *
- * Ownership is proven the same way as `GET /projects/:id` — missing, not-owned
- * and soft-deleted all answer an identical 404, so this route cannot be used to
- * probe for the existence of someone else's project.
- */
-router.get(
-  '/:id/models',
-  asyncHandler(async (req, res) => {
-    const params = projectIdParamsSchema.safeParse(req.params);
-    if (!params.success) {
-      res.status(400).json({
-        status: 'error',
-        code: 'INVALID_REQUEST',
-        message: params.error.issues[0]?.message ?? 'Invalid project id',
-      });
-      return;
-    }
-
-    const userId = req.user!.userId;
-    const project = await getProject(userId, params.data.id);
-    if (!project) {
-      res.status(404).json({
-        status: 'error',
-        code: 'NOT_FOUND',
-        message: 'Project not found.',
-      });
-      return;
-    }
-
-    // Ownership proven above, so the lookup is by project alone. No analytics
-    // event: this is a read the user can repeat freely (pull-to-refresh), and
-    // `project_resumed` already marks the open that led here.
-    const models = await listOwnerModelsFor(project.id);
-
-    res.status(200).json({ status: 'success', models });
   })
 );
 
@@ -429,6 +385,139 @@ const OWNER_DECLINE_MESSAGES: Record<
   INSUFFICIENT_SPREAD:
     'This capture only shows one side of the object. Walk all the way around it and capture again.',
 };
+
+/**
+ * GET /projects/:id/models — the OWNER-facing model history for their own
+ * project, newest first.
+ *
+ * The owner counterpart of `GET /admin/projects/:id/models`, and deliberately
+ * NOT the same payload: it returns {@link OwnerModelListItemDto} rows, which
+ * carry no selectedKeys, no generationTrace, no actor ids, no S3 keys and no
+ * job/project ids. Staff keep their route; this one exists so an owner never
+ * has to be handed the staff projection to see their own models.
+ *
+ * Scoped by `getProject(userId, id)` — the same ownership proof every other
+ * route in this router uses — so "no such project" and "not your project"
+ * collapse into one identical 404 and a model list cannot be enumerated across
+ * users.
+ *
+ * Read-only, so it takes no rate window of its own; the optimize action below
+ * keeps the one that guards real work.
+ */
+router.get(
+  '/:id/models',
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const project = await getProject(req.user!.userId, params.data.id);
+    if (!project) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+
+    const models = await listOwnerProjectModels(project.id);
+    res.json({ status: 'success', models });
+  })
+);
+
+/**
+ * POST /projects/:id/models/:modelId/optimize — the OWNER-facing "Optimize"
+ * action: make a smaller copy of a model this project already has.
+ *
+ * Costs no Meshy credits, so none of the generation spend guards apply — but it
+ * IS CPU-expensive (glTF-Transform holds the whole document in memory and
+ * re-encodes every buffer), so it keeps its own rate window.
+ *
+ * ENUMERATION-SAFE: "no such project", "not your project" and "no such model in
+ * this project" are ONE identical 404, the same stance every other owner route
+ * takes. An owner must not be able to probe which model ids exist.
+ */
+router.post(
+  '/:id/models/:modelId/optimize',
+  asyncHandler(async (req, res) => {
+    const params = ownerModelIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    // Ownership proven the same way as everywhere else — and the ONLY way the
+    // service is ever reached, so a cross-user model id can never be optimized.
+    const project = await getProject(userId, params.data.id);
+    if (!project) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+
+    const rate = await consumeRateWindow(
+      `model-optimize:${userId}`,
+      env.MODEL_OPTIMIZE_MAX_PER_WINDOW,
+      env.MODEL_OPTIMIZE_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await requestModelOptimization({
+      projectId: project.id,
+      modelId: params.data.modelId,
+      actor: { userId, role: 'USER' },
+    });
+
+    if (result.outcome === 'PROJECT_NOT_FOUND' || result.outcome === 'MODEL_NOT_FOUND') {
+      // Collapsed on purpose — see the route comment.
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_OPTIMIZABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: NOT_OPTIMIZABLE_CODES[result.reason],
+        message: NOT_OPTIMIZABLE_MESSAGES[result.reason],
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.MODEL_OPTIMIZE_REQUESTED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(project.id),
+      model_id_hash: hashIdentifier(params.data.modelId),
+      optimized_model_id_hash: hashIdentifier(result.model.id as string),
+      source_bytes: result.sourceBytes,
+      was_replay: result.outcome === 'REPLAYED',
+      surface: 'owner',
+    });
+
+    // The owner gets the same minimal projection the rest of this router uses:
+    // the id to poll and the status, never the staff DTO.
+    res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({
+      status: 'success',
+      optimization: {
+        id: result.model.id as string,
+        status: result.model.status,
+      },
+    });
+  })
+);
 
 /**
  * PATCH /projects/:id — rename a project owned by the authenticated user.

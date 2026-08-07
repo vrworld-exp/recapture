@@ -14,14 +14,14 @@
 import { env } from '@/config/env';
 import { assertMeshyConfigured } from '@/worker/engine/meshy/meshyClient';
 import { registerProcessor } from '@/worker/processorRegistry';
-import { assetOptimizationProcessor } from '@/worker/processors/assetOptimizationProcessor';
 import { captureProcessingProcessor } from '@/worker/processors/captureProcessingProcessor';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
+import { modelOptimizationProcessor } from '@/worker/processors/modelOptimizationProcessor';
 import { startWorker } from '@/worker/worker';
 import {
-  ASSET_OPTIMIZATION_JOB_TYPE,
   DEFAULT_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
+  MODEL_OPTIMIZATION_JOB_TYPE,
 } from '@/worker/workerTypes';
 
 /**
@@ -35,9 +35,10 @@ export function registerAllProcessors(): void {
   // Staff-triggered Meshy generation — a PEER of the capture pipeline, not a
   // replacement for it (docs/meshy-integration-implementation-prompt.md).
   registerProcessor(MESHY_MODEL_GENERATION_JOB_TYPE, meshyModelProcessor);
-  // Post-generation web optimization. Enqueued BY the Meshy processor once a
-  // model already exists, so it can fail without retracting that model.
-  registerProcessor(ASSET_OPTIMIZATION_JOB_TYPE, assetOptimizationProcessor);
+  // Shrinking an already-generated model. Costs CPU, never Meshy credits, and
+  // needs no extra credential — so unlike the Meshy processor it has nothing to
+  // assert at boot (docs/prompts/model-optimization-opt-variant.md).
+  registerProcessor(MODEL_OPTIMIZATION_JOB_TYPE, modelOptimizationProcessor);
 }
 
 /**

@@ -27,65 +27,28 @@ import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
 import { Job } from '@/models/Job';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
-import { ASSET_PIPELINE_VERSION } from '@/models/types/assetManifest.types';
-import type { ModelArtifacts, ModelProgressPhase } from '@/models/types/projectModel.types';
+import type { ModelArtifacts } from '@/models/types/projectModel.types';
 import { presignObjectGetUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import {
   getMeshyClient,
   MeshyErrorCode,
   type MeshyTask,
 } from '@/worker/engine/meshy/meshyClient';
+import {
+  clearProgress,
+  failRecordIfTerminal,
+  reportProgress,
+  setStatus,
+} from '@/worker/processors/modelRecordState';
 import { enterStage, recordStageProgress } from '@/worker/stageTransitions';
 import { log } from '@/worker/workerLog';
-import {
-  ASSET_OPTIMIZATION_JOB_TYPE,
-  DEFAULT_MAX_ATTEMPTS,
-  NonRetryableJobError,
-  type JobProcessor,
-  type WorkerJob,
-} from '@/worker/workerTypes';
+import { NonRetryableJobError, type JobProcessor, type WorkerJob } from '@/worker/workerTypes';
 
 /** Per-model artifact prefix — keeps each generation's output separate, so a
  * regenerate never overwrites the attempt an artist may still want to compare
  * (and makes a record's storage self-contained). */
 function modelArtifactPrefix(rawPrefix: string, modelId: string): string {
   return `${rawPrefix}models/${modelId}/`;
-}
-
-/**
- * Publishes "what the worker is doing right now" onto the record, for the staff
- * progress UI (the admin app polls the models list while a record is pending).
- *
- * STRICTLY BEST-EFFORT: display data must never fail or delay a paid
- * generation, so errors are swallowed and the write is fenced on
- * `status: 'PROCESSING'` — it can never resurrect a record that has already
- * reached a terminal state.
- */
-async function reportProgress(
-  record: IProjectModel,
-  phase: ModelProgressPhase,
-  percent: number
-): Promise<void> {
-  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
-  try {
-    await ProjectModel.updateOne(
-      { _id: record._id, status: 'PROCESSING' },
-      { $set: { progress: { phase, percent: clamped } } }
-    ).exec();
-  } catch {
-    // Ignored by design — the next tick (or the terminal status) supersedes it.
-  }
-}
-
-/** Removes the live progress once the record is terminal — SUCCEEDED/FAILED
- * carry their own truth and a stale "FINALIZING 100%" would only confuse. */
-async function clearProgress(record: IProjectModel): Promise<void> {
-  try {
-    await ProjectModel.updateOne({ _id: record._id }, { $unset: { progress: 1 } }).exec();
-  } catch {
-    // Best-effort for the same reason as reportProgress; clients ignore
-    // `progress` on terminal statuses anyway.
-  }
 }
 
 export const meshyModelProcessor: JobProcessor = async (job) => {
@@ -143,122 +106,13 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
       modelId,
       projectId: record.projectId,
     });
-
-    // Hand off to the web-optimization pipeline. STRICTLY BEST-EFFORT and
-    // deliberately AFTER the record is already SUCCEEDED: the generation is
-    // paid for and complete, and a queueing hiccup here must not fail it or
-    // trigger a retry that re-downloads a model we already have. If the enqueue
-    // is lost, the model simply serves un-optimized until someone re-runs it.
-    await enqueueAssetOptimization(job, record);
     // Only OUR keys/URLs — a Meshy URL must never reach the DB (they expire).
     return { source: 'meshy', modelId, artifacts: artifacts.cdnUrls };
   } catch (err: unknown) {
-    await failRecordIfTerminal(job, record, err);
+    await failRecordIfTerminal(job, record, err, 'PROCESSING_FAILED', 'Model generation failed.');
     throw err;
   }
 };
-
-/**
- * Queues the ASSET_OPTIMIZATION job for a model that has just succeeded.
- *
- * Swallows its own failures on purpose (see the call site): this runs after the
- * money has been spent and the record is already terminal, so the worst case
- * must be "the model serves un-optimized", never "the generation failed".
- *
- * Idempotent by construction — one optimization job per model id, so a
- * re-claimed generation that re-runs this line does not queue a second one.
- *
- * ── WHY IT STAMPS `optimized.status = 'QUEUED'` ─────────────────────────────
- * A SUCCEEDED record with no `optimized` block is ambiguous in the one way that
- * matters to every reader: it could be a model whose optimization is seconds
- * away, or one generated before the pipeline existed that will never have one.
- * Clients that cannot tell them apart stop watching immediately and serve the
- * untouched original forever (see isOptimizationPending). Writing the QUEUED
- * marker BEFORE the job makes the difference observable — and makes the wire
- * field it feeds true from the same instant the work is promised, never a
- * moment where the API says "nothing more is coming" while a job is in flight.
- */
-async function enqueueAssetOptimization(job: WorkerJob, record: IProjectModel): Promise<void> {
-  try {
-    const existing = await Job.findOne({
-      jobType: ASSET_OPTIMIZATION_JOB_TYPE,
-      'payload.modelId': record.id as string,
-    })
-      .select({ _id: 1 })
-      .lean()
-      .exec();
-    if (existing) return;
-
-    await markOptimizationQueued(record);
-
-    try {
-      await Job.create({
-        projectId: record.projectId,
-        userId: record.createdByUserId,
-        jobType: ASSET_OPTIMIZATION_JOB_TYPE,
-        state: 'QUEUED',
-        queuedAt: new Date(),
-        payload: { modelId: record.id as string },
-      });
-    } catch (err: unknown) {
-      // The promise the marker made is not going to be kept — retract it, or
-      // every client waits out its grace period on work that will never run.
-      await unmarkOptimizationQueued(record);
-      throw err;
-    }
-
-    log('info', 'Asset optimization queued', {
-      jobId: job._id,
-      modelId: record.id,
-      projectId: record.projectId,
-    });
-  } catch (err: unknown) {
-    log('warn', 'Could not queue asset optimization — model serves un-optimized', {
-      jobId: job._id,
-      modelId: record.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-/**
- * Publishes "an optimization is coming" onto the record.
- *
- * Fenced on there being NO optimized block yet: a re-claimed generation must
- * never knock a completed optimization (or an admin's pinned variant) back to
- * QUEUED. `activeVariant` starts at 'original' because that is what is being
- * served right now — promotion is the optimization job's call, once it has
- * something validated to promote.
- */
-async function markOptimizationQueued(record: IProjectModel): Promise<void> {
-  await ProjectModel.updateOne(
-    { _id: record._id, optimized: { $exists: false } },
-    {
-      $set: {
-        optimized: {
-          status: 'QUEUED',
-          pipelineVersion: ASSET_PIPELINE_VERSION,
-          activeVariant: 'original',
-        },
-      },
-    }
-  ).exec();
-}
-
-/** Undoes {@link markOptimizationQueued}, and only its own marker: the fence on
- * `status: 'QUEUED'` means a processor that already started (PROCESSING) or
- * finished keeps its state. */
-async function unmarkOptimizationQueued(record: IProjectModel): Promise<void> {
-  try {
-    await ProjectModel.updateOne(
-      { _id: record._id, 'optimized.status': 'QUEUED' },
-      { $unset: { optimized: 1 } }
-    ).exec();
-  } catch {
-    // Best-effort: the caller is already reporting the enqueue failure, and a
-    // stale QUEUED marker only costs clients a bounded wait.
-  }
-}
 
 /**
  * The resume guard. If the record already names a Meshy task, that task was
@@ -401,30 +255,31 @@ async function rehostArtifacts(
     ...(task.modelUrls.usdz
       ? [{ url: task.modelUrls.usdz, filename: 'model.usdz', contentType: 'model/vnd.usdz+zip' }]
       : []),
-    // PNG, not JPEG: the generation preset sets `alpha_thumbnail: true`, so
-    // Meshy's poster comes back with a transparent background (what the dark
-    // menu cards need). Serving those bytes as image/jpeg from CloudFront under
-    // an immutable cache header would be wrong and uncacheable to undo — this
-    // filename and MESHY_PRESET.alpha_thumbnail must change together.
     ...(task.thumbnailUrl
-      ? [{ url: task.thumbnailUrl, filename: 'preview.png', contentType: 'image/png' }]
+      ? [{ url: task.thumbnailUrl, filename: 'preview.jpg', contentType: 'image/jpeg' }]
       : []),
   ];
 
+  // The GLB's size is recorded as it goes by — it is the only input to the
+  // "is this worth optimizing?" rule, and the bytes are already in hand here,
+  // so measuring it later would mean a needless HEAD round trip per record.
+  let glbBytes: number | undefined;
   for (const target of targets) {
     const bytes = await download(target.url);
+    if (target.filename === 'model.glb') glbBytes = bytes.byteLength;
     await putObjectBytes(BUCKET_ARTIFACTS, `${prefix}${target.filename}`, bytes, target.contentType);
   }
 
   const has = (filename: string): boolean => targets.some((t) => t.filename === filename);
   return {
     glbKey: `${prefix}model.glb`,
+    ...(glbBytes !== undefined ? { glbBytes } : {}),
     ...(has('model.usdz') ? { usdzKey: `${prefix}model.usdz` } : {}),
-    ...(has('preview.png') ? { previewImageKey: `${prefix}preview.png` } : {}),
+    ...(has('preview.jpg') ? { previewImageKey: `${prefix}preview.jpg` } : {}),
     cdnUrls: {
       glb: `${CLOUDFRONT_BASE}/${prefix}model.glb`,
       ...(has('model.usdz') ? { usdz: `${CLOUDFRONT_BASE}/${prefix}model.usdz` } : {}),
-      ...(has('preview.png') ? { preview: `${CLOUDFRONT_BASE}/${prefix}preview.png` } : {}),
+      ...(has('preview.jpg') ? { preview: `${CLOUDFRONT_BASE}/${prefix}preview.jpg` } : {}),
     },
   };
 }
@@ -444,46 +299,6 @@ async function download(url: string): Promise<Uint8Array> {
   } catch {
     throw new Error('Failed to download a generated model artifact from Meshy');
   }
-}
-
-/**
- * Moves the record to FAILED only when nothing more will run for it: either the
- * error is terminal, or this was the job's last attempt. On a retryable error
- * with attempts remaining, the record stays PROCESSING — which is the truth,
- * since the worker will pick it up again after the backoff.
- *
- * Cancel/claim-loss are neither: another owner now decides the outcome, so the
- * record is left exactly as it is.
- */
-async function failRecordIfTerminal(
-  job: WorkerJob,
-  record: IProjectModel,
-  err: unknown
-): Promise<void> {
-  const isTerminal = err instanceof NonRetryableJobError;
-  const attemptsSoFar = job.attempts ?? 0;
-  const maxAttempts = job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const isFinalAttempt = attemptsSoFar + 1 >= maxAttempts;
-
-  const name = (err as { name?: string })?.name;
-  if (name === 'JobCanceledError' || name === 'ClaimLostError') return;
-  if (!isTerminal && !isFinalAttempt) return;
-
-  record.status = 'FAILED';
-  record.error = {
-    code: isTerminal ? (err as NonRetryableJobError).code : 'PROCESSING_FAILED',
-    // Our own messages only (meshyClient never interpolates a response body or
-    // a presigned URL into one), so this is safe to show staff.
-    message: err instanceof Error ? err.message : 'Model generation failed.',
-  };
-  await record.save();
-  await clearProgress(record);
-}
-
-async function setStatus(record: IProjectModel, status: IProjectModel['status']): Promise<void> {
-  if (record.status === status) return;
-  record.status = status;
-  await record.save();
 }
 
 function sleep(ms: number): Promise<void> {

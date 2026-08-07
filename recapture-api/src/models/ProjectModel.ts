@@ -12,11 +12,6 @@
 import { Schema, model, Document, Types } from 'mongoose';
 import { USER_ROLES, type UserRole } from '@/models/User';
 import {
-  ASSET_OPTIMIZATION_STATUSES,
-  ASSET_VARIANT_IDS,
-  type OptimizedAsset,
-} from '@/models/types/assetManifest.types';
-import {
   GENERATION_REQUESTED_BY,
   GENERATION_STEP_NAMES,
   GENERATION_STEP_STATUSES,
@@ -32,6 +27,7 @@ import {
   type ModelCdnUrls,
   type ModelError,
   type ModelGenerationTrace,
+  type ModelOptimization,
   type ModelProgress,
   type ModelSource,
   type ModelStatus,
@@ -60,22 +56,25 @@ export interface IProjectModel extends Document {
   progress?: ModelProgress;
   /** Populated on SUCCEEDED — our S3 keys + CloudFront URLs only. */
   artifacts?: ModelArtifacts;
-  /**
-   * The web-optimization result, produced by a SEPARATE job after this record
-   * already reached SUCCEEDED (see worker/processors/assetOptimizationProcessor).
-   *
-   * Absent on every record predating the pipeline, and on any record whose
-   * optimization has not run yet — readers must treat missing as "original
-   * only". A FAILED optimization is deliberately NOT a failed model: the
-   * untouched Meshy GLB in `artifacts` still serves.
-   */
-  optimized?: OptimizedAsset;
   /** The "we're satisfied, skip manual creation" gate. SUCCEEDED records only. */
   approved?: ModelApproval;
   /** Populated on FAILED. */
   error?: ModelError;
   /** Client-supplied Idempotency-Key — unique per actor when present. */
   idempotencyKey?: string;
+  /**
+   * Set on an OPTIMIZED record: the id of the model it was derived from. A
+   * record carrying this is a DERIVATIVE, never a paid generation — it costs no
+   * Meshy credits and must be excluded from anything that counts or waits on
+   * generations.
+   *
+   * The UNIQUE PARTIAL INDEX below is what makes "a model is optimized at most
+   * once" true: a concurrent double-tap loses with E11000 and is resolved to a
+   * replay of the winner, exactly like the Idempotency-Key path.
+   */
+  optimizedFrom?: Types.ObjectId;
+  /** Byte savings of the pass, for the UI's "OPT · 4.2 MB (−68%)" label. */
+  optimization?: ModelOptimization;
   /**
    * Who the generation is attributed to. For a staff "Create Model" tap this is
    * the staff actor; for an AUTOMATIC generation there is no actor, so it is the
@@ -127,6 +126,18 @@ const ModelArtifactsSchema = new Schema<ModelArtifacts>(
     usdzKey: { type: String },
     previewImageKey: { type: String },
     cdnUrls: { type: ModelCdnUrlsSchema, required: true },
+    // Optional: pre-existing records have none, and absent means UNKNOWN size,
+    // never "small" — see ModelArtifacts.glbBytes.
+    glbBytes: { type: Number, min: 0 },
+  },
+  { _id: false }
+);
+
+const ModelOptimizationSchema = new Schema<ModelOptimization>(
+  {
+    sourceBytes: { type: Number, required: true, min: 0 },
+    outputBytes: { type: Number, required: true, min: 0 },
+    at: { type: Date, required: true },
   },
   { _id: false }
 );
@@ -178,42 +189,6 @@ const ModelGenerationTraceSchema = new Schema<ModelGenerationTrace>(
   { _id: false }
 );
 
-/**
- * The manifest is stored as Mixed rather than a strict sub-schema, on the same
- * reasoning as ModelGenerationTrace.selection: it is a VERSIONED document whose
- * shape is allowed to grow with the pipeline version that wrote it. A strict
- * sub-schema would silently strip any field a newer pipeline added, which would
- * corrupt exactly the record a client needs to render the variant it cached.
- * The manifest's real contract is enforced at the type level
- * (models/types/assetManifest.types.ts), not by Mongoose.
- */
-const OptimizedAssetSchema = new Schema<OptimizedAsset>(
-  {
-    status: { type: String, enum: ASSET_OPTIMIZATION_STATUSES, required: true },
-    pipelineVersion: { type: Number, required: true },
-    manifest: { type: Schema.Types.Mixed },
-    error: {
-      type: new Schema(
-        { code: { type: String, required: true }, message: { type: String, required: true } },
-        { _id: false }
-      ),
-    },
-    // Defaults to 'original' — the safe fallback for a record with no validated
-    // variant. A successful pipeline run raises it to 'web' itself (the source
-    // GLB is now too heavy to serve), unless variantPinnedByAdmin says a human
-    // already decided. See OptimizedAsset in types/assetManifest.types.ts.
-    activeVariant: {
-      type: String,
-      enum: ASSET_VARIANT_IDS,
-      required: true,
-      default: 'original',
-    },
-    variantPinnedByAdmin: { type: Boolean },
-    reportKey: { type: String },
-  },
-  { _id: false }
-);
-
 const ProjectModelSchema = new Schema<IProjectModel>(
   {
     projectId: { type: Schema.Types.ObjectId, ref: 'Project', required: true },
@@ -224,10 +199,11 @@ const ProjectModelSchema = new Schema<IProjectModel>(
     meshyTaskId: { type: String },
     progress: { type: ModelProgressSchema },
     artifacts: { type: ModelArtifactsSchema },
-    optimized: { type: OptimizedAssetSchema },
     approved: { type: ModelApprovalSchema },
     error: { type: ModelErrorSchema },
     idempotencyKey: { type: String, maxlength: 128 },
+    optimizedFrom: { type: Schema.Types.ObjectId, ref: 'ProjectModel' },
+    optimization: { type: ModelOptimizationSchema },
     createdByUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     createdByRole: { type: String, enum: USER_ROLES, required: true },
     createdBySystem: { type: Boolean },
@@ -255,6 +231,17 @@ ProjectModelSchema.index(
 // counted before every automatic AND button-triggered generation.
 ProjectModelSchema.index({ createdByUserId: 1, createdAt: -1 });
 
+// "A model is optimized at most once." Partial so the overwhelming majority of
+// records — which have no optimizedFrom — never collide. This index is the RACE
+// AUTHORITY for the Optimize button exactly as the Idempotency-Key index is for
+// Create-Model: two simultaneous taps both try to insert, one wins, and the
+// loser's E11000 is resolved to a REPLAY of the winner rather than a second
+// (CPU-expensive, duplicate-row-producing) optimization.
+ProjectModelSchema.index(
+  { optimizedFrom: 1 },
+  { unique: true, partialFilterExpression: { optimizedFrom: { $exists: true } } }
+);
+
 export const ProjectModel = model<IProjectModel>('ProjectModel', ProjectModelSchema);
 
 export {
@@ -273,6 +260,7 @@ export {
   type ModelArtifacts,
   type ModelCdnUrls,
   type ModelError,
+  type ModelOptimization,
   type ModelProgress,
   type ModelSource,
   type ModelStatus,

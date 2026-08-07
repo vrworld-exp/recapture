@@ -73,70 +73,6 @@ export interface MeshyClient {
 const MULTI_IMAGE_PATH = '/openapi/v1/multi-image-to-3d';
 
 /**
- * The Mirage Menu production generation preset — the fixed half of every
- * multi-image request. Sent EXPLICITLY rather than left to Meshy's defaults so
- * a result is reproducible across environments and across Meshy's own default
- * changes (which have already bitten us once — see `should_remesh`).
- *
- * The two remaining knobs, `target_polycount` and `texture_resolution`, stay in
- * config/env.ts because they are the ones an operator retunes against a device
- * test without a deploy. Both are now tuned for FIDELITY (200k triangles, 4k
- * maps), not for what a phone can hold: this request produces the SOURCE, and
- * src/modules/asset-pipeline produces the asset that is actually served. Nothing
- * in this preset should be traded away for file size — that is the pipeline's
- * job, and it is much better at it than a generator hitting a hard cap in one
- * step.
- *
- * Field by field, and why:
- *   ai_model 'latest'        — resolves to meshy-6, the best organic/food geometry.
- *   should_remesh true       — MUST be explicit: meshy-6 defaults this to FALSE,
- *                              which returns the raw unbounded mesh (see below).
- *                              Kept true even though we now ask for a HIGH
- *                              budget: false makes target_polycount ignored
- *                              entirely and output non-deterministic (observed
- *                              55k–1.2M triangles for the same kind of object).
- *                              A high PINNED budget is the goal, not an
- *                              unbounded one.
- *   topology 'triangle'      — GLB triangulates on export anyway.
- *   should_texture true      — Meshy's default; pinned so a default flip is inert.
- *   enable_pbr true          — a roughness map is what separates glossy gravy
- *                              from dry naan. NOTE: this adds a metallicRoughness
- *                              (and normal) texture per material, which is what
- *                              the asset pipeline's collapseConstantMetalRough
- *                              step exists to claw back when the map is flat.
- *   remove_lighting true     — no baked highlights/shadows; the viewer lights the
- *                              scene, so a model looks right under any menu theme.
- *   auto_size true           — real-world scale, so AR placement is correct
- *                              without the client guessing a scale factor.
- *   origin_at 'bottom'       — the model sits ON the table rather than sunk
- *                              half-through it when placed at a hit-test point.
- *   moderation false         — Meshy's default; food never trips it and the extra
- *                              pass only adds latency against MESHY_TASK_TIMEOUT_MS.
- *   alpha_thumbnail true     — a TRANSPARENT PNG poster, which is what the dark
- *                              (#0B0B0E) menu cards need. This is why the
- *                              re-hosted preview is `preview.png`/`image/png` in
- *                              meshyModelProcessor — the two must stay in step.
- *   multi_view_thumbnails    — OFF: nothing renders the extra views yet, and each
- *                              one costs generation time we would not spend.
- *   target_formats           — glb (the viewer) + usdz (iOS Quick Look). Anything
- *                              else is generation time for bytes we never serve.
- */
-export const MESHY_PRESET = {
-  ai_model: 'latest',
-  should_remesh: true,
-  topology: 'triangle',
-  should_texture: true,
-  enable_pbr: true,
-  remove_lighting: true,
-  auto_size: true,
-  origin_at: 'bottom',
-  moderation: false,
-  alpha_thumbnail: true,
-  multi_view_thumbnails: false,
-  target_formats: ['glb', 'usdz'],
-} as const;
-
-/**
  * Fails fast when the Meshy credential is absent. Called at WORKER boot (the
  * only process that talks to Meshy) — see the MESHY_API_KEY note in config/env.ts
  * for why the shared schema leaves it optional.
@@ -239,32 +175,19 @@ export const meshyClient: MeshyClient = {
    * CREDITS: the caller must persist the returned id before doing anything
    * else, so a crash can never turn into a second submission.
    *
-   * The whole recipe is sent EXPLICITLY rather than left to Meshy's defaults —
-   * see MESHY_PRESET above for the field-by-field reasoning. The load-bearing
-   * one is `should_remesh`: it defaults to false on Meshy's newer models
-   * (including the meshy-6 that `ai_model: 'latest'` resolves to), which returns
-   * the raw generated mesh — unbounded in practice (observed 55k–1.2M triangles
-   * for the same kind of captured object). Pinning remesh + target_polycount +
-   * texture_resolution is what makes one generation REPRODUCIBLE.
-   *
-   * What it no longer makes true, deliberately, is "the result is directly
-   * servable". This request asks for 200k triangles and 4k textures because a
-   * low generation budget was breaking thin geometry at the source. The GLB it
-   * returns is the ARCHIVE and the pipeline's input; the asset an owner loads is
-   * the 'web' variant produced by src/modules/asset-pipeline and auto-promoted
-   * once it passes its gates. See MESHY_TARGET_POLYCOUNT in config/env.ts for
-   * the full policy and the WebView history behind it.
-   *
-   * Adding a field here is not free: an unknown parameter is a 400, which this
-   * client classifies as TERMINAL. Check docs/meshy-integration.md and the live
-   * /openapi/v1/multi-image-to-3d reference before adding one.
+   * The mesh budget is sent EXPLICITLY rather than left to Meshy's defaults.
+   * `should_remesh` defaults to false on Meshy's newer models, which returns the
+   * raw generated mesh — unbounded in practice (observed 55k–1.2M triangles for
+   * the same kind of captured object), and the large end simply does not render
+   * in the app's WebView. Pinning remesh + target_polycount + texture_resolution
+   * is what makes "the generation succeeded" and "the owner can see it" the same
+   * statement. See MESHY_TARGET_POLYCOUNT in config/env.ts.
    */
   async createMultiImageTask(imageUrls: string[]): Promise<{ taskId: string }> {
     const res = await transport().post(MULTI_IMAGE_PATH, {
       image_urls: imageUrls,
-      ...MESHY_PRESET,
-      // The environment-tunable half of the recipe (config/env.ts), kept out of
-      // the preset so it can be retuned per environment against a device test.
+      should_remesh: true,
+      topology: 'triangle',
       target_polycount: env.MESHY_TARGET_POLYCOUNT,
       texture_resolution: env.MESHY_TEXTURE_RESOLUTION,
     });

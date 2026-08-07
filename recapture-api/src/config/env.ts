@@ -118,78 +118,33 @@ const envSchema = z.object({
    * WORKER_CLAIM_TIMEOUT_MS or a live generation gets re-claimed mid-flight.
    */
   MESHY_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
-  /**
-   * Hard cap on total wait for one generation before giving up (ms).
-   *
-   * 30 min, not the 10 it used to be. MESHY_TARGET_POLYCOUNT now asks for 200k
-   * triangles and MESHY_TEXTURE_RESOLUTION for 4k maps, and both cost Meshy
-   * wall-clock time. Blowing this budget raises MESHY_TIMEOUT, and the worker's
-   * retry SPENDS CREDITS AGAIN — so the budget must be generous enough that a
-   * slow-but-succeeding task is never killed just short of the finish line.
-   *
-   * This is a total budget only: it does NOT change the poll cadence.
-   * MESHY_POLL_INTERVAL_MS stays at 5 s because each poll doubles as the claim
-   * lease renewal against WORKER_CLAIM_TIMEOUT_MS (120 s) — see below.
-   */
-  MESHY_TASK_TIMEOUT_MS: z.coerce.number().int().positive().default(1_800_000),
+  /** Hard cap on total wait for one generation before giving up (ms). */
+  MESHY_TASK_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
   /** Presigned-GET TTL for the source images handed to Meshy (seconds). */
   MESHY_SOURCE_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
   /**
-   * Triangle budget asked of Meshy's remesher — a GENERATION-QUALITY knob, not
-   * the phone's budget. Those used to be the same number; they are not anymore.
+   * Triangle budget for a generated model — the size the phone has to render.
    *
-   * ── The policy, in one line ─────────────────────────────────────────────────
-   * Meshy generates HIGH, the asset pipeline delivers LOW. Generation optimizes
-   * for fidelity; src/modules/asset-pipeline optimizes for delivery, and its
-   * simplify stage is what produces the mesh a phone actually loads.
+   * NOT cosmetic. Meshy's remesh phase defaults to OFF on its newer models, and
+   * the raw mesh it returns for a captured object is unbounded: live results
+   * ranged from 55k to 1.2M triangles (4 MB to 38 MB GLB). Past roughly a few
+   * hundred thousand triangles an Android WebView runs out of heap or loses its
+   * WebGL context while parsing the GLB, model-viewer fires `error`, and the
+   * owner sees "We couldn't load this model" for a generation that in fact
+   * succeeded. Asking for a fixed budget is what keeps every result viewable on
+   * the device it was captured with.
    *
-   * ── Why it moved off 12k ────────────────────────────────────────────────────
-   * A 12k budget made the raw GLB directly servable, but it was destroying
-   * geometry at the source: thin features — handles, rims, stems, cup lips —
-   * came back holed or broken, and no downstream stage can put back detail the
-   * generator never produced. Decimating a good 200k mesh with meshoptimizer
-   * (which optimizes for silhouette error) beats asking Meshy to hit 12k in one
-   * step, because the simplifier gets to see the real surface first.
-   *
-   * ── The WebView history, which is WHY the pipeline must now decimate ────────
-   * Meshy's remesh phase defaults to OFF on its newer models, and the raw mesh
-   * it returns for a captured object is unbounded: live results ranged from 55k
-   * to 1.2M triangles (4 MB to 38 MB GLB). Past roughly a few hundred thousand
-   * triangles an Android WebView runs out of heap or loses its WebGL context
-   * while parsing the GLB, model-viewer fires `error`, and the owner sees "We
-   * couldn't load this model" for a generation that in fact succeeded.
-   *
-   * That failure has NOT gone away — it has moved. At 200k the untouched
-   * original is on the wrong side of that line, so it is no longer what an owner
-   * is served: a validated pipeline run auto-promotes `optimized.activeVariant`
-   * to 'web' (see worker/processors/assetOptimizationProcessor.ts). Raising this
-   * number WITHOUT that promotion, or without the pipeline's simplify stage,
-   * reintroduces the crash for every model.
-   *
-   * ── The number ──────────────────────────────────────────────────────────────
-   * 200k leaves headroom under Meshy's hard 300k cap (anything outside
-   * 100–300,000 comes back a terminal 400) and is a PINNED budget, which is the
-   * point: `should_remesh: true` plus a fixed target is what makes output
-   * deterministic. Turning remesh off would give the raw unbounded mesh and make
-   * this value ignored entirely — see MESHY_PRESET.
+   * 100k sits well inside Meshy's own 100–300,000 range: high enough to keep the
+   * surface detail of a captured object, low enough to load on a mid-range phone
+   * (~8 MB GLB). Raise it only alongside a device test.
    */
-  MESHY_TARGET_POLYCOUNT: z.coerce.number().int().min(100).max(300_000).default(200_000),
+  MESHY_TARGET_POLYCOUNT: z.coerce.number().int().min(100).max(300_000).default(100_000),
   /**
-   * Base-colour texture resolution requested from Meshy — again a SOURCE
-   * quality knob, not what ships. The pipeline resamples every texture to the
-   * active profile's per-slot budget (profiles/food.json), so this decides how
-   * much real detail that resample has to work from, not how much decoded
-   * texture memory the WebView has to find.
-   *
-   * '4k' rather than Meshy's own '2k' default: the served baseColor is 2048, and
-   * downsampling 4096 → 2048 keeps visibly more of the dish's surface than
-   * asking Meshy for 2048 directly. '8k' is not worth it — it costs generation
-   * time against MESHY_TASK_TIMEOUT_MS for detail two resamples throw away.
-   *
-   * If a profile's baseColor budget ever drops back to 1024, drop this to '2k'
-   * with it: paying for source detail nothing samples is pure latency.
+   * Base-colour texture resolution requested from Meshy. '2k' is Meshy's own
+   * default and the one a phone can hold comfortably; '4k'/'8k' multiply the
+   * decoded texture memory that the same WebView has to find.
    */
-  MESHY_TEXTURE_RESOLUTION: z.enum(['2k', '4k', '8k']).default('4k'),
+  MESHY_TEXTURE_RESOLUTION: z.enum(['2k', '4k', '8k']).default('2k'),
   /** Max Create-Model requests one staff user may make per window (credits!). */
   MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
   /** Sliding window for the Create-Model cap (seconds). */
@@ -206,6 +161,40 @@ const envSchema = z.object({
   MODEL_IMAGE_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(60),
   /** Sliding window for the model-image upload-urls cap (seconds). */
   MODEL_IMAGE_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
+  // ── Model optimization (docs/prompts/model-optimization-opt-variant.md) ─────
+  /**
+   * GLB size above which a model is worth optimizing — the ONLY gate on the
+   * Optimize button, and the server's own verdict (`canOptimize`) is what the
+   * client renders, so the two can never disagree.
+   *
+   * BINARY, NOT DECIMAL: 8 MiB = 8 * 1024 * 1024 = 8,388,608 bytes. "8 MB" is
+   * ambiguous and the client formats displayed sizes with the SAME 1024 divisor
+   * — mix the two and a 8,200,000-byte model reads "8.2 MB" with no button, or
+   * "7.8 MB" with one.
+   */
+  MODEL_OPTIMIZE_THRESHOLD_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(8 * 1024 * 1024),
+  /**
+   * Hard ceiling on the GLB the optimizer will even open (bytes).
+   *
+   * glTF-Transform holds the WHOLE document in memory (and meshopt re-encodes
+   * every buffer), so a pathological input does not fail slowly — it OOMs the
+   * process. When RUN_WORKER_IN_PROCESS is on that process is the API, so this
+   * is the difference between one failed optimization and an outage.
+   */
+  MODEL_OPTIMIZE_MAX_INPUT_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(250 * 1024 * 1024),
+  /** Max optimize requests one OWNER may make per window (CPU, not credits). */
+  MODEL_OPTIMIZE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  /** Sliding window for the owner optimize cap (seconds). */
+  MODEL_OPTIMIZE_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // ── Automatic model generation (docs/auto-model-generation-*.md) ───────────
   /**

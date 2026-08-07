@@ -31,24 +31,6 @@
 > 2. **The enqueue lives in the service, not the route** — AGENTS.md keeps
 >    routers thin (parse, delegate, map), and record+job creation is one
 >    business operation.
->
-> **Recipe budget (updated 2026-08-04) — generation asks for QUALITY, not for
-> what ships.** `MESHY_TARGET_POLYCOUNT` is **200,000** (not the 12,000 it
-> launched with) and `MESHY_TEXTURE_RESOLUTION` is **4k**; the low budget was
-> destroying thin features — handles, rims, stems came back holed — and no
-> downstream stage can restore geometry that was never generated. The returned
-> GLB is now an **archive and a pipeline input**: `src/modules/asset-pipeline`
-> decimates and resamples it into the `web` variant a viewer actually loads, and
-> auto-promotes that variant once it passes its gates. `MESHY_TASK_TIMEOUT_MS`
-> is **1,800,000** (30 min) to fit the slower tasks — note the §3 snippet below
-> still shows the old 600,000, along with the rest of that superseded design.
-> `MESHY_POLL_INTERVAL_MS` stays 5 s regardless: each poll is also the worker's
-> claim-lease renewal against `WORKER_CLAIM_TIMEOUT_MS`.
->
-> `should_remesh` stays **true**. Setting it false returns the raw unbounded
-> mesh and makes `target_polycount` ignored entirely (observed 55k–1.2M
-> triangles for the same kind of object) — the goal is a high **pinned** budget,
-> not an unbounded one.
 
 ---
 
