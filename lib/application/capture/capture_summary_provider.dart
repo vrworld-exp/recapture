@@ -14,9 +14,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/capture/level_completion.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/capture_evaluation.dart';
+import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
-import 'capture_shape_mode_provider.dart';
+import 'capture_mode_provider.dart';
 import 'ledger/level_capture_ledger_registry_provider.dart';
 import 'ledger/warned_photo_record.dart';
 import 'review_grid_items_provider.dart';
@@ -151,9 +152,9 @@ bool allLevelsComplete(List<LevelCaptureSummary> summaries) =>
 /// counts, coverage, and warnings).
 final captureSummaryProvider =
     Provider.autoDispose<List<LevelCaptureSummary>>((ref) {
-  final config = ref.watch(effectiveCaptureConfigProvider);
+  final config = ref.watch(captureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
-  final mode = ref.watch(captureShapeModeProvider);
+  final mode = ref.watch(captureModeProvider);
   final registry = ref.watch(levelCaptureLedgerRegistryProvider);
   final thresholds = config.completionThresholds;
 
@@ -170,7 +171,7 @@ final captureSummaryProvider =
 
         // The SAME effective-N resolver the builders/machines use (always >= 1),
         // so the summary can never disagree with the flow on segment count.
-        final segCount = effectiveSegmentsFor(config, variant, bandId);
+        final segCount = effectiveSegmentsFor(config, variant, bandId, mode: mode);
         final filled = items
             .map((i) => i.ringIndex)
             .whereType<int>()
@@ -185,7 +186,13 @@ final captureSummaryProvider =
           segmentCount: segCount,
           acceptedCount: items.length,
           minAcceptedCount: minRequired,
-          minCoveragePct: config.thresholds.minCoveragePct,
+          // Per-MODE floor, through the SAME resolver the capture-screen
+          // auto-advance and the upload gate use. Reading the raw global here
+          // would let a remote retune of `minCoveragePct` make this screen
+          // disagree with the gate that let the user reach it: phantom
+          // "Incomplete" badges, a Fix Issues button for a finished capture,
+          // and a confirm dialog on an upload the gate considers complete.
+          minCoveragePct: minCoveragePctForMode(mode, config.thresholds),
         );
 
         return LevelCaptureSummary(

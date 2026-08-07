@@ -31,11 +31,10 @@ class ShutterButton extends StatefulWidget {
 
   final CaptureReadiness readiness;
 
-  /// Short word rendered inside the shutter core naming how THIS flow captures
-  /// ('Auto' for the full flow's auto-capture loop, 'Click' for the manual-only
-  /// Meshy flow). Presentational only — it never changes what the button does.
-  /// Hidden while a capture is in flight (the spinner takes the slot); null/empty
-  /// renders the plain core exactly as before.
+  /// Short word printed on the button's core naming what the shutter does in
+  /// the active capture mode ("Auto" in full capture, "Click" in Meshy — see
+  /// `CaptureMode.shutterLabel`). Null renders the plain core (no text). It is
+  /// hidden while a capture is in flight, where the spinner owns the core.
   final String? label;
 
   /// Performs the actual capture (parent's `takePicture`); completes on success,
@@ -141,26 +140,16 @@ class _ShutterButtonState extends State<ShutterButton> {
         : _ShutterVisual.blocked;
   }
 
-  /// The rendered label, or null when there is nothing to show (no label given,
-  /// or a capture is in flight and the spinner owns the slot).
-  String? get _visibleLabel {
-    if (_capturing) return null;
-    final label = widget.label;
-    return (label == null || label.isEmpty) ? null : label;
-  }
-
   String get _semanticsLabel {
     if (_capturing) return 'Capturing';
-    final label = widget.label;
-    final suffix = (label == null || label.isEmpty) ? '' : ' $label';
-    if (widget.readiness.canCapture) return 'Capture$suffix, ready';
+    if (widget.readiness.canCapture) return 'Capture, ready';
     return switch (widget.readiness.primaryBlockReason) {
-      BlockReason.notPlaced => 'Capture$suffix, blocked: place the object',
+      BlockReason.notPlaced => 'Capture, blocked: place the object',
       BlockReason.alreadyCaptured =>
-        'Capture$suffix, blocked: already captured this angle',
-      BlockReason.outOfBand => 'Capture$suffix, blocked: adjust tilt',
-      BlockReason.unstable => 'Capture$suffix, blocked: hold steady',
-      _ => 'Capture$suffix, blocked',
+        'Capture, blocked: already captured this angle',
+      BlockReason.outOfBand => 'Capture, blocked: adjust tilt',
+      BlockReason.unstable => 'Capture, blocked: hold steady',
+      _ => 'Capture, blocked',
     };
   }
 
@@ -169,7 +158,6 @@ class _ShutterButtonState extends State<ShutterButton> {
     final reduceMotion =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     final visual = _visual;
-    final visibleLabel = _visibleLabel;
 
     final ringColor = switch (visual) {
       _ShutterVisual.ready || _ShutterVisual.capturing => AppColors.royalGold,
@@ -221,30 +209,23 @@ class _ShutterButtonState extends State<ShutterButton> {
                               shape: BoxShape.circle,
                             ),
                           ),
-                          if (visibleLabel != null)
-                            // Excluded from semantics: the button's own label
-                            // already names the mode, and this Text would
-                            // otherwise merge into that node and duplicate it.
+                          // Mode word ("Auto" / "Click"). Excluded from
+                          // semantics: the button's own label already says what
+                          // a tap does, so announcing the word again would just
+                          // repeat it.
+                          if (widget.label != null && !_capturing)
                             ExcludeSemantics(
-                              child: Padding(
-                                // Keeps a long word off the core's curved edge.
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                ),
-                                child: Text(
-                                  visibleLabel,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  textAlign: TextAlign.center,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .labelSmall
-                                      ?.copyWith(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 0.5,
-                                      ),
-                                ),
+                              child: Text(
+                                widget.label!,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelSmall
+                                    ?.copyWith(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.5,
+                                    ),
                               ),
                             ),
                           if (_capturing)

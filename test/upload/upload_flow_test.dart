@@ -98,6 +98,11 @@ class _FakeBackend implements UploadJobsBackend {
   Map<String, Object?>? jobArgs;
   int? finalizedWith;
 
+  /// The args the fallback create-project path forwarded (null when the flow
+  /// reused an existing project and skipped POST /projects).
+  String? createProjectName;
+  String? createProjectSize;
+
   /// Snapshot hook so the test can pin what the SCREEN saw at finalize time.
   void Function()? onFinalize;
 
@@ -108,6 +113,10 @@ class _FakeBackend implements UploadJobsBackend {
     required String mode,
   }) async {
     calls.add('createProject');
+    createProjectName = name;
+    createProjectSize = size;
+    // POST /projects `mode` is the guided|manual enum — never the full/meshy
+    // capture mode. The fallback path must send a valid project mode.
     expect(mode, 'guided');
     return 'proj-1';
   }
@@ -120,6 +129,7 @@ class _FakeBackend implements UploadJobsBackend {
     required String captureMode,
     required int expectedFilesCount,
     required String idempotencyKey,
+    String captureMode = 'full',
   }) async {
     calls.add('createJob');
     jobArgs = {
@@ -215,9 +225,19 @@ Future<void> _flush([int microtasks = 6]) async {
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-UploadFlowContext _context() => UploadFlowContext(
-      localProjectId: 'local-p1',
-      projectName: 'Chair scan',
+/// [localProjectId] defaults to a real (non-`pending_`) server id, i.e. the
+/// common REUSE case: the project was already created at naming time, so the
+/// flow reuses it and skips POST /projects. Pass an empty or `pending_…` id to
+/// exercise the create-project fallback. [objectSize] mirrors the size sourced
+/// from the reused project.
+UploadFlowContext _context({
+  String localProjectId = 'proj-existing',
+  String projectName = 'Chair scan',
+  String objectSize = 'medium',
+}) =>
+    UploadFlowContext(
+      localProjectId: localProjectId,
+      projectName: projectName,
       captureSessionId: 'cap-session-1',
       config: CaptureConfig.bundledDefault,
       progression: initialProgressionFromConfig(
@@ -227,6 +247,7 @@ UploadFlowContext _context() => UploadFlowContext(
       registry: LevelCaptureLedgerRegistry(),
       variant: CaptureFlowVariant.withBottom,
       workspaceRoot: '/ws',
+      objectSize: objectSize,
     );
 
 const _bundle = CaptureBundle(
@@ -238,12 +259,13 @@ const _bundle = CaptureBundle(
 );
 
 class _Harness {
-  _Harness({_FakeBackend? backend, PackBundleFn? pack})
+  _Harness({_FakeBackend? backend, PackBundleFn? pack, UploadFlowContext? context})
       : backend = backend ?? _FakeBackend() {
+    final ctx = context ?? _context();
     orchestrator = UploadFlowOrchestrator(
       resolveContext: () async {
         calls.add('resolveContext');
-        return _context();
+        return ctx;
       },
       pack: pack ??
           ({
@@ -316,13 +338,16 @@ void main() {
     await _flush();
     await h.log.dispose();
 
-    // Sequence.
+    // Sequence. The default context carries a REAL project id, so the flow
+    // reuses it and POST /projects is skipped — createJob runs against that id.
     expect(h.calls, ['resolveContext', 'pack', 'engineFactory(job-1)']);
-    expect(h.backend.calls, ['createProject', 'createJob', 'finalizeJob']);
+    expect(h.backend.calls, ['createJob', 'finalizeJob']);
+    expect(h.backend.createProjectName, isNull); // never created a second project
 
-    // Job creation: exact count (images + manifest), variant id, fixed key.
+    // Job creation: exact count (images + manifest), variant id, fixed key,
+    // and the REUSED project id (never a freshly-minted one).
     expect(h.backend.jobArgs, {
-      'projectId': 'proj-1',
+      'projectId': 'proj-existing',
       'objectSize': 'medium',
       'captureVariant': 'with_bottom',
       'captureMode': 'full',
@@ -348,8 +373,8 @@ void main() {
     }
     expect(h.backend.finalizedWith, 4);
 
-    // The manifest/bundle got the LOCAL ids (remote ids are minted later).
-    expect(h.packSession!.projectId, 'local-p1');
+    // The manifest/bundle got the resolved project id (here the reused one).
+    expect(h.packSession!.projectId, 'proj-existing');
     expect(h.packSession!.captureSessionId, 'cap-session-1');
 
     // Terminal truth: at finalize time the screen still saw inProgress; the
@@ -383,8 +408,10 @@ void main() {
     expect(tl[UploadFlowStepId.prepare].info, '4 files · 0.0 MB');
     expect(tl[UploadFlowStepId.transfer].info, '4 files');
     // Dev-only raw detail (test flavor is dev — the prod gate strips these).
+    // The reuse path records the REUSED id (no POST /projects happened).
     expect(tl[UploadFlowStepId.createProject].devDetail,
-        contains('remoteProjectId=proj-1'));
+        contains('reused remoteProjectId=proj-existing'));
+    expect(tl[UploadFlowStepId.createProject].info, 'Using existing project');
     expect(tl[UploadFlowStepId.createJob].devDetail,
         contains('jobId=job-1'));
   });
@@ -601,7 +628,12 @@ void main() {
 
   test('pre-engine throw (createProject) fails THAT step; later steps pending',
       () async {
-    final h = _Harness(backend: _FailingProjectBackend());
+    // An empty id forces the create-project FALLBACK path, so the failing
+    // createProject is actually reached.
+    final h = _Harness(
+      backend: _FailingProjectBackend(),
+      context: _context(localProjectId: ''),
+    );
 
     await h.orchestrator.run();
     await _flush();
@@ -622,6 +654,86 @@ void main() {
     expect(tl[UploadFlowStepId.createJob].isPending, isTrue);
     expect(tl[UploadFlowStepId.transfer].isPending, isTrue);
     expect(tl[UploadFlowStepId.finalize].isPending, isTrue);
+  });
+
+  // ── Project reuse vs fallback create ────────────────────────────────────────
+
+  Future<void> runToSuccess(_Harness h) async {
+    final done = h.orchestrator.run();
+    await h.engine.started.future;
+    await _flush();
+    h.engine.outcome.complete(const ResilientUploadOutcome(
+      status: ResilientUploadStatus.succeeded,
+      attemptsUsed: 1,
+    ));
+    await done;
+    await _flush();
+    await h.log.dispose();
+  }
+
+  test(
+      'reuse: a real project id skips POST /projects; createJob gets that exact '
+      'id and no dated name is ever minted', () async {
+    final h = _Harness(context: _context(localProjectId: 'server-proj-77'));
+    await runToSuccess(h);
+
+    // The single existing project is reused: no second project is created.
+    expect(h.backend.calls, ['createJob', 'finalizeJob']);
+    expect(h.backend.createProjectName, isNull);
+    expect(h.backend.jobArgs!['projectId'], 'server-proj-77');
+    // remoteProjectId points at the reused project (the paid Generate button).
+    expect(h.orchestrator.progress.remoteProjectId, 'server-proj-77');
+    // The createProject step still resolves sensibly (not stuck 'started').
+    expect(h.orchestrator.progress.timeline[UploadFlowStepId.createProject].isDone,
+        isTrue);
+    expect(h.log.snapshots.last.status, UploadStatus.completed);
+  });
+
+  test('fallback: an empty id creates a project with the (dated) context name',
+      () async {
+    final h = _Harness(
+      context: _context(
+        localProjectId: '',
+        projectName: 'ReCapture 2026-07-27 14:32',
+      ),
+    );
+    await runToSuccess(h);
+
+    expect(h.backend.calls, ['createProject', 'createJob', 'finalizeJob']);
+    expect(h.backend.createProjectName, 'ReCapture 2026-07-27 14:32');
+    // createJob then runs against the freshly-created project id.
+    expect(h.backend.jobArgs!['projectId'], 'proj-1');
+    expect(h.orchestrator.progress.remoteProjectId, 'proj-1');
+  });
+
+  test('fallback: an offline pending_ id cannot own a job, so a project is created',
+      () async {
+    final h = _Harness(
+      context: _context(localProjectId: 'pending_1721000000000000'),
+    );
+    await runToSuccess(h);
+
+    expect(h.backend.calls, ['createProject', 'createJob', 'finalizeJob']);
+    expect(h.backend.jobArgs!['projectId'], 'proj-1');
+  });
+
+  test('size: the reused project size is forwarded to createProject/createJob, '
+      'not the hardcoded medium', () async {
+    // Reuse path: createJob must carry the project's stored size (a mismatch is
+    // a server SIZE_MISMATCH). 'large' proves it is not the 'medium' default.
+    final reuse = _Harness(
+      context: _context(localProjectId: 'server-proj-9', objectSize: 'large'),
+    );
+    await runToSuccess(reuse);
+    expect(reuse.backend.jobArgs!['objectSize'], 'large');
+
+    // Fallback path: the size threads into BOTH the created project and the job.
+    final fallback = _Harness(
+      context: _context(localProjectId: '', objectSize: 'small'),
+    );
+    await runToSuccess(fallback);
+    expect(fallback.backend.createProjectSize, 'small');
+    expect(fallback.backend.jobArgs!['objectSize'], 'small');
   });
 
   test('buildUploadSessionSpec rejects a key escaping the plan prefix', () {

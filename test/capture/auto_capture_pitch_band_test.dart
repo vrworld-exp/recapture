@@ -22,7 +22,9 @@ import 'package:recapture/domain/capture/auto_capture_trigger.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/platform/method_channels.dart' show CapturedFrame;
 
-// Level A 'mid' band: [60, 120) degrees — min inclusive, max exclusive.
+// A representative 'mid'-shaped band, [60, 120): min inclusive, max exclusive.
+// Literal on purpose — these tests pin membership SEMANTICS, not the tuning
+// (the bundled tuning is pinned by the per-ring acceptance tests).
 const _band = PitchBand(id: 'mid', minDegrees: 60, maxDegrees: 120, segments: 10);
 final _t0 = DateTime(2024, 1, 1, 12, 0, 0);
 

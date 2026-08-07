@@ -35,23 +35,26 @@ class LevelACompleteScreen extends ConsumerStatefulWidget {
     required this.onReview,
     this.onDoneExit,
     this.startLevelBEnabled = true,
-    this.nextLabel,
+    this.primaryLabel = 'Start Level B',
   });
 
   final LevelASummary summary;
+
+  /// The primary CTA intent. Named for the full-mode flow (advance to Level B),
+  /// but repurposed by the route: in Meshy mode Level A is the ONLY ring, so this
+  /// finishes the capture and goes to the Summary instead — see [primaryLabel].
   final VoidCallback onStartLevelB;
   final VoidCallback onReview;
 
   /// Optional "finish after Level A" path. Hidden when null.
   final VoidCallback? onDoneExit;
 
-  /// When false, "Start Level B" is disabled with a note (Level B unavailable).
+  /// When false, the primary CTA is disabled with a "coming soon" note.
   final bool startLevelBEnabled;
 
-  /// Primary-CTA label. Defaults to "Start Level B" (the full A→B→C flow); the
-  /// single-ring Meshy flow passes "Continue" since Level A IS the whole capture
-  /// and the CTA goes straight to the Summary.
-  final String? nextLabel;
+  /// The primary CTA label. Defaults to "Start Level B" (full mode); Meshy mode
+  /// passes a finish label since there is no Level B.
+  final String primaryLabel;
 
   @override
   ConsumerState<LevelACompleteScreen> createState() =>
@@ -149,7 +152,7 @@ class _LevelACompleteScreenState extends ConsumerState<LevelACompleteScreen>
               ],
               const SizedBox(height: AppSpacing.xxl),
               AppButton(
-                label: widget.nextLabel ?? 'Start Level B',
+                label: widget.primaryLabel,
                 icon: Icons.arrow_forward,
                 onPressed: widget.startLevelBEnabled
                     ? () => _dispatch('start_level_b', widget.onStartLevelB)

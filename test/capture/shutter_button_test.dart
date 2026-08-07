@@ -19,15 +19,6 @@ const _ready = CaptureReadiness(mode: CaptureMode.manual);
 const _blockedUnstable =
     CaptureReadiness(mode: CaptureMode.guided, inBand: true, stable: false);
 
-/// The one-shot-per-segment block: every other gate passes, the segment is just
-/// already filled (the Meshy "turn to the next section" state).
-const _blockedAlreadyCaptured = CaptureReadiness(
-  mode: CaptureMode.guided,
-  inBand: true,
-  stable: true,
-  alreadyCaptured: true,
-);
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final messenger =
@@ -58,9 +49,9 @@ void main() {
     required CaptureReadiness readiness,
     Future<void> Function()? onCapture,
     VoidCallback? onBlockedTap,
-    String? label,
     bool reduceMotion = false,
     Duration blockedCooldown = Duration.zero,
+    String? label,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -121,43 +112,6 @@ void main() {
     expect(named(AnalyticsEvents.levelACaptureTriggered), isEmpty);
     final blocked = named(AnalyticsEvents.levelABlockedShutterTap).single;
     expect(blocked['reason'], 'unstable');
-  });
-
-  testWidgets(
-      'already-captured segment: blocked visual, no capture, its own analytics '
-      'reason + semantics', (tester) async {
-    var calls = 0;
-    var nudged = 0;
-    await pump(
-      tester,
-      readiness: _blockedAlreadyCaptured,
-      label: 'Click',
-      onCapture: () async => calls++,
-      onBlockedTap: () => nudged++,
-    );
-
-    // Blocked visual: the button dims exactly as for any other blocked reason.
-    final opacity = tester.widget<Opacity>(
-      find.descendant(
-        of: find.byType(ShutterButton),
-        matching: find.byType(Opacity),
-      ),
-    );
-    expect(opacity.opacity, 0.5);
-    expect(
-      find.bySemanticsLabel('Capture Click, blocked: already captured this angle'),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.byType(ShutterButton));
-    await tester.pump();
-
-    expect(calls, 0, reason: 'a filled segment must never capture again');
-    expect(nudged, 1, reason: 'the parent surfaces the "turn" warning');
-    expect(named(AnalyticsEvents.levelACaptureTriggered), isEmpty);
-    // Its OWN reason — never lumped into 'unknown'.
-    expect(named(AnalyticsEvents.levelABlockedShutterTap).single['reason'],
-        'already_captured');
   });
 
   testWidgets('blocked-tap analytics is throttled within the cooldown',
@@ -243,42 +197,34 @@ void main() {
         findsOneWidget);
   });
 
-  testWidgets('renders the flow label, and names it in semantics',
-      (tester) async {
+  testWidgets('mode label prints on the core; null renders none', (tester) async {
     await pump(tester, readiness: _ready, label: 'Click');
     expect(find.text('Click'), findsOneWidget);
-    expect(find.bySemanticsLabel('Capture Click, ready'), findsOneWidget);
 
-    await pump(tester, readiness: _ready, label: 'Auto');
-    expect(find.text('Auto'), findsOneWidget);
-    expect(find.bySemanticsLabel('Capture Auto, ready'), findsOneWidget);
-  });
-
-  testWidgets('no label supplied → unchanged core + semantics', (tester) async {
     await pump(tester, readiness: _ready);
-    expect(find.byType(Text), findsNothing);
-    expect(find.bySemanticsLabel('Capture, ready'), findsOneWidget);
+    expect(find.text('Click'), findsNothing);
+    expect(find.text('Auto'), findsNothing);
   });
 
-  testWidgets('the spinner replaces the label while capturing', (tester) async {
+  testWidgets('label yields the core to the in-flight spinner', (tester) async {
     final gate = Completer<void>();
     await pump(
       tester,
       readiness: _ready,
-      label: 'Click',
+      label: 'Auto',
       onCapture: () => gate.future,
     );
-    expect(find.text('Click'), findsOneWidget);
+    expect(find.text('Auto'), findsOneWidget);
 
     await tester.tap(find.byType(ShutterButton));
     await tester.pump();
-    expect(find.text('Click'), findsNothing);
+    expect(find.text('Auto'), findsNothing); // spinner owns the core
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
     gate.complete();
     await tester.pump();
     await tester.pump();
-    expect(find.text('Click'), findsOneWidget); // label comes back
+    expect(find.text('Auto'), findsOneWidget); // restored
   });
 
   testWidgets('disposed mid-capture does not throw', (tester) async {

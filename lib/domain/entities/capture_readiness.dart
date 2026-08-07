@@ -4,14 +4,26 @@
 // by the PARENT from the tilt (inBand), stability (stable), and placement (placed)
 // inputs. The shutter button consumes this; it does NOT subscribe to sensors.
 //
-// Safety rule: sensor-unavailable must NEVER hard-block. In guided mode with no
-// usable sensors we fail OPEN (allow capture) so the user is never locked out —
-// the parent surfaces a "guidance unavailable" note separately.
+// Safety rule (DEFAULT, full mode): sensor-unavailable must NEVER hard-block. In
+// guided mode with no usable sensors we fail OPEN (allow capture) so the user is
+// never locked out — the parent surfaces a "guidance unavailable" note.
+//
+// HARD-GATE EXCEPTION (Meshy mode): a Meshy shot MUST land in the eye→top window
+// or it is worthless to the model, so [hardGate] disables the fail-open — a shot
+// outside the band is blocked even when sensors are unavailable. On a device that
+// does not stream tilt this means the Meshy shutter stays blocked ("adjust tilt")
+// rather than taking an unguided shot; that is the intended behaviour, not a bug
+// (a sensor-less device cannot satisfy Meshy's guarantee). Full mode is untouched.
+//
+// ALREADY-CAPTURED (Meshy mode): the one gate that NEVER fails open. A second
+// shot into a wedge that already holds one adds nothing the model can use, so it
+// is refused whatever the sensors are doing — see [CaptureReadiness.alreadyCaptured].
+// The PARENT decides when it applies (Meshy, live segment known and in range, no
+// retake targeted); this type only enforces what it is told.
 
 enum CaptureMode { guided, manual }
 
-/// Why the shutter is currently blocked (guided mode only, except
-/// [alreadyCaptured] which blocks in every mode). [capturing] and
+/// Why the shutter is currently blocked (guided mode only). [capturing] and
 /// [sensorUnavailable] are not returned by [CaptureReadiness.primaryBlockReason]
 /// — capturing is the button's own in-flight state, and sensor-unavailable fails
 /// open rather than blocking.
@@ -31,6 +43,7 @@ class CaptureReadiness {
     this.stable = false,
     this.placed = true,
     this.sensorSupported = true,
+    this.hardGate = false,
     this.alreadyCaptured = false,
   });
 
@@ -42,36 +55,43 @@ class CaptureReadiness {
   final bool placed;
 
   /// Whether the motion sensors that drive [inBand]/[stable] are usable. When
-  /// false, gating is bypassed (fail-open).
+  /// false, gating is normally bypassed (fail-open) — UNLESS [hardGate].
   final bool sensorSupported;
 
-  /// The ring segment the camera currently points at ALREADY holds an accepted
-  /// shot, so another shot here would add nothing — the user must turn to an
-  /// unfilled segment. Used by the one-shot-per-segment flows (Meshy).
+  /// When true (Meshy mode), the tilt band is ENFORCED even without usable
+  /// sensors: the fail-open is disabled, so a shot outside the band is blocked
+  /// rather than silently taken. See the HARD-GATE EXCEPTION note above. False
+  /// (the default) preserves full mode's fail-open exactly.
+  final bool hardGate;
+
+  /// The wedge the camera currently points at ALREADY holds a capture, and this
+  /// mode allows exactly one per wedge (Meshy). Default false — every existing
+  /// construction site keeps today's behaviour.
   ///
-  /// The parent sets this true ONLY when the current segment is definitively
-  /// known AND filled; an unknown segment (sensors warming up / unavailable)
-  /// must resolve to false, never true. That rule is what makes blocking on it
-  /// safe even though every other gate here fails open.
+  /// Unlike every other gate this one is absolute: it is checked before the
+  /// manual-mode allowance AND before the sensor fail-open, because a duplicate
+  /// shot is worthless to the model no matter how the shutter was reached. The
+  /// parent supplies it only from state it can actually read (a known, in-range
+  /// live segment), so "unknown" arrives here as false — the fail-open lives at
+  /// the call site, not in this rule.
   final bool alreadyCaptured;
 
-  /// Manual mode: always allowed. Guided mode: require all gates — but if sensors
-  /// are unavailable, allow (never lock the user out).
-  ///
-  /// [alreadyCaptured] is the ONE hard block, checked before both fail-open
-  /// returns: it is not a "we can't tell" state (those fail open by design) but a
-  /// positively-known duplicate, and the user always has a way out — turn.
+  /// Already-captured: never allowed (see [alreadyCaptured]). Otherwise manual
+  /// mode is always allowed, and guided mode requires all gates — but if sensors
+  /// are unavailable, allow (fail-open), UNLESS [hardGate] is set, in which case
+  /// the gates are enforced regardless (a sensor-less device then cannot capture).
   bool get canCapture {
-    if (alreadyCaptured) return false;
+    if (alreadyCaptured) return false; // the one gate that never fails open
     if (mode == CaptureMode.manual) return true;
-    if (!sensorSupported) return true; // fail-open
+    if (!sensorSupported && !hardGate) return true; // fail-open (full mode)
     return inBand && stable && placed;
   }
 
   /// The single reason the shutter is blocked, or null if it can capture. Order:
-  /// placement, already-captured, band, stability. Already-captured outranks
-  /// tilt/stability because at a finished segment "turn to the next angle" is the
-  /// only useful instruction — tilt/steadiness advice there is noise.
+  /// placement, then already-captured, then band, then stability. Already-captured
+  /// outranks band/stability because "turn to the next section" is the action that
+  /// resolves it — telling the user to steady a shot they cannot take would be a
+  /// dead end.
   BlockReason? get primaryBlockReason {
     if (canCapture) return null;
     if (!placed) return BlockReason.notPlaced;
@@ -89,6 +109,7 @@ class CaptureReadiness {
       other.stable == stable &&
       other.placed == placed &&
       other.sensorSupported == sensorSupported &&
+      other.hardGate == hardGate &&
       other.alreadyCaptured == alreadyCaptured;
 
   @override
@@ -98,6 +119,7 @@ class CaptureReadiness {
         stable,
         placed,
         sensorSupported,
+        hardGate,
         alreadyCaptured,
       );
 }

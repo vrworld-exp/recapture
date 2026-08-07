@@ -58,7 +58,7 @@ void main() {
       expect(r.maxDegrees, 90);
     });
 
-    test('Level C default resolves to exactly the bundled low band [0,60)', () {
+    test('Level C default resolves to exactly the bundled low band [0,40)', () {
       // No remote band for 'low', no override → bundled default.
       final r = resolvePitchBand(
         bandId: 'low',
@@ -67,7 +67,7 @@ void main() {
       final bundledLow = CaptureConfig.bundledDefault.pitchBands
           .firstWhere((b) => b.id == 'low');
       expect(r.minDegrees, bundledLow.minDegrees); // 0
-      expect(r.maxDegrees, bundledLow.maxDegrees); // 60
+      expect(r.maxDegrees, bundledLow.maxDegrees); // 40
     });
   });
 

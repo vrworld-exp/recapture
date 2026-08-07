@@ -15,18 +15,52 @@ import 'package:recapture/application/projects/preview_download_service.dart';
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'package:recapture/domain/entities/preview_manifest.dart';
+import 'package:recapture/domain/entities/project_model.dart';
 import 'package:recapture/presentation/screens/projects/preview_gallery_screen.dart';
+import 'repo_fake_defaults.dart';
 
-class _FakeRepo implements LiveProjectsRepository {
+class _FakeRepo
+    with
+        FakeModelGenerationDefaults,
+        FakeAdminDeleteDefaults,
+        FakeAutoGenerationDefaults,
+        FakeModelOptimizeDefaults,
+        FakeOwnerModelListDefaults
+    implements LiveProjectsRepository {
   Map<String, dynamic> exportResult = const {};
   LiveProjectsException? exportFail;
   int exportCalls = 0;
   PreviewDeleteResult deleteResult =
       const PreviewDeleteResult(deleted: [], missing: []);
 
+  /// The keys of every createModel call — the CTA now issues the request
+  /// itself, so this is what proves nothing sits between selection and Meshy.
+  final List<List<String>> createdKeys = [];
+
+  static const _queued = ProjectModelView(
+    id: 'm1',
+    source: ModelSource.meshy,
+    status: ModelStatus.queued,
+  );
+
   @override
   Future<LiveProjectsPage> list({int limit = 20, String? cursor}) async =>
       const LiveProjectsPage(items: [], nextCursor: null);
+
+  @override
+  Future<ProjectModelView> createModel(
+    String projectId,
+    List<String> keys, {
+    required String idempotencyKey,
+  }) async {
+    createdKeys.add(keys);
+    return _queued;
+  }
+
+  // The generation screen the CTA pushes polls this straight away.
+  @override
+  Future<List<ProjectModelView>> listModels(String projectId) async =>
+      const [_queued];
 
   @override
   Future<Map<String, dynamic>> export(String projectId) async {
@@ -58,12 +92,21 @@ Map<String, dynamic> _manifest(List<String> keys, {String expiresAt = '2099-01-0
       ],
     };
 
-Widget _app(_FakeRepo repo, _RecordingDownloader dl, {required bool admin}) {
+Widget _app(
+  _FakeRepo repo,
+  _RecordingDownloader dl, {
+  required bool admin,
+  bool staff = true,
+}) {
   return ProviderScope(
     overrides: [
       liveProjectsRepositoryProvider.overrideWithValue(repo),
       previewDownloaderProvider.overrideWithValue(dl),
       isAdminProvider.overrideWithValue(admin),
+      // Required, not optional: the screen's Create Model action watches this,
+      // and the real provider chain reads the role from Hive — unopened in a
+      // widget test, so leaving it un-overridden throws before anything renders.
+      isStaffProvider.overrideWithValue(staff),
     ],
     child: MaterialApp(
       theme: AppTheme.dark,
@@ -188,5 +231,35 @@ void main() {
     expect(find.text('1 photo'), findsOneWidget);
     // Manifest was NOT re-requested after the delete.
     expect(repo.exportCalls, 1);
+  });
+
+  testWidgets(
+      'Create Model goes straight to the generation screen — no editing step',
+      (tester) async {
+    const keys = ['images/EYE/a.jpg', 'images/EYE/b.jpg', 'images/TOP/c.jpg'];
+    final repo = _FakeRepo()..exportResult = _manifest(keys);
+
+    await tester.pumpWidget(_app(repo, _RecordingDownloader(), admin: false));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('preview_select_toggle')));
+    await tester.pump();
+    for (final k in keys) {
+      await tester.tap(find.byKey(ValueKey('preview_tile_$k')));
+      await tester.pump();
+    }
+
+    await tester.tap(find.byKey(const ValueKey('create_model_cta')));
+    // Not pumpAndSettle: the pushed generation screen spins forever.
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    // The request carried exactly the picked keys, in manifest order…
+    expect(repo.createdKeys, [keys]);
+    // …and the removed Prepare-Images step never appeared in between.
+    expect(find.byKey(const ValueKey('prep_generate_cta')), findsNothing);
+    expect(find.byKey(const ValueKey('prep_save_edit')), findsNothing);
+    expect(find.byKey(const ValueKey('model_gen_pending')), findsOneWidget);
   });
 }

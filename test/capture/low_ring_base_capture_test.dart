@@ -33,7 +33,7 @@
 // ── CONVENTION RECONCILIATION (same as the sibling Low-Ring tests) ─────────────
 // The brief frames Low Ring as an "upward tilt / NEGATIVE band". This codebase does
 // NOT use a negative band: Level C resolves to `pitchBandIdForLevel(CaptureLevel.c)
-// == 'low'`, the [0, 60) slice — the lowest of the 0–180° camera-tilt scale, reached
+// == 'low'`, the [0, 40) slice — the lowest of the 0–180° camera-tilt scale, reached
 // by a slight upward tilt from level (copy: "Lower the phone, tilt slightly up").
 // The assertions encode that production convention; the sabotage group fails if the
 // band is ever mis-wired to the horizontal (Level A) band.
@@ -60,13 +60,13 @@ void main() {
   // tests track an INTENTIONAL retune and fail on an UNINTENTIONAL one.
   final lowRing = resolvePitchBand(
       bandId: pitchBandIdForLevel(CaptureLevel.c), config: config);
-  // Level A's band (Eye Ring 'mid' [60,120)) is the "horizontal" posture that would
+  // Level A's band (Eye Ring 'mid' [40,110)) is the "horizontal" posture that would
   // cut the base off — the wrong band for the Low Ring.
   final eyeRing = resolvePitchBand(
       bandId: pitchBandIdForLevel(CaptureLevel.a), config: config);
 
-  // The base-capturing angle (well inside the Low Ring [0,60)) and a horizontal /
-  // Level-A angle (inside [60,120), outside Low Ring) that clips the base.
+  // The base-capturing angle (well inside the Low Ring [0,40)) and a horizontal /
+  // Level-A angle (inside [40,110), outside Low Ring) that clips the base.
   const baseAnglePitch = 30.0; // slight-up posture (low band centre) → base in frame
   const horizontalPitch = 90.0; // Eye-Ring/horizontal → base cut off
   const eps = 0.01;

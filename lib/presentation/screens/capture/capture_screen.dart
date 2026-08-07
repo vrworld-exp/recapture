@@ -12,8 +12,8 @@ import '../../../application/capture/analytics/capture_level_events.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/capture/analytics/capture_trigger_analytics.dart';
 import '../../../application/capture/auto_capture_controller.dart';
-import '../../../application/capture/capture_shape_mode_provider.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
+import '../../../application/capture/capture_mode_provider.dart';
 import '../../../application/capture/capture_lock.dart';
 import '../../../application/capture/current_tilt_provider.dart';
 import '../../../application/capture/ledger/captured_photo_record.dart';
@@ -25,6 +25,7 @@ import '../../../application/capture/segment_coverage_provider.dart';
 import '../../../application/capture/session/capture_session_codec.dart';
 import '../../../application/capture/session/capture_session_store.dart';
 import '../../../application/capture/stability_provider.dart';
+import '../../../application/config/config_notifier.dart';
 import '../../../domain/capture/level_completion.dart';
 import '../../../domain/capture/segment_capture_decision.dart';
 import '../../../data/local/active_session_box.dart';
@@ -41,6 +42,7 @@ import '../../../domain/entities/capture_settings.dart';
 import '../../../domain/entities/capture_thumbnail.dart';
 import '../../../domain/entities/capture_top_bar_state.dart';
 import '../../../domain/entities/save_exit_decision.dart';
+import '../../../domain/entities/segment_coverage.dart';
 import '../../../domain/entities/direction_hint.dart';
 import '../../../domain/entities/permission_item.dart';
 import '../../../domain/entities/retake_request.dart';
@@ -79,6 +81,12 @@ export 'capture_instructions.dart'
         kDefaultCaptureInstructions,
         kLevelBCaptureInstructions,
         kLevelCCaptureInstructions;
+
+/// How long a blocked-shutter nudge is suppressed after one fires. Shared by the
+/// button's `level_a_blocked_shutter_tap` analytics throttle and the screen's
+/// already-captured snack, so a user mashing a refused shutter gets ONE of each,
+/// not one per tap.
+const Duration kBlockedShutterFeedbackCooldown = Duration(seconds: 2);
 
 class CaptureScreen extends ConsumerStatefulWidget {
   const CaptureScreen({
@@ -199,12 +207,6 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// persisted (every entry starts paused by design).
   bool _capturePaused = true;
 
-  /// True when this is a MESHY capture (single Eye ring of 6, manual shutter).
-  /// Meshy has NO auto-capture: the AUTO pill and play/pause control are hidden
-  /// and the auto-fire loop is force-disabled, so the user taps the shutter at
-  /// each of the 6 yaw slots. Resolved once at [initState] from the shape mode.
-  bool _isMeshy = false;
-
   /// Single in-flight guard shared by the manual shutter path and the
   /// auto-capture loop, so the two can never run overlapping captures against
   /// the one native capture resource.
@@ -282,17 +284,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// N the progression/machine layers and the live HUD providers use). Computed
   /// directly (not via the active-band provider) so it is correct even before
   /// [_activateLevelRing] stamps the active band.
-  ///
-  /// Reads the EFFECTIVE config (shape-mode aware), not the raw remote one: in
-  /// Meshy this ring is 6, and the live HUD providers
-  /// ([activeLevelSegmentCountProvider], and through it the yaw→segment
-  /// bucketing) already resolve 6 from the same source. Reading the raw config
-  /// here reshaped the coverage to the full flow's 16 and desynced the two.
-  /// In full mode the two providers are identical, so nothing changes.
   int _levelSegmentCount() => effectiveSegmentsFor(
-        ref.read(effectiveCaptureConfigProvider),
+        ref.read(captureConfigProvider),
         ref.read(captureFlowVariantProvider),
         _levelBandId,
+        mode: ref.read(captureModeProvider),
       );
 
   /// Whether a saved draft was restored into the live coverage (guards
@@ -336,6 +332,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// re-capture of an already-filled segment never re-navigates).
   bool _levelCompleteNavigated = false;
 
+  /// When the already-captured snack last fired, for its
+  /// [kBlockedShutterFeedbackCooldown] throttle. Transient (per entry).
+  DateTime? _lastAlreadyCapturedSnackAt;
+
   /// The active instruction cycle for this level — the widget's tuned copy, or
   /// [kDefaultCaptureInstructions] when none/empty was supplied (so the cycle is
   /// never empty: `% length` and `[index]` below stay safe).
@@ -356,12 +356,6 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     _cameraController = CameraPreviewController();
     _cameraController.addListener(_onCameraStateChanged);
     WidgetsBinding.instance.addObserver(this);
-    // Meshy is manual-only: force auto-capture OFF up front so the loop can never
-    // fire and the pill/play-pause controls are hidden (see build()).
-    _isMeshy = ref.read(captureShapeModeProvider).isMeshy;
-    if (_isMeshy) {
-      _autoCapture = const AutoCaptureState(mode: AutoCaptureMode.off);
-    }
     _resolveProjectId();
     _loadAutoCapturePref();
     _loadCaptureSettings();
@@ -479,6 +473,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     }
 
     _retake = request;
+    // Rebuild: this runs in a post-frame callback, so the bottom bar was already
+    // built with `_retake == null`. Without this the shutter would keep the
+    // one-shot-per-wedge gate armed for a retake — whose whole purpose is to
+    // re-shoot a FILLED wedge — until some other change happened to rebuild it.
+    if (mounted) setState(() {});
     notifier.begin(request);
     if (!_retakeStartedLogged) {
       _retakeStartedLogged = true;
@@ -518,7 +517,10 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       level: _captureLevel,
       projectId: session.projectId,
       sessionId: session.sessionId,
-      captureMode: _autoCapture.isOn ? 'guided' : 'manual',
+      // 'guided' = the auto loop is driving; 'manual' = the user taps every
+      // shot. Meshy sessions are always manual, so this is what makes them
+      // separable in the funnel without a second analytics field.
+      captureMode: _autoCaptureAllowed && _autoCapture.isOn ? 'guided' : 'manual',
       targetSegments: _levelSegmentCount(),
       sensorSupported: _sensorSupportedNow(),
       deviceType: _deviceType,
@@ -534,11 +536,31 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         (stability?.sensorSupported ?? false);
   }
 
+  /// Whether this session may auto-capture AT ALL.
+  ///
+  /// False in Meshy mode: a single ring of 6 is nothing for a loop to pace, and
+  /// a frame the loop takes is one the user did not compose — with only 6 frames
+  /// feeding a model, every frame is load-bearing. The SHUTTER is unaffected;
+  /// this gates only the automatic loop, the AUTO pill, and the settings toggle.
+  bool get _autoCaptureAllowed =>
+      ref.read(captureModeProvider).usesAutoCapture;
+
   /// Best-effort read of the persisted auto-capture preference (default ON when
   /// none is stored / persistence is unavailable). Corrects [_autoCapture] only
   /// when it differs, so there is no needless rebuild.
   Future<void> _loadAutoCapturePref() async {
-    if (_isMeshy) return; // manual-only mode — the stored pref never applies
+    // Meshy mode neither READS nor WRITES the store: the preference is a full-
+    // mode setting, and letting a Meshy session read it would turn auto-capture
+    // on for a flow that must not have it — or, worse, letting it write would
+    // leak "off" back into the user's full-capture sessions.
+    if (!_autoCaptureAllowed) {
+      if (mounted && _autoCapture.isOn) {
+        setState(() =>
+            _autoCapture = const AutoCaptureState(mode: AutoCaptureMode.off));
+        _syncSettings();
+      }
+      return;
+    }
     final enabled = await _autoCaptureStore.getEnabled() ?? true;
     if (!mounted || enabled == _autoCapture.isOn) return;
     setState(() {
@@ -578,6 +600,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// and logs the toggle. Armed/countdown are owned by the (separate) auto-capture
   /// loop, so a manual toggle just sets the mode.
   void _toggleAutoCapture() {
+    if (!_autoCaptureAllowed) return; // no auto loop to toggle in Meshy mode
     final newOn = !_autoCapture.isOn;
     setState(() {
       _autoCapture = AutoCaptureState(
@@ -765,15 +788,18 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   Future<void> _performCapture() async {
     if (!_captureLock.tryAcquire()) return; // auto fire in flight — stand down
     try {
-      // HARD one-shot-per-segment guard (Meshy). The shutter's own readiness can
-      // be one frame stale and a native shutter call is expensive + side-effecting,
-      // so the decision is re-taken here, immediately before the capture. A RETAKE
-      // is exempt: it deliberately re-shoots a filled segment.
-      if (_isMeshy && _retake == null && !_isSegmentCaptureAllowed()) {
-        _showAlreadyCapturedWarning();
-        return; // no frame, no counter, no ledger, no thumbnail — finally releases
+      // PRE-CAPTURE re-check of the one-shot-per-wedge rule (Meshy), against the
+      // live segment + coverage read HERE rather than the readiness the button
+      // was built with. It closes the one-frame window where the user turns back
+      // into a filled wedge in the same frame their tap lands — the shutter still
+      // looked enabled, but the shot would be a duplicate. Runs BEFORE
+      // captureSingle so a refused shot is never taken (and never written), and
+      // is skipped for a RETAKE, which exists to re-shoot a filled wedge. The
+      // shared `finally` releases the lock.
+      if (_retake == null && _duplicateShotBlockedNow()) {
+        _onShutterBlocked(BlockReason.alreadyCaptured);
+        return;
       }
-
       final frame = await _captureChannel.captureSingle();
       if (!mounted) return;
       if (frame == null) return;
@@ -813,42 +839,51 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     }
   }
 
-  /// The one-shot-per-segment decision for the CURRENT ring segment, via the pure
-  /// [evaluateSegmentCapture]. FAILS OPEN: an unknown or out-of-range segment
-  /// (sensors warming up, no usable gyro) allows the capture — a device without
-  /// motion sensors must still be able to shoot. Caller-gated to Meshy + non-retake.
-  bool _isSegmentCaptureAllowed() {
+  /// Whether a shot taken RIGHT NOW would duplicate a wedge that already holds
+  /// one, under the active mode's one-shot rule. False in full mode (repeat
+  /// shots are expected there), once the level has completed, and — via
+  /// [isSegmentAlreadyCaptured] — whenever the live segment is unknown or out of
+  /// range, so unreadable sensors never block a capture.
+  bool _duplicateShotBlockedNow() {
+    if (!ref.read(captureModeProvider).oneShotPerSegment) return false;
+    if (_levelCompleteNavigated) return false;
     final seg =
         ref.read(currentRingSegmentProvider).valueOrNull?.currentSegment;
-    final coverage = ref.read(segmentCoverageProvider);
-    if (seg == null || seg < 0 || seg >= coverage.segmentCount) return true;
-    return switch (evaluateSegmentCapture(
-      segmentIndex: seg,
-      isFilled: coverage.filled[seg],
-    )) {
-      ProceedCapture() => true,
-      RejectAlreadyFilled() => false,
-    };
+    return isSegmentAlreadyCaptured(seg, ref.read(segmentCoverageProvider));
   }
 
-  /// Surfaces the duplicate-angle refusal, reading the copy from the decision
-  /// model's single source of truth. Shown both when the blocked shutter is tapped
-  /// and when the pre-capture guard refuses, using the app's standard SnackBar
-  /// pattern (no new overlay). Best-effort: no messenger (unmounted) → silent.
-  void _showAlreadyCapturedWarning() {
-    if (!mounted) return;
+  /// A blocked shutter tap (or a refused pre-capture re-check). Only the
+  /// already-captured block gets a message: the others are already reported
+  /// live by the HUD (tilt gauge, stability dot), so a snack would repeat what
+  /// the user can already see, while "turn to the next section" is a fact no
+  /// overlay states.
+  void _onShutterBlocked(BlockReason? reason) {
+    if (reason != BlockReason.alreadyCaptured) return;
+    _showAlreadyCapturedSnack();
+  }
+
+  /// Surfaces [RejectAlreadyFilled.warningMessage] — the SINGLE source of that
+  /// copy — as the app's standard SnackBar, throttled by
+  /// [kBlockedShutterFeedbackCooldown] so a user mashing the refused shutter
+  /// gets one snack, not a queue of them. The ring coverage map already
+  /// highlights the nearest empty wedge, so this needs no visual of its own.
+  void _showAlreadyCapturedSnack() {
+    final now = DateTime.now();
+    final last = _lastAlreadyCapturedSnackAt;
+    if (last != null &&
+        now.difference(last) < kBlockedShutterFeedbackCooldown) {
+      return; // throttled
+    }
     final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        const SnackBar(
-          key: Key('already_captured_snack'),
-          backgroundColor: AppColors.warning,
-          duration: Duration(seconds: 2),
-          content: Text(RejectAlreadyFilled.warningMessage),
-        ),
-      );
+    if (messenger == null) return; // no Scaffold host (never fatal)
+    _lastAlreadyCapturedSnackAt = now;
+    messenger.showSnackBar(
+      const SnackBar(
+        key: Key('already_captured_snack'),
+        backgroundColor: AppColors.warning,
+        content: Text(RejectAlreadyFilled.warningMessage),
+      ),
+    );
   }
 
   /// One auto-capture evaluation per orientation tick. Reads the live stability,
@@ -868,8 +903,8 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     final isStable = (stability?.sensorSupported ?? false) &&
         stability!.stability == Stability.stable;
     final coverage = ref.read(segmentCoverageProvider);
-    final enabled = _autoCapture.isOn &&
-        !_isMeshy && // Meshy is manual-only — the auto-fire loop never runs
+    final enabled = _autoCaptureAllowed &&
+        _autoCapture.isOn &&
         !_capturePaused &&
         !_autoCaptureSuspended &&
         _retake == null &&
@@ -993,12 +1028,6 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// `minAcceptedCount` is 1: the repo has no Dart count-config field, so coverage
   /// (`CaptureConfig.thresholds.minCoveragePct`) is the effective production gate —
   /// reaching it already implies ≥1 accepted. Retake mode never auto-completes.
-  ///
-  /// The floor comes from the EFFECTIVE (shape-mode aware) config, so Meshy
-  /// completes at its own 100% floor — all 6 wedges. Reading the raw remote config
-  /// here completed a Meshy session at 5/6 (the full flow's 80%) and stranded the
-  /// user on a Summary whose Upload gate demands 6. Full mode is unchanged (the
-  /// two providers are identical there).
   void _maybeAutoComplete() {
     if (_levelCompleteNavigated || _retake != null) return;
     final coverage = ref.read(segmentCoverageProvider);
@@ -1006,8 +1035,13 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       coverage,
       acceptedCount: _ledger.accepted.length,
       minAcceptedCount: 1,
-      minCoveragePct:
-          ref.read(effectiveCaptureConfigProvider).thresholds.minCoveragePct,
+      // Per-mode floor: Meshy finishes one slot short (5 of 6) via its explicit
+      // floor; full uses the tunable global. Routed through the ONE resolver the
+      // upload gate also uses, so "capture done" and "upload eligible" agree.
+      minCoveragePct: minCoveragePctForMode(
+        ref.read(captureModeProvider),
+        ref.read(captureConfigProvider).thresholds,
+      ),
     );
     if (!completion.isComplete) return;
     _levelCompleteNavigated = true;
@@ -1057,7 +1091,9 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       'device_type': _deviceType,
     });
 
-    _retake = null;
+    // setState: leaving retake mode RE-ARMS the one-shot-per-wedge gate for the
+    // resumed pass, and the bottom bar only reads `_retake` when it rebuilds.
+    setState(() => _retake = null);
     ref.read(retakeSessionProvider.notifier).clear();
 
     if (request.returnToReviewAfter) {
@@ -1135,6 +1171,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
         context,
         settings: _settings,
         onChanged: _onSettingChanged,
+        autoCaptureSupported: _autoCaptureAllowed,
       );
     } finally {
       if (mounted) setState(() => _autoCaptureSuspended = false);
@@ -1156,6 +1193,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   }
 
   void _applyAutoCaptureSetting(bool on) {
+    if (!_autoCaptureAllowed) return; // the sheet renders it disabled anyway
     setState(() {
       _autoCapture = AutoCaptureState(
         mode: on ? AutoCaptureMode.on : AutoCaptureMode.off,
@@ -1383,49 +1421,47 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
                   // yaw + ring progress into a DirectionHint.
                   const DirectionArrowOverlay(hint: DirectionHint.hidden),
                   // Auto-capture ON/OFF pill (top-right, below the top bar).
-                  // Hidden in Meshy mode — that flow is manual-only.
-                  if (!_isMeshy)
-                    Positioned(
-                      top: 0,
-                      right: 0,
-                      child: SafeArea(
-                        child: Padding(
-                          padding: const EdgeInsets.only(
-                            top: 44,
-                            right: AppSpacing.lg,
-                          ),
-                          child: AutoCaptureIndicator(
-                            // While suspended (e.g. Help sheet open) the loop is
-                            // paused, so it can never be armed.
-                            state: _autoCaptureSuspended
-                                ? AutoCaptureState(mode: _autoCapture.mode)
-                                : _autoCapture,
-                            onToggle: _toggleAutoCapture,
-                          ),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.only(
+                          top: 44,
+                          right: AppSpacing.lg,
                         ),
+                        // Absent entirely in Meshy mode — a pill that only ever
+                        // reads OFF and refuses its own tap is worse than no
+                        // pill. Nothing reserves its space, so the layout simply
+                        // closes up.
+                        child: !_autoCaptureAllowed
+                            ? const SizedBox.shrink()
+                            : AutoCaptureIndicator(
+                                // While suspended (e.g. Help sheet open) the
+                                // loop is paused, so it can never be armed.
+                                state: _autoCaptureSuspended
+                                    ? AutoCaptureState(mode: _autoCapture.mode)
+                                    : _autoCapture,
+                                onToggle: _toggleAutoCapture,
+                              ),
                       ),
                     ),
+                  ),
                   _BottomBar(
                     captureCount: _captureCount,
-                    // Meshy has no auto-progression to gate, so the play/pause
-                    // control is hidden — the shutter is the only capture path.
-                    playPause: _isMeshy
-                        ? const SizedBox.shrink()
-                        : _PlayPauseButton(
-                            paused: _capturePaused,
-                            onToggle: _toggleCapturePaused,
-                          ),
+                    playPause: _PlayPauseButton(
+                      paused: _capturePaused,
+                      onToggle: _toggleCapturePaused,
+                    ),
                     shutter: _ShutterControl(
                       band: _resolvedBand,
-                      isMeshy: _isMeshy,
-                      // ONE shot per ring sixth — Meshy only. A retake must be
-                      // able to re-shoot a filled segment, and once the level has
-                      // completed the gate is moot (the screen is leaving).
-                      enforceOneShotPerSegment:
-                          _isMeshy && _retake == null && !_levelCompleteNavigated,
                       onCapture: _performCapture,
                       onTriggered: _onManualTriggered,
-                      onAlreadyCapturedTap: _showAlreadyCapturedWarning,
+                      onBlockedTap: _onShutterBlocked,
+                      // The two states where re-shooting a filled wedge is
+                      // correct (a targeted retake) or moot (the level already
+                      // navigated away) — both owned here, not by the control.
+                      gateExempt: _retake != null || _levelCompleteNavigated,
                     ),
                     thumbnails: ThumbnailStrip(
                       recent: _recentThumbnails,
@@ -1564,21 +1600,21 @@ class _CameraErrorSurface extends StatelessWidget {
 /// Guided mode; placement is not gated yet (no detection). Until sensor samples
 /// arrive — or if sensors are unavailable — `sensorSupported` is false, so the
 /// shutter fails OPEN (never locks the user out).
+///
+/// In MESHY mode it adds the one-shot-per-wedge gate: the live segment
+/// ([currentRingSegmentProvider]) is looked up in the live fill state
+/// ([segmentCoverageProvider] — the single source of truth, never a parallel
+/// ring), and an already-filled wedge blocks the shutter until the user turns to
+/// an empty one. Unknown or out-of-range state FAILS OPEN, and [gateExempt] lets
+/// the parent switch the rule off wholesale (retake / level complete).
 class _ShutterControl extends ConsumerWidget {
   const _ShutterControl({
     required this.band,
-    required this.isMeshy,
-    required this.enforceOneShotPerSegment,
     required this.onCapture,
     this.onTriggered,
-    this.onAlreadyCapturedTap,
+    this.onBlockedTap,
+    this.gateExempt = false,
   });
-
-  /// The active session's capture shape mode, snapshotted at level entry by the
-  /// parent (same source as the hidden AUTO pill / play-pause). Only names the
-  /// shutter: 'Click' for the manual-only Meshy flow, 'Auto' for the full flow's
-  /// auto-capture loop. The shutter itself is manual in BOTH modes.
-  final bool isMeshy;
 
   /// The EFFECTIVE pitch band THIS level enforces — resolved once at level entry
   /// (override → remote/cache → bundled default) and held stable for the pass by
@@ -1586,23 +1622,21 @@ class _ShutterControl extends ConsumerWidget {
   /// agree; and a mid-pass config/override change never shifts the gate.
   final PitchBand band;
 
-  /// ONE shot per ring segment: when true, the shutter refuses a tap while the
-  /// segment the camera currently points at already holds an accepted shot — the
-  /// user must physically turn to an unfilled one. Only the Meshy flow sets this;
-  /// the shipped full flow's manual shutter is deliberately untouched (its
-  /// auto-capture loop already skips filled segments via `isCurrentFilled`).
-  final bool enforceOneShotPerSegment;
-
   final Future<void> Function() onCapture;
 
   /// Capture-initiation hook (fires once per non-blocked tap) — the parent emits
   /// `manual_capture_triggered` with full context from the readiness.
   final void Function(CaptureReadiness readiness)? onTriggered;
 
-  /// Nudge for a blocked tap at an ALREADY-CAPTURED segment — the parent surfaces
-  /// the "turn to the next section" warning. Wired only for that reason: a tap
-  /// blocked on tilt/stability keeps its existing (silent) behaviour.
-  final VoidCallback? onAlreadyCapturedTap;
+  /// Fired on a BLOCKED tap with the live reason, so the parent can surface the
+  /// matching nudge (the already-captured snack). Null = no nudge.
+  final void Function(BlockReason? reason)? onBlockedTap;
+
+  /// Switches the one-shot-per-wedge gate OFF entirely. The parent owns the two
+  /// states that exempt it — a targeted RETAKE (which exists precisely to
+  /// re-shoot a filled wedge) and a latched level-complete navigation — so this
+  /// widget never has to reach for state it doesn't own.
+  final bool gateExempt;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1612,37 +1646,68 @@ class _ShutterControl extends ConsumerWidget {
     final tiltSupported = tilt?.sensorSupported ?? false;
     final stabilitySupported = stability?.sensorSupported ?? false;
 
-    // FAIL-OPEN: only a KNOWN, in-range, filled segment blocks. An unknown /
-    // out-of-range segment (sensors warming up or unavailable) leaves this false,
-    // so a device with no usable gyro can still shoot.
-    final seg =
+    // Meshy enforces the eye→top window HARD: a shot outside [60,180) is worthless
+    // to the model, so the tilt gate must not fail open. Full mode keeps its
+    // fail-open (never lock out a sensor-less device). See CaptureReadiness.
+    // One read for both the gate and the printed word, so the button can never
+    // show "Click" while enforcing full mode's rules (or vice versa).
+    final captureMode = ref.watch(captureModeProvider);
+    final hardGate = captureMode.usesHardTiltGate;
+
+    // One shot per wedge (Meshy). Watched — not read — so the shutter re-gates
+    // the instant the user turns into (or out of) a filled wedge.
+    final segment =
         ref.watch(currentRingSegmentProvider).valueOrNull?.currentSegment;
     final coverage = ref.watch(segmentCoverageProvider);
-    final alreadyCaptured = enforceOneShotPerSegment &&
-        seg != null &&
-        seg >= 0 &&
-        seg < coverage.segmentCount &&
-        coverage.filled[seg];
+    final alreadyCaptured = captureMode.oneShotPerSegment &&
+        !gateExempt &&
+        isSegmentAlreadyCaptured(segment, coverage);
 
+    final readiness = CaptureReadiness(
+      mode: CaptureMode.guided,
+      // Reuse the SHARED pitch-band gate (min inclusive, max exclusive) — the
+      // same membership the auto-capture trigger's isInPitchBand uses.
+      inBand:
+          tiltSupported && CapturePitchGuide.isInBand(band, tilt!.tiltDegrees),
+      stable: stabilitySupported && stability!.stability == Stability.stable,
+      // Both sensors must be usable to gate; otherwise fail open (full mode).
+      sensorSupported: tiltSupported && stabilitySupported,
+      // In Meshy, enforce the band even without sensors (no fail-open).
+      hardGate: hardGate,
+      alreadyCaptured: alreadyCaptured,
+    );
+
+    final blockedTap = onBlockedTap;
     return ShutterButton(
       key: const ValueKey('capture_shutter'),
-      label: isMeshy ? 'Click' : 'Auto',
-      readiness: CaptureReadiness(
-        mode: CaptureMode.guided,
-        // Reuse the SHARED pitch-band gate (min inclusive, max exclusive) — the
-        // same membership the auto-capture trigger's isInPitchBand uses.
-        inBand: tiltSupported &&
-            CapturePitchGuide.isInBand(band, tilt!.tiltDegrees),
-        stable: stabilitySupported && stability!.stability == Stability.stable,
-        // Both sensors must be usable to gate; otherwise fail open.
-        sensorSupported: tiltSupported && stabilitySupported,
-        alreadyCaptured: alreadyCaptured,
-      ),
+      // "Auto" in full capture (the shutter supplements the auto loop),
+      // "Click" in Meshy (shutter-only — every one of the 6 is a press).
+      label: captureMode.shutterLabel,
+      readiness: readiness,
       onCapture: onCapture,
       onTriggered: onTriggered,
-      onBlockedTap: alreadyCaptured ? onAlreadyCapturedTap : null,
+      onBlockedTap:
+          blockedTap == null ? null : () => blockedTap(readiness.primaryBlockReason),
+      blockedTapCooldown: kBlockedShutterFeedbackCooldown,
     );
   }
+}
+
+/// Whether a shot aimed at [segment] would land in a wedge that already holds
+/// one, per the live [coverage] (`filled[i]` already honours the fill threshold).
+///
+/// FAILS OPEN on state we cannot trust: a null segment (sensors pending /
+/// unavailable) or an index outside the ring returns false, so an unreadable
+/// sensor can never lock the shutter. Routed through the pure
+/// [evaluateSegmentCapture] so the live gate and the pre-capture re-check share
+/// one decision rule rather than two copies of the same `if`.
+bool isSegmentAlreadyCaptured(int? segment, SegmentCoverage coverage) {
+  if (segment == null) return false;
+  if (segment < 0 || segment >= coverage.segmentCount) return false;
+  return evaluateSegmentCapture(
+        segmentIndex: segment,
+        isFilled: coverage.filled[segment],
+      ) is RejectAlreadyFilled;
 }
 
 /// Live frame counter (bottom-right of the bottom bar): photos taken this
@@ -1702,15 +1767,13 @@ class _RingCoverageHud extends ConsumerWidget {
 /// segment count (N) from the config band, accepted/coverage from the shared
 /// [RingCoverage] — so the two HUD readouts can never disagree. Empty until the
 /// ring-progress resolver supplies filled segments; the completion threshold is
-/// the EFFECTIVE config's `minCoveragePct` (the same floor [_maybeAutoComplete]
-/// gates on, so the meter can't read "complete" while the gate disagrees — in
-/// Meshy that is 100%, not the full flow's 80%).
+/// CaptureConfig's `minCoveragePct`.
 class _ProgressMeterHud extends ConsumerWidget {
   const _ProgressMeterHud();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final config = ref.watch(effectiveCaptureConfigProvider);
+    final config = ref.watch(captureConfigProvider);
     // Same live source as the ring map → the two readouts can never disagree.
     final coverage = ref.watch(segmentCoverageProvider).toRingCoverage();
     return ProgressMeter(

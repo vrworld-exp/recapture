@@ -3,7 +3,7 @@
 // Proves the capture screen wires THIS level's pitch band (pitchBandIdForLevel)
 // into the tilt indicator: the SAME smoothed pitch yields different guidance per
 // level because each level targets a different band. 40° is inside Level A's Eye
-// Ring [60,120) ("Hold steady") but below Level B's Top Ring [120,180) ("Tilt down").
+// Ring [40,110) ("Hold steady") but below Level B's Top Ring [110,180) ("Tilt down").
 // The shutter gate shares the same _levelBandId, so this also exercises the
 // per-level enforcement wiring (the pure gate itself is covered exhaustively by
 // auto_capture_pitch_band_test.dart).
@@ -128,7 +128,7 @@ void main() {
     addTearDown(source.close);
     await pumpMeter(tester, levelLabel: 'B', source: source.stream);
 
-    source.add(_at(100)); // below Top Ring [120,180) → aim further down
+    source.add(_at(100)); // below Top Ring [110,180) → aim further down
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
@@ -150,7 +150,7 @@ void main() {
     addTearDown(source.close);
     await pumpMeter(tester, levelLabel: 'A', source: source.stream);
 
-    source.add(_at(100)); // inside Eye Ring [60,120)
+    source.add(_at(100)); // inside Eye Ring [40,110)
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 

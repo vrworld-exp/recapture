@@ -303,10 +303,8 @@ Map<String, dynamic> buildCaptureManifest({
   // id so pre-variant callers emit an explicit, truthful value. Emitted as
   // `flowVariant` (this manifest's camelCase convention).
   String flowVariantId = 'with_bottom',
-  // The capture SHAPE MODE id ('full' / 'meshy' — CaptureShapeMode.id). The
-  // backend cross-checks this against the job's captureMode at finalize, so a
-  // Meshy bundle must declare 'meshy'. Additive: defaults to 'full' so every
-  // pre-Meshy caller emits an explicit, truthful value. Emitted as `captureMode`.
+  // The capture MODE this bundle was shot under. Cross-checked server-side
+  // against the job's mode, exactly as flowVariant is.
   String captureModeId = 'full',
 }) {
   // Canonical ordering — deterministic regardless of input order.

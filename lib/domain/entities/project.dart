@@ -15,6 +15,7 @@ class Project {
     required this.updatedAt,
     this.thumbnailUrl,
     this.totalPhotos = 0,
+    this.modelCount = 0,
     this.isPending = false,
   });
 
@@ -28,6 +29,15 @@ class Project {
   /// the API DTO — manifest-exclusive). 0 until an upload has finalized.
   final int totalPhotos;
 
+  /// VIEWABLE (SUCCEEDED) 3D models this project has — `modelCount` on the API
+  /// DTO. Drives the staff-only Models button, which must not open a history
+  /// with nothing in it. Failed/pending generations are deliberately NOT counted
+  /// (backend contract), so 0 means "nothing to view", not "nothing was tried".
+  final int modelCount;
+
+  /// Whether the staff Models entry point has anything to show.
+  bool get hasViewableModels => modelCount > 0;
+
   /// True for a project created offline that is still waiting in the offline
   /// outbox to be flushed to the server. Such a row carries a temporary local
   /// [id] (never the server id) and is shown optimistically until reconciled.
@@ -40,6 +50,7 @@ class Project {
     final rawThumb = (map['thumbnailUrl'] as String?)?.trim();
     final stats = map['stats'];
     final rawPhotos = stats is Map ? stats['totalPhotos'] : null;
+    final rawModels = map['modelCount'];
     return Project(
       id: (map['id'] ?? '').toString(),
       name: rawName == null || rawName.isEmpty ? 'Untitled project' : rawName,
@@ -47,6 +58,9 @@ class Project {
       thumbnailUrl: rawThumb == null || rawThumb.isEmpty ? null : rawThumb,
       updatedAt: _parseDate(map['updatedAt']),
       totalPhotos: rawPhotos is num && rawPhotos >= 0 ? rawPhotos.toInt() : 0,
+      // Absent on a row cached before this field existed → 0 (button hidden)
+      // rather than a crash; the next fetch fills it in.
+      modelCount: rawModels is num && rawModels >= 0 ? rawModels.toInt() : 0,
       isPending: map['isPending'] == true,
     );
   }
@@ -61,6 +75,9 @@ class Project {
         'thumbnailUrl': thumbnailUrl,
         'updatedAt': updatedAt.toIso8601String(),
         'stats': {'totalPhotos': totalPhotos},
+        // Must round-trip: a cached row read back without it would drop to 0 and
+        // hide the Models button until the next successful fetch.
+        'modelCount': modelCount,
         'isPending': isPending,
       };
 
@@ -78,6 +95,7 @@ class Project {
     ProjectStatus? status,
     DateTime? updatedAt,
     int? totalPhotos,
+    int? modelCount,
     bool? isPending,
   }) {
     return Project(
@@ -87,6 +105,7 @@ class Project {
       thumbnailUrl: thumbnailUrl,
       updatedAt: updatedAt ?? this.updatedAt,
       totalPhotos: totalPhotos ?? this.totalPhotos,
+      modelCount: modelCount ?? this.modelCount,
       isPending: isPending ?? this.isPending,
     );
   }

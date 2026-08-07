@@ -7,6 +7,16 @@ import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/capture_config_validator.dart';
 import '../../utils/analytics.dart';
 
+/// The lowest cached [CaptureConfig.version] still trusted at startup. A
+/// returning user's Hive cache is applied BEFORE the remote fetch lands and
+/// would otherwise win over the bundled default for the first ~400ms — so a
+/// cache written under superseded tuning (e.g. the pre-2026-07-21 equal-thirds
+/// tilt bands) is dropped and the bundled default stands until the remote
+/// answers. Raise this in lockstep with [CaptureConfig.bundledDefault.version]
+/// whenever a bundled change must be authoritative from the first frame.
+/// This is a floor, NOT a migration: an old cache is discarded, never rewritten.
+const int kMinAcceptedConfigVersion = 4;
+
 /// Owns app-wide capture configuration. [build] returns a synchronous,
 /// always-valid value (bundled default) so consumers never see loading/null;
 /// it is then upgraded to cached, then remote, via a non-blocking bootstrap.
@@ -15,6 +25,8 @@ import '../../utils/analytics.dart';
 /// The remote fetch is fire-and-forget; failures are silent to the user
 /// (analytics only). This notifier is the single sanitization gate — every
 /// value reaching state or the cache passes through [sanitizeCaptureConfig].
+///
+/// A cached config BELOW [kMinAcceptedConfigVersion] is dropped (see there).
 class ConfigNotifier extends Notifier<CaptureConfig> {
   @override
   CaptureConfig build() {
@@ -26,10 +38,12 @@ class ConfigNotifier extends Notifier<CaptureConfig> {
     final repo = ref.read(configRepositoryProvider);
     var usedCache = false;
 
-    // 1) Cache → a better-than-default starting point (instant, offline-safe).
+    // 1) Cache → a better-than-default starting point (instant, offline-safe),
+    //    UNLESS it predates the current bundled contract (see
+    //    [kMinAcceptedConfigVersion]) — then the bundled default is better.
     try {
       final cached = await repo.readCached();
-      if (cached != null) {
+      if (cached != null && cached.version >= kMinAcceptedConfigVersion) {
         state = sanitizeCaptureConfig(cached);
         usedCache = true;
       }

@@ -6,7 +6,7 @@
 // aimed too far down → "Tilt up"; below → "Tilt down"), throttle-emits
 // `tilt_meter_out_of_band`, and degrades to a non-blocking fallback when the
 // sensor is unsupported. Config resolves to the bundled default (mid band =
-// [60,120)); the native orientation stream is injected.
+// [40,110)); the native orientation stream is injected.
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -101,7 +101,7 @@ void main() {
     addTearDown(source.close);
     await _pumpMeter(tester, source.stream);
 
-    source.add(_at(90)); // mid band [60,120)
+    source.add(_at(90)); // mid band [40,110)
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
 
@@ -185,7 +185,7 @@ void main() {
       outCooldown: Duration.zero,
     );
 
-    source.add(_at(30)); // below the mid band [60,120) → "below"
+    source.add(_at(30)); // below the mid band [40,110) → "below"
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 

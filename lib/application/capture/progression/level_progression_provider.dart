@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
 import '../../config/config_notifier.dart';
 import '../capture_flow_variant_provider.dart';
+import '../capture_mode_provider.dart';
 import 'level_progression.dart';
 import 'level_progression_builder.dart';
 import 'level_progression_store.dart';
@@ -60,6 +61,7 @@ class LevelProgressionController extends Notifier<LevelProgression?> {
     state = initialProgressionFromConfig(
       ref.read(captureConfigProvider),
       variant: variant,
+      mode: ref.read(captureModeProvider),
     );
     try {
       await _store.saveVariant(projectId, variant);
@@ -86,6 +88,12 @@ class LevelProgressionController extends Notifier<LevelProgression?> {
       variant = CaptureFlowVariant.withBottom;
     }
     ref.read(captureFlowVariantProvider.notifier).restore(variant);
+    // Restore the persisted MODE too (absent → full) and resume under it — a
+    // Meshy project must rebuild its ONE-level progression, not the full A→B[→C]
+    // sequence. loadFor also installs it into captureModeProvider for the rest
+    // of the flow.
+    final mode =
+        await ref.read(captureModeProvider.notifier).loadFor(projectId);
     LevelProgression? persisted;
     try {
       persisted = await _store.load(projectId);
@@ -93,8 +101,8 @@ class LevelProgressionController extends Notifier<LevelProgression?> {
       persisted = null;
     }
     final restored = persisted == null
-        ? initialProgressionFromConfig(config, variant: variant)
-        : reconcileWithConfig(persisted, config, variant: variant);
+        ? initialProgressionFromConfig(config, variant: variant, mode: mode)
+        : reconcileWithConfig(persisted, config, variant: variant, mode: mode);
     state = restored;
     // Re-persist the reconciled snapshot so the stored shape matches live config.
     await _persist();

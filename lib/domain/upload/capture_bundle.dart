@@ -48,6 +48,10 @@ class BundleSourceImage {
   const BundleSourceImage({
     required this.sourcePath,
     required this.captureTimestampNs,
+    required this.blurScore,
+    required this.meanLuminance,
+    required this.yawDegrees,
+    required this.pitchDegrees,
     this.segmentIndex,
     this.warned = false,
   });
@@ -57,6 +61,21 @@ class BundleSourceImage {
 
   /// Camera-aligned sensor timestamp (ns) — an ordering key.
   final int captureTimestampNs;
+
+  /// Sharpness (variance of Laplacian) from the capture ledger. REQUIRED and
+  /// non-null: [CapturedPhotoRecord] declares it non-null, and the backend's
+  /// automatic photo selection SKIPS any manifest photo without a finite blur
+  /// score — dropping it here silently declines every real capture.
+  final double blurScore;
+
+  /// Mean luminance 0–255 from the capture ledger (see [blurScore]).
+  final double meanLuminance;
+
+  /// Device yaw in DEGREES at capture (see [blurScore]).
+  final double yawDegrees;
+
+  /// Camera tilt in DEGREES at capture on the 0–180° scale (see [blurScore]).
+  final double pitchDegrees;
 
   /// Ring segment index (primary ordering key; nulls sort last).
   final int? segmentIndex;
@@ -94,6 +113,10 @@ class PlannedBundleImage {
     required this.relPath,
     required this.index,
     required this.captureTimestampNs,
+    required this.blurScore,
+    required this.meanLuminance,
+    required this.yawDegrees,
+    required this.pitchDegrees,
     this.segmentIndex,
     this.warned = false,
   });
@@ -117,6 +140,15 @@ class PlannedBundleImage {
   final int index;
 
   final int captureTimestampNs;
+
+  /// Quality + orientation carried through from the ledger record, unchanged.
+  /// These land in the manifest's `quality` / `orientation` blocks and are what
+  /// the backend's automatic photo selection ranks on — see [BundleSourceImage].
+  final double blurScore;
+  final double meanLuminance;
+  final double yawDegrees;
+  final double pitchDegrees;
+
   final int? segmentIndex;
   final bool warned;
 }
@@ -157,6 +189,10 @@ List<PlannedBundleImage> planBundleImages(List<BundleLevelSources> levels) {
         relPath: bundleImageRelPath(ring, fileName),
         index: index,
         captureTimestampNs: src.captureTimestampNs,
+        blurScore: src.blurScore,
+        meanLuminance: src.meanLuminance,
+        yawDegrees: src.yawDegrees,
+        pitchDegrees: src.pitchDegrees,
         segmentIndex: src.segmentIndex,
         warned: src.warned,
       ));

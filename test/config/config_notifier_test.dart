@@ -128,6 +128,49 @@ void main() {
     expect(repo.written?.pitchBands.single.segments, 64);
   });
 
+  group('stale-cache guard (kMinAcceptedConfigVersion)', () {
+    test('a cache BELOW the minimum is ignored → bundled default holds',
+        () async {
+      // The returning-user hazard: a Hive cache written under superseded tuning
+      // is applied before the remote fetch lands. Below the floor it must be
+      // dropped, not shown for a few frames.
+      final repo = FakeConfigRepository(
+        cached: _config(version: kMinAcceptedConfigVersion - 1),
+        remoteError: Exception('offline'),
+      );
+      final c = await _booted(repo);
+      expect(c.read(captureConfigProvider).version,
+          CaptureConfig.bundledDefault.version);
+      expect(c.read(captureConfigProvider).pitchBands,
+          CaptureConfig.bundledDefault.pitchBands);
+    });
+
+    test('a cache AT the minimum is used', () async {
+      final repo = FakeConfigRepository(
+        cached: _config(version: kMinAcceptedConfigVersion),
+        remoteError: Exception('offline'),
+      );
+      final c = await _booted(repo);
+      expect(c.read(captureConfigProvider).version, kMinAcceptedConfigVersion);
+    });
+
+    test('a cache ABOVE the minimum is used', () async {
+      final repo = FakeConfigRepository(
+        cached: _config(version: kMinAcceptedConfigVersion + 3),
+        remoteError: Exception('offline'),
+      );
+      final c = await _booted(repo);
+      expect(
+          c.read(captureConfigProvider).version, kMinAcceptedConfigVersion + 3);
+    });
+
+    test('the bundled default is never below the floor (guard stays reachable)',
+        () {
+      expect(CaptureConfig.bundledDefault.version,
+          greaterThanOrEqualTo(kMinAcceptedConfigVersion));
+    });
+  });
+
   test('cache then remote: ends on remote (server authoritative)', () async {
     final repo = FakeConfigRepository(
       cached: _config(version: 5),

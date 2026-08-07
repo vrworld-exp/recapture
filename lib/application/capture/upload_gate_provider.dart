@@ -24,18 +24,19 @@ import '../../domain/capture/level_completion.dart';
 import '../../domain/capture/upload_gate.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../utils/analytics.dart';
+import '../config/config_notifier.dart';
 import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
-import 'capture_shape_mode_provider.dart';
+import 'capture_mode_provider.dart';
 import 'review_grid_items_provider.dart';
 
 /// The live hard upload gate. Watch it for `eligible` / `shortLevels`; it reflects
 /// the current ledger + config every time it is read. Fail-safe: with no levels it
 /// reports NOT eligible (upload disabled), never enabling on unknown state.
 final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
-  final config = ref.watch(effectiveCaptureConfigProvider);
+  final config = ref.watch(captureConfigProvider);
   final variant = ref.watch(captureFlowVariantProvider);
-  final mode = ref.watch(captureShapeModeProvider);
+  final mode = ref.watch(captureModeProvider);
   return evaluateUploadGate([
     for (final level in activeCaptureLevels(variant, mode))
       () {
@@ -43,7 +44,7 @@ final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
         // Live accepted shots — the SAME source the review grids + completion
         // gate read (no duplicated shot-counting).
         final items = ref.watch(reviewGridItemsProvider(bandId));
-        final segments = effectiveSegmentsFor(config, variant, bandId);
+        final segments = effectiveSegmentsFor(config, variant, bandId, mode: mode);
         // Distinct in-range segments among the accepted shots — the ledger
         // analogue of SegmentCoverage.filledCount (same rule as the upload
         // flow's progressionFromLedger snapshot).
@@ -58,8 +59,11 @@ final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
           accepted: items.length,
           required: config.uploadMinShots.minShotsFor(level.code),
           filled: filled,
-          requiredFilled:
-              requiredSegmentsFor(config.thresholds.minCoveragePct, segments),
+          // Per-mode floor: Meshy requires 5 of 6 (its explicit floor); full
+          // uses the tunable global. SAME resolver the capture-screen advance
+          // uses, so the two never disagree on "how many segments is enough".
+          requiredFilled: requiredSegmentsFor(
+              minCoveragePctForMode(mode, config.thresholds), segments),
         );
       }(),
   ]);

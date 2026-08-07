@@ -519,17 +519,27 @@ Client (widget + unit):
 
 
 
+///////////// New problems ------------->>>
+
+
+1. Add ar btn that used to show model in ar view, user able to see model in ar view.✅
+
+2. While getting 3d model on screen there is not loading animation that tell wait we arr preparing your model. ✅
+
+3. While creating we jsut getting we are creating he model, how ever i want the the loang animation or ui acc. to the process happing while creating model. So plz update this so Admin able to see that what is going on in backend. ✅
+
+4. Provide some btn on view model page to export the model into their system, This feature should avilable only for Admins and Artist. ✅
+
+5. Fix the btn of create model, in the create model screen it is not matching the theme.✅/2
+
+6. Admin able to delete the live projects too, Because if not good capture we'll delete that, Here we can ask to admin for hard delete and soft delete thing. ✅
+
+7. Crop img then, send to generate the 3d is not working fine. But direction get changed so no need work more on this. ✅/2
+
+
+8. model_render_view.dart :- line number 124 , we are controlling the size of model. ✅
 
 
 
-
-
-
-
-
-
-
-
-
-
+9. Also replace the logo of profile from projects page with actual avatar url, so ui look more enhanced, if avatar url present on db then only. ✅
 

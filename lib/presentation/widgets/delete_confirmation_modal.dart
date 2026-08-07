@@ -16,9 +16,9 @@ import '../../platform/haptics.dart';
 // depending on presentation).
 export '../../domain/entities/confirm_kind.dart';
 
-/// Platform-idiomatic destructive-confirmation modal, reusable for Delete and
-/// Retake. Returns `true` only on a deliberate confirm; ANY dismissal (system
-/// back, tap-outside, iOS Cancel/backdrop) resolves to `false`.
+/// Platform-idiomatic destructive-confirmation modal, reusable for Delete,
+/// Retake and Sign out. Returns `true` only on a deliberate confirm; ANY
+/// dismissal (system back, tap-outside, iOS Cancel/backdrop) resolves to `false`.
 ///
 ///   - Android (and default) → Material [AlertDialog]
 ///   - iOS / macOS           → [CupertinoActionSheet] with a destructive action
@@ -36,6 +36,7 @@ export '../../domain/entities/confirm_kind.dart';
 ///
 /// [count] must be `>= 1` (Delete/Retake are selection-gated). A `count <= 0`
 /// call is a no-op that resolves `false` without showing anything.
+/// [ConfirmKind.signOut] is not photo-driven — its copy ignores [count]; pass 1.
 Future<bool> showDeleteConfirmation(
   BuildContext context, {
   required int count,
@@ -97,6 +98,24 @@ class _ConfirmCopy {
           // so no permanence claim.
           message: 'Retake $photos? Your current $shots will be replaced.',
           confirmLabel: 'Retake',
+        );
+      case ConfirmKind.removeAvatar:
+        // Account action, not a photo action — [count] is deliberately unused.
+        // No permanence claim: the user can pick a new picture any time, so the
+        // message states the OUTCOME instead.
+        return const _ConfirmCopy(
+          title: 'Remove photo?',
+          message: 'Your initials will be shown instead.',
+          confirmLabel: 'Remove',
+        );
+      case ConfirmKind.signOut:
+        // Session teardown, not a photo action — [count] is deliberately unused.
+        // No permanence claim: signing back in restores the account; only the
+        // local caches go.
+        return const _ConfirmCopy(
+          title: 'Sign out?',
+          message: "You'll need to sign in again.",
+          confirmLabel: 'Sign out',
         );
     }
   }

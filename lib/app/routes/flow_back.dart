@@ -40,6 +40,7 @@ String? flowBackRouteFor(String location) {
   return switch (location) {
       AppRoutes.otpVerify => AppRoutes.auth,
       AppRoutes.createProject => AppRoutes.projects,
+      AppRoutes.profile => AppRoutes.projects,
       AppRoutes.preCapture => AppRoutes.projects,
       AppRoutes.permissions => AppRoutes.preCapture,
       AppRoutes.levelAIntro => AppRoutes.permissions,

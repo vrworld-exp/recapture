@@ -10,6 +10,7 @@ import 'package:recapture/application/projects/live_projects_notifier.dart';
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
+import 'repo_fake_defaults.dart';
 
 LiveProject _lp(String id) => LiveProject(
       id: id,
@@ -20,7 +21,14 @@ LiveProject _lp(String id) => LiveProject(
       totalPhotos: 36,
     );
 
-class _ScriptedLiveRepo implements LiveProjectsRepository {
+class _ScriptedLiveRepo
+    with
+        FakeModelGenerationDefaults,
+        FakeAdminDeleteDefaults,
+        FakeAutoGenerationDefaults,
+        FakeModelOptimizeDefaults,
+        FakeOwnerModelListDefaults
+    implements LiveProjectsRepository {
   /// Pages keyed by cursor (null key = first page).
   final Map<String?, LiveProjectsPage> pages = {};
   LiveProjectsException? failWith;

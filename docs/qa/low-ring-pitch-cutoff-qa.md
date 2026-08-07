@@ -20,15 +20,21 @@ coverage lives in:
 The task brief frames Low Ring as an **upward tilt** and references a **negative**
 band (−30…−10°). **This codebase does not use a negative band.** Level C resolves to
 `pitchBandIdForLevel(CaptureLevel.c) == 'low'`, and the bundled `low` band is the
-**positive `[0, 30)`** slice — the lowest of the `[0, 90]` capture range. The Level C
-copy is "Lower the phone, tilt slightly up", i.e. the accepted posture is a low
-positive pitch reached by a slight upward tilt from level. The automated tests
-encode this production convention; the direction-lock tests fail if the band sign is
-ever inverted (verified — see Meta-checks).
+**positive `[0, 40)`** slice — the lowest of the `[0, 180]` CAMERA-TILT range (0° =
+camera aimed at the sky, 90° = horizon, 180° = at the ground; see
+`camera_tilt.dart`). The Level C copy is "Lower the phone, tilt slightly up", i.e.
+the accepted posture is a low tilt value reached by an upward tilt from level. The
+automated tests encode this production convention; the direction-lock tests fail if
+the band sign is ever inverted (verified — see Meta-checks).
 
 Band membership (`CapturePitchGuide.isInBand`): **min inclusive, max exclusive**
-(`0 ≤ pitch < 30`). The brief's "inclusive both edges" is asserted against the
+(`0 ≤ tilt < 40`). The brief's "inclusive both edges" is asserted against the
 **actual** behaviour, not imposed.
+
+**Retuned 2026-07-21** (`docs/prompts/capture-tilt-bands-retune-40-110.md`): `low`
+narrowed from `[0, 60)` to `[0, 40)`, making it the **narrowest** of the three bands
+(40° vs 70° for `mid` and `high`). It is therefore the hardest posture to hold —
+give the dwell/jitter items in the checklist below extra attention on device.
 
 ## ⚠️ Production gap: cutoff gating is NOT wired (do not mask)
 

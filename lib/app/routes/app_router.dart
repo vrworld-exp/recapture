@@ -1,13 +1,16 @@
 // lib/app/routes/app_router.dart
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/capture_flow_variant_provider.dart';
-import '../../application/capture/capture_shape_mode_provider.dart';
+import '../../application/capture/capture_mode_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
+import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/capture/capture_flow_variant.dart';
+import '../../domain/capture/capture_mode.dart';
 import '../../domain/capture/completion_gate.dart';
 import '../../domain/entities/level_a_summary.dart';
 import '../../domain/entities/retake_request.dart';
@@ -18,6 +21,9 @@ import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
+import '../../presentation/screens/projects/model_history_screen.dart';
+import '../../presentation/screens/projects/model_viewer_screen.dart';
+import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
@@ -37,6 +43,15 @@ import 'auth_router_notifier.dart';
 import 'flow_back.dart';
 import 'route_error_screen.dart';
 
+/// Observes route pushes/pops on the app's root navigator so screens can react
+/// to becoming visible again after a pushed screen pops.
+///
+/// The Projects Hub uses it to re-fetch its list on focus: a finished 3D model
+/// only appears once the list DTO's `modelCount` is refreshed, and a generation
+/// runs for minutes AFTER the user has left the build screen — so returning to
+/// this tab (from the model viewer, a capture flow, anywhere) has to re-pull.
+final projectsRouteObserver = RouteObserver<PageRoute<dynamic>>();
+
 /// Named route paths for the ReCapture app.
 /// No route string should exist anywhere else in the codebase — always
 /// reference AppRoutes.* (paths) or AppRouteNames.* (names) constants.
@@ -47,8 +62,19 @@ abstract final class AppRoutes {
   static const projects = '/projects';
   static const createProject = '/projects/new';
 
+  /// The signed-in user's own account screen (avatar, name, masked contact,
+  /// Sign out). Protected like every non-auth route.
+  static const profile = '/profile';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
+
+  /// Staff-only per-project 3D-model generation history. `:id` = the project id.
+  static const modelHistory = '/admin/projects/:id/models';
+
+  /// Staff-only viewer for ONE generated model, resolved by `:modelId` out of
+  /// the project's history — the model's only persistent entry point.
+  static const modelViewer = '/admin/projects/:id/models/:modelId';
   static const preCapture = '/capture/pre';
   static const permissions = '/capture/permissions';
   static const levelAIntro = '/capture/level-a/intro';
@@ -79,7 +105,10 @@ abstract final class AppRouteNames {
   static const otpVerify = 'otpVerify';
   static const projects = 'projects';
   static const createProject = 'createProject';
+  static const profile = 'profile';
   static const previewGallery = 'previewGallery';
+  static const modelHistory = 'modelHistory';
+  static const modelViewer = 'modelViewer';
   static const preCapture = 'preCapture';
   static const permissions = 'permissions';
   static const levelAIntro = 'levelAIntro';
@@ -119,6 +148,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
   return GoRouter(
     initialLocation: AppRoutes.splash,
     refreshListenable: authNotifier,
+    // Root-navigator observer so the Projects Hub can refresh on focus (see
+    // projectsRouteObserver): a model generated after the user left the build
+    // screen is invisible until the list is re-pulled.
+    observers: [projectsRouteObserver],
     redirect: (context, state) {
       final loc = state.matchedLocation;
 
@@ -166,6 +199,19 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.createProject,
         builder: (_, __) => const FlowBackScope(child: CreateProjectScreen()),
       ),
+      // The account screen — a STANDALONE top-level destination, deliberately
+      // not nested under /projects: the Projects app bar go()es here, so the
+      // location is plain `/profile` and a cold deep-link to it behaves
+      // identically to the in-app entry. FlowBackScope + the screen's AppBar
+      // arrow both funnel through navigateBack, which maps /profile → /projects
+      // (flowBackRouteFor) when there is nothing to pop — so back never exits
+      // the app. Auth is enforced by the router guard alone — the screen must
+      // not re-check it.
+      GoRoute(
+        path: AppRoutes.profile,
+        name: AppRouteNames.profile,
+        builder: (_, __) => const FlowBackScope(child: ProfileScreen()),
+      ),
       // Staff-only per-project Preview gallery. Reached via push (hardware back
       // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel
       // through navigateBack so a go()-replaced entry can't exit the app either.
@@ -175,6 +221,32 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (context, state) => FlowBackScope(
           child: PreviewGalleryScreen(
             projectId: state.pathParameters['id'] ?? '',
+          ),
+        ),
+      ),
+      // Staff-only model history + viewer, registered like the Preview gallery
+      // above (pushed, FlowBackScope, id from the path). The viewer is nested
+      // under the history so `:modelId` reads as a record OF that history, and
+      // a back from the viewer lands on it.
+      GoRoute(
+        path: AppRoutes.modelHistory,
+        name: AppRouteNames.modelHistory,
+        builder: (context, state) => FlowBackScope(
+          child: ModelHistoryScreen(
+            projectId: state.pathParameters['id'] ?? '',
+          ),
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.modelViewer,
+        name: AppRouteNames.modelViewer,
+        // Resolves the record by id from the generation history, so a cold
+        // deep-link works exactly like a push from the history (no `extra` to
+        // be missing) and a stale id shows the unavailable state, not a blank.
+        builder: (context, state) => FlowBackScope(
+          child: ModelViewerRoute(
+            projectId: state.pathParameters['id'] ?? '',
+            modelId: state.pathParameters['modelId'] ?? '',
           ),
         ),
       ),
@@ -229,15 +301,17 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (context, _) => FlowBackScope(
           child: Consumer(
             builder: (context, ref, _) {
-              final isMeshy = ref.watch(captureShapeModeProvider).isMeshy;
+              final mode = ref.watch(captureModeProvider);
               final target = effectiveSegmentsFor(
-                ref.watch(effectiveCaptureConfigProvider),
+                ref.watch(captureConfigProvider),
                 ref.watch(captureFlowVariantProvider),
                 'mid',
+                mode: mode,
               );
-              // Meshy is a SINGLE ring: Level A is the whole capture, so its CTA
-              // continues to the Summary (whose gate still guards it), not to a
-              // Level B that does not exist in this mode.
+              // Meshy has only Level A (the single eye ring): its primary CTA
+              // finishes the capture and goes straight to the Summary — there is
+              // no Level B/C. Full mode advances to the Level B intro.
+              final meshy = mode == CaptureMode.meshy;
               return LevelACompleteScreen(
                 summary: LevelASummary(
                   accepted: target - 2,
@@ -245,10 +319,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                   coveragePct: 92,
                   rejected: 1,
                 ),
-                nextLabel: isMeshy ? 'Continue' : null,
-                onStartLevelB: () => context.go(
-                  isMeshy ? AppRoutes.captureSummary : AppRoutes.levelBIntro,
-                ),
+                primaryLabel: meshy ? 'Finish — go to summary' : 'Start Level B',
+                onStartLevelB: meshy
+                    ? () => context.go(AppRoutes.captureSummary)
+                    : () => context.go(AppRoutes.levelBIntro),
                 onReview: () => context.push(AppRoutes.levelAReview),
                 onDoneExit: () => context.go(AppRoutes.projects),
               );
@@ -261,13 +335,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBIntro,
         name: AppRouteNames.levelBIntro,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         builder: (_, __) => const FlowBackScope(child: LevelBIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.levelBCapture,
         name: AppRouteNames.levelBCapture,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         // Reuses the Level A capture screen (6A), driven by Level B's label +
         // tuned top-ring instruction copy. Analytics `level` is derived from
         // levelLabel ('B'), so the capture funnel is tagged level=B automatically.
@@ -284,7 +356,6 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBReview,
         name: AppRouteNames.levelBReview,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'B',
           levelName: 'Top Ring',
@@ -294,7 +365,6 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelBComplete,
         name: AppRouteNames.levelBComplete,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: false),
         // FLOW-VARIANT FORK: with_bottom continues to Level C; without_bottom
         // is a 2-ring flow, so Level B is the FINAL ring — its CTA goes to the
         // Capture Summary (which the summary gate still guards) and its copy
@@ -331,13 +401,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCIntro,
         name: AppRouteNames.levelCIntro,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         builder: (_, __) => const FlowBackScope(child: LevelCIntroScreen()),
       ),
       GoRoute(
         path: AppRoutes.levelCCapture,
         name: AppRouteNames.levelCCapture,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         // Reuses the shared capture screen (6A/6B), driven by Level C's label +
         // tuned low-ring instruction copy. Analytics `level` is derived from
         // levelLabel ('C'), so the capture funnel is tagged level=C automatically.
@@ -356,7 +426,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCReview,
         name: AppRouteNames.levelCReview,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         builder: (_, __) => const LevelReviewGridScreen(
           levelLabel: 'C',
           levelName: 'Low Ring',
@@ -366,7 +436,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.levelCComplete,
         name: AppRouteNames.levelCComplete,
-        redirect: (_, __) => _postLevelAGuardRedirect(ref, isLevelC: true),
+        redirect: (_, __) => _levelCGuardRedirect(ref),
         builder: (_, __) => const FlowBackScope(
           child: LevelCompleteScreen(
             levelLabel: 'C',
@@ -413,7 +483,18 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.processing,
         name: AppRouteNames.processing,
-        builder: (_, __) => const FlowBackScope(child: ProcessingScreen()),
+        // The post-upload success screen. The REMOTE project id rides in via
+        // `extra` (see UploadingScreen); a null/garbled extra — a deep link, a
+        // hot restart, a flow that failed before creating the project —
+        // degrades the screen to "Back to Projects" with no Generate button,
+        // never a button that would 404.
+        builder: (_, state) => FlowBackScope(
+          child: ProcessingScreen(
+            projectId: state.extra is String && (state.extra! as String).isNotEmpty
+                ? state.extra! as String
+                : null,
+          ),
+        ),
       ),
       GoRoute(
         path: AppRoutes.modelReady,
@@ -447,21 +528,12 @@ String levelBCompleteNextRoute(CaptureFlowVariant variant) =>
         ? AppRoutes.captureSummary
         : AppRoutes.levelCIntro;
 
-/// Router guard for a ring AFTER Level A (Level B or C). Meshy is a SINGLE Eye
-/// ring, so ANY Level B/C route bounces to the Summary (whose own gate redirect
-/// then routes an incomplete session to the first incomplete level's review);
-/// otherwise the Level-C-only rule applies (Level B is always reachable in the
-/// full flow). A null [ref] (router built without provider access, e.g. a focused
-/// test) never blocks — same policy as the summary gate.
-String? _postLevelAGuardRedirect(Ref? ref, {required bool isLevelC}) {
-  if (ref == null) return null;
-  if (ref.read(captureShapeModeProvider).isMeshy) {
-    return AppRoutes.captureSummary;
-  }
-  return isLevelC
-      ? levelCRedirectForVariant(ref.read(captureFlowVariantProvider))
-      : null;
-}
+/// Router adapter over [levelCRedirectForVariant]. A null [ref] (router built
+/// without provider access, e.g. a focused test) never blocks — same policy as
+/// the summary gate.
+String? _levelCGuardRedirect(Ref? ref) => ref == null
+    ? null
+    : levelCRedirectForVariant(ref.read(captureFlowVariantProvider));
 
 /// Enforces the final completion gate at the Summary entry. Returns null (allow)
 /// when the gate is unlocked — emitting the once-per-transition unlock milestone —

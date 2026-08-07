@@ -8,18 +8,20 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/capture_flow_variant_provider.dart';
+import '../../../application/capture/capture_mode_provider.dart';
 import '../../../application/capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../../../application/capture/progression/level_progression_provider.dart';
 import '../../../application/capture/session/capture_session_store.dart';
 import '../../../application/config/config_notifier.dart';
 import '../../../data/local/active_session_box.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
+import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../../../domain/entities/checklist_item.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
-import '../../widgets/app_card.dart';
 import '../../widgets/checklist_item_tile.dart';
+import '../../widgets/selectable_option_card.dart';
 
 /// Pre-capture checklist. The user acknowledges each required item — and
 /// answers the "can you capture the bottom?" question that selects the capture
@@ -99,6 +101,17 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
       return;
     }
     _projectId = projectId;
+    // Restore the project's CAPTURE MODE before anything reads a segment count.
+    // This is the resume path's only chance to learn it: a user reopening a
+    // project from the list never passes through the creation sheet, and every
+    // expected count downstream (gates, ring sizes, the upload's file count)
+    // depends on getting it right. Absent → full, the pre-Meshy behaviour.
+    try {
+      await ref.read(captureModeProvider.notifier).loadFor(projectId);
+    } catch (_) {
+      // Unreadable store → the provider keeps its default (full).
+    }
+    if (!mounted) return;
     bool locked;
     try {
       locked = await projectHasAcceptedCaptures(
@@ -172,6 +185,9 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
   @override
   Widget build(BuildContext context) {
     final variant = ref.watch(captureFlowVariantProvider);
+    // Meshy is variant-independent (ONE ring of 6, no underside) — the bottom
+    // question is meaningless there, so it is replaced with a single explainer.
+    final mode = ref.watch(captureModeProvider);
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       appBar: AppBar(
@@ -216,11 +232,14 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
                     ),
                   ],
                   const SizedBox(height: AppSpacing.lg),
-                  _BottomCaptureQuestion(
-                    selected: variant,
-                    locked: _variantLocked,
-                    onSelect: _selectVariant,
-                  ),
+                  if (mode == CaptureMode.meshy)
+                    const _MeshyCaptureNote()
+                  else
+                    _BottomCaptureQuestion(
+                      selected: variant,
+                      locked: _variantLocked,
+                      onSelect: _selectVariant,
+                    ),
                 ],
               ),
             ),
@@ -258,13 +277,24 @@ class _BottomCaptureQuestion extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Per-ring photo counts for the option copy, through the same
-    // config × variant resolver the flow itself uses ('mid' is representative:
-    // variant counts are uniform across rings).
+    // config × mode × variant resolver the flow itself uses.
+    //
+    // These are read PER RING and rendered per ring. They used to be read once
+    // from 'mid' and described as "N photos each", on the stated grounds that
+    // variant counts are uniform across rings — true of full mode, and FALSE in
+    // Meshy mode (6 eye / 2 top / 2 bottom). A single representative number
+    // there would have understated the eye ring or trebled the other two.
     final config = ref.watch(captureConfigProvider);
-    final withBottomN =
-        effectiveSegmentsFor(config, CaptureFlowVariant.withBottom, 'mid');
-    final withoutBottomN =
-        effectiveSegmentsFor(config, CaptureFlowVariant.withoutBottom, 'mid');
+    final mode = ref.watch(captureModeProvider);
+    String ringCopy(CaptureFlowVariant variant) {
+      const labelForBand = {'mid': 'eye', 'high': 'top', 'low': 'bottom'};
+      final parts = [
+        for (final bandId in variant.bandIds)
+          '${effectiveSegmentsFor(config, variant, bandId, mode: mode)} '
+              '${labelForBand[bandId] ?? bandId}',
+      ];
+      return parts.join(' + ');
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -285,20 +315,20 @@ class _BottomCaptureQuestion extends ConsumerWidget {
         const SizedBox(height: AppSpacing.sm),
         // "No" leads: it is the session default (preselected), so the common
         // path needs no interaction; "Yes" is the opt-in below it.
-        _VariantOptionCard(
+        SelectableOptionCard<CaptureFlowVariant>(
           title: 'No — bottom stays hidden',
-          subtitle:
-              "You'll capture 2 rings — eye and top level ($withoutBottomN photos each).",
+          subtitle: "You'll capture 2 rings — "
+              '${ringCopy(CaptureFlowVariant.withoutBottom)} photos.',
           value: CaptureFlowVariant.withoutBottom,
           selected: selected,
           locked: locked,
           onSelect: onSelect,
         ),
         const SizedBox(height: AppSpacing.sm),
-        _VariantOptionCard(
+        SelectableOptionCard<CaptureFlowVariant>(
           title: 'Yes — capture the bottom',
-          subtitle:
-              "You'll capture 3 rings — eye, top and bottom level ($withBottomN photos each).",
+          subtitle: "You'll capture 3 rings — "
+              '${ringCopy(CaptureFlowVariant.withBottom)} photos.',
           value: CaptureFlowVariant.withBottom,
           selected: selected,
           locked: locked,
@@ -309,79 +339,30 @@ class _BottomCaptureQuestion extends ConsumerWidget {
   }
 }
 
-/// One selectable Yes/No option card. Selection is shown by the accent border +
-/// radio glyph; when [locked] the unselected option is muted and taps no-op.
-class _VariantOptionCard extends StatelessWidget {
-  const _VariantOptionCard({
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.selected,
-    required this.locked,
-    required this.onSelect,
-  });
-
-  final String title;
-  final String subtitle;
-  final CaptureFlowVariant value;
-  final CaptureFlowVariant selected;
-  final bool locked;
-  final ValueChanged<CaptureFlowVariant> onSelect;
-
-  bool get _isSelected => value == selected;
+/// The Meshy-mode explainer that REPLACES the bottom question: Meshy is one ring
+/// of 6, variant-independent, with no underside — so there is no Yes/No choice to
+/// make, only a description of the single sweep.
+class _MeshyCaptureNote extends StatelessWidget {
+  const _MeshyCaptureNote();
 
   @override
   Widget build(BuildContext context) {
-    final disabled = locked && !_isSelected;
-    return Semantics(
-      button: true,
-      selected: _isSelected,
-      enabled: !locked,
-      label: title,
-      hint: subtitle,
-      child: ConstrainedBox(
-        // Comfortable tap target (≥48dp) even with tight text scaling.
-        constraints: const BoxConstraints(minHeight: 56),
-        child: AppCard(
-          onTap: locked ? null : () => onSelect(value),
-          border: _isSelected
-              ? const BorderSide(color: AppColors.mirageRed, width: 1.5)
-              : null,
-          child: Row(
-            children: [
-              Icon(
-                _isSelected
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-                color: _isSelected
-                    ? AppColors.mirageRed
-                    : (disabled ? AppColors.disabled : AppColors.textMuted),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                            color: disabled ? AppColors.textMuted : null,
-                          ),
-                    ),
-                    Text(
-                      subtitle,
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodySmall
-                          ?.copyWith(color: AppColors.textMuted),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'One ring — 6 photos.',
+          style: theme.textTheme.bodyLarge,
         ),
-      ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Circle the object once, keeping the camera between eye level and '
+          'looking down at its top. No underside needed.',
+          style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+        ),
+      ],
     );
   }
 }
+

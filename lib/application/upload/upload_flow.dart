@@ -51,12 +51,13 @@ import '../../utils/app_env.dart';
 import '../../utils/byte_format.dart';
 import '../capture/analytics/capture_level_session.dart';
 import '../capture/capture_flow_variant_provider.dart';
-import '../capture/capture_shape_mode_provider.dart';
+import '../capture/capture_mode_provider.dart';
 import '../capture/ledger/level_capture_ledger_registry.dart';
 import '../capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../capture/progression/level_progression.dart';
 import '../capture/progression/level_progression_builder.dart';
 import '../capture/progression/level_progression_provider.dart';
+import '../config/config_notifier.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../projects/projects_notifier.dart';
 import '../warmup/backend_warmup.dart';
@@ -71,7 +72,11 @@ import 'upload_jobs_backend.dart';
 import 'upload_progress_provider.dart';
 
 import '../../domain/capture/capture_flow_variant.dart';
-import '../../domain/capture/capture_shape_mode.dart';
+import '../../domain/capture/capture_mode.dart';
+// `hide CaptureMode`: create_project_options defines an unrelated same-named
+// enum (guided/manual, the PROJECT mode); we want only its ObjectSize +
+// apiValue extension for reading the reused project's stored size.
+import '../../domain/entities/create_project_options.dart' hide CaptureMode;
 
 /// A terminal upload-flow failure carrying its ALREADY-MAPPED category — the
 /// authoritative [UploadFailureSignal] `classifyUploadFailure` honors, so 9F
@@ -101,8 +106,8 @@ class UploadFlowContext {
     required this.progression,
     required this.registry,
     required this.variant,
+    this.mode = CaptureMode.full,
     required this.workspaceRoot,
-    this.shapeMode = CaptureShapeMode.full,
     this.objectSize = 'medium',
   });
 
@@ -121,11 +126,10 @@ class UploadFlowContext {
   final LevelCaptureLedgerRegistry registry;
   final CaptureFlowVariant variant;
 
-  /// The capture SHAPE mode (full / meshy). Stamped on the manifest and POST
-  /// /jobs so finalize validates the bundle against the right shape; drives the
-  /// single-ring Meshy count (6 + manifest) via the effective config the context
-  /// was built with.
-  final CaptureShapeMode shapeMode;
+  /// The capture MODE the session ran under. Decides the per-ring counts the
+  /// bundle contains, so it must reach both the job (`POST /jobs`) and the
+  /// manifest — the server validates the bundle against the mode it was told.
+  final CaptureMode mode;
 
   /// App-scoped documents root the packer stages/finalizes bundles under.
   final String workspaceRoot;
@@ -219,6 +223,19 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   /// Orchestrator hook: a cancel signal must reach the WHOLE flow (pack token,
   /// engine, finalize skip), not just the engine.
   void Function()? onCancelRequested;
+
+  /// The id of the project the backend MINTED for this flow, once it exists.
+  ///
+  /// The one fact the post-upload screen cannot derive for itself: the local
+  /// session's project id is a device-side id, and only `POST /projects` knows
+  /// the remote one. Carried here rather than re-resolved downstream so the
+  /// screen that offers "Generate 3D model" points at the project the photos
+  /// actually went into — a re-derived id that missed would 404 a paid button.
+  ///
+  /// Null until the create-project step succeeds, and null forever on a flow
+  /// that failed before it: the screen degrades to no button rather than to a
+  /// broken one.
+  String? remoteProjectId;
 
   /// False once the flow reached completed/failed/cancelled — a terminal flow
   /// is replaced (not reused) by the next start.
@@ -514,7 +531,7 @@ class UploadFlowOrchestrator {
           'context resolved (project="${ctx.projectName}", '
           'localProjectId=${ctx.localProjectId.isEmpty ? '<empty>' : ctx.localProjectId}, '
           'sessionId=${ctx.captureSessionId.isEmpty ? '<empty>' : ctx.captureSessionId}, '
-          'variant=${ctx.variant.id})');
+          'variant=${ctx.variant.id}, mode=${ctx.mode.id})');
 
       // Local ids for the bundle/manifest — the REMOTE ids are minted below;
       // the backend pairs files↔manifest by keys/photo entries, not these.
@@ -558,31 +575,56 @@ class UploadFlowOrchestrator {
       }
       _checkCancel();
 
-      DevUploadLog.instance.add('POST /projects …');
       progress.stepStarted(UploadFlowStepId.createProject);
-      final remoteProjectId = await backend.createProject(
-        name: ctx.projectName,
-        size: ctx.objectSize,
-        mode: 'guided',
-      );
-      _checkCancel();
-      DevUploadLog.instance.add('project created (remoteId=$remoteProjectId); '
-          'POST /jobs (expectedFiles=${bundle.totalImages + 1}) …');
-      progress.stepCompleted(
-        UploadFlowStepId.createProject,
-        devDetail: ['remoteProjectId=$remoteProjectId'],
-      );
+      final String remoteProjectId;
+      if (_isReusableProjectId(ctx.localProjectId)) {
+        // The project was ALREADY created at naming time (create_project_screen
+        // → POST /projects, DRAFT). Reuse it so the single project transitions
+        // DRAFT → UPLOADING → PROCESSING instead of stranding it as an empty
+        // draft and spawning a duplicate. No POST /projects here — the name and
+        // size are already correct on the server.
+        remoteProjectId = ctx.localProjectId;
+        DevUploadLog.instance.add(
+            'reusing existing project (id=$remoteProjectId); skipping POST /projects; '
+            'POST /jobs (expectedFiles=${bundle.totalImages + 1}) …');
+        progress.remoteProjectId = remoteProjectId;
+        progress.stepCompleted(
+          UploadFlowStepId.createProject,
+          info: 'Using existing project',
+          devDetail: ['reused remoteProjectId=$remoteProjectId'],
+        );
+      } else {
+        // No usable server project (empty/unresolvable id, or an offline
+        // optimistic `pending_…` id that cannot own a job): create one now.
+        // `mode` is the PROJECT capture-mode enum (guided|manual) — NOT the
+        // full/meshy capture mode `ctx.mode` (that is only valid for POST
+        // /jobs `captureMode`, which is sent below). The create form's
+        // guided/manual choice is not carried into the upload context, so this
+        // fallback sends the valid default 'guided'.
+        DevUploadLog.instance.add('POST /projects …');
+        remoteProjectId = await backend.createProject(
+          name: ctx.projectName,
+          size: ctx.objectSize,
+          mode: 'guided',
+        );
+        _checkCancel();
+        DevUploadLog.instance.add('project created (remoteId=$remoteProjectId); '
+            'POST /jobs (expectedFiles=${bundle.totalImages + 1}) …');
+        progress.remoteProjectId = remoteProjectId;
+        progress.stepCompleted(
+          UploadFlowStepId.createProject,
+          devDetail: ['remoteProjectId=$remoteProjectId'],
+        );
+      }
 
       progress.stepStarted(UploadFlowStepId.createJob);
       final job = await backend.createJob(
         projectId: remoteProjectId,
         objectSize: ctx.objectSize,
         captureVariant: ctx.variant.id,
-        // Meshy is variant-less on the server; the variant above is sent but
-        // ignored for shape. The MODE is what selects the 6-shot shape.
-        captureMode: ctx.shapeMode.id,
+        captureMode: ctx.mode.id,
         // MUST equal the bundle's real content (exact-checked at finalize):
-        // every staged image + the manifest. Meshy = 6 images + manifest = 7.
+        // every staged image + the manifest.
         expectedFilesCount: bundle.totalImages + 1,
         idempotencyKey: _uuid(),
       );
@@ -691,6 +733,15 @@ class UploadFlowOrchestrator {
     }
   }
 
+  /// Whether [id] names a real, reusable SERVER project (created at naming
+  /// time). A real project owns a job, so the flow reuses it and skips
+  /// `POST /projects`. Excluded — and therefore routed to the create-project
+  /// fallback — are the empty/unresolvable id and the offline optimistic
+  /// `pending_…` id minted by ProjectsNotifier.create (projects_notifier.dart),
+  /// which is a device-local placeholder the server has never seen.
+  static bool _isReusableProjectId(String id) =>
+      id.isNotEmpty && !id.startsWith(kPendingProjectIdPrefix);
+
   static String get _platformName =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
 }
@@ -777,14 +828,13 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
     // see level_progression_provider.dart's SCOPE note), so the snapshot is
     // derived from the SAME live sources the Summary gate reads: config +
     // flow variant + the per-level ledgers.
-    final shapeMode = ref.read(captureShapeModeProvider);
     var progression = ref.read(levelProgressionControllerProvider);
     if (progression == null) {
       progression = progressionFromLedger(
-        ref.read(effectiveCaptureConfigProvider),
+        ref.read(captureConfigProvider),
         variant: ref.read(captureFlowVariantProvider),
         registry: ref.read(levelCaptureLedgerRegistryProvider),
-        mode: shapeMode,
+        mode: ref.read(captureModeProvider),
       );
       DevUploadLog.instance.add(
           'progression derived from ledger (${progression.levels.map((l) => '${l.levelCode}=${l.acceptedCount}').join(', ')})');
@@ -803,8 +853,30 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       }
     }
 
+    // Object SIZE is a property of the project (chosen at create, persisted
+    // per project — the server Project DTO does not carry it back). Source it
+    // so POST /jobs declares the SAME size the project was created with; the
+    // server rejects a mismatch with SIZE_MISMATCH. Falls back to 'medium'
+    // only for a legacy/never-persisted project (matching the prior hardcoded
+    // default). Reads by whatever id resolved above (a real or a pending id —
+    // create_project_screen persists it under either).
+    var objectSize = 'medium';
+    if (projectId.isNotEmpty) {
+      try {
+        final size = await ref
+            .read(levelProgressionStoreProvider)
+            .loadObjectSizeOrNull(projectId);
+        if (size != null) objectSize = size.apiValue;
+      } catch (_) {
+        // Unreadable store → keep the 'medium' default.
+      }
+    }
+
     // Name the remote project from the local one when it is in the loaded
     // list; otherwise a dated fallback (the upload must not block on the list).
+    // Only the FALLBACK create path (no real project) ever sends this name —
+    // when an existing project is reused, POST /projects is skipped entirely
+    // and the name is correct by construction.
     String projectName = '';
     final projects = ref.read(projectsProvider).valueOrNull;
     if (projects != null) {
@@ -829,12 +901,13 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       localProjectId: projectId,
       projectName: projectName,
       captureSessionId: session?.sessionId ?? '',
-      config: ref.read(effectiveCaptureConfigProvider),
+      config: ref.read(captureConfigProvider),
       progression: progression,
       registry: ref.read(levelCaptureLedgerRegistryProvider),
       variant: ref.read(captureFlowVariantProvider),
-      shapeMode: shapeMode,
+      mode: ref.read(captureModeProvider),
       workspaceRoot: '${docs.path}/upload_workspace',
+      objectSize: objectSize,
     );
   }
 
@@ -851,7 +924,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
         progression: context.progression,
         registry: context.registry,
         flowVariantId: context.variant.id,
-        captureModeId: context.shapeMode.id,
+        captureModeId: context.mode.id,
         cancelToken: cancelToken,
       );
 

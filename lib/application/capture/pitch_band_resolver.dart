@@ -15,7 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/capture/pitch_band_resolution.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../utils/analytics.dart';
-import 'capture_shape_mode_provider.dart';
+import 'effective_capture_config_provider.dart';
 import 'pitch_band_override_provider.dart';
 
 /// The effective [PitchBand] for [bandId] (a `PitchBand.id` — the canonical
@@ -24,14 +24,11 @@ import 'pitch_band_override_provider.dart';
 /// entry by capture and held for the pass (read, not watch).
 final resolvedPitchBandProvider =
     Provider.family<PitchBand, String>((ref, bandId) {
-  final mode = ref.watch(captureShapeModeProvider);
+  // The MODE-AWARE config: in Meshy mode the EYE band is the hard eye→top window
+  // [60,180); in full mode this is the plain live config. Reading it here is what
+  // makes the tilt meter, gauge, and shutter gate all share the Meshy band.
   final config = ref.watch(effectiveCaptureConfigProvider);
-  // Meshy's [90,180) ring is a FIXED product decision (hard tilt gate), so the
-  // runtime pitch-band overrides — a full-flow dev/QA hook — are deliberately
-  // bypassed: an override on the shared 'mid' id must never narrow or move the
-  // Meshy tilt window. In full mode overrides apply exactly as before.
-  final overrides =
-      mode.isMeshy ? const <String, PitchBand>{} : ref.watch(pitchBandOverrideProvider);
+  final overrides = ref.watch(pitchBandOverrideProvider);
   return resolvePitchBand(
     bandId: bandId,
     config: config,

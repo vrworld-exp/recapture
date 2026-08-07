@@ -220,7 +220,11 @@ void main() {
       ]);
 
       final ctx = UploadFlowContext(
-        localProjectId: 'e2e-local-project',
+        // Empty id → the create-project FALLBACK path, so this E2E still
+        // mints a real project against the live API (reuse would need a
+        // pre-existing server project id). The duplicate-project fix only
+        // skips creation when a REAL project id is present.
+        localProjectId: '',
         projectName: 'E2E Upload Test (auto)',
         captureSessionId: sessionId,
         config: CaptureConfig.bundledDefault,

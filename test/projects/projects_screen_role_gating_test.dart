@@ -8,6 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:recapture/application/auth/profile_provider.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/projects/live_projects_notifier.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
@@ -19,6 +20,9 @@ import 'package:recapture/presentation/screens/projects/projects_screen.dart';
 /// Serves the owner list without repositories/Hive (same pattern as the
 /// dev-tools screen test).
 class _FakeProjectsNotifier extends ProjectsNotifier {
+  _FakeProjectsNotifier({this.modelCount = 0});
+  final int modelCount;
+
   @override
   Future<List<Project>> build() async => [
         Project(
@@ -27,6 +31,7 @@ class _FakeProjectsNotifier extends ProjectsNotifier {
           status: ProjectStatus.processing,
           updatedAt: DateTime(2026, 7, 12),
           totalPhotos: 36,
+          modelCount: modelCount,
         ),
       ];
 }
@@ -49,12 +54,19 @@ class _FakeLiveProjectsNotifier extends LiveProjectsNotifier {
       );
 }
 
-Widget _app({required bool isStaff}) {
+Widget _app({required bool isStaff, int mineModelCount = 0}) {
   return ProviderScope(
     overrides: [
-      projectsProvider.overrideWith(_FakeProjectsNotifier.new),
+      projectsProvider
+          .overrideWith(() => _FakeProjectsNotifier(modelCount: mineModelCount)),
       liveProjectsProvider.overrideWith(_FakeLiveProjectsNotifier.new),
       isStaffProvider.overrideWithValue(isStaff),
+      // The Live tab reads the admin flag for its delete affordance; without
+      // this override the real userRoleProvider chain would open Hive.
+      isAdminProvider.overrideWithValue(false),
+      // The app-bar avatar watches this; the real one would reach /auth/me
+      // through the account repository. No picture → the plain glyph.
+      avatarBytesProvider.overrideWith((ref) async => null),
     ],
     child: const MaterialApp(home: ProjectsScreen()),
   );
@@ -109,5 +121,36 @@ void main() {
     await _pumpFrames(tester);
     expect(find.text('My vase'), findsOneWidget);
     expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
+
+  testWidgets(
+      'non-staff owner: Generate on an exportable project with no model yet',
+      (tester) async {
+    // The 3D-model flow is no longer staff-only: an owner sees "Generate 3D
+    // model" on their exportable (PROCESSING) project — all without any staff
+    // tab chrome. No model yet, so no Models button.
+    await tester.pumpWidget(_app(isStaff: false, mineModelCount: 0));
+    await _pumpFrames(tester);
+
+    expect(find.text('My vase'), findsOneWidget);
+    expect(find.text('Generate 3D model'), findsOneWidget);
+    expect(find.text('Models'), findsNothing);
+    // Still no staff-only surface.
+    expect(find.byType(SegmentedButton), findsNothing);
+    expect(find.text('Live projects'), findsNothing);
+  });
+
+  testWidgets('non-staff owner: a viewable model swaps Generate for Models',
+      (tester) async {
+    // Once this capture already has a model, Generate gives way to Models —
+    // re-offering a build on a capture that already succeeded is redundant.
+    await tester.pumpWidget(_app(isStaff: false, mineModelCount: 1));
+    await _pumpFrames(tester);
+
+    expect(find.text('My vase'), findsOneWidget);
+    expect(find.text('Models'), findsOneWidget);
+    expect(find.text('Generate 3D model'), findsNothing);
+    expect(find.byType(SegmentedButton), findsNothing);
+    expect(find.text('Live projects'), findsNothing);
   });
 }

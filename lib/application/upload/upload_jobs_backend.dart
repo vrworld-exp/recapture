@@ -40,9 +40,11 @@ abstract interface class UploadJobsBackend {
     required String projectId,
     required String objectSize,
     required String captureVariant,
-    required String captureMode,
     required int expectedFilesCount,
     required String idempotencyKey,
+    /// Defaulted so existing fakes and pre-Meshy callers stay valid — a job
+    /// that says nothing is a full capture, matching the server's own default.
+    String captureMode,
   });
 
   /// `POST /jobs/:jobId/finalize` → the job's resulting state
@@ -81,9 +83,9 @@ class DioUploadJobsBackend implements UploadJobsBackend {
     required String projectId,
     required String objectSize,
     required String captureVariant,
-    required String captureMode,
     required int expectedFilesCount,
     required String idempotencyKey,
+    String captureMode = 'full',
   }) async {
     final res = await _dio.post<Map<String, dynamic>>(
       '/jobs',
@@ -91,6 +93,9 @@ class DioUploadJobsBackend implements UploadJobsBackend {
         'projectId': projectId,
         'objectSize': objectSize,
         'captureVariant': captureVariant,
+        // Omitted by a pre-Meshy client; the server defaults it to 'full'. Sent
+        // explicitly here so the job's expected counts are validated against
+        // the shape the session actually captured.
         'captureMode': captureMode,
         'expectedFilesCount': expectedFilesCount,
       },

@@ -19,7 +19,7 @@
 // dispatcher. PRIVACY: only opaque ids (project_id/session_id), enum values, and
 // counts — never names, emails, phones, file paths, or tokens.
 import '../../../domain/capture/capture_flow_variant.dart';
-import '../../../domain/capture/capture_shape_mode.dart';
+import '../../../domain/capture/capture_mode.dart';
 import '../../../utils/analytics.dart';
 
 /// The capture level this event belongs to. Serializes to "A"/"B"/"C".
@@ -63,6 +63,11 @@ String pitchBandIdForLevel(CaptureLevel level) => switch (level) {
 extension CaptureFlowVariantLevels on CaptureFlowVariant {
   /// This variant's levels in flow order (A→B[→C]) — always a prefix of
   /// [CaptureLevel.values], so flow order never changes between variants.
+  ///
+  /// This is the FULL-mode (variant-shaped) list. Flow consumers must NOT read
+  /// it directly — they go through [activeCaptureLevels], which also collapses
+  /// Meshy mode to its single ring. Reading `.levels` unqualified would run a
+  /// Meshy capture against the full A→B[→C] sequence.
   List<CaptureLevel> get levels => switch (this) {
         CaptureFlowVariant.withBottom =>
           const [CaptureLevel.a, CaptureLevel.b, CaptureLevel.c],
@@ -71,18 +76,23 @@ extension CaptureFlowVariantLevels on CaptureFlowVariant {
       };
 }
 
-/// The ACTIVE capture levels for [variant] under capture shape [mode] — the ONE
-/// mode-aware level-list source every flow-shaping consumer (gates, the
-/// progression/machine builders, the summary) uses instead of `variant.levels`
-/// directly. Meshy is a single Eye ring, so it yields exactly [CaptureLevel.a]
-/// (band 'mid' → EYE) regardless of variant; full defers to the variant's
-/// A→B[→C] list. Keeping this in ONE place means a Meshy session can never demand
-/// (or list) Level B/C anywhere.
+/// The ACTIVE level list for a ([variant], [mode]) pair — the SINGLE source
+/// every flow-shaping iteration (progression builder, segment machines, upload
+/// gate, completion gate, summary, upload snapshot, post-Level-A routing) goes
+/// through instead of [CaptureFlowVariantLevels.levels].
+///
+/// - FULL mode → the variant's levels (A→B with bottom, A→B[→C]).
+/// - MESHY mode → ALWAYS just [CaptureLevel.a] (the single eye ring), regardless
+///   of variant: Meshy is variant-independent (see [CaptureMode]), so no TOP or
+///   LOW ring is ever active and the flow ends at Summary after Level A.
+///
+/// Centralising this is what keeps a Meshy session from demanding — or the
+/// upload snapshot from counting — Level B/C anywhere.
 List<CaptureLevel> activeCaptureLevels(
   CaptureFlowVariant variant,
-  CaptureShapeMode mode,
+  CaptureMode mode,
 ) =>
-    mode.isMeshy ? const [CaptureLevel.a] : variant.levels;
+    mode == CaptureMode.meshy ? const [CaptureLevel.a] : variant.levels;
 
 /// A typed capture-level lifecycle event: its dispatcher [name] + its [properties].
 abstract class CaptureLevelEvent {

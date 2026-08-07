@@ -16,12 +16,14 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/model_generation_notifier.dart';
 import '../../../application/projects/preview_download_service.dart';
 import '../../../application/projects/preview_gallery_notifier.dart';
 import '../../../data/repositories/live_projects_repository.dart';
 import '../../../domain/entities/preview_manifest.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/delete_confirmation_modal.dart';
+import 'model_generation_screen.dart';
 
 class PreviewGalleryScreen extends ConsumerStatefulWidget {
   const PreviewGalleryScreen({super.key, required this.projectId});
@@ -33,23 +35,144 @@ class PreviewGalleryScreen extends ConsumerStatefulWidget {
       _PreviewGalleryScreenState();
 }
 
+/// Selection bounds for a Meshy generation. MIRRORS the server's authority
+/// (projectModelsService MIN/MAX_SELECTED_PHOTOS) — the CTA gate here is a
+/// courtesy so a staff user isn't sent to a guaranteed 400; the backend still
+/// re-checks. Keep the two in sync.
+const int kMinModelPhotos = 3;
+const int kMaxModelPhotos = 4;
+
+/// Maps any staff-surface failure to friendly, mapped-only copy (never a raw
+/// code/URL) — same categories as the Live tab's _showFailure. Top-level so the
+/// model history screen shares this one definition rather than paraphrasing it.
+String failureCopy(Object error) => switch (error) {
+      LiveProjectsException(failure: LiveProjectsFailure.notExportable) =>
+        'This project has no finished upload to preview yet.',
+      LiveProjectsException(failure: LiveProjectsFailure.rateLimited) =>
+        'Preview limit reached — try again later.',
+      LiveProjectsException(failure: LiveProjectsFailure.forbidden) =>
+        'Your account no longer has staff access.',
+      LiveProjectsException(failure: LiveProjectsFailure.network) =>
+        'You’re offline — check your connection and try again.',
+      // The row the button was on is out of date — retrying the same request
+      // would fail identically, so the copy asks for a refresh instead.
+      LiveProjectsException(failure: LiveProjectsFailure.notOptimizable) =>
+        'This model can’t be optimized — pull down to refresh the list.',
+      _ => 'Something went wrong. Please try again.',
+    };
+
 class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
+  /// Sizing-only override for the app-bar CTA: everything visual (fill,
+  /// border, radius, text style, disabled states) still resolves from the
+  /// elevated/outlined button themes, so this can never drift off-theme.
+  static final ButtonStyle _appBarCompact = ElevatedButton.styleFrom(
+    minimumSize: const Size(0, 36),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+  );
+
   /// Per-key download in-flight guard (mirrors the Live tab's _exportInFlight).
   final Set<String> _downloadInFlight = <String>{};
 
-  /// Maps any Preview failure to friendly, mapped-only copy (never a raw
-  /// code/URL) — same categories as the Live tab's _showFailure.
-  static String failureCopy(Object error) => switch (error) {
-        LiveProjectsException(failure: LiveProjectsFailure.notExportable) =>
-          'This project has no finished upload to preview yet.',
-        LiveProjectsException(failure: LiveProjectsFailure.rateLimited) =>
-          'Preview limit reached — try again later.',
-        LiveProjectsException(failure: LiveProjectsFailure.forbidden) =>
-          'Your account no longer has staff access.',
-        LiveProjectsException(failure: LiveProjectsFailure.network) =>
-          'You’re offline — check your connection and try again.',
-        _ => 'Something went wrong. Please try again.',
-      };
+  /// Selection mode: tapping a tile picks it for model generation instead of
+  /// opening the viewer. Off by default so the browse/download flow is unchanged.
+  bool _selecting = false;
+
+  /// The picked photos, by [PreviewPhoto.key] — the same relative key the
+  /// server resolves against the job prefix.
+  final Set<String> _selected = <String>{};
+
+  /// Create-Model in-flight guard. The press spends Meshy credits, so a fast
+  /// double-tap must not fire a second request before the first lands (the
+  /// server's idempotency key is the backstop, this is the front one).
+  bool _creating = false;
+
+  bool get _canCreate =>
+      _selected.length >= kMinModelPhotos &&
+      _selected.length <= kMaxModelPhotos;
+
+  void _toggleSelecting() {
+    setState(() {
+      _selecting = !_selecting;
+      if (!_selecting) _selected.clear();
+    });
+  }
+
+  void _toggle(PreviewPhoto photo) {
+    setState(() {
+      if (!_selected.remove(photo.key) && _selected.length < kMaxModelPhotos) {
+        _selected.add(photo.key);
+      }
+    });
+  }
+
+  /// A stable key for one (project, keys) request: a double-tap resolves to the
+  /// SAME record server-side instead of a second PAID generation.
+  String _idempotencyKeyFor(List<String> keys) {
+    final sorted = [...keys]..sort();
+    return '${widget.projectId}:${sorted.join('|')}'.hashCode.toRadixString(16);
+  }
+
+  /// Sends the selected photos to Maya AI and opens the generation screen.
+  Future<void> _createModel() async {
+    if (!_canCreate || _creating) return;
+    // Walk the MANIFEST and filter, never the Set: selection order is request
+    // order, and a Set has none — the photo order reaching Meshy would be
+    // arbitrary.
+    final keys = [
+      for (final photo in ref
+              .read(previewGalleryProvider(widget.projectId))
+              .valueOrNull
+              ?.files ??
+          const <PreviewPhoto>[])
+        if (_selected.contains(photo.key)) photo.key,
+    ];
+    if (keys.length < kMinModelPhotos) return;
+
+    setState(() => _creating = true);
+    try {
+      final model = await ref
+          .read(modelGenerationProvider(widget.projectId).notifier)
+          .createModel(keys, idempotencyKey: _idempotencyKeyFor(keys));
+      if (!mounted) return;
+      // Cleared only on SUCCESS — a failed create must leave the picked photos
+      // alone so a retry doesn't start with re-picking them.
+      setState(() {
+        _selecting = false;
+        _selected.clear();
+      });
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelGenerationScreen(
+            projectId: widget.projectId,
+            modelId: model.id,
+          ),
+        ),
+      );
+    } catch (e) {
+      // A dialog, not a snackbar: this press spends credits and a toast that
+      // fades in four seconds is how a real failure gets reported as "nothing
+      // happened".
+      if (mounted) await _showCreateFailure(failureCopy(e));
+    } finally {
+      if (mounted) setState(() => _creating = false);
+    }
+  }
+
+  /// Mapped copy only — never a raw error, code or URL.
+  Future<void> _showCreateFailure(String message) => showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          key: const ValueKey('create_model_error'),
+          title: const Text('Couldn’t start the model'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
 
   void _snack(String message) {
     if (!mounted) return;
@@ -116,6 +239,9 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(previewGalleryProvider(widget.projectId));
+    // The screen is already staff-only, but the CTA spends Meshy credits — gate
+    // it on the role too rather than relying on the route alone.
+    final canCreateModel = ref.watch(isStaffProvider);
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       appBar: AppBar(
@@ -128,17 +254,87 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
           // hardware back / this arrow both return to Projects, never the OS home.
           onPressed: () => navigateBack(context),
         ),
-        title: Text('Preview', style: Theme.of(context).textTheme.titleLarge),
+        title: Text(
+          _selecting ? 'Select photos' : 'Preview',
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        actions: [
+          if (canCreateModel && (async.valueOrNull?.files.isNotEmpty ?? false))
+            Padding(
+              padding: const EdgeInsets.only(right: AppSpacing.md),
+              child: Center(
+                // Same design language as every other CTA (AppButton primary /
+                // secondary), just compacted for an app-bar slot: colors,
+                // shape and typography come from the button THEMES; only the
+                // sizing is overridden (AppButton itself can't sit here — its
+                // theme minimumSize is infinite-width × 48).
+                child: _selecting
+                    ? OutlinedButton(
+                        key: const ValueKey('preview_select_toggle'),
+                        style: _appBarCompact,
+                        onPressed: _toggleSelecting,
+                        child: const Text('Cancel'),
+                      )
+                    : ElevatedButton.icon(
+                        key: const ValueKey('preview_select_toggle'),
+                        style: _appBarCompact,
+                        onPressed: _toggleSelecting,
+                        icon: const Icon(Icons.auto_awesome, size: 16),
+                        label: const Text('Create Model'),
+                      ),
+              ),
+            ),
+        ],
       ),
+      bottomNavigationBar: _selecting ? _createModelBar(context) : null,
       body: async.when(
         loading: () => const Center(
           child: CircularProgressIndicator(color: AppColors.mirageRed),
         ),
         error: (error, __) => _PreviewErrorView(
           message: failureCopy(error),
-          onRetry: () => ref.invalidate(previewGalleryProvider(widget.projectId)),
+          onRetry: () =>
+              ref.invalidate(previewGalleryProvider(widget.projectId)),
         ),
         data: (manifest) => _body(manifest),
+      ),
+    );
+  }
+
+  /// The Create Model CTA + its live selection hint. Disabled outside the 3–4
+  /// bound, with the hint saying WHY rather than leaving a dead button.
+  Widget _createModelBar(BuildContext context) {
+    final n = _selected.length;
+    final hint = switch (n) {
+      < kMinModelPhotos => 'Select $kMinModelPhotos–$kMaxModelPhotos photos '
+          'from different angles ($n selected)',
+      _ => '$n of $kMaxModelPhotos selected',
+    };
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              hint,
+              key: const ValueKey('create_model_hint'),
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: AppColors.textMuted),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            AppButton(
+              key: const ValueKey('create_model_cta'),
+              label: 'Create Model',
+              icon: Icons.auto_awesome,
+              isLoading: _creating,
+              onPressed: (_canCreate && !_creating) ? _createModel : null,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -163,8 +359,7 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
             SliverPadding(
               padding: const EdgeInsets.all(AppSpacing.lg),
               sliver: SliverGrid(
-                gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 3,
                   mainAxisSpacing: AppSpacing.sm,
                   crossAxisSpacing: AppSpacing.sm,
@@ -172,10 +367,18 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
                 delegate: SliverChildBuilderDelegate(
                   (context, index) {
                     final photo = manifest.files[index];
+                    final selected = _selected.contains(photo.key);
                     return _PhotoTile(
                       key: ValueKey('preview_tile_${photo.key}'),
                       photo: photo,
-                      onTap: () => _openViewer(manifest, photo),
+                      selectable: _selecting,
+                      selected: selected,
+                      // In selection mode a tap picks instead of opening — the
+                      // grid is the picker, so a second surface would just be
+                      // in the way.
+                      onTap: () => _selecting
+                          ? _toggle(photo)
+                          : _openViewer(manifest, photo),
                     );
                   },
                   childCount: manifest.files.length,
@@ -229,12 +432,21 @@ class _Header extends StatelessWidget {
   }
 }
 
-/// One grid thumbnail with graceful loader/error placeholders.
+/// One grid thumbnail with graceful loader/error placeholders. In selection
+/// mode it also carries the checkmark + dimming that show what is picked.
 class _PhotoTile extends StatelessWidget {
-  const _PhotoTile({super.key, required this.photo, required this.onTap});
+  const _PhotoTile({
+    super.key,
+    required this.photo,
+    required this.onTap,
+    this.selectable = false,
+    this.selected = false,
+  });
 
   final PreviewPhoto photo;
   final VoidCallback onTap;
+  final bool selectable;
+  final bool selected;
 
   @override
   Widget build(BuildContext context) {
@@ -244,12 +456,55 @@ class _PhotoTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.xs),
         child: AspectRatio(
           aspectRatio: 1,
-          child: Image.network(
-            photo.url,
-            fit: BoxFit.cover,
-            loadingBuilder: (context, child, progress) =>
-                progress == null ? child : const _TilePlaceholder(loading: true),
-            errorBuilder: (_, __, ___) => const _TilePlaceholder(loading: false),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.network(
+                photo.url,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, progress) => progress == null
+                    ? child
+                    : const _TilePlaceholder(loading: true),
+                errorBuilder: (_, __, ___) =>
+                    const _TilePlaceholder(loading: false),
+              ),
+              if (selectable)
+                _SelectionOverlay(
+                  key: ValueKey('preview_tile_check_${photo.key}'),
+                  selected: selected,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The selected/unselected affordance drawn over a tile in selection mode.
+class _SelectionOverlay extends StatelessWidget {
+  const _SelectionOverlay({super.key, required this.selected});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border:
+            selected ? Border.all(color: AppColors.mirageRed, width: 3) : null,
+        // Unselected tiles recede so the picked set reads at a glance.
+        color: selected ? null : Colors.black.withValues(alpha: 0.35),
+      ),
+      child: Align(
+        alignment: Alignment.topRight,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xs),
+          child: Icon(
+            selected ? Icons.check_circle : Icons.circle_outlined,
+            size: 20,
+            color: selected ? AppColors.mirageRed : Colors.white70,
+            semanticLabel: selected ? 'Selected' : 'Not selected',
           ),
         ),
       ),

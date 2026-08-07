@@ -20,6 +20,8 @@ class ProjectCard extends StatelessWidget {
     required this.onRetry,
     required this.onMore,
     this.onPreview,
+    this.onModels,
+    this.onGenerate,
     this.isActionInFlight = false,
   });
 
@@ -38,9 +40,39 @@ class ProjectCard extends StatelessWidget {
   /// passes it only for staff on an exportable project.
   final ValueChanged<Project>? onPreview;
 
+  /// OPTIONAL staff-only "Models" action, opening the project's 3D-model
+  /// generation history. Null for every non-staff caller (default) — same
+  /// null-means-hidden rule as [onPreview], so the shared card is unchanged for
+  /// regular users.
+  ///
+  /// Deliberately ONE button rather than one per model: the history grows
+  /// without bound (a project regenerated eight times would crowd this
+  /// fixed-height card with eight buttons), and a list has room to show the
+  /// timestamp, status, photo count and approval that a button cannot.
+  final ValueChanged<Project>? onModels;
+
+  /// OPTIONAL staff-only "Generate" action: ask the server to pick photos
+  /// itself and build a 3D model. Same null-means-hidden rule as [onPreview].
+  ///
+  /// The caller passes it only for a project with a FINALIZED capture — a
+  /// project without one would always be refused, and a button that always
+  /// errors is worse than no button.
+  final ValueChanged<Project>? onGenerate;
+
   /// When true the action button shows a loading state and is disabled
   /// (per-project in-flight guard owned by the screen).
   final bool isActionInFlight;
+
+  /// Whether to render the top-right status pill.
+  ///
+  /// Hidden once a viewable model exists AND the project is still flagged
+  /// "Processing…": the model is the real deliverable and it's done, so a
+  /// perpetually-pulsing amber "Processing" pill is stale noise. Every other
+  /// status keeps its pill. Mirrors the action-area suppression in
+  /// [_buildActionArea].
+  bool get _showStatusPill =>
+      !(project.status == ProjectStatus.processing &&
+          project.hasViewableModels);
 
   @override
   Widget build(BuildContext context) {
@@ -78,8 +110,10 @@ class ProjectCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              AppStatusPill(status: project.status),
+              if (_showStatusPill) ...[
+                const SizedBox(width: AppSpacing.sm),
+                AppStatusPill(status: project.status),
+              ],
               IconButton(
                 icon: const Icon(Icons.more_vert, color: AppColors.textSecondary),
                 iconSize: 20,
@@ -96,9 +130,24 @@ class ProjectCard extends StatelessWidget {
   }
 
   List<Widget> _buildActionArea(BuildContext context) {
-    final action = project.status.cardAction;
+    // Once a viewable model exists, the "Processing…" label is stale noise: the
+    // model is done and the Models button is the real state. Suppress it so the
+    // card doesn't spin forever. Uploading is untouched — that's a live upload,
+    // not a finished model.
+    final rawAction = project.status.cardAction;
+    final action =
+        rawAction == ProjectCardAction.processing && project.hasViewableModels
+            ? ProjectCardAction.none
+            : rawAction;
     final showPreview = onPreview != null;
-    if (action == ProjectCardAction.none && !showPreview) return const [];
+    final showModels = onModels != null;
+    final showGenerate = onGenerate != null;
+    if (action == ProjectCardAction.none &&
+        !showPreview &&
+        !showModels &&
+        !showGenerate) {
+      return const [];
+    }
 
     final trailing = <Widget>[
       if (showPreview)
@@ -107,6 +156,13 @@ class ProjectCard extends StatelessWidget {
           icon: Icons.photo_library_outlined,
           isFullWidth: false,
           onPressed: () => onPreview!(project),
+        ),
+      if (showModels)
+        AppButton.secondary(
+          label: 'Models',
+          icon: Icons.view_in_ar_outlined,
+          isFullWidth: false,
+          onPressed: () => onModels!(project),
         ),
       if (action != ProjectCardAction.none) _buildAction(context, action),
     ];
@@ -126,6 +182,21 @@ class ProjectCard extends StatelessWidget {
           ],
         ],
       ),
+      // Its OWN full-width row rather than a fourth slot above: three labelled
+      // buttons across a phone-width card already ellipsize, and this one is a
+      // deliberate, credit-spending action that should not be squeezed into an
+      // abbreviation. Same treatment the Live card gives its Models button.
+      if (showGenerate) ...[
+        const SizedBox(height: AppSpacing.sm),
+        SizedBox(
+          width: double.infinity,
+          child: AppButton.secondary(
+            label: 'Generate 3D model',
+            icon: Icons.auto_awesome_outlined,
+            onPressed: () => onGenerate!(project),
+          ),
+        ),
+      ],
     ];
   }
 

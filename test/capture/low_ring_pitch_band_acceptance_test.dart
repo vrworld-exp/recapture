@@ -10,7 +10,7 @@
 // The brief frames Low Ring as an "upward tilt" pass and references a negative
 // band (−30…−10). This codebase does NOT use a negative band: Level C resolves to
 // `pitchBandIdForLevel(CaptureLevel.c) == 'low'`, and the bundled `low` band is
-// [0, 60) on the 0–180° CAMERA-TILT scale (0 = camera at the sky, 90 = horizon,
+// [0, 40) on the 0–180° CAMERA-TILT scale (0 = camera at the sky, 90 = horizon,
 // 180 = at the ground) — the lowest slice, reached by tilting the phone UP. The
 // Level C product copy is "Lower the phone, tilt slightly up". These tests encode
 // that production convention and the direction-lock below fails if the band is
@@ -62,7 +62,7 @@ SmoothedOrientation _at(double tiltDeg) {
 void main() {
   // The Low Ring band, resolved through the REAL production path: the single
   // level→band-id map + the band resolver over the live config. Reading from the
-  // source of truth (not a hardcoded [0,60) duplicate) means the boundary tests
+  // source of truth (not a hardcoded [0,40) duplicate) means the boundary tests
   // track an INTENTIONAL retune and fail on an UNINTENTIONAL one.
   const config = CaptureConfig.bundledDefault;
   final lowRingBandId = pitchBandIdForLevel(CaptureLevel.c);
@@ -81,11 +81,20 @@ void main() {
       expect(lowRing.id, 'low');
     });
 
-    test('tuning tripwire: low band is exactly [0, 60)', () {
+    test('tuning tripwire: low band is exactly [0, 40)', () {
       // Explicit pin of the CURRENT tuning: an UNINTENDED edge nudge (even 1°)
       // fails here. A deliberate retune updates these two numbers on purpose.
+      // Retuned 2026-07-21 from [0, 60) — `low` is now the NARROWEST band (40°).
       expect(lowRing.minDegrees, 0);
-      expect(lowRing.maxDegrees, 60);
+      expect(lowRing.maxDegrees, 40);
+    });
+
+    test('boundary: 39.999 is in `low`, 40.0 is not (exactly one band each)',
+        () {
+      expect(accepted(39.999), isTrue);
+      expect(accepted(40.0), isFalse);
+      expect(CapturePitchGuide.activeBand(config, 39.999)?.id, 'low');
+      expect(CapturePitchGuide.activeBand(config, 40.0)?.id, 'mid');
     });
 
     test('band is a valid positive slice in the LOWER region (sign-flip guard)', () {
@@ -234,7 +243,7 @@ void main() {
       Analytics.testSink = (n, p) => events.add((name: n, props: p));
       addTearDown(() => Analytics.testSink = null);
 
-      // 90° is above the Low Ring [0,60) → sustained out-of-band → one emission.
+      // 90° is above the Low Ring [0,40) → sustained out-of-band → one emission.
       await pumpOverlay(tester,
           outCooldown: const Duration(seconds: 3), pitches: [90]);
 
@@ -243,7 +252,7 @@ void main() {
       expect(out, hasLength(1));
       expect(out.first.props['target_band_id'], 'low');
       expect(out.first.props['level'], 'C');
-      expect(out.first.props['direction'], 'above'); // above [0,60)
+      expect(out.first.props['direction'], 'above'); // above [0,40)
       expect(out.first.props['pitch'], closeTo(90.0, 0.001));
     });
 
@@ -271,7 +280,7 @@ void main() {
       Analytics.testSink = (n, p) => events.add((name: n, props: p));
       addTearDown(() => Analytics.testSink = null);
 
-      // 30° is inside [0,60) → in-band → no guidance event.
+      // 30° is inside [0,40) → in-band → no guidance event.
       await pumpOverlay(tester,
           outCooldown: Duration.zero, pitches: [30, 30, 30]);
 

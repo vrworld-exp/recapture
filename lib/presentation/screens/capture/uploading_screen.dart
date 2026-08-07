@@ -25,6 +25,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
 import '../../../application/upload/upload_controller.dart';
+import '../../../application/upload/upload_flow.dart';
 import '../../../application/upload/upload_progress_provider.dart';
 import '../../../domain/capture/capture_cancel.dart';
 import '../../../domain/entities/upload_progress.dart';
@@ -122,7 +123,17 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
         'duration_ms': DateTime.now().difference(_entryTime).inMilliseconds,
         'device_type': _deviceType,
       });
-      if (mounted) context.go(AppRoutes.processing);
+      // Carry the REMOTE project id the flow minted into the post-upload
+      // screen. Re-deriving it there would read the local session's id, which
+      // is a different id space — and the button it feeds spends money on
+      // whatever project it names. Null (a flow that never created a project)
+      // degrades that screen to "Back to Projects" with no button at all.
+      if (mounted) {
+        context.go(
+          AppRoutes.processing,
+          extra: ref.read(uploadFlowProvider)?.remoteProjectId,
+        );
+      }
     } else if (p.isFailed) {
       // A failed STATUS carries no exception object → classified as the safe
       // generic (unknown) on Screen 9F.

@@ -103,17 +103,20 @@ String _writeSource(String rel, List<int> bytes) {
   required List<String> top,
   required List<String> low,
   Set<String> warned = const {},
+  Map<String, ({double blur, double luma, double yaw, double pitch})> quality =
+      const {},
 }) {
   final registry = LevelCaptureLedgerRegistry();
   void add(String levelId, List<String> paths) {
     for (var i = 0; i < paths.length; i++) {
+      final q = quality[paths[i]];
       registry.ledgerFor(levelId).recordAccepted(CapturedPhotoRecord(
             segmentIndex: i,
             framePath: paths[i],
-            blurScore: 120,
-            meanLuminance: 128,
-            yawDegrees: 0,
-            pitchDegrees: 0,
+            blurScore: q?.blur ?? 120,
+            meanLuminance: q?.luma ?? 128,
+            yawDegrees: q?.yaw ?? 0,
+            pitchDegrees: q?.pitch ?? 0,
             sensorTimestampNs: 1000 + i,
           ));
       if (warned.contains(paths[i])) {
@@ -214,6 +217,68 @@ void main() {
 
     // No leftover staging.
     expect(Directory('${_tmp.path}/staging/job1').existsSync(), isFalse);
+  });
+
+  test('manifest JSON carries per-photo quality + orientation (never null)', () async {
+    // THE regression guard for the bug that shipped: the packer dropped the
+    // ledger's blurScore/yaw, so every uploaded manifest wrote
+    // `quality: {blurScore: null}` and the backend's automatic model generation
+    // declined 100% of real captures with NO_USABLE_PHOTOS. Asserted against the
+    // EMITTED JSON — the intermediate Dart structs would not have caught it.
+    final a1 = _writeSource('A/a1.jpg', [1]);
+    final a2 = _writeSource('A/a2.jpg', [2]);
+    final b1 = _writeSource('B/b1.jpg', [3]);
+    final fx = _fixture(
+      eye: [a1, a2],
+      top: [b1],
+      low: [],
+      quality: {
+        a1: (blur: 132.5, luma: 118.25, yaw: 12.5, pitch: 88.5),
+        a2: (blur: 61.75, luma: 90.5, yaw: 190.25, pitch: 91.5),
+        b1: (blur: 45.5, luma: 77.25, yaw: 275.75, pitch: 130.5),
+      },
+    );
+    final packer = CaptureBundlePacker(
+      workspaceRoot: _tmp.path,
+      copier: _RealCopier(),
+      sidecarReader: _MapSidecarReader({}),
+    );
+    final bundle = await packer.pack(
+      session: _session,
+      device: _device,
+      config: CaptureConfig.bundledDefault,
+      progression: fx.progression,
+      registry: fx.registry,
+    );
+
+    final manifest =
+        jsonDecode(File(bundle.manifestPath).readAsStringSync()) as Map<String, dynamic>;
+    final photos = (manifest['photos'] as List).cast<Map<String, dynamic>>();
+    expect(photos.length, 3);
+
+    // The regression guard: NOT ONE photo may ship without a blur score.
+    for (final photo in photos) {
+      expect((photo['quality'] as Map)['blurScore'], isNotNull,
+          reason: 'photo ${photo['imagePath']} has a null blurScore');
+      expect((photo['orientation'] as Map)['yawDegrees'], isNotNull);
+    }
+
+    Map<String, dynamic> byPath(String p) =>
+        photos.firstWhere((photo) => photo['imagePath'] == p);
+
+    final eye1 = byPath('images/EYE/eye_0001.jpg');
+    expect((eye1['quality'] as Map)['blurScore'], 132.5);
+    expect((eye1['quality'] as Map)['meanLuminance'], 118.25);
+    expect((eye1['orientation'] as Map)['yawDegrees'], 12.5);
+    expect((eye1['orientation'] as Map)['pitchDegrees'], 88.5);
+
+    final eye2 = byPath('images/EYE/eye_0002.jpg');
+    expect((eye2['quality'] as Map)['blurScore'], 61.75);
+    expect((eye2['orientation'] as Map)['yawDegrees'], 190.25);
+
+    final top1 = byPath('images/TOP/top_0001.jpg');
+    expect((top1['quality'] as Map)['blurScore'], 45.5);
+    expect((top1['orientation'] as Map)['yawDegrees'], 275.75);
   });
 
   test('deterministic: packing twice yields identical filenames + manifest bytes', () async {

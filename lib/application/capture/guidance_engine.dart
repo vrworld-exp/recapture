@@ -174,7 +174,7 @@ TiltTarget _eyeRingTarget(CaptureConfig config) {
     return TiltTarget.fromBand(config.pitchBands.first);
   }
   // Last-resort floor: the bundled `mid` band on the 0–180° camera-tilt scale.
-  return const TiltTarget(minDegrees: 60, maxDegrees: 120, bandId: 'mid');
+  return const TiltTarget(minDegrees: 40, maxDegrees: 110, bandId: 'mid');
 }
 
 String get _deviceType => switch (defaultTargetPlatform) {

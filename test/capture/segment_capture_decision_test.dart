@@ -31,16 +31,19 @@ void main() {
             RejectAlreadyFilled() => RejectAlreadyFilled.warningMessage,
           };
       expect(describe(const ProceedCapture(0)), 'go');
-      expect(describe(const RejectAlreadyFilled(0)),
-          'Already captured this angle — turn to the next section');
+      expect(
+        describe(const RejectAlreadyFilled(0)),
+        'Already captured this angle — turn to the next section',
+      );
     });
 
     test('warningMessage is the exact required copy', () {
-      // Directive by design — the one-shot-per-segment flows surface this verbatim
-      // (SnackBar + shutter semantics), so it must say where to go, not just what
-      // was refused.
-      expect(RejectAlreadyFilled.warningMessage,
-          'Already captured this angle — turn to the next section');
+      // DIRECTIVE copy: the rejection names the action that resolves it. The
+      // capture screen's already-captured snack renders this constant verbatim.
+      expect(
+        RejectAlreadyFilled.warningMessage,
+        'Already captured this angle — turn to the next section',
+      );
     });
 
     test('value equality by variant + index', () {

@@ -45,6 +45,15 @@ android {
         }
     }
 
+    // Android release "vital" lint (lintVitalAnalyzeRelease) is not part of the
+    // Flutter release pipeline and, on Windows, its jar cache is prone to
+    // file-lock failures ("process cannot access the file"). Skip it so a stray
+    // daemon or AV scan can't fail the release build.
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     buildTypes {
         release {
             // Use release signing only when a real keystore is configured in

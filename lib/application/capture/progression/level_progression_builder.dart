@@ -1,9 +1,9 @@
 // lib/application/capture/progression/level_progression_builder.dart
 //
 // Builds the ordered level sequence for the progression core FROM CONFIG + the
-// FLOW VARIANT — never a hardcoded 3-tuple. It iterates the variant's ACTIVE
-// levels (CaptureFlowVariant.levels: A→B→C with bottom, A→B without) and
-// resolves each level's band via the single level→band map [pitchBandIdForLevel]
+// FLOW VARIANT + the capture MODE — never a hardcoded tuple. It iterates the
+// active level list via [activeCaptureLevels] (full: A→B[→C]; meshy: just A, the
+// single eye ring) and resolves each level's band via [pitchBandIdForLevel]
 // and its segment count via the single [effectiveSegmentsFor] resolver
 // (variant counts → legacy band counts → 12). Retuning a variant's counts
 // server-side (guided_capture_variant_segments) flows straight through here
@@ -12,7 +12,7 @@
 // Kept OUT of the pure core (level_progression.dart) because it depends on the
 // CaptureLevel taxonomy + config; the core stays config-agnostic and pure.
 import '../../../domain/capture/capture_flow_variant.dart';
-import '../../../domain/capture/capture_shape_mode.dart';
+import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/capture/coverage_milestones.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../analytics/capture_level_events.dart';
@@ -29,8 +29,8 @@ const int kDefaultMinAcceptedPerLevel = 1;
 List<LevelProgressState> levelStatesFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
-  CaptureShapeMode mode = CaptureShapeMode.full,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
+  CaptureMode mode = CaptureMode.full,
 }) {
   return [
     for (final level in activeCaptureLevels(variant, mode))
@@ -39,7 +39,7 @@ List<LevelProgressState> levelStatesFromConfig(
         return LevelProgressState(
           levelId: bandId,
           levelCode: level.code,
-          segmentCount: effectiveSegmentsFor(config, variant, bandId),
+          segmentCount: effectiveSegmentsFor(config, variant, bandId, mode: mode),
           minAcceptedCount: minAcceptedCount,
           minCoveragePct: config.thresholds.minCoveragePct,
         );
@@ -52,15 +52,15 @@ List<LevelProgressState> levelStatesFromConfig(
 LevelProgression initialProgressionFromConfig(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
-  CaptureShapeMode mode = CaptureShapeMode.full,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
+  CaptureMode mode = CaptureMode.full,
 }) =>
     LevelProgression.of(
       levelStatesFromConfig(
         config,
         variant: variant,
-        mode: mode,
         minAcceptedCount: minAcceptedCount,
+        mode: mode,
       ),
     );
 
@@ -78,7 +78,7 @@ LevelProgression progressionFromLedger(
   CaptureConfig config, {
   required CaptureFlowVariant variant,
   required LevelCaptureLedgerRegistry registry,
-  CaptureShapeMode mode = CaptureShapeMode.full,
+  CaptureMode mode = CaptureMode.full,
 }) {
   final thresholds = config.completionThresholds;
   return LevelProgression.of([
@@ -114,14 +114,14 @@ LevelProgression reconcileWithConfig(
   LevelProgression persisted,
   CaptureConfig config, {
   required CaptureFlowVariant variant,
-  CaptureShapeMode mode = CaptureShapeMode.full,
   int minAcceptedCount = kDefaultMinAcceptedPerLevel,
+  CaptureMode mode = CaptureMode.full,
 }) {
   final fresh = levelStatesFromConfig(
     config,
     variant: variant,
-    mode: mode,
     minAcceptedCount: minAcceptedCount,
+    mode: mode,
   );
   final merged = [
     for (final f in fresh)

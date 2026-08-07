@@ -6,8 +6,13 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/auth/profile_provider.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/projects/model_generation_request_notifier.dart';
+import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
+import '../../../data/repositories/live_projects_repository.dart';
+import '../../../data/repositories/projects_repository.dart';
 import '../../../domain/entities/project.dart';
 import '../../../domain/entities/project_status.dart';
 import '../../../utils/analytics.dart';
@@ -18,6 +23,10 @@ import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
 import 'live_projects_view.dart';
+import 'capture_mode_sheet.dart';
+import 'model_building_screen.dart';
+import 'model_viewer_screen.dart';
+import 'owner_model_history_screen.dart';
 
 /// Which list the (staff-only) segmented control shows. Non-staff users never
 /// see the control and always get [mine].
@@ -34,7 +43,7 @@ class ProjectsScreen extends ConsumerStatefulWidget {
   ConsumerState<ProjectsScreen> createState() => _ProjectsScreenState();
 }
 
-class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
+class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware {
   /// Per-project in-flight guard so a double-tap can't fire two requests/navs.
   final Set<String> _actionInFlight = <String>{};
 
@@ -55,6 +64,52 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
   _ProjectsTab _tab = _ProjectsTab.mine;
 
   ProjectsNotifier get _notifier => ref.read(projectsProvider.notifier);
+
+  @override
+  void initState() {
+    super.initState();
+    // A fresh mount (e.g. `context.go(/projects)` after the capture → generate
+    // flow) shows the CACHED list first — re-pull once so a model finished while
+    // away is picked up without a manual swipe.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshSilently());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Subscribe to the root-navigator observer so [didPopNext] fires when a
+    // pushed screen (model viewer, build, capture flow) pops back to here.
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      projectsRouteObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void dispose() {
+    projectsRouteObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  /// Returned to this tab after a pushed screen popped — re-pull so a model
+  /// generated while away shows its Models button. See [projectsRouteObserver].
+  @override
+  void didPopNext() => _refreshSilently();
+
+  /// A focus-driven re-fetch. Unlike [_refresh] it NEVER surfaces the offline
+  /// modal: a background refresh that nags on every network blip would be worse
+  /// than a slightly stale list. The notifier keeps the visible list on failure.
+  Future<void> _refreshSilently() async {
+    if (!mounted || _refreshInFlight) return;
+    _refreshInFlight = true;
+    try {
+      await _notifier.refresh();
+    } catch (_) {
+      // Keep the visible list; the next focus/pull reconciles.
+    } finally {
+      _refreshInFlight = false;
+    }
+  }
 
   String get _deviceType =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
@@ -148,11 +203,198 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     context.goNamed(AppRouteNames.preCapture, extra: p.id);
   }
 
-  void _onView(Project p) {
+  /// Opens the project's finished 3D model when it has one.
+  ///
+  /// The model is fetched HERE, on tap, rather than watched per card: the
+  /// projects list DTO doesn't carry it (see ProjectsRepository.fetchModel), and
+  /// one request per completed card would be an N+1 across the whole list.
+  /// Projects without a generated model keep the previous behaviour exactly.
+  Future<void> _onView(Project p) async {
     if (!_claim(p)) return;
     _logAction('view', p);
-    // TODO(viewer): route to the project detail/viewer for p.id once it exists.
+    try {
+      final state = await ref.read(projectsRepositoryProvider).fetchModelState(p.id);
+      if (!mounted) return;
+      if (state.hasViewableModel) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ModelViewerScreen(
+              model: state.model!,
+              title: p.name,
+              // Owners can spin a fresh version straight from the viewer; staff
+              // regenerate through Prepare-Images (see _regenerateHandlerFor).
+              onRegenerate: _regenerateHandlerFor(p),
+              // The owner's ONLY route to optimization: there is no
+              // owner-facing models list, so the viewer is the surface. The
+              // button itself only renders when the server says canOptimize.
+              onOptimize: () => ref
+                  .read(liveProjectsRepositoryProvider)
+                  .optimizeOwnerModel(p.id, state.model!.id),
+            ),
+          ),
+        );
+        return;
+      }
+      // A model is being built for this project that the user never asked for.
+      // Sending them to the generic "model ready" placeholder here would be a
+      // lie; the building screen explains the wait and watches it finish.
+      if (state.generation != null) {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ModelBuildingScreen(
+              projectId: p.id,
+              projectName: p.name,
+              onRegenerate: _regenerateHandlerFor(p),
+            ),
+          ),
+        );
+        return;
+      }
+    } catch (_) {
+      // Offline / server hiccup: fall through to the existing destination
+      // rather than dead-ending the tap on an error.
+    }
+    if (!mounted) return;
     context.goNamed(AppRouteNames.modelReady);
+  }
+
+  /// The "make a new version" action for the model viewer / building screen.
+  ///
+  /// Two different paths by role. STAFF regenerate through the Preview gallery →
+  /// Prepare-Images, where they hand-pick and clean up the photos. OWNERS get
+  /// the server-selected path — the same POST the post-capture button uses, with
+  /// `regenerate: true` so it makes a genuinely new version rather than replaying
+  /// the existing one. The owner spend is bounded server-side by the per-user
+  /// daily cap; here it is just a button.
+  VoidCallback _regenerateHandlerFor(Project p) {
+    if (ref.read(isStaffProvider)) {
+      return () => context.pushNamed(
+            AppRouteNames.previewGallery,
+            pathParameters: {'id': p.id},
+          );
+    }
+    return () => _onRegenerate(p);
+  }
+
+  /// Owner "Create a new version": forces a fresh (capped) generation and opens
+  /// the build screen to watch it. Mirrors [_onGenerate] but through the owner
+  /// notifier's [OwnerGenerationRequestNotifier.regenerate], and it deliberately
+  /// does NOT gate on `_claim`: it is launched from a pushed screen (the viewer /
+  /// build screen), not the card, so the per-card in-flight guard doesn't apply —
+  /// the notifier's own in-flight guard is what stops a double-fire.
+  Future<void> _onRegenerate(Project p) async {
+    _logAction('regenerate', p);
+    // Fire the request; the build screen we push renders its progress/outcome.
+    final pending =
+        ref.read(ownerGenerationRequestProvider(p.id).notifier).regenerate();
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelBuildingScreen(
+            projectId: p.id,
+            projectName: p.name,
+            watchOwnerRequest: true,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
+    } finally {
+      // Let the POST settle before returning so a fast re-tap finds it in flight.
+      await pending;
+    }
+  }
+
+  /// "Generate 3D model": the SERVER picks the photos and starts a generation,
+  /// then this pushes the screen that explains what it decided and watches the
+  /// build.
+  ///
+  /// Role-split, because the two audiences talk to different routes with
+  /// different payloads: an OWNER goes through [_onGenerateOwner]
+  /// (`POST /projects/:id/model`, one owner-safe sentence), while STAFF use the
+  /// `/admin` auto route below, which additionally returns the selector trace
+  /// the staff building screen renders. An owner hitting the admin route would
+  /// only ever 403, so they never reach it.
+  ///
+  /// The screen is pushed FIRST and the request is awaited there rather than
+  /// here, because the most valuable outcome is a REFUSAL: a snackbar can say
+  /// "couldn't build a model" but it cannot show which rule refused and with
+  /// what numbers. Every outcome — enqueued, replayed, declined, failed — gets
+  /// the same full screen.
+  Future<void> _onGenerate(Project p) async {
+    if (!ref.read(isStaffProvider)) {
+      await _onGenerateOwner(p);
+      return;
+    }
+    if (!_claim(p)) return;
+    _logAction('generate', p);
+    // Fire-and-render: the notifier holds the result, so the screen shows the
+    // in-flight state and then the trace without this having to await.
+    final pending =
+        ref.read(modelGenerationRequestProvider(p.id).notifier).request();
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelBuildingScreen(
+            projectId: p.id,
+            projectName: p.name,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
+    } finally {
+      // Let the request settle before releasing the per-project claim, so a
+      // second press cannot start a second (paid) generation while the first
+      // is still in flight.
+      await pending;
+      _release(p);
+    }
+  }
+
+  /// Owner "Generate 3D model": the non-staff counterpart to [_onGenerate].
+  ///
+  /// Fires the owner request (`POST /projects/:id/model` via
+  /// [OwnerGenerationRequestNotifier.request] — no body, so a repeat replays
+  /// instead of paying twice) and pushes the owner-safe build screen with
+  /// [ModelBuildingScreen.watchOwnerRequest] set, so it watches the OWNER
+  /// notifier rather than the staff one. Same double-spend discipline as
+  /// [_onGenerate]: claim first, await the POST before releasing.
+  Future<void> _onGenerateOwner(Project p) async {
+    if (!_claim(p)) return;
+    _logAction('generate', p);
+    final pending =
+        ref.read(ownerGenerationRequestProvider(p.id).notifier).request();
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ModelBuildingScreen(
+            projectId: p.id,
+            projectName: p.name,
+            watchOwnerRequest: true,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
+    } finally {
+      await pending;
+      _release(p);
+    }
+  }
+
+  /// The `+` action: ask which capture mode, then open Create Project.
+  ///
+  /// The chooser is unconditional — choosing a capture mode is now part of
+  /// creating a project, so there is no path to Create Project that leaves the
+  /// mode unstated. A dismissed sheet navigates NOWHERE: the user backed out of
+  /// creating a project, and pushing the form anyway would ignore that.
+  ///
+  /// REQUIRES a server that understands `captureMode`. A Meshy project created
+  /// against an older deployment reaches create-job with a mode and a 10-file
+  /// count that server knows nothing about, and 422s there — after the user has
+  /// already shot everything.
+  Future<void> _onCreateProject() async {
+    final mode = await showCaptureModeSheet(context);
+    if (mode == null || !mounted) return;
+    context.pushNamed(AppRouteNames.createProject, extra: mode);
   }
 
   /// Staff-only per-project Preview (My-projects surface). Pushed so hardware
@@ -162,6 +404,48 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
     _logAction('preview', p);
     context.pushNamed(
       AppRouteNames.previewGallery,
+      pathParameters: {'id': p.id},
+    );
+  }
+
+  /// Per-project model history — the persistent way back to a generated model
+  /// once you've left the screen that created it. Pushed, like Preview, and
+  /// likewise unclaimed: pure navigation, and the history screen owns its own
+  /// load/empty/error states.
+  ///
+  /// Shown only for a project with a VIEWABLE model (`modelCount > 0` on the
+  /// Project DTO — one aggregation per list page server-side, never a request
+  /// per card). The count is SUCCEEDED-only by backend contract, so a project
+  /// whose generations all FAILED shows no button; its failures stay visible on
+  /// the generation screen, not here.
+  ///
+  /// The button carries no NUMBER on purpose — the count exists to decide
+  /// whether to render it, and the very next tap shows the full history anyway.
+  /// Role-split by ROUTE, not by feature: both audiences now get a list, but
+  /// they poll different endpoints with different payloads. Staff open the
+  /// staff history (`/admin/projects/:id/models`, which carries the trace and
+  /// the selected keys); an owner opens [OwnerModelHistoryScreen], which polls
+  /// the owner-scoped `/projects/:id/models` and can only ever see their own
+  /// project. Sending an owner to the staff screen would just 403.
+  void _onModels(Project p) {
+    _logAction('models', p);
+    if (!ref.read(isStaffProvider)) {
+      // Pushed directly rather than through a named route, for the same reason
+      // the owner viewer is: the `modelHistory` route is registered under
+      // `/admin/...` and resolves against the staff provider.
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => OwnerModelHistoryScreen(
+            projectId: p.id,
+            projectName: p.name,
+            onRegenerate: _regenerateHandlerFor(p),
+          ),
+        ),
+      );
+      return;
+    }
+    context.pushNamed(
+      AppRouteNames.modelHistory,
       pathParameters: {'id': p.id},
     );
   }
@@ -274,19 +558,13 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
         elevation: 0,
         automaticallyImplyLeading: false,
         title: Text('Projects', style: Theme.of(context).textTheme.titleLarge),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined,
-                color: AppColors.textSecondary),
-            onPressed: () {},
-          ),
-        ],
+        actions: const [_ProfileAvatarAction()],
       ),
       // Creating a project belongs to My projects; the Live tab is read-only.
       floatingActionButton: showLive
           ? null
           : FloatingActionButton(
-              onPressed: () => context.pushNamed(AppRouteNames.createProject),
+              onPressed: _onCreateProject,
               backgroundColor: AppColors.mirageRed,
               child: const Icon(Icons.add, color: Colors.white),
             ),
@@ -317,8 +595,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 child: ConstrainedBox(
                   constraints: BoxConstraints(minHeight: constraints.maxHeight),
                   child: ProjectsEmptyState(
-                    onStartCapture: () =>
-                        context.pushNamed(AppRouteNames.createProject),
+                    // Go through the same capture-mode sheet the FAB uses — a
+                    // direct push here would skip the Full/Meshy chooser, so a
+                    // first-time user (whose list is empty) could never start a
+                    // Meshy capture and would silently get a Full one.
+                    onStartCapture: _onCreateProject,
                   ),
                 ),
               ),
@@ -343,6 +624,23 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
                 onMore: _onMore,
                 onPreview:
                     isStaff && _isExportable(project) ? _onPreview : null,
+                // Any owner can open their own generated models — _onModels
+                // routes to ModelViewerScreen for every user. Still requires a
+                // VIEWABLE model: the history has nothing to show otherwise, and
+                // a button that opens an empty screen is worse than no button.
+                // Failed-only projects therefore show no Models button (see
+                // ProjectListItem.modelCount).
+                onModels: project.hasViewableModels ? _onModels : null,
+                // Any owner can generate a model for their own capturable
+                // project. Requires a FINALIZED capture (without one the server
+                // always answers NOT_EXPORTABLE) AND no model yet: once this
+                // capture already has one, Generate gives way to the Models
+                // button — a viewable model is the successful end state, so
+                // re-offering Generate there is redundant noise. Regenerating
+                // stays reachable from inside the viewer.
+                onGenerate: _isExportable(project) && !project.hasViewableModels
+                    ? _onGenerate
+                    : null,
               );
             },
           ),
@@ -358,6 +656,77 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> {
       backgroundColor: AppColors.surface1,
       onRefresh: _refresh,
       child: child,
+    );
+  }
+}
+
+/// The app-bar entry point to /profile.
+///
+/// Renders the signed-in user's ACTUAL profile picture when the account has one
+/// on the server, and the previous `account_circle_outlined` glyph when it does
+/// not. Loading and failure both resolve to the glyph — a picture that cannot be
+/// fetched must never leave the app bar emptier than it was before.
+///
+/// BYTES, not the snapshot's `avatarUrl`: that URL is a short-lived presigned
+/// credential the browser build cannot fetch at all (cross-origin to a bucket
+/// with no CORS). [avatarBytesProvider] is the one display path that works on
+/// web and native alike, and it is the SAME provider the Profile screen watches,
+/// so opening Projects and then Profile costs one fetch between them, not two.
+class _ProfileAvatarAction extends ConsumerWidget {
+  const _ProfileAvatarAction();
+
+  /// Fits the default IconButton box exactly (48 − 2×8 padding), so swapping the
+  /// glyph for a picture does not resize the app bar's tap target.
+  static const double _size = 32;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final bytes = ref.watch(avatarBytesProvider).valueOrNull;
+    final hasPicture = bytes != null && bytes.isNotEmpty;
+
+    return IconButton(
+      tooltip: 'Profile',
+      icon: hasPicture
+          ? _picture(bytes)
+          : const Icon(Icons.account_circle_outlined,
+              color: AppColors.textSecondary),
+      // go(), not push: /profile is a standalone top-level destination, not a
+      // page stacked on Projects — the location REPLACES /projects so the
+      // address bar reads exactly what a direct /profile deep-link would. BACK
+      // is not lost: FlowBackScope on the route maps /profile → /projects (see
+      // flowBackRouteFor), and a fresh Projects mount re-pulls the list in
+      // initState.
+      onPressed: () => context.goNamed(AppRouteNames.profile),
+    );
+  }
+
+  /// The picture inside the same 1px royalGold ring the Profile screen's avatar
+  /// wears — the one gold accent on this screen, and the visual link between the
+  /// two surfaces. Clipped so the photo can never paint over the stroke.
+  Widget _picture(Uint8List bytes) {
+    return Container(
+      width: _size,
+      height: _size,
+      decoration: BoxDecoration(
+        color: AppColors.surface1,
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.royalGold, width: 1),
+      ),
+      child: ClipOval(
+        child: Image.memory(
+          bytes,
+          width: _size,
+          height: _size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true, // a changed picture must not flash the glyph
+          // Undecodable bytes degrade to the plain glyph, never to a
+          // broken-image icon in the app bar.
+          errorBuilder: (context, error, stack) => const Icon(
+            Icons.account_circle_outlined,
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ),
     );
   }
 }

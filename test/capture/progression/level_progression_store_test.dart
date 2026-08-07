@@ -10,6 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/capture/progression/level_progression.dart';
 import 'package:recapture/application/capture/progression/level_progression_store.dart';
 import 'package:recapture/domain/capture/capture_flow_variant.dart';
+import 'package:recapture/domain/entities/create_project_options.dart'
+    show ObjectSize;
 import 'package:recapture/data/local/box_names.dart';
 
 LevelProgression _sample() => LevelProgression.of([
@@ -169,6 +171,47 @@ void main() {
       await store.clear('p1');
       expect(await store.load('p1'), isNull);
       expect(await store.loadVariant('p1'), CaptureFlowVariant.withBottom);
+    });
+  });
+
+  group('object size persistence', () {
+    test('saveObjectSize → loadObjectSizeOrNull round-trips each size',
+        () async {
+      final store = LevelProgressionStore();
+      for (final size in ObjectSize.values) {
+        await store.saveObjectSize('p1', size);
+        expect(await store.loadObjectSizeOrNull('p1'), size);
+      }
+    });
+
+    test('absent size (legacy/never-persisted project) → null', () async {
+      final store = LevelProgressionStore();
+      expect(await store.loadObjectSizeOrNull('legacy'), isNull);
+    });
+
+    test('unknown persisted value → null (upload flow keeps its own default)',
+        () async {
+      final box = await Hive.openBox<String>(BoxNames.captureProgression);
+      await box.put('p1::object_size', 'enormous');
+      final store = LevelProgressionStore();
+      expect(await store.loadObjectSizeOrNull('p1'), isNull);
+    });
+
+    test('clear removes the size along with the snapshot', () async {
+      final store = LevelProgressionStore();
+      await store.save('p1', _sample());
+      await store.saveObjectSize('p1', ObjectSize.large);
+      await store.clear('p1');
+      expect(await store.loadObjectSizeOrNull('p1'), isNull);
+    });
+
+    test('migrateProject carries the size from a temp id to the server id',
+        () async {
+      final store = LevelProgressionStore();
+      await store.saveObjectSize('pending_1', ObjectSize.small);
+      await store.migrateProject('pending_1', 'server_1');
+      expect(await store.loadObjectSizeOrNull('pending_1'), isNull);
+      expect(await store.loadObjectSizeOrNull('server_1'), ObjectSize.small);
     });
   });
 }

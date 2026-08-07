@@ -17,8 +17,12 @@ import 'package:hive/hive.dart';
 import '../../../data/local/box_names.dart';
 import '../../../data/local/hive_init.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
-import '../../../domain/capture/capture_shape_mode.dart';
+import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/capture/coverage_milestones.dart';
+// `hide CaptureMode`: this file already uses the capture CaptureMode
+// (domain/capture); create_project_options defines an unrelated same-named enum
+// (guided/manual). We want its ObjectSize + apiValue extension, not that enum.
+import '../../../domain/entities/create_project_options.dart' hide CaptureMode;
 import 'level_progression.dart';
 
 /// Centralised JSON keys so encode/decode can't drift via a typo.
@@ -174,13 +178,14 @@ class LevelProgressionStore {
     }
   }
 
-  /// Removes the snapshot for [projectId] (and its flow variant + shape mode).
-  /// No-op if absent.
+  /// Removes the snapshot for [projectId] (and its flow variant + capture
+  /// mode + object size). No-op if absent.
   Future<void> clear(String projectId) async {
     final box = await _open();
     await box.delete(projectId);
     await box.delete(_variantKey(projectId));
-    await box.delete(_shapeModeKey(projectId));
+    await box.delete(_modeKey(projectId));
+    await box.delete(_objectSizeKey(projectId));
   }
 
   // ── flow variant ───────────────────────────────────────────────────────────
@@ -212,25 +217,92 @@ class LevelProgressionStore {
     return CaptureFlowVariant.tryFromId(raw is String ? raw : null);
   }
 
-  // ── capture shape mode ───────────────────────────────────────────────────────
-  // The capture SHAPE MODE (full / meshy) for a project is project-scoped
-  // sequencing state, so it rides in this box as a sibling key — the same ONE
-  // durable location the flow variant uses, so the two can never disagree.
+  // ── capture mode ───────────────────────────────────────────────────────────
+  // Same reasoning as the flow variant, and deliberately the same box: the mode
+  // is project-scoped capture state that a RESUMED session must run under. It
+  // is chosen earlier than the variant (at project creation, not on the
+  // checklist), which is exactly why it cannot live on the navigation stack —
+  // resuming from the projects list never passes through the creation sheet.
 
-  /// The box key holding [projectId]'s capture-shape-mode id.
-  static String _shapeModeKey(String projectId) => '$projectId::shape_mode';
+  /// The box key holding [projectId]'s capture-mode id.
+  static String _modeKey(String projectId) => '$projectId::capture_mode';
 
-  /// Persists the chosen shape [mode] for [projectId].
-  Future<void> saveShapeMode(String projectId, CaptureShapeMode mode) async {
+  /// Persists the chosen capture [mode] for [projectId].
+  Future<void> saveMode(String projectId, CaptureMode mode) async {
     final box = await _open();
-    await box.put(_shapeModeKey(projectId), mode.id);
+    await box.put(_modeKey(projectId), mode.id);
   }
 
-  /// The persisted shape mode for [projectId]. Absent or unknown (every
-  /// pre-Meshy project) → [CaptureShapeMode.full]. Never throws.
-  Future<CaptureShapeMode> loadShapeMode(String projectId) async {
+  /// The persisted capture mode for [projectId]. Absent or unknown (every
+  /// project created before Meshy mode) → [CaptureMode.full]. Never throws.
+  Future<CaptureMode> loadMode(String projectId) async =>
+      await loadModeOrNull(projectId) ?? CaptureMode.full;
+
+  /// The persisted capture mode for [projectId], or null when none was ever
+  /// saved. Mirrors [loadVariantOrNull] so callers can tell "never chosen"
+  /// from an explicit choice of the default.
+  Future<CaptureMode?> loadModeOrNull(String projectId) async {
     final box = await _open();
-    final raw = box.get(_shapeModeKey(projectId));
-    return CaptureShapeMode.fromId(raw is String ? raw : null);
+    final raw = box.get(_modeKey(projectId));
+    return CaptureMode.tryFromId(raw is String ? raw : null);
+  }
+
+  // ── object size ──────────────────────────────────────────────────────────────
+  // Same project-scoped rationale as the mode: the object size is chosen at
+  // project creation (the create form), never on a screen a RESUMED session
+  // passes through, so it cannot live on the navigation stack. It is not carried
+  // on the server Project DTO either, so this is the one durable client-side home
+  // — and the upload flow needs it to send `POST /jobs objectSize` that matches
+  // the project's stored size (the server rejects a mismatch with SIZE_MISMATCH).
+
+  /// The box key holding [projectId]'s object-size wire value.
+  static String _objectSizeKey(String projectId) => '$projectId::object_size';
+
+  /// Persists the chosen object [size] for [projectId] (as its wire apiValue).
+  Future<void> saveObjectSize(String projectId, ObjectSize size) async {
+    final box = await _open();
+    await box.put(_objectSizeKey(projectId), size.apiValue);
+  }
+
+  /// The persisted object size for [projectId], or null when none was ever saved
+  /// (or the stored value is unknown). Lets callers keep their own default (the
+  /// upload flow falls back to 'medium') for a legacy/never-persisted project
+  /// instead of silently forcing one. Never throws.
+  Future<ObjectSize?> loadObjectSizeOrNull(String projectId) async {
+    final box = await _open();
+    final raw = box.get(_objectSizeKey(projectId));
+    if (raw is! String) return null;
+    for (final size in ObjectSize.values) {
+      if (size.apiValue == raw) return size;
+    }
+    return null;
+  }
+
+  /// Moves every project-scoped record from [fromId] to [toId].
+  ///
+  /// The offline-create path needs this: a project created without a network
+  /// gets a local `pending_…` id, and the capture mode (and later the flow
+  /// variant and progression) are stored under THAT id. When the outbox flushes
+  /// and the server issues the real id, records left behind under the temp id
+  /// would be invisible — a Meshy project would silently resume as a full
+  /// capture. Existing records at [toId] are not overwritten: the server id is
+  /// authoritative if it somehow already has state.
+  ///
+  /// Best-effort and never throws; a failed migration loses a preference, not
+  /// the capture.
+  Future<void> migrateProject(String fromId, String toId) async {
+    if (fromId == toId) return;
+    final box = await _open();
+    for (final (from, to) in [
+      (fromId, toId),
+      (_variantKey(fromId), _variantKey(toId)),
+      (_modeKey(fromId), _modeKey(toId)),
+      (_objectSizeKey(fromId), _objectSizeKey(toId)),
+    ]) {
+      final value = box.get(from);
+      if (value == null) continue;
+      if (box.get(to) == null) await box.put(to, value);
+      await box.delete(from);
+    }
   }
 }
