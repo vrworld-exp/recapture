@@ -11,18 +11,29 @@
 //   • keeping it pure is also what makes it unit-testable without S3, a Job, or
 //     a Mongo record — the processor owns all of that.
 //
-// ⚠ THE OUTPUT REQUIRES A MESHOPT DECODER ON THE CLIENT. `meshopt()` writes
-// EXT_meshopt_compression into `extensionsRequired`, and <model-viewer> ships
-// DRACO and KTX2 decoder locations by default but NOT a meshopt one — so
-// without client configuration GLTFLoader throws and every optimized model
-// shows the generic "couldn't load this model" error. The two places that must
-// be configured are `web/index.html` and `_lifecycleJs` in
-// lib/presentation/screens/projects/model_render_view.dart. Do not change the
-// meshopt pass without re-reading that note.
+// THE OUTPUT NEEDS NO CLIENT DECODER. Geometry is quantized
+// (KHR_mesh_quantization) and textures are WebP (EXT_texture_webp); three.js
+// and <model-viewer> support both natively, and those two are the only entries
+// this pipeline is allowed to put in `extensionsRequired`.
+//
+// meshopt() was REMOVED here deliberately. It writes EXT_meshopt_compression
+// into `extensionsRequired`, and <model-viewer> ships DRACO and KTX2 decoder
+// locations by default but NOT a meshopt one — so, the extension being
+// *required* rather than merely used, the loader rejected the whole file
+// instead of degrading, and every optimized model showed the generic "couldn't
+// load this model" error. Quantization keeps most of the geometry saving with
+// no such demand on the client; expect output roughly 1.5–2× the meshopt size
+// on geometry-heavy models, which is the accepted price. Do not reintroduce
+// meshopt unless every client registers a decoder.
+//
+// The meshopt DECODER is still registered on the READER: S3 already holds GLBs
+// written by the previous version of this pipeline, and every retry, re-import
+// or re-optimize path feeds one back in. Without it `io.readBinary()` throws
+// and surfaces as a misleading OPTIMIZE_PARSE_FAILED.
 import { Logger, NodeIO, type Document, type Transform } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
-import { dedup, meshopt, prune, textureCompress, weld } from '@gltf-transform/functions';
-import { MeshoptEncoder } from 'meshoptimizer';
+import { dedup, prune, quantize, textureCompress, weld } from '@gltf-transform/functions';
+import { MeshoptDecoder } from 'meshoptimizer';
 
 /** Knobs the caller (the processor) supplies. */
 export interface OptimizeGlbOptions {
@@ -57,8 +68,9 @@ export interface OptimizeGlbResult {
    * primitives of (max − min) — ignores every node transform in the scene, so
    * calling it "metres" is wrong for any model whose nodes carry scale, and a
    * warning built on it fires on perfectly correct models. It is measured
-   * BEFORE meshopt(), because meshopt quantizes the position accessors and the
-   * normalized min/max afterwards no longer describe the source geometry.
+   * BEFORE quantize(), because quantization rewrites the position accessors and
+   * the normalized min/max afterwards describe the encoding, not the source
+   * geometry.
    *
    * Diagnostics only: nothing branches on it.
    */
@@ -103,7 +115,7 @@ export class ModelOptimizeError extends Error {
  * `sharp` ships a PLATFORM-NATIVE binary, and a Render image whose install
  * resolved the wrong variant (or skipped optional deps) has a `sharp` that
  * throws on import. That must not turn the whole feature into a hard failure:
- * the mesh passes (dedup/weld/prune/meshopt) are most of the win and need no
+ * the mesh passes (dedup/weld/prune/quantize) are most of the win and need no
  * native code at all, so a missing encoder degrades to "textures untouched"
  * and is REPORTED, not thrown.
  *
@@ -124,13 +136,14 @@ async function loadSharp(): Promise<unknown | null> {
  * Runs the optimization pipeline over one GLB.
  *
  * PASS ORDER IS LOAD-BEARING:
- *   dedup → weld → prune → texture… → prune → meshopt
+ *   dedup → weld → prune → texture… → prune → quantize
  *
  * The SECOND prune is the one that is easy to omit and expensive to omit:
  * `textureCompress` writes new texture objects and leaves the originals in the
  * document, so without a prune afterwards the output carries BOTH copies and
- * can come out larger than the input. meshopt runs last because it re-encodes
- * every buffer view — anything that rewrites geometry after it would undo it.
+ * can come out larger than the input. quantize runs last for the same reason
+ * meshopt used to: it rewrites the position, normal and texcoord accessors, so
+ * anything that touches geometry after it would undo it.
  */
 export async function optimizeGlb(
   input: Uint8Array,
@@ -144,11 +157,13 @@ export async function optimizeGlb(
     );
   }
 
-  await MeshoptEncoder.ready;
+  // Decoder, not encoder: nothing here WRITES meshopt any more, but the reader
+  // must still accept the meshopt-compressed GLBs the old pipeline left in S3.
+  await MeshoptDecoder.ready;
 
   const io = new NodeIO()
     .registerExtensions(ALL_EXTENSIONS)
-    .registerDependencies({ 'meshopt.encoder': MeshoptEncoder })
+    .registerDependencies({ 'meshopt.decoder': MeshoptDecoder })
     // glTF-Transform's default logger writes straight to `console`, and every
     // pass narrates itself ("prune: Removed types…"). Worker output is
     // one-JSON-object-per-line through workerLog (AGENTS.md), so a library
@@ -167,6 +182,8 @@ export async function optimizeGlb(
     );
   }
 
+  dropMeshoptExtension(doc);
+
   const sharp = await loadSharp();
   const degraded: OptimizeDegradation[] = [];
 
@@ -174,6 +191,7 @@ export async function optimizeGlb(
     dedup(), // merge duplicate materials/accessors
     weld(), // merge split vertices (Meshy leaves a lot)
     prune(), // drop unused nodes + orphan textures
+    cullOpaqueBackfaces(), // Meshy marks everything doubleSided; closed meshes pay twice
   ];
 
   if (sharp) {
@@ -220,12 +238,14 @@ export async function optimizeGlb(
     );
   }
 
-  // BEFORE meshopt: it quantizes the position accessors, after which
+  // BEFORE quantize: it rewrites the position accessors, after which
   // getMinNormalized/getMaxNormalized describe the encoding, not the geometry.
   const localBboxLongestAxis = measureLocalBboxLongestAxis(doc);
 
   try {
-    await doc.transform(meshopt({ encoder: MeshoptEncoder, level: 'high' }));
+    // Defaults (quantizePosition 14). Anything coarser produces visible
+    // faceting on curved surfaces at the handheld AR scale these are viewed at.
+    await doc.transform(quantize());
   } catch {
     throw new ModelOptimizeError(
       ModelOptimizeErrorCode.PARSE_FAILED,
@@ -243,6 +263,47 @@ export async function optimizeGlb(
     overBudget: outputBytes > opts.budgetBytes,
     localBboxLongestAxis,
     degraded,
+  };
+}
+
+/**
+ * Detaches EXT_meshopt_compression from a document that arrived carrying it.
+ *
+ * Reading a legacy GLB DECODES the geometry but leaves the extension attached
+ * to the Document, and glTF-Transform re-encodes on write from that attachment
+ * alone. That is two bugs at once: the writer reaches for an encoder we
+ * deliberately no longer register (a raw TypeError out of `writeBinary`, which
+ * escapes as a RETRYABLE error and retries forever), and if it succeeded it
+ * would put EXT_meshopt_compression straight back into `extensionsRequired` —
+ * re-creating the exact failure this change exists to remove.
+ *
+ * Nothing else registered by ALL_EXTENSIONS is touched: KHR_materials_*,
+ * KHR_texture_transform and friends are all decoder-free and must survive.
+ */
+function dropMeshoptExtension(doc: Document): void {
+  for (const extension of doc.getRoot().listExtensionsUsed()) {
+    if (extension.extensionName === 'EXT_meshopt_compression') extension.dispose();
+  }
+}
+
+/**
+ * Turns backface culling back ON for OPAQUE materials.
+ *
+ * Meshy emits `doubleSided: true` on everything and nothing downstream clears
+ * it. On a closed mesh that buys no visible geometry and roughly doubles
+ * fragment cost on low-end Android, which is exactly the device this pipeline
+ * exists for.
+ *
+ * OPAQUE ONLY, deliberately. A BLEND or MASK material is how leaves, thin
+ * plastics, cellophane and glass are authored, and those legitimately need both
+ * faces — culling them would delete visible surfaces, which is a far worse bug
+ * than the fill cost this pass saves.
+ */
+function cullOpaqueBackfaces(): Transform {
+  return (doc: Document): void => {
+    for (const material of doc.getRoot().listMaterials()) {
+      if (material.getAlphaMode() === 'OPAQUE') material.setDoubleSided(false);
+    }
   };
 }
 

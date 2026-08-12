@@ -20,6 +20,10 @@ import path from 'node:path';
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import mongoose, { Types } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { Document, Logger, NodeIO, getBounds } from '@gltf-transform/core';
+import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { dedup, meshopt, prune, weld } from '@gltf-transform/functions';
+import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 
 import { env } from '@/config/env';
 import { s3Client } from '@/config/s3';
@@ -369,6 +373,85 @@ describe('modelOptimizationProcessor — terminal failures', () => {
   });
 });
 
+/**
+ * Reads produced bytes back into a Document.
+ *
+ * Registers the meshopt DECODER so this helper can also read the legacy
+ * meshopt-compressed input the round-trip test builds — asserting on the JSON
+ * chunk as a string would not survive a buffer that happens to contain the
+ * extension name.
+ */
+async function readOutput(bytes: Uint8Array): Promise<Document> {
+  await MeshoptDecoder.ready;
+  const io = new NodeIO()
+    .registerExtensions(ALL_EXTENSIONS)
+    .registerDependencies({ 'meshopt.decoder': MeshoptDecoder })
+    .setLogger(new Logger(Logger.Verbosity.SILENT));
+  return io.readBinary(bytes);
+}
+
+/** World-space bounds of the default scene — node transforms applied. */
+function sceneBounds(doc: Document): { min: number[]; max: number[] } {
+  const scene = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0]!;
+  return getBounds(scene);
+}
+
+/**
+ * The fixture as the PREVIOUS pipeline version would have written it.
+ *
+ * The mesh passes are replayed too, not just meshopt: meshopt() runs quantize()
+ * internally and quantize refuses a primitive with no POSITION, which is
+ * exactly what prune() removes from this fixture. Encoding the raw bytes would
+ * throw here for a reason that has nothing to do with what this is testing.
+ */
+async function meshoptEncodedFixture(): Promise<Uint8Array> {
+  await MeshoptEncoder.ready;
+  const io = new NodeIO()
+    .registerExtensions(ALL_EXTENSIONS)
+    .registerDependencies({ 'meshopt.encoder': MeshoptEncoder })
+    .setLogger(new Logger(Logger.Verbosity.SILENT));
+  const doc = await io.readBinary(FIXTURE);
+  await doc.transform(
+    dedup(),
+    weld(),
+    prune(),
+    meshopt({ encoder: MeshoptEncoder, level: 'high' })
+  );
+  return io.writeBinary(doc);
+}
+
+/**
+ * Two triangles, two materials: one OPAQUE and one BLEND, BOTH doubleSided —
+ * the shape Meshy emits. The fixture GLB cannot exercise this: all 24 of its
+ * materials are already single-sided and opaque.
+ */
+async function twoMaterialGlb(): Promise<Uint8Array> {
+  const doc = new Document();
+  const buffer = doc.createBuffer();
+  const scene = doc.createScene('Scene');
+  doc.getRoot().setDefaultScene(scene);
+
+  for (const alphaMode of ['OPAQUE', 'BLEND'] as const) {
+    const position = doc
+      .createAccessor(`POSITION_${alphaMode}`)
+      .setType('VEC3')
+      .setArray(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]))
+      .setBuffer(buffer);
+    const material = doc
+      .createMaterial(`mat_${alphaMode}`)
+      .setAlphaMode(alphaMode)
+      .setDoubleSided(true);
+    const prim = doc.createPrimitive().setAttribute('POSITION', position).setMaterial(material);
+    const mesh = doc.createMesh(`mesh_${alphaMode}`).addPrimitive(prim);
+    scene.addChild(doc.createNode(`node_${alphaMode}`).setMesh(mesh));
+  }
+
+  return new NodeIO()
+    .registerExtensions(ALL_EXTENSIONS)
+    .setLogger(new Logger(Logger.Verbosity.SILENT))
+    .writeBinary(doc);
+}
+
 describe('optimizeGlb', () => {
   it('shrinks a real GLB and reports the numbers', async () => {
     const result = await optimizeGlb(FIXTURE, {
@@ -379,24 +462,101 @@ describe('optimizeGlb', () => {
     expect(result.inputBytes).toBe(FIXTURE.byteLength);
     expect(result.outputBytes).toBeLessThan(result.inputBytes);
     expect(result.overBudget).toBe(false);
-    // Measured BEFORE meshopt quantizes the positions, so it still describes
+    // Measured BEFORE quantize() rewrites the positions, so it still describes
     // the source geometry.
     expect(result.localBboxLongestAxis).toBeGreaterThan(0);
     expect(result.degraded).toEqual([]);
   });
 
-  it('emits EXT_meshopt_compression as REQUIRED — the client must have a decoder', async () => {
+  it('requires KHR_mesh_quantization and NOTHING that needs a decoder', async () => {
     const { bytes } = await optimizeGlb(FIXTURE, {
       maxInputBytes: env.MODEL_OPTIMIZE_MAX_INPUT_BYTES,
       budgetBytes: env.MODEL_OPTIMIZE_THRESHOLD_BYTES,
     });
-    const json = Buffer.from(bytes).toString('latin1');
-    // This is WHY web/index.html and _lifecycleJs must set
-    // meshoptDecoderLocation. If this assertion ever stops holding, that
-    // configuration is no longer load-bearing — and if it holds while the
-    // configuration is missing, every optimized model fails to load.
-    expect(json).toContain('extensionsRequired');
-    expect(json).toContain('EXT_meshopt_compression');
+
+    const required = (await readOutput(bytes))
+      .getRoot()
+      .listExtensionsRequired()
+      .map((e) => e.extensionName);
+
+    // THE bug this pipeline shipped: EXT_meshopt_compression in
+    // `extensionsRequired` makes <model-viewer> — which enables no meshopt
+    // decoder by default — reject the whole file rather than degrade, so every
+    // optimized model showed "couldn't load this model". Quantization and WebP
+    // are both native in three.js and <model-viewer>; nothing else may appear
+    // here without a client change to match.
+    expect(required).toContain('KHR_mesh_quantization');
+    expect(required).not.toContain('EXT_meshopt_compression');
+    expect(required.sort()).toEqual(['EXT_texture_webp', 'KHR_mesh_quantization']);
+    expect(Buffer.from(bytes).toString('latin1')).not.toContain('EXT_meshopt_compression');
+  });
+
+  it('preserves world-space size and pivot through quantization', async () => {
+    const { bytes } = await optimizeGlb(FIXTURE, {
+      maxInputBytes: env.MODEL_OPTIMIZE_MAX_INPUT_BYTES,
+      budgetBytes: env.MODEL_OPTIMIZE_THRESHOLD_BYTES,
+    });
+
+    // quantize() is free to bake a compensating scale into the node transforms
+    // to fit positions into the quantized range. That is fine INVISIBLY — the
+    // rendered model must be the same size in the same place. Local accessor
+    // bounds would not catch a mismatch here; world bounds are the check.
+    const before = sceneBounds(await readOutput(FIXTURE));
+    const after = sceneBounds(await readOutput(bytes));
+    const span = Math.max(...before.max.map((v, i) => v - (before.min[i] as number)));
+
+    for (let axis = 0; axis < 3; axis++) {
+      expect(Math.abs((after.min[axis] as number) - (before.min[axis] as number))).toBeLessThan(
+        span * 0.001
+      );
+      expect(Math.abs((after.max[axis] as number) - (before.max[axis] as number))).toBeLessThan(
+        span * 0.001
+      );
+    }
+  });
+
+  it('re-optimizes a GLB the PREVIOUS meshopt pipeline produced', async () => {
+    // S3 is full of these. A retry, a re-import or a re-optimize feeds one
+    // straight back in, and a reader with no meshopt decoder registered throws
+    // on read — surfacing as a misleading OPTIMIZE_PARSE_FAILED on a file this
+    // service itself wrote.
+    const legacy = await meshoptEncodedFixture();
+    expect(
+      Buffer.from(legacy).toString('latin1')
+    ).toContain('EXT_meshopt_compression');
+
+    const result = await optimizeGlb(legacy, {
+      maxInputBytes: env.MODEL_OPTIMIZE_MAX_INPUT_BYTES,
+      budgetBytes: env.MODEL_OPTIMIZE_THRESHOLD_BYTES,
+    });
+
+    const required = (await readOutput(result.bytes))
+      .getRoot()
+      .listExtensionsRequired()
+      .map((e) => e.extensionName);
+    // Decoded on the way in, and NOT re-encoded on the way out.
+    expect(required).not.toContain('EXT_meshopt_compression');
+    expect(required).toContain('KHR_mesh_quantization');
+  });
+
+  it('culls backfaces on OPAQUE materials and leaves BLEND alone', async () => {
+    const input = await twoMaterialGlb();
+
+    const { bytes } = await optimizeGlb(input, {
+      maxInputBytes: env.MODEL_OPTIMIZE_MAX_INPUT_BYTES,
+      budgetBytes: env.MODEL_OPTIMIZE_THRESHOLD_BYTES,
+    });
+
+    const materials = (await readOutput(bytes)).getRoot().listMaterials();
+    const opaque = materials.find((m) => m.getAlphaMode() === 'OPAQUE');
+    const blend = materials.find((m) => m.getAlphaMode() === 'BLEND');
+
+    // Meshy marks everything doubleSided; on a closed opaque mesh that is pure
+    // fragment cost on low-end Android.
+    expect(opaque?.getDoubleSided()).toBe(false);
+    // …but a transparent material is how leaves and thin plastics are authored,
+    // and culling those DELETES visible surfaces.
+    expect(blend?.getDoubleSided()).toBe(true);
   });
 
   it('reports overBudget against the budget it was GIVEN, not a hardcoded one', async () => {
