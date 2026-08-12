@@ -282,8 +282,8 @@ class _ThumbPlaceholder extends StatelessWidget {
 ///
 /// Uses the BINARY divisor (1024), which is the same one
 /// MODEL_OPTIMIZE_THRESHOLD_BYTES is expressed in on the backend. That is not
-/// cosmetic: mix the two and an 8,200,000-byte model reads "8.2 MB" while the
-/// server, measuring against 8 MiB = 8,388,608, still calls it below threshold
+/// cosmetic: mix the two and a 5,100,000-byte model reads "5.1 MB" while the
+/// server, measuring against 5 MiB = 5,242,880, still calls it below threshold
 /// and shows no button — a display that contradicts the affordance next to it.
 ///
 /// Returns null rather than "0 B" for an absent size: absent means unknown.

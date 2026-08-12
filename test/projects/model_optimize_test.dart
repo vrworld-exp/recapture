@@ -32,10 +32,16 @@ import 'package:recapture/domain/entities/project_model.dart';
 import 'package:recapture/presentation/screens/projects/model_history_screen.dart';
 import 'repo_fake_defaults.dart';
 
-/// 8 MiB — the backend's MODEL_OPTIMIZE_THRESHOLD_BYTES default, expressed the
+/// 5 MiB — the backend's MODEL_OPTIMIZE_THRESHOLD_BYTES default, expressed the
 /// same BINARY way. Used here only to build believable fixtures; the client
 /// never applies the rule itself.
-const _eightMiB = 8 * 1024 * 1024;
+const _thresholdBytes = 5 * 1024 * 1024;
+
+/// The two sides of that gate. The server's verdict is what actually decides
+/// the button — these exist so the fixtures below sit on the REAL boundary
+/// rather than a number that stopped meaning anything when the threshold moved.
+const _justUnderThreshold = 5138022; // 4.9 MiB
+const _justOverThreshold = 5347738; // 5.1 MiB
 
 class _FakeRepo
     with
@@ -188,6 +194,26 @@ void main() {
       await _load(tester);
 
       expect(_optimizeButton, findsNothing);
+    });
+
+    testWidgets('4.9 MiB → no button, 5.1 MiB → button', (tester) async {
+      // The 5 MiB gate as the owner meets it. The THRESHOLD itself is the
+      // server's (see tests/model-optimization.test.ts for the truth table);
+      // what this pins down is the pairing the row is responsible for — the
+      // size it prints and the affordance it puts next to it must describe the
+      // same model. A row reading "4.9 MB" beside an Optimize button, or
+      // "5.1 MB" without one, is the bug this catches.
+      final repo = _FakeRepo([
+        _model(id: 'under', canOptimize: false, sizeBytes: _justUnderThreshold),
+        _model(id: 'over', canOptimize: true, sizeBytes: _justOverThreshold),
+      ]);
+      await tester.pumpWidget(_app(repo));
+      await _load(tester);
+
+      expect(find.textContaining('4.9 MB'), findsOneWidget);
+      expect(find.textContaining('5.1 MB'), findsOneWidget);
+      // Exactly one of the two rows offers the action — the over-threshold one.
+      expect(_optimizeButton, findsOneWidget);
     });
 
     testWidgets('an OPT row shows the badge and never the button',
@@ -368,7 +394,7 @@ void main() {
         'source': 'meshy',
         'status': 'SUCCEEDED',
         'artifacts': {'glb': 'https://cdn/m1.glb'},
-        'glbBytes': _eightMiB + 1,
+        'glbBytes': _thresholdBytes + 1,
         'canOptimize': true,
         'createdAt': '2026-08-06T11:42:00.000Z',
       })!;

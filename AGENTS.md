@@ -190,9 +190,11 @@ do not remove it).
   - eligibility is the SERVER's verdict, shipped as `canOptimize` on both DTOs.
     The client never re-derives it. `artifacts.glbBytes` is the only input, and
     **absent means UNKNOWN, not small** — no size, no button.
-  - `MODEL_OPTIMIZE_THRESHOLD_BYTES` is **binary** (8 MiB). The client's
+  - `MODEL_OPTIMIZE_THRESHOLD_BYTES` is **binary** (5 MiB). The client's
     `formatBytes` uses the same 1024 divisor deliberately; mix them and a model
-    reads "8.0 MB" with no button beside it.
+    reads "5.0 MB" with no button beside it. It is **advisory** — it gates the
+    button and the route the button calls, and nothing else. No upload, save or
+    scene load is refused for crossing it.
 - ⚠ **`meshopt()` puts `EXT_meshopt_compression` in `extensionsRequired`, and
   `<model-viewer>` has NO default meshopt decoder location** (it does have DRACO
   and KTX2 ones). Unconfigured, `GLTFLoader` throws and EVERY optimized model

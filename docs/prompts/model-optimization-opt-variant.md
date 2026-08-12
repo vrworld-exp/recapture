@@ -4,6 +4,12 @@
 **Codebases:** `recapture-api/` (Node/TS backend + worker) and the Flutter client at the repo root.
 **Read `AGENTS.md` first.** Where this prompt disagrees with a foundational convention, AGENTS.md wins.
 
+> **Superseded in one place:** this prompt specifies an **8 MB** threshold throughout
+> (§1, §4, §11). The shipped default is now **5 MiB** — `MODEL_OPTIMIZE_THRESHOLD_BYTES`
+> in `recapture-api/src/config/env.ts`. Everything else below still describes the
+> feature as built; the number is the only thing that moved. This file is kept as the
+> historical prompt, not edited into a spec.
+
 ---
 
 ## 1. What we are building, in one paragraph

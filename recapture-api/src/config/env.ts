@@ -168,16 +168,21 @@ const envSchema = z.object({
    * Optimize button, and the server's own verdict (`canOptimize`) is what the
    * client renders, so the two can never disagree.
    *
-   * BINARY, NOT DECIMAL: 8 MiB = 8 * 1024 * 1024 = 8,388,608 bytes. "8 MB" is
+   * BINARY, NOT DECIMAL: 5 MiB = 5 * 1024 * 1024 = 5,242,880 bytes. "5 MB" is
    * ambiguous and the client formats displayed sizes with the SAME 1024 divisor
-   * — mix the two and a 8,200,000-byte model reads "8.2 MB" with no button, or
-   * "7.8 MB" with one.
+   * — mix the two and a 5,100,000-byte model reads "5.1 MB" with no button, or
+   * "4.9 MB" with one.
+   *
+   * ADVISORY ONLY. Nothing uploads, saves or loads worse for being over it: the
+   * only things it gates are the Optimize button and the route that button
+   * calls. The hard limits live elsewhere (MODEL_OPTIMIZE_MAX_INPUT_BYTES is
+   * the one that actually refuses work).
    */
   MODEL_OPTIMIZE_THRESHOLD_BYTES: z.coerce
     .number()
     .int()
     .positive()
-    .default(8 * 1024 * 1024),
+    .default(5 * 1024 * 1024),
   /**
    * Hard ceiling on the GLB the optimizer will even open (bytes).
    *

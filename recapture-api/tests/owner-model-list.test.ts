@@ -36,7 +36,7 @@ import { listOwnerProjectModels } from '@/services/projectModelsService';
 const app = createApp();
 let mongod: MongoMemoryServer;
 
-/** Comfortably over MODEL_OPTIMIZE_THRESHOLD_BYTES (8 MiB). */
+/** Comfortably over MODEL_OPTIMIZE_THRESHOLD_BYTES (5 MiB). */
 const BIG = 21 * 1024 * 1024;
 /** Comfortably under it. */
 const SMALL = 2 * 1024 * 1024;

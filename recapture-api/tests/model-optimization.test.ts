@@ -45,10 +45,19 @@ import {
 const app = createApp();
 let mongod: MongoMemoryServer;
 
-/** Comfortably over MODEL_OPTIMIZE_THRESHOLD_BYTES (8 MiB). */
+/** Comfortably over MODEL_OPTIMIZE_THRESHOLD_BYTES (5 MiB). */
 const BIG = 21 * 1024 * 1024;
 /** Comfortably under it. */
 const SMALL = 2 * 1024 * 1024;
+/**
+ * The two sides of the 5 MiB gate, a tenth of a MiB out on each side.
+ *
+ * Written against the literal rather than `env.MODEL_OPTIMIZE_THRESHOLD_BYTES ±
+ * 1` on purpose: this pair is what pins the threshold to the number the copy and
+ * the docs claim, so a change to the default has to come here and be seen.
+ */
+const JUST_UNDER = Math.round(4.9 * 1024 * 1024);
+const JUST_OVER = Math.round(5.1 * 1024 * 1024);
 
 beforeAll(async () => {
   mongod = await MongoMemoryServer.create();
@@ -180,6 +189,20 @@ describe('canOptimizeModel — the truth table', () => {
     const { model, project } = await seedModel(owner.id, {}, { glbBytes: SMALL });
     const ids = await optimizedSourceIdsFor(project.id as string);
     expect(canOptimizeModel(model, ids)).toBe(false);
+  });
+
+  it('false at 4.9 MiB — just under the 5 MiB gate, no button', async () => {
+    const owner = await makeUser('USER');
+    const { model, project } = await seedModel(owner.id, {}, { glbBytes: JUST_UNDER });
+    const ids = await optimizedSourceIdsFor(project.id as string);
+    expect(canOptimizeModel(model, ids)).toBe(false);
+  });
+
+  it('true at 5.1 MiB — just over the 5 MiB gate, button shown', async () => {
+    const owner = await makeUser('USER');
+    const { model, project } = await seedModel(owner.id, {}, { glbBytes: JUST_OVER });
+    const ids = await optimizedSourceIdsFor(project.id as string);
+    expect(canOptimizeModel(model, ids)).toBe(true);
   });
 
   it('false at EXACTLY the threshold — the rule is strictly greater-than', async () => {
