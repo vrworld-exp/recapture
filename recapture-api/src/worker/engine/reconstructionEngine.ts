@@ -73,7 +73,7 @@ export interface ReconstructionEngine {
 // and DETERMINISTIC artifact keys (same job ⇒ same keys, so a re-run
 // overwrites instead of duplicating — the idempotency contract by
 // construction). Keys mirror the raw bundle's scope under the artifacts
-// bucket: {env}/{userId}/{projectId}/{jobId}/model.glb etc.
+// bucket: {env}/{projectSlug}_{projectId}/{jobId}/model.glb etc.
 
 const STUB_PROGRESS_MILESTONES = [25, 50, 75] as const;
 

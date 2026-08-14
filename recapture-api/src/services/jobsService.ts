@@ -20,7 +20,7 @@
 // `keyPrefix` (+ a template documenting the rule) that the initiate endpoint
 // must enforce as a containment check. The prefix and manifest key come from
 // the CANONICAL key utility (@/utils/s3Keys) — the single source of truth for
-// the {env}/{userId}/{projectId}/{jobId}/… scheme — never inline templates.
+// the {env}/{projectSlug}_{projectId}/{jobId}/… scheme — never inline templates.
 import { Types } from 'mongoose';
 import { Job, type IJob } from '@/models/Job';
 import { Project } from '@/models/Project';
@@ -206,7 +206,13 @@ export async function createJob(
   // single document write (atomic — a failure persists nothing). Both keys
   // come from the canonical builder ({env} is config-driven there).
   const jobId = new Types.ObjectId();
-  const keyScope = { userId, projectId: input.projectId, jobId: jobId.toHexString() };
+  const keyScope = {
+    // RAW name — buildJobKeyPrefix slugifies it. The project doc is already in
+    // scope (read above for objectSize), so this costs no extra query.
+    projectName: project.name,
+    projectId: input.projectId,
+    jobId: jobId.toHexString(),
+  };
   const rawPrefix = buildJobKeyPrefix(keyScope);
 
   try {

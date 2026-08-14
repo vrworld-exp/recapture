@@ -186,7 +186,7 @@ Follow the secrets rules in `AGENTS.md`.
 - **`optimize(input)`** — download each `modelUrl`/`thumbnailUrl` from Meshy
   (they expire!) and `PutObject` into `BUCKET_ARTIFACTS` under the deterministic
   keys the stub already uses:
-  `{env}/{userId}/{projectId}/{jobId}/model.glb`, `model.usdz`, `preview.jpg`.
+  `{env}/{projectSlug}_{projectId}/{jobId}/model.glb`, `model.usdz`, `preview.jpg`.
   Return `EngineArtifacts` with `glbKey`, `usdzKey?`, `previewImageKey`, and
   `cdnUrls` built from `CLOUDFRONT_BASE`. Overwrite (never append) so a re-run is
   idempotent.

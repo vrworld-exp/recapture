@@ -120,7 +120,12 @@ export interface UploadInfo {
   /** S3 bucket name for raw captures — always 'msxr-raw-captures' */
   rawBucket: string;
 
-  /** S3 key prefix for this job's raw files, e.g. 'prod/{userId}/{projectId}/{jobId}/' */
+  /**
+   * S3 key prefix for this job's raw files, e.g.
+   * 'prod/{projectSlug}_{projectId}/{jobId}/'. Written ONCE at job creation from
+   * the canonical builder and read back everywhere after — never rebuilt, so a
+   * change to the key scheme leaves existing jobs pointing at their own objects.
+   */
   rawPrefix: string;
 
   /** S3 key for the capture_manifest.json file */

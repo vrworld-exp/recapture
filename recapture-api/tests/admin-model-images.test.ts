@@ -78,7 +78,7 @@ async function makeProject(ownerId: string, status: string) {
 /** A finalized (QUEUED) job with the canonical prefix persisted; returns the prefix. */
 async function makeFinalizedJob(ownerId: string, projectId: string, state = 'QUEUED') {
   const jobId = new Types.ObjectId();
-  const prefix = buildJobKeyPrefix({ userId: ownerId, projectId, jobId: jobId.toHexString() });
+  const prefix = buildJobKeyPrefix({ projectName: 'Model images fixture', projectId, jobId: jobId.toHexString() });
   const job = await Job.create({
     _id: jobId,
     projectId: new Types.ObjectId(projectId),

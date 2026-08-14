@@ -610,6 +610,58 @@ If you tell me where the CloudFront/S3 config lives in this repo — Terraform, 
 
 
 
+///////////////  After changing AWS things ----------------------------->>>>>>>>>>>>>>>
+
+
+
+
+Done. Acceptance: npm run type-check clean, npm run lint clean, npm test → 673 passed, 7 failed — all 7 failures are in admin-model-variants.test.ts and are pre-existing (I verified them by stashing my changes: identical 7 failures on a clean tree; they're about a missing variant field on the models DTO, unrelated to keys).
+
+1. Before/after, real example
+
+Project "Brass Vase" (665f…54321), owner 665f…45678, job 665f…def12, prod:
+
+before  prod/665f1c2b8a9d3e0012345678/665f1c2b8a9d3e0087654321/665f1c2b8a9d3e00abcdef12/images/EYE/eye_0001.jpg
+after   prod/brass-vase_665f1c2b8a9d3e0087654321/665f1c2b8a9d3e00abcdef12/images/EYE/eye_0001.jpg
+
+Edge case — project named "🗿🗿" (slug empty ⇒ bare id, never a leading _):
+
+after   prod/665f1c2b8a9d3e0087654321/665f1c2b8a9d3e00abcdef12/capture_manifest.json
+
+The end-to-end assertion in jobs-create.test.ts drives the real POST /jobs and pins dev/brass-vase_${projectId}/${jobId}/.
+
+2. Files changed
+
+Production code (3 functional, 3 comment-only)
+- src/utils/s3Keys.ts — new exported projectNameSlug(); new private projectSegment(); JobKeyScope.userId → projectName (raw); buildJobKeyPrefix emits the new root; ParsedImageKey now standalone with projectSlug + projectId; parseImageKey rewritten for 6 segments with last-underscore split; header docblock rewritten.
+- src/services/jobsService.ts — the one production call site: keyScope now { projectName: project.name, projectId, jobId } (uses the project doc already read at ~L176 — no new query); header comment.
+- src/models/types/job.types.ts — rawPrefix doc comment + a note that it is written once and never rebuilt.
+- src/utils/avatarKeys.ts, src/worker/engine/reconstructionEngine.ts — comment-only; both quoted the old capture format. No avatar code touched.
+
+Docs
+- AGENTS.md — new §S3 key scheme (capture jobs) under Conventions (format, {env} firewall, slug-is-a-label rule, no {userId}, last-underscore parse, both-buckets-identical, build-once/persist rule, client never builds keys); the avatar bullet's "7-segment" → "6-segment" plus the note that the two spaces diverge on {userId} on purpose.
+- recapture-api/docs/meshy-integration.md, .../meshy-integration-implementation-prompt.md — key-format strings. README.md has no key references; the Flutter recapture/{projectId}/{jobId}/… paths are local device storage, not S3.
+
+Tests — all 12 listed files, plus two the prompt didn't list: auto-model-generation.test.ts (2 buildJobKeyPrefix call sites) and jobs-create.test.ts (hardcoded the old prefix inline at L98). New coverage in s3-keys.test.ts: slugifier (spaces, NFKD + both é forms, emoji-only, leading digits, / and \, 100-char maxlength, underscores, determinism ×5), {env}-is-first-segment on every builder, round-trip incl. a slug-less key, the last-underscore split with a_b_c__d, and old-7-segment → clean ok:false. admin-delete-project.test.ts now records (bucket, prefix) pairs and asserts both buckets are swept under the identical prefix, which equals the job's persisted rawPrefix.
+
+3. No path rebuilds a prefix for an already-created job — confirmed
+
+buildJobKeyPrefix / buildManifestKey have exactly one production call site: jobsService.ts:213/234, inside createJob, before the Job.create. Every other consumer reads job.upload.rawPrefix / job.upload.manifestKey: captureProcessingProcessor, captureProcessingPipeline, meshyModelProcessor, modelOptimizationProcessor, projectModelsService (presign/photo-bytes), onDemandModelGenerationService, jobsService finalize + export, and adminProjectsService (soft-delete move, export manifest, hard-delete sweep). Old jobs keep pointing at their own objects; no migration.
+
+Non-goals verified: meshyModelProcessor.ts:51 and modelOptimizationProcessor.ts:65 both build ${rawPrefix}models/${modelId}/ — derived, unchanged. avatarKeys.ts keeps {userId}, its own SEGMENT_RE and parser. No Flutter code changed — upload_flow.dart composes ${keyPrefix}${rel} from the server-supplied plan and asserts containment; it never builds a key.
+
+4. Things that contradict the prompt
+
+1. Segment count: the prompt says 5, it's 6. {env}/{slug}_{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg — the prompt's own format string has six /-separated parts (7 minus {userId}). Implemented as 6; the failure message reads "must have exactly 6 segments".
+2. Slug edge-stripping had to cover _, not just -. Underscore must survive slugification (your last-underscore test case requires it), so a name like _foo would produce _foo_<id> and throw S3KeyError on requireSegment. I strip leading/trailing [-_], a superset of the stated rule that preserves its stated reason (SEGMENT_RE needs an alphanumeric first char). Also: . does not survive slugification (collapses to -), since a leading dot is how .. starts.
+3. ParsedImageKey can no longer extend JobKeyScope. The scope now carries the raw projectName, which is not recoverable from a key (slugification is one-way). It is a standalone interface with projectSlug + projectId. Round-trip therefore means parseImageKey(buildImageKey(x)).projectSlug === projectNameSlug(x.projectName), which is what the test asserts.
+4. Two more test files needed updating beyond the listed twelve (auto-model-generation.test.ts, jobs-create.test.ts).
+5. admin-model-variants.test.ts is broken on dev already — 7 of 8 tests fail before my change. Worth a separate look; I left it alone.
+
+✻ Cogitated for 15m 30s
+
+──────────────────────────────────────────────────────────────────>>>>>>>>>>>>>>>>
+
 
 
 

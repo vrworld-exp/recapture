@@ -85,7 +85,7 @@ async function makeCaptureJob() {
   });
   const jobId = new Types.ObjectId();
   const prefix = buildJobKeyPrefix({
-    userId: ownerId.toHexString(),
+    projectName: project.name,
     projectId: project.id as string,
     jobId: jobId.toHexString(),
   });
@@ -121,7 +121,7 @@ async function addNewerCaptureJob(
 ) {
   const jobId = new Types.ObjectId();
   const prefix = buildJobKeyPrefix({
-    userId: ownerId.toHexString(),
+    projectName: 'Auto test',
     projectId: project.id,
     jobId: jobId.toHexString(),
   });

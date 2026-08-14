@@ -21,6 +21,7 @@ import {
   buildJobKeyPrefix,
   buildManifestKey,
   parseImageKey,
+  projectNameSlug,
   CAPTURE_LEVEL_SEGMENTS,
 } from '@/utils/s3Keys';
 
@@ -428,12 +429,23 @@ describe('canonical key convention — end-to-end agreement with @/utils/s3Keys'
       .set(auth)
       .send({ projectId: p.id, objectSize: 'medium', expectedFilesCount: 49 });
     expect(created.status).toBe(201);
-    const scope = { userId, projectId: p.id as string, jobId: created.body.job.id as string };
+    const scope = {
+      projectName: p.name,
+      projectId: p.id as string,
+      jobId: created.body.job.id as string,
+    };
 
     // The route's advertised plan IS the utility's output — never a divergent
     // inline template.
     expect(created.body.uploadPlan.keyPrefix).toBe(buildJobKeyPrefix(scope));
     expect(created.body.uploadPlan.manifestKey).toBe(buildManifestKey(scope));
+
+    // …and that output roots at the project-name-labelled segment, with no
+    // {userId} anywhere in the path.
+    expect(created.body.uploadPlan.keyPrefix).toBe(
+      `dev/brass-vase_${p.id as string}/${scope.jobId}/`
+    );
+    expect(created.body.uploadPlan.keyPrefix).not.toContain(userId);
 
     // Every canonically built image key is contained by the plan prefix and
     // round-trips through the strict parser.
@@ -442,7 +454,14 @@ describe('canonical key convention — end-to-end agreement with @/utils/s3Keys'
       expect(levelKey.startsWith(created.body.uploadPlan.keyPrefix)).toBe(true);
       expect(parseImageKey(levelKey)).toEqual({
         ok: true,
-        value: { env: 'dev', ...scope, level, filename: 'frame_0001.jpg' },
+        value: {
+          env: 'dev',
+          projectSlug: projectNameSlug(scope.projectName),
+          projectId: scope.projectId,
+          jobId: scope.jobId,
+          level,
+          filename: 'frame_0001.jpg',
+        },
       });
     }
 

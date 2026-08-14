@@ -82,7 +82,7 @@ async function makeFinalizedJob(
   { state = 'QUEUED', expectedFilesCount = 49 }: { state?: string; expectedFilesCount?: number } = {}
 ) {
   const jobId = new Types.ObjectId();
-  const scope = { userId: ownerId, projectId, jobId: jobId.toHexString() };
+  const scope = { projectName: 'Admin projects fixture', projectId, jobId: jobId.toHexString() };
   const prefix = buildJobKeyPrefix(scope);
   return Job.create({
     _id: jobId,

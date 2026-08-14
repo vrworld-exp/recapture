@@ -138,7 +138,9 @@ do not remove it).
 - **Profile pictures: the DB stores the S3 KEY, the API derives the URL.**
   `User.avatarKey` holds `{env}/avatars/{userId}/{uuid}.{jpg|png}`
   (`utils/avatarKeys.ts` — a SEPARATE key space from the capture-job
-  `utils/s3Keys.ts`, whose parser is strict about its own 7-segment scheme).
+  `utils/s3Keys.ts`, whose parser is strict about its own 6-segment scheme).
+  The avatar space KEEPS `{userId}`; the capture space does not (see §S3 key
+  scheme) — two schemes, two parsers, deliberately not unified.
   A presigned URL is a bearer credential that expires within the hour, so it is
   never persisted: `accountSnapshot` presigns per response and ships
   `avatarUrl` + `avatarUrlExpiresAt`, and `avatarKey` appears in NO response
@@ -277,6 +279,52 @@ do not remove it).
 - **`MESHY_API_KEY` is optional in `config/env.ts` and required at WORKER boot**
   (`assertMeshyConfigured()`): only the worker calls Meshy, so the API must not
   fail to boot over a secret it never uses.
+
+### S3 key scheme (capture jobs)
+- **One builder, one parser: `utils/s3Keys.ts`.** Inline key templates anywhere
+  else are a bug. The exact scheme:
+
+  ```
+  {env}/{projectSlug}_{projectId}/{jobId}/images/{EYE|TOP|LOW}/{name}.jpg
+  {env}/{projectSlug}_{projectId}/{jobId}/capture_manifest.json
+  {env}/{projectSlug}_{projectId}/{jobId}/model-input/…      ← reserved namespace
+  {env}/{projectSlug}_{projectId}/{jobId}/deleted/…          ← soft-delete park
+  {env}/{projectSlug}_{projectId}/{jobId}/models/{modelId}/… ← 3D artifacts
+  ```
+
+- **`{env}` (`dev|staging|prod`) is config-driven from `NODE_ENV`, never
+  hardcoded.** It is the firewall that stops a non-prod deploy from writing —
+  or, more importantly, **deleting** — production objects, since the
+  project-delete path wipes objects **by prefix**. Non-negotiable.
+- **`{projectSlug}` is a LABEL, never an identifier.** `projectNameSlug()`
+  lowercases, NFKD-strips diacritics, collapses anything outside `[a-z0-9_]` to
+  a single `-`, trims leading/trailing separators, and truncates to 40 chars. It
+  is **pure and deterministic**, and it is **one-way** — nothing resolves a
+  project by reading it back. It exists so a human debugging in the S3 console
+  can identify a project without cross-referencing Mongo. A name that slugifies
+  to nothing (all-emoji is a real input, and must not throw) degrades the segment
+  to a bare `{projectId}` — never a leading `_`. `{projectId}` is what keeps the
+  path unique and machine-parseable, and the composed segment always goes
+  through `requireSegment()` so a slugifier bug cannot emit a traversal.
+- **`{userId}` is NOT in the path.** Ownership is enforced in the DB and by the
+  token, never by key prefix. (`Job.userId` is unchanged — only the key lost it.)
+- **`parseImageKey` splits the project segment on its LAST underscore**, which is
+  unambiguous because project ids are ObjectId hex (`[a-f0-9]{24}`, no
+  underscore). It is strict at exactly 6 segments and returns a discriminated
+  failure, never a partial parse — so an old-format key is a clean `ok: false`.
+- **Both buckets use the IDENTICAL prefix.** `msxr-raw-captures` and
+  `msxr-model-artifacts` must never diverge: `deleteProject`
+  (`adminProjectsService.ts`) runs `deleteObjectsUnderPrefix` against the same
+  prefix in both. Accepted consequence: the project name is visible in public
+  CloudFront URLs. Conscious tradeoff, not an oversight.
+- **Keys are built ONCE and persisted** on `Job.upload` (`rawPrefix`,
+  `manifestKey`) at job creation. Every later read/list/move/delete resolves
+  from those persisted values, so changing this scheme needs **no migration and
+  no backfill** — old objects stay where they are and old jobs keep uploading,
+  finalizing, generating, exporting and deleting. **Rebuilding a prefix for an
+  already-created job would turn a scheme change into data loss — don't.**
+- The client never builds keys: it receives `keyPrefix` / `keyTemplate` in the
+  upload plan and composes relative paths under them.
 
 ### Config & secrets
 - **All tunables and secrets come from env.** `config/env.ts` validates them with

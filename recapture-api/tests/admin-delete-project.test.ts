@@ -76,7 +76,7 @@ async function makeProject(ownerId: string, status = 'PROCESSING') {
 /** A finalized (QUEUED) job with the canonical prefix persisted; returns the prefix. */
 async function makeFinalizedJob(ownerId: string, projectId: string) {
   const jobId = new Types.ObjectId();
-  const prefix = buildJobKeyPrefix({ userId: ownerId, projectId, jobId: jobId.toHexString() });
+  const prefix = buildJobKeyPrefix({ projectName: 'Delete project fixture', projectId, jobId: jobId.toHexString() });
   const job = await Job.create({
     _id: jobId,
     projectId: new Types.ObjectId(projectId),
@@ -97,12 +97,18 @@ async function makeFinalizedJob(ownerId: string, projectId: string) {
   return { job, prefix };
 }
 
-/** Scripts List/Delete against a mutable Set of absolute keys. */
-function mockS3Store(initialKeys: string[]): Set<string> {
+/** Every (bucket, prefix) pair the purge swept, in call order. */
+type SweptPrefix = { bucket: string; prefix: string };
+
+/** Scripts List/Delete against a mutable Set of absolute keys, and records the
+ * (bucket, prefix) pairs listed so a test can assert BOTH buckets are swept
+ * under the IDENTICAL prefix. */
+function mockS3Store(initialKeys: string[]): { store: Set<string>; swept: SweptPrefix[] } {
   const store = new Set(initialKeys);
+  const swept: SweptPrefix[] = [];
   vi.spyOn(s3Client, 'send').mockImplementation((async (cmd: {
     constructor: { name: string };
-    input: { Key?: string; Prefix?: string };
+    input: { Key?: string; Prefix?: string; Bucket?: string };
   }) => {
     const name = cmd.constructor.name;
     if (name === 'DeleteObjectCommand') {
@@ -111,6 +117,7 @@ function mockS3Store(initialKeys: string[]): Set<string> {
     }
     if (name === 'ListObjectsV2Command') {
       const prefix = cmd.input.Prefix as string;
+      swept.push({ bucket: cmd.input.Bucket as string, prefix });
       return {
         Contents: [...store]
           .filter((k) => k.startsWith(prefix))
@@ -120,7 +127,7 @@ function mockS3Store(initialKeys: string[]): Set<string> {
     }
     throw new Error(`unexpected S3 command: ${name}`);
   }) as never);
-  return store;
+  return { store, swept };
 }
 
 describe('DELETE /admin/projects/:id — gate + confirmation', () => {
@@ -224,7 +231,7 @@ describe('DELETE /admin/projects/:id — HARD', () => {
         cdnUrls: { glb: 'https://test.cloudfront.net/k/model.glb' },
       },
     });
-    const store = mockS3Store([
+    const { store, swept } = mockS3Store([
       `${prefix}capture_manifest.json`,
       `${prefix}images/EYE/eye_0001.jpg`,
       // A curated-away photo parked under deleted/ must be purged too.
@@ -246,6 +253,18 @@ describe('DELETE /admin/projects/:id — HARD', () => {
     expect(res.body.modelsDeleted).toBe(1);
 
     expect(store.size).toBe(0);
+
+    // BOTH buckets are swept under the IDENTICAL prefix — the raw bucket and
+    // the artifacts bucket share one key namespace by contract, and this purge
+    // is exactly why the two must never diverge.
+    expect(swept.map((s) => s.bucket)).toEqual([
+      'recapture-test-raw', // env S3_BUCKET_RAW
+      'recapture-test-artifacts', // env S3_BUCKET_ARTIFACTS
+    ]);
+    expect(new Set(swept.map((s) => s.prefix))).toEqual(new Set([prefix]));
+    // …and that prefix is the job's persisted rawPrefix, not a rebuilt one.
+    expect(prefix).toBe(job.upload.rawPrefix);
+
     expect(await Project.findById(project._id).exec()).toBeNull();
     expect(await Job.countDocuments({ projectId: project._id }).exec()).toBe(0);
     expect(await ProjectModel.countDocuments({ projectId: project._id }).exec()).toBe(0);

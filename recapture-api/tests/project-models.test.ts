@@ -75,7 +75,7 @@ async function makeProject(ownerId: string, status = 'PROCESSING') {
 
 async function makeFinalizedJob(ownerId: string, projectId: string) {
   const jobId = new Types.ObjectId();
-  const prefix = buildJobKeyPrefix({ userId: ownerId, projectId, jobId: jobId.toHexString() });
+  const prefix = buildJobKeyPrefix({ projectName: 'Project models fixture', projectId, jobId: jobId.toHexString() });
   const job = await Job.create({
     _id: jobId,
     projectId: new Types.ObjectId(projectId),

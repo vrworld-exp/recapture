@@ -218,7 +218,7 @@ Processing (single logical stage; reuse the lease/progress helpers):
    timeout → plain `Error`.
 5. Download the GLB/USDZ/thumbnail (they expire), `PutObject` into
    `BUCKET_ARTIFACTS` under deterministic per-model keys
-   (`{env}/{userId}/{projectId}/{jobId}/models/{modelId}/model.glb`, etc. —
+   (`{env}/{projectSlug}_{projectId}/{jobId}/models/{modelId}/model.glb`, etc. —
    overwrite = idempotent).
 6. Update the record → `SUCCEEDED` with `artifacts` (our keys + `CLOUDFRONT_BASE`
    URLs). On any thrown terminal error, set `status: FAILED` + `error`.
@@ -369,7 +369,7 @@ In [`preview_gallery_screen.dart`] / [`preview_gallery_notifier.dart`]:
    URLs vs. base64; result URL + expiry fields) against the live docs.
 2. **`key` → absolute S3 key resolution** — reconcile the export-manifest
    relative `key` with the job's `upload.rawPrefix`
-   (`{env}/{userId}/{projectId}/{jobId}/`) using the SAME resolution the
+   (`{env}/{projectSlug}_{projectId}/{jobId}/`) using the SAME resolution the
    soft-delete/export path uses. See [`src/utils/s3Keys.ts`](../src/utils/s3Keys.ts)
    and `adminProjectsService.ts`.
 3. **Owner exposure shape** — confirm how much of the model record the owner

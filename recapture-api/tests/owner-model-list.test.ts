@@ -122,7 +122,7 @@ async function seedProject(ownerId: string) {
   });
   const jobId = new Types.ObjectId();
   const prefix = buildJobKeyPrefix({
-    userId: ownerId,
+    projectName: project.name,
     projectId: project.id as string,
     jobId: jobId.toHexString(),
   });

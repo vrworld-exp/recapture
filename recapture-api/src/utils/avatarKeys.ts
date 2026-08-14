@@ -3,9 +3,11 @@
 // CANONICAL S3 key naming for USER AVATARS — the single source of truth for
 // building AND parsing every profile-picture key. Deliberately a SEPARATE file
 // from utils/s3Keys.ts: that one is the capture-job key space, and its
-// parseImageKey is a strict 7-segment `{env}/{userId}/{projectId}/{jobId}/
+// parseImageKey is a strict 6-segment `{env}/{projectSlug}_{projectId}/{jobId}/
 // images/{LEVEL}/{filename}.jpg` parser. An avatar is not a capture image and
-// must not be reachable through that parser (nor widen it).
+// must not be reachable through that parser (nor widen it). Note the capture
+// key space dropped {userId} from its path; the AVATAR key space keeps it —
+// these are separate schemes with separate parsers, on purpose.
 //
 // Key format (exact):
 //   {env}/avatars/{userId}/{avatarId}.{jpg|png}

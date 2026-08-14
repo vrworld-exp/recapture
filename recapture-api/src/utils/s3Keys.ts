@@ -8,14 +8,29 @@
 // anywhere else in the codebase are a bug.
 //
 // Key format (exact):
-//   {env}/{userId}/{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg
+//   {env}/{projectSlug}_{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg
 // with the job manifest at:
-//   {env}/{userId}/{projectId}/{jobId}/capture_manifest.json
+//   {env}/{projectSlug}_{projectId}/{jobId}/capture_manifest.json
 //
-// GROUNDING vs the task prompt (its assumptions, confirmed against the code):
+// The job-root segment carries a slugified PROJECT NAME so a human debugging in
+// the S3 console can identify a project without cross-referencing Mongo. Rules
+// of that segment:
+//   • {projectSlug} is a convenience LABEL, never an identifier — nothing reads
+//     it back to resolve a project. {projectId} is what makes the path unique
+//     and machine-parseable.
+//   • A name that slugifies to nothing (all-emoji, all-punctuation) is a real
+//     input: the segment then degrades to a bare {projectId}, never a leading
+//     "_". See projectNameSlug.
+//   • {userId} is deliberately NOT in the path. Ownership is enforced in the DB
+//     and by the token, never by key prefix. (The AVATAR key space —
+//     utils/avatarKeys.ts — is separate and does keep {userId}.)
+//
+// GROUNDING (assumptions confirmed against the code):
 //   • {env} is CONFIG-DRIVEN, never hardcoded: env.NODE_ENV maps
 //     production→"prod", staging→"staging", development→"dev" — a staging
-//     deploy can never emit prod/... keys.
+//     deploy can never emit prod/... keys. It is also the firewall that stops a
+//     non-prod deploy from DELETING prod objects, since the project-delete path
+//     wipes objects by this prefix.
 //   • {LEVEL} is the ring name EYE | TOP | LOW — NOT the prompt's A/B/C. The
 //     client bundle's layout is images/{EYE|TOP|LOW}/<name>.jpg
 //     (lib/domain/upload/capture_bundle.dart) and the manifest validator's
@@ -25,6 +40,15 @@
 //   • The JOB-ROOT prefix (…/{jobId}/) — not …/images/ — is what the upload
 //     plan advertises and finalize lists, because expectedFilesCount is
 //     manifest-INCLUSIVE and the manifest sits at the job root.
+//   • BOTH buckets (raw captures and model artifacts) use the IDENTICAL prefix:
+//     deleting a project runs deleteObjectsUnderPrefix against the same prefix
+//     in both (adminProjectsService.deleteProject). Accepted consequence: the
+//     project name is visible in public CloudFront URLs — a conscious tradeoff.
+//   • Keys are built ONCE, at job creation, and persisted on the job
+//     (Job.upload.rawPrefix / manifestKey). Every later read/list/move/delete
+//     resolves from those persisted values, so changing this scheme leaves
+//     existing objects readable in place — no migration, no backfill. Rebuilding
+//     a prefix for an ALREADY-CREATED job would break that and is a bug.
 //
 // Every interpolated segment is validated before composition (no separators,
 // no leading dot — which also kills ".." — no whitespace/control chars, never
@@ -132,9 +156,60 @@ function jpgFilenameSegment(filename: string): string {
   return `${requireSegment('filename', stem)}.jpg`;
 }
 
+/** Max length of the slug LABEL inside the project segment (ids excluded). */
+const PROJECT_SLUG_MAX_LENGTH = 40;
+
+/** Characters kept verbatim by the slugifier; everything else collapses to `-`.
+ * `_` survives because the project segment is split on its LAST underscore, so
+ * an underscore inside the label is unambiguous. `.` does NOT survive — a
+ * leading dot is how ".." traversal starts. */
+const SLUG_KEEP_RE = /[^a-z0-9_]+/g;
+
+/** Trimmed off both ends: SEGMENT_RE requires an ALPHANUMERIC first char, so a
+ * leading `-` or `_` would make the composed segment throw on a legitimate name. */
+const SLUG_EDGE_RE = /^[-_]+|[-_]+$/g;
+
+/**
+ * Slugifies a user-authored `Project.name` into the label half of the job-root
+ * segment. PURE and DETERMINISTIC — no clock, no randomness — so the same name
+ * always yields the same key.
+ *
+ * Lowercased, NFKD-normalized with diacritics stripped (`Café` → `cafe`); any
+ * run of characters outside `[a-z0-9_]` collapses to a single `-`; leading and
+ * trailing `-`/`_` are stripped; truncated to 40 chars and re-stripped so
+ * truncation can never leave a trailing separator.
+ *
+ * Returns the EMPTY STRING when nothing survives (an all-emoji name is a real
+ * input and must not throw) — `buildJobKeyPrefix` then emits a bare
+ * `{projectId}` segment rather than a leading `_`.
+ */
+export function projectNameSlug(name: string): string {
+  if (typeof name !== 'string' || name.length === 0) return '';
+  const folded = name
+    .normalize('NFKD')
+    // Strip combining marks left behind by NFKD (the accent of `é`, etc.).
+    .replace(/[\u0300-\u036f]/gu, '')
+    .toLowerCase();
+  const collapsed = folded.replace(SLUG_KEEP_RE, '-').replace(SLUG_EDGE_RE, '');
+  if (collapsed.length <= PROJECT_SLUG_MAX_LENGTH) return collapsed;
+  return collapsed.slice(0, PROJECT_SLUG_MAX_LENGTH).replace(SLUG_EDGE_RE, '');
+}
+
+/**
+ * The job-root's project segment: `{slug}_{projectId}`, or a bare `{projectId}`
+ * when the name slugifies to nothing. Always passed through `requireSegment` —
+ * a future slugifier bug must not be able to emit a traversal.
+ */
+function projectSegment(projectName: string, projectId: string): string {
+  const id = requireSegment('projectId', projectId);
+  const slug = projectNameSlug(projectName);
+  return requireSegment('projectSegment', slug.length > 0 ? `${slug}_${id}` : id);
+}
+
 /** The identifiers that scope every key of one upload job. */
 export interface JobKeyScope {
-  userId: string;
+  /** RAW `Project.name` — the builders slugify it, so no caller can forget to. */
+  projectName: string;
   projectId: string;
   jobId: string;
 }
@@ -143,18 +218,17 @@ export interface JobKeyScope {
 export const MANIFEST_FILENAME = 'capture_manifest.json';
 
 /**
- * Job-ROOT prefix: `{env}/{userId}/{projectId}/{jobId}/`. This is the plan's
- * `keyPrefix` (containment boundary for every object of the job) AND the
+ * Job-ROOT prefix: `{env}/{projectSlug}_{projectId}/{jobId}/`. This is the
+ * plan's `keyPrefix` (containment boundary for every object of the job) AND the
  * prefix finalize lists for its manifest-inclusive count.
  */
 export function buildJobKeyPrefix(scope: JobKeyScope): string {
-  const userId = requireSegment('userId', scope.userId);
-  const projectId = requireSegment('projectId', scope.projectId);
+  const project = projectSegment(scope.projectName, scope.projectId);
   const jobId = requireSegment('jobId', scope.jobId);
-  return `${s3EnvPrefix()}/${userId}/${projectId}/${jobId}/`;
+  return `${s3EnvPrefix()}/${project}/${jobId}/`;
 }
 
-/** Image sub-prefix: `{env}/{userId}/{projectId}/{jobId}/images/`. */
+/** Image sub-prefix: `{env}/{projectSlug}_{projectId}/{jobId}/images/`. */
 export function buildJobImagePrefix(scope: JobKeyScope): string {
   return `${buildJobKeyPrefix(scope)}images/`;
 }
@@ -177,18 +251,30 @@ export interface BuildImageKeyInput extends JobKeyScope {
 }
 
 /**
- * Full image key: `{env}/{userId}/{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg`.
+ * Full image key:
+ * `{env}/{projectSlug}_{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg`.
  * Round-trip guarantee: for canonical inputs (ring-name level, filename ending
- * in one lowercase `.jpg`), `parseImageKey(buildImageKey(x))` returns exactly
- * `x` plus the configured env.
+ * in one lowercase `.jpg`, an underscore-free `projectId`),
+ * `parseImageKey(buildImageKey(x))` returns `x`'s ids, the configured env, and
+ * the SLUG of `x.projectName` (the raw name is not recoverable from a key —
+ * slugification is one-way, by design).
  */
 export function buildImageKey(input: BuildImageKeyInput): string {
   return `${buildLevelImagePrefix(input, input.level)}${jpgFilenameSegment(input.filename)}`;
 }
 
-/** All segments of one canonical image key, exactly as they appear in it. */
-export interface ParsedImageKey extends JobKeyScope {
+/**
+ * All segments of one canonical image key, exactly as they appear in it.
+ *
+ * Deliberately NOT `extends JobKeyScope`: a key carries the project SLUG, and
+ * the raw `projectName` a scope holds cannot be recovered from it.
+ */
+export interface ParsedImageKey {
   env: S3EnvPrefix;
+  /** The label half of the project segment; `''` when the key carries no slug. */
+  projectSlug: string;
+  projectId: string;
+  jobId: string;
   level: CaptureLevelSegment;
   /** Includes the `.jpg` extension (the literal final segment). */
   filename: string;
@@ -198,11 +284,26 @@ export type ParseImageKeyResult =
   | { ok: true; value: ParsedImageKey }
   | { ok: false; reason: string };
 
+/** Number of `/`-separated segments in a canonical image key. */
+const IMAGE_KEY_SEGMENT_COUNT = 6;
+
+/** Human-readable shape, reused in the parser's failure reasons. */
+const IMAGE_KEY_SHAPE =
+  '{env}/{projectSlug}_{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg';
+
 /**
  * STRICT parser for canonical image keys. Accepts only the exact scheme —
- * seven segments, a literal `images` level-4 segment, a known env prefix, an
+ * six segments, a literal `images` 4th segment, a known env prefix, an
  * uppercase ring-name level, valid id segments, and a single lowercase `.jpg`
  * — and returns a discriminated failure (never a partial parse) otherwise.
+ *
+ * The project segment splits on its LAST underscore: project ids are ObjectId
+ * hex (`[a-f0-9]{24}`, no underscore), so an underscore inside the slug label
+ * cannot make the id ambiguous. A segment with no underscore at all is a
+ * slug-less key (`{projectId}` alone) and yields `projectSlug: ''`.
+ *
+ * Keys in the OLD `{env}/{userId}/{projectId}/{jobId}/…` scheme have seven
+ * segments and therefore fail cleanly here rather than mis-parsing.
  */
 export function parseImageKey(key: string): ParseImageKeyResult {
   const fail = (reason: string): ParseImageKeyResult => ({ ok: false, reason });
@@ -211,20 +312,23 @@ export function parseImageKey(key: string): ParseImageKeyResult {
   }
 
   const parts = key.split('/');
-  if (parts.length !== 7) {
-    return fail(
-      'key must have exactly 7 segments: {env}/{userId}/{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg'
-    );
+  if (parts.length !== IMAGE_KEY_SEGMENT_COUNT) {
+    return fail(`key must have exactly ${IMAGE_KEY_SEGMENT_COUNT} segments: ${IMAGE_KEY_SHAPE}`);
   }
-  const [envSeg, userId, projectId, jobId, imagesSeg, levelSeg, fileSeg] = parts as [
-    string, string, string, string, string, string, string,
+  const [envSeg, projectSeg, jobId, imagesSeg, levelSeg, fileSeg] = parts as [
+    string, string, string, string, string, string,
   ];
 
   if (!(S3_ENV_PREFIXES as readonly string[]).includes(envSeg)) {
     return fail(`unknown env prefix ${JSON.stringify(envSeg)} (expected ${S3_ENV_PREFIXES.join('/')})`);
   }
+  if (!SEGMENT_RE.test(projectSeg)) {
+    return fail(`invalid project segment: ${JSON.stringify(projectSeg)}`);
+  }
+  const splitAt = projectSeg.lastIndexOf('_');
+  const projectSlug = splitAt === -1 ? '' : projectSeg.slice(0, splitAt);
+  const projectId = splitAt === -1 ? projectSeg : projectSeg.slice(splitAt + 1);
   for (const [name, value] of [
-    ['userId', userId],
     ['projectId', projectId],
     ['jobId', jobId],
   ] as const) {
@@ -233,7 +337,7 @@ export function parseImageKey(key: string): ParseImageKeyResult {
     }
   }
   if (imagesSeg !== 'images') {
-    return fail(`expected literal "images" as the 5th segment, got ${JSON.stringify(imagesSeg)}`);
+    return fail(`expected literal "images" as the 4th segment, got ${JSON.stringify(imagesSeg)}`);
   }
   if (!(CAPTURE_LEVEL_SEGMENTS as readonly string[]).includes(levelSeg)) {
     return fail(
@@ -255,7 +359,7 @@ export function parseImageKey(key: string): ParseImageKeyResult {
     ok: true,
     value: {
       env: envSeg as S3EnvPrefix,
-      userId,
+      projectSlug,
       projectId,
       jobId,
       level: levelSeg as CaptureLevelSegment,
