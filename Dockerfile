@@ -23,7 +23,9 @@ FROM ghcr.io/cirruslabs/flutter:3.41.1 AS build
 # Render exposes a service's environment variables to the build as build args,
 # so setting API_BASE_URL under Settings → Environment overrides the default
 # below without touching this file.
-ARG APP_ENV=prod
+
+# ARG APP_ENV=prod
+ARG APP_ENV=dev
 # ARG API_BASE_URL=https://recapture-api.onrender.com
 ARG API_BASE_URL=https://recapture-unvp.onrender.com
 
