@@ -34,6 +34,12 @@ services:
         value: msxr-model-artifacts
       - key: CLOUDFRONT_BASE_URL
         sync: false
+      # Browser origins allowed to call this API (comma-separated, exact match).
+      # The web client deployed at recapture-live; the mobile builds send no
+      # Origin header and never consult this. NODE_ENV is `development` on this
+      # instance, so localhost:* is additionally allowed for local web runs.
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://recapture-live.onrender.com
       # This web service also runs the job loop in-process, so there is no
       # separate worker service to deploy or pay for. Only valid while every
       # processor is I/O-bound (the Meshy path is HTTP + sleep); when the

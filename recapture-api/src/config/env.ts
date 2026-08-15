@@ -17,6 +17,26 @@ const envSchema = z.object({
   CLOUDFRONT_BASE_URL: z.string().url('CLOUDFRONT_BASE_URL must be a valid URL'),
   // backedendMakeAliveUrl: z.string().url('backendMakeAliveUrl must be a valid URL'),
 
+  // ── CORS (src/app.ts) ──────────────────────────────────────────────────────
+  /**
+   * Browser origins allowed to call this API — comma-separated, matched
+   * EXACTLY (scheme + host + port, no path, no trailing slash).
+   *
+   * Only browsers are affected: the Flutter mobile builds send no Origin
+   * header, so they bypass this entirely. localhost/127.0.0.1 on any port is
+   * additionally allowed outside production, for `flutter run -d chrome`
+   * (which picks a random port every launch).
+   */
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .default('https://recapture-live.onrender.com')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((o) => o.trim().replace(/\/+$/, ''))
+        .filter(Boolean),
+    ),
+
   // ── OTP (POST /auth/send-otp) ──────────────────────────────────────────────
   // All tunables come from env; every one has a safe default so existing
   // deployments boot without new required vars.
