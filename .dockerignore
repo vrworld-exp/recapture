@@ -1,0 +1,62 @@
+# Keeps the Docker build context small and, just as importantly, makes a local
+# `docker build` see the SAME tree Render does. Render builds from a clean git
+# clone, so anything .gitignore hides is already absent there; mirroring those
+# entries here stops a local build from silently succeeding on files that will
+# not exist in CI.
+#
+# Unpruned the context is ~460 MB, nearly all of it irrelevant to a web build:
+#   recapture-api 179M · build 96M · .dart_tool 60M · recapture 55M
+#   .git 34M · android 32M
+# Pruned it is a few MB, which is uploaded to the daemon on every single build.
+
+# ── Never ships, and would defeat the layer cache ────────────────────────────
+.git
+.github
+.gitignore
+.gitattributes
+
+# Regenerated inside the image by `flutter pub get` / `flutter build web`.
+# Copying a host .dart_tool in would overwrite the package_config.json the
+# builder just produced, with paths that do not exist in the container.
+.dart_tool
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+coverage/
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Also .gitignore'd. The Dockerfile regenerates these from ARG API_BASE_URL;
+# excluding them here guarantees a stray local .env can never be baked into a
+# published image, where it would be world-readable at /assets/.env.
+.env
+.env.dev
+.env.staging
+.env.prod
+
+# ── Other platforms — a web build needs none of them ─────────────────────────
+android/
+ios/
+macos/
+linux/
+windows/
+fastlane/
+Gemfile
+Gemfile.lock
+
+# ── Not part of this Flutter app ─────────────────────────────────────────────
+recapture-api/
+recapture/
+maya-viewer/
+node_modules/
+docker-compose.yml
+
+# ── Dev-only ─────────────────────────────────────────────────────────────────
+test/
+docs/
+DOC/
+*.md
+*.txt
+*.iml
+.vscode/
+.idea/
+Makefile
