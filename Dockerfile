@@ -24,7 +24,8 @@ FROM ghcr.io/cirruslabs/flutter:3.41.1 AS build
 # so setting API_BASE_URL under Settings → Environment overrides the default
 # below without touching this file.
 ARG APP_ENV=prod
-ARG API_BASE_URL=https://recapture-api.onrender.com
+# ARG API_BASE_URL=https://recapture-api.onrender.com
+ARG API_BASE_URL=https://recapture-unvp.onrender.com
 
 WORKDIR /app
 
