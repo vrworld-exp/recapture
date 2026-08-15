@@ -104,25 +104,26 @@ describe('projectNameSlug — user-authored free text → one safe label', () =>
     expect(projectNameSlug('...')).toBe('');
   });
 
-  it('truncates to 40 chars and never leaves a trailing separator', () => {
+  it('truncates to 24 chars and never leaves a trailing separator', () => {
     // Project.name is maxlength 100 — a name at the limit must still slugify.
     const atMaxLength = 'A'.repeat(100);
     expect(atMaxLength).toHaveLength(100);
-    expect(projectNameSlug(atMaxLength)).toBe('a'.repeat(40));
+    expect(projectNameSlug(atMaxLength)).toBe('a'.repeat(24));
 
     const wordy = 'The Extremely Long Museum Artifact Name Of Doom';
     const slug = projectNameSlug(wordy);
-    expect(slug.length).toBeLessThanOrEqual(40);
-    expect(slug).toBe('the-extremely-long-museum-artifact-name');
+    expect(slug.length).toBeLessThanOrEqual(24);
+    expect(slug).toBe('the-extremely-long-museu');
     expect(slug.endsWith('-')).toBe(false);
 
-    // The cut lands exactly ON a hyphen → it must be re-stripped.
-    const cutOnSeparator = `${'a'.repeat(39)} tail`;
-    expect(projectNameSlug(cutOnSeparator)).toBe('a'.repeat(39));
+    // The cut lands exactly ON a hyphen → it must be re-stripped. The fixture is
+    // sized to the cap: 23 chars + a separator puts the 24th char on the hyphen.
+    const cutOnSeparator = `${'a'.repeat(23)} tail`;
+    expect(projectNameSlug(cutOnSeparator)).toBe('a'.repeat(23));
 
     for (let n = 1; n <= 60; n += 1) {
       const s = projectNameSlug('word '.repeat(n));
-      expect(s.length).toBeLessThanOrEqual(40);
+      expect(s.length).toBeLessThanOrEqual(24);
       expect(s).toMatch(/^[a-z0-9][a-z0-9_-]*$/);
     }
   });

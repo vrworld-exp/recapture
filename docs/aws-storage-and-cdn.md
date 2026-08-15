@@ -180,7 +180,7 @@ from deleting production objects. Non-negotiable.
 
 **`{projectSlug}` — a label, never an identifier.** `projectNameSlug()`
 lowercases, NFKD-strips diacritics (`Café` → `cafe`), collapses anything outside
-`[a-z0-9_]` to a single `-`, trims edge separators, truncates to 40 chars. Pure
+`[a-z0-9_]` to a single `-`, trims edge separators, truncates to 24 chars. Pure
 and deterministic. **Why it exists:** so a human debugging in the S3 console can
 tell which project a folder is without cross-referencing Mongo. Nothing ever
 reads it back — slugification is one-way. An all-emoji name slugifies to nothing

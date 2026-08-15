@@ -90,7 +90,7 @@ clean pointer flip. Cleanup is handled in §1.5.
 ### 1.1 Key scheme — new `src/utils/avatarKeys.ts`
 
 **Do not extend `src/utils/s3Keys.ts`.** That file is the canonical
-*capture-job* key space; its `parseImageKey` is a strict 7-segment parser and an
+*capture-job* key space; its `parseImageKey` is a strict 6-segment parser and an
 avatar key is not a capture image. New file, same discipline (its header comment
 explains the rules — read it and follow them).
 

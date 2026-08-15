@@ -298,7 +298,7 @@ do not remove it).
   project-delete path wipes objects **by prefix**. Non-negotiable.
 - **`{projectSlug}` is a LABEL, never an identifier.** `projectNameSlug()`
   lowercases, NFKD-strips diacritics, collapses anything outside `[a-z0-9_]` to
-  a single `-`, trims leading/trailing separators, and truncates to 40 chars. It
+  a single `-`, trims leading/trailing separators, and truncates to 24 chars. It
   is **pure and deterministic**, and it is **one-way** — nothing resolves a
   project by reading it back. It exists so a human debugging in the S3 console
   can identify a project without cross-referencing Mongo. A name that slugifies

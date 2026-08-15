@@ -157,7 +157,7 @@ function jpgFilenameSegment(filename: string): string {
 }
 
 /** Max length of the slug LABEL inside the project segment (ids excluded). */
-const PROJECT_SLUG_MAX_LENGTH = 40;
+const PROJECT_SLUG_MAX_LENGTH = 24;
 
 /** Characters kept verbatim by the slugifier; everything else collapses to `-`.
  * `_` survives because the project segment is split on its LAST underscore, so
@@ -176,7 +176,7 @@ const SLUG_EDGE_RE = /^[-_]+|[-_]+$/g;
  *
  * Lowercased, NFKD-normalized with diacritics stripped (`Café` → `cafe`); any
  * run of characters outside `[a-z0-9_]` collapses to a single `-`; leading and
- * trailing `-`/`_` are stripped; truncated to 40 chars and re-stripped so
+ * trailing `-`/`_` are stripped; truncated to 24 chars and re-stripped so
  * truncation can never leave a trailing separator.
  *
  * Returns the EMPTY STRING when nothing survives (an all-emoji name is a real
