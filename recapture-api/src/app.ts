@@ -10,6 +10,7 @@ import healthRouter from '@/routes/health';
 import authRouter from '@/routes/auth';
 import projectsRouter from '@/routes/projects';
 import jobsRouter from '@/routes/jobs';
+import catalogRouter from '@/routes/catalog';
 import remoteConfigRouter from '@/routes/remoteConfig';
 import adminRouter from '@/routes/admin';
 
@@ -54,6 +55,9 @@ export function createApp(): express.Express {
   app.use('/auth', authRouter);
   app.use('/projects', projectsRouter);
   app.use('/jobs', jobsRouter);
+  // Catalog authoring (requireAuth inside the router). Owner-scoped: every
+  // route resolves the caller's single catalog from the token.
+  app.use('/catalog', catalogRouter);
   // Public (no JWT) — consumed at client startup, possibly pre-login.
   app.use('/remote-config', remoteConfigRouter);
   // Staff-only (requireAuth + requireRole ≥ MODEL_ARTIST inside the router).

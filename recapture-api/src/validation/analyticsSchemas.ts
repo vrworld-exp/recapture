@@ -20,6 +20,10 @@ import { PROJECT_STATUS_VALUES } from '@/models/Project';
 import { MODEL_SOURCES } from '@/models/types/projectModel.types';
 // And for the admin project-delete mode (SOFT | HARD) — the route's enum.
 import { ADMIN_DELETE_MODES } from '@/validation/adminSchemas';
+// And for the catalog product kind (THREE_D | IMAGE_ONLY) and the bulk-action
+// verb — the same constants the /catalog routes validate against.
+import { PRODUCT_TYPES } from '@/models/types/catalog.types';
+import { BULK_PRODUCT_ACTIONS } from '@/validation/catalogSchemas';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -67,6 +71,17 @@ export const AnalyticsEvent = {
   // ── Model optimization (the OPT variant) ──────────────────────────────────
   MODEL_OPTIMIZE_REQUESTED: 'model_optimize_requested',
   MODEL_OPTIMIZE_COMPLETED: 'model_optimize_completed',
+  // ── Catalog authoring (the Mirage publish feature) ────────────────────────
+  CATALOG_CREATED: 'catalog_created',
+  CATALOG_UPDATED: 'catalog_updated',
+  CATALOG_CATEGORY_CREATED: 'catalog_category_created',
+  CATALOG_CATEGORY_DELETED: 'catalog_category_deleted',
+  CATALOG_PRODUCTS_LISTED: 'catalog_products_listed',
+  CATALOG_PRODUCT_CREATED: 'catalog_product_created',
+  CATALOG_PRODUCT_UPDATED: 'catalog_product_updated',
+  CATALOG_PRODUCT_ARCHIVED: 'catalog_product_archived',
+  CATALOG_PRODUCT_DELETED: 'catalog_product_deleted',
+  CATALOG_PRODUCTS_BULK_ACTION: 'catalog_products_bulk_action',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -479,6 +494,96 @@ const modelOptimizeCompletedProps = z
   })
   .strict();
 
+// ── Catalog authoring ───────────────────────────────────────────────────────
+// Catalog/product/category NAMES are business content, not analytics data, and
+// never appear here — only ids, enums and counts. `catalog_id` is an opaque
+// ObjectId the same way `project_id` already is.
+
+const catalogCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    /** True when the create was a replay of an existing catalog. */
+    was_existing: z.boolean(),
+  })
+  .strict();
+
+const catalogUpdatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    /** Which fields the patch touched — names only, never values. */
+    fields: z.array(z.string()).min(1),
+  })
+  .strict();
+
+const catalogCategoryCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    category_id: z.string().min(1),
+  })
+  .strict();
+
+const catalogCategoryDeletedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    category_id: z.string().min(1),
+    /** Products moved to Uncategorized as a result. */
+    moved_product_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const catalogProductsListedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    result_count: z.number().int().nonnegative(),
+    is_filtered: z.boolean(),
+  })
+  .strict();
+
+const catalogProductCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    product_type: z.enum(PRODUCT_TYPES),
+    has_category: z.boolean(),
+  })
+  .strict();
+
+const catalogProductUpdatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    fields: z.array(z.string()).min(1),
+  })
+  .strict();
+
+const catalogProductArchivedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    /** false = restored. */
+    archived: z.boolean(),
+  })
+  .strict();
+
+const catalogProductDeletedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    was_already_deleted: z.boolean(),
+  })
+  .strict();
+
+const catalogProductsBulkActionProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    action: z.enum(BULK_PRODUCT_ACTIONS),
+    requested_count: z.number().int().nonnegative(),
+    affected_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
 /** requireRole rejected an authenticated caller (role below the minimum). */
 const adminAccessDeniedProps = z
   .object({
@@ -524,6 +629,16 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED]: modelImageUploadsGeneratedProps,
   [AnalyticsEvent.MODEL_OPTIMIZE_REQUESTED]: modelOptimizeRequestedProps,
   [AnalyticsEvent.MODEL_OPTIMIZE_COMPLETED]: modelOptimizeCompletedProps,
+  [AnalyticsEvent.CATALOG_CREATED]: catalogCreatedProps,
+  [AnalyticsEvent.CATALOG_UPDATED]: catalogUpdatedProps,
+  [AnalyticsEvent.CATALOG_CATEGORY_CREATED]: catalogCategoryCreatedProps,
+  [AnalyticsEvent.CATALOG_CATEGORY_DELETED]: catalogCategoryDeletedProps,
+  [AnalyticsEvent.CATALOG_PRODUCTS_LISTED]: catalogProductsListedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_CREATED]: catalogProductCreatedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_UPDATED]: catalogProductUpdatedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_ARCHIVED]: catalogProductArchivedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_DELETED]: catalogProductDeletedProps,
+  [AnalyticsEvent.CATALOG_PRODUCTS_BULK_ACTION]: catalogProductsBulkActionProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */
