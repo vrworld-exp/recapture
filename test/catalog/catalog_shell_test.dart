@@ -34,10 +34,20 @@ class _StubAuth extends AuthNotifier {
 
 /// A repository whose catalog is whatever the test says it is.
 class _FakeCatalogRepo implements CatalogRepository {
-  _FakeCatalogRepo(this._fetch);
+  _FakeCatalogRepo(this._fetch, {this.onCreate});
 
   final Future<Catalog?> Function() _fetch;
+
+  /// Lets a test fail the create. Null → the default success.
+  final Future<Catalog> Function()? onCreate;
+
   int fetchCalls = 0;
+
+  /// What the last create was called with, so a test can assert that a blank
+  /// optional field went out ABSENT rather than as an empty string.
+  int createCalls = 0;
+  String? lastCreateName;
+  String? lastCreateBusinessName;
 
   @override
   Future<Catalog?> fetch() {
@@ -46,8 +56,13 @@ class _FakeCatalogRepo implements CatalogRepository {
   }
 
   @override
-  Future<Catalog> create({required String name, String? businessName}) async =>
-      Catalog.fromMap(golden.catalogGolden()..['name'] = name);
+  Future<Catalog> create({required String name, String? businessName}) async {
+    createCalls++;
+    lastCreateName = name;
+    lastCreateBusinessName = businessName;
+    if (onCreate != null) return onCreate!();
+    return Catalog.fromMap(golden.catalogGolden()..['name'] = name);
+  }
 
   @override
   Future<Catalog> update({
@@ -161,6 +176,101 @@ void main() {
     // The server's own owner-safe sentence, not an exception toString.
     expect(find.textContaining("You're offline"), findsOneWidget);
     expect(find.text('Try again'), findsOneWidget);
+  });
+
+  group('create flow', () {
+    /// The dialog's submit button. Both it and the empty state's CTA read
+    /// "Create catalog", so it has to be scoped to the dialog or the finder
+    /// resolves to two widgets.
+    final submitButton = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.widgetWithText(ElevatedButton, 'Create catalog'),
+    );
+
+    Future<void> openDialog(WidgetTester tester, _FakeCatalogRepo repo) async {
+      await tester.pumpWidget(_app(repo));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Create catalog'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the empty state CTA opens the create form', (tester) async {
+      // The button used to be wired to a null callback — a CTA that named the
+      // step and then did nothing. Pin that it actually opens something.
+      await openDialog(tester, _FakeCatalogRepo(() async => null));
+
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('Create your catalog'), findsOneWidget);
+    });
+
+    testWidgets('creating switches the shell to the catalog body',
+        (tester) async {
+      final repo = _FakeCatalogRepo(() async => null);
+      await openDialog(tester, repo);
+
+      await tester.enterText(find.byType(TextFormField).first, '  Cafe Mocha  ');
+      await tester.tap(submitButton);
+      await tester.pumpAndSettle();
+
+      // Trimmed client-side, and the untouched optional field goes out as an
+      // absent key — the server schema is strict and rejects a blank one.
+      expect(repo.createCalls, 1);
+      expect(repo.lastCreateName, 'Cafe Mocha');
+      expect(repo.lastCreateBusinessName, isNull);
+
+      // The notifier holds the created catalog, so the shell moved on without a
+      // re-fetch.
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.text('No catalog yet'), findsNothing);
+      expect(find.text('Cafe Mocha'), findsOneWidget);
+      expect(repo.fetchCalls, 1);
+
+      // Let the confirmation snackbar expire, so no timer outlives the tree.
+      await tester.pumpAndSettle(const Duration(seconds: 5));
+    });
+
+    testWidgets('an empty name is rejected without a round-trip',
+        (tester) async {
+      final repo = _FakeCatalogRepo(() async => null);
+      await openDialog(tester, repo);
+
+      await tester.tap(submitButton);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Give your catalog a name.'), findsOneWidget);
+      expect(repo.createCalls, 0);
+      expect(find.byType(AlertDialog), findsOneWidget); // still open
+    });
+
+    testWidgets('a failed create keeps the form open with what was typed',
+        (tester) async {
+      final repo = _FakeCatalogRepo(
+        () async => null,
+        onCreate: () async => throw const CatalogFailure(
+          code: 'OFFLINE',
+          message: "You're offline — check your connection and try again.",
+          isOffline: true,
+        ),
+      );
+      await openDialog(tester, repo);
+
+      await tester.enterText(find.byType(TextFormField).first, 'Cafe Mocha');
+      await tester.tap(submitButton);
+      await tester.pumpAndSettle();
+
+      // The whole reason the request is issued from inside the dialog: a retry
+      // must not cost the user the name they already typed.
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.textContaining("You're offline"), findsOneWidget);
+      expect(
+        tester.widget<TextFormField>(find.byType(TextFormField).first).controller?.text,
+        'Cafe Mocha',
+      );
+      // A failed create leaves notifier state alone, so the shell behind the
+      // dialog is still the empty state — it must not have blanked or errored.
+      expect(find.text('No catalog yet'), findsOneWidget);
+      expect(find.textContaining("couldn't load"), findsNothing);
+    });
   });
 
   group('route wiring', () {

@@ -13,6 +13,7 @@ import '../../../domain/entities/catalog.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
+import 'create_catalog_dialog.dart';
 
 /// The catalog shell — the storefront authoring surface's home.
 ///
@@ -33,6 +34,21 @@ class CatalogScreen extends ConsumerStatefulWidget {
 }
 
 class _CatalogScreenState extends ConsumerState<CatalogScreen> {
+  /// Opens the create form and acknowledges the result.
+  ///
+  /// Nothing is refreshed on success: [CatalogNotifier.create] has already put
+  /// the created catalog into state, so this screen has rebuilt into
+  /// [_CatalogBody] by the time the dialog finishes popping. Failures never
+  /// reach here — the dialog keeps them next to the fields the user typed in.
+  Future<void> _createCatalog() async {
+    final created = await showCreateCatalogDialog(context);
+    if (created == null || !mounted) return; // cancelled
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${created.name} is ready. Add your first product.')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final catalogAsync = ref.watch(catalogProvider);
@@ -66,8 +82,9 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
             actionLabel: 'Try again',
             onAction: () => ref.invalidate(catalogProvider),
           ),
-          data: (catalog) =>
-              catalog == null ? const _NoCatalogYet() : _CatalogBody(catalog: catalog),
+          data: (catalog) => catalog == null
+              ? _NoCatalogYet(onCreate: _createCatalog)
+              : _CatalogBody(catalog: catalog),
         ),
       ),
     );
@@ -76,18 +93,18 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
 
 /// First run: the account has no catalog at all.
 class _NoCatalogYet extends StatelessWidget {
-  const _NoCatalogYet();
+  const _NoCatalogYet({required this.onCreate});
+
+  final VoidCallback onCreate;
 
   @override
-  Widget build(BuildContext context) => const _CatalogMessage(
+  Widget build(BuildContext context) => _CatalogMessage(
         icon: Icons.storefront_outlined,
         title: 'No catalog yet',
         body: 'Your catalog is the storefront customers open when they scan '
             'your QR code. Create it once — the link never changes after that.',
         actionLabel: 'Create catalog',
-        // T-007 lands the create flow; until then the shell states the next step
-        // rather than offering a button that would do nothing.
-        onAction: null,
+        onAction: onCreate,
       );
 }
 
