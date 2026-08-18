@@ -13,8 +13,13 @@ import { Types } from 'mongoose';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
+import { CLOUDFRONT_BASE } from '@/config/s3';
 import type { CatalogContact, CatalogStatus } from '@/models/types/catalog.types';
-import type { CreateCatalogInput, UpdateCatalogInput } from '@/validation/catalogSchemas';
+import type {
+  CreateCatalogInput,
+  UpdateBusinessProfileInput,
+  UpdateCatalogInput,
+} from '@/validation/catalogSchemas';
 
 /** Headline counts for the catalog screen. */
 export interface CatalogCountsDto {
@@ -182,17 +187,19 @@ export type UpdateCatalogResult =
   | { outcome: 'UPDATED'; catalog: CatalogDto };
 
 /**
- * Updates catalog metadata (features 2, 58-60). Ownership is token-resolved and
- * re-scoped on the write, so a soft-delete landing between the read and the
- * write wins instead of being clobbered.
+ * The ONE catalog-metadata write. Both `PATCH /catalog` and
+ * `PATCH /catalog/profile` go through it — they differ only in the DTO they
+ * project out of the returned document, and two write paths is exactly how one
+ * of them ends up forgetting the `draftRevision` bump.
  *
- * `contact` REPLACES the whole block when present — see the schema for why a
- * deep merge is the wrong shape here.
+ * Returns the updated document, or null when the caller has no (non-deleted)
+ * catalog. Ownership is re-scoped on the write itself, so a soft-delete landing
+ * between a read and this write wins instead of being clobbered.
  */
-export async function updateCatalog(
+async function applyCatalogPatch(
   userId: string,
   input: UpdateCatalogInput
-): Promise<UpdateCatalogResult> {
+): Promise<ICatalog | null> {
   const ownerId = new Types.ObjectId(userId);
 
   const set: Record<string, unknown> = {};
@@ -200,7 +207,7 @@ export async function updateCatalog(
   if (input.businessName !== undefined) set.businessName = input.businessName;
   if (input.contact !== undefined) set.contact = input.contact;
 
-  const updated = await Catalog.findOneAndUpdate(
+  return Catalog.findOneAndUpdate(
     { userId: ownerId, deletedAt: null },
     // The draft bump rides along in the SAME update rather than going through
     // bumpDraftRevision: this write already targets the catalog document, and
@@ -208,6 +215,20 @@ export async function updateCatalog(
     { $set: set, $inc: { draftRevision: 1 } },
     { new: true, runValidators: true }
   ).exec();
+}
+
+/**
+ * Updates catalog metadata (feature 2) and returns the catalog DTO.
+ *
+ * `contact` REPLACES the whole block when present — see the schema for why a
+ * deep merge is the wrong shape here. The write itself, and the reason it is
+ * shared with the profile endpoint, live in {@link applyCatalogPatch}.
+ */
+export async function updateCatalog(
+  userId: string,
+  input: UpdateCatalogInput
+): Promise<UpdateCatalogResult> {
+  const updated = await applyCatalogPatch(userId, input);
 
   if (!updated) return { outcome: 'NOT_FOUND' };
 
@@ -215,6 +236,104 @@ export async function updateCatalog(
     outcome: 'UPDATED',
     catalog: toCatalogDto(updated, await countsFor(updated._id as Types.ObjectId)),
   };
+}
+
+// ── Business profile (features 58-60) ───────────────────────────────────────
+//
+// The profile is a VIEW of the catalog document, not a second row. `User` stays
+// out of it on purpose: the catalog is the thing that gets branded, `User` is
+// deliberately near-PII-free, and `GET /auth/me` is a masked-only snapshot.
+
+/**
+ * The profile fields that actually reach the published public catalog, as dotted
+ * paths into {@link BusinessProfileDto}.
+ *
+ * Mirage's `update-restaurant` (M3) carries only name / location / phoneNo /
+ * icon / description — so everything else here is ReCapture-only and the profile
+ * screen marks it as such (feature 59, T-023). This list is the ONE source of
+ * truth for that marking: hardcoding it in the client would drift the moment the
+ * publish worker learns to carry another field.
+ *
+ * `name` → restaurant name · `contact.address` → location · `contact.phone` →
+ * phoneNo · `logoUrl` → icon.
+ */
+export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
+  'name',
+  'contact.phone',
+  'contact.address',
+  'logoUrl',
+];
+
+/**
+ * The business profile as the profile screen reads it. Built field by field for
+ * the same reason as {@link CatalogDto} — a spread is how `mirageRestaurantId`
+ * or `deletedAt` reaches a client the next time the schema grows.
+ */
+export interface BusinessProfileDto {
+  /** The catalog this profile belongs to (feature 3). */
+  id: string;
+  /** The storefront title — becomes the Mirage restaurant name on publish. */
+  name: string;
+  businessName: string | null;
+  contact: CatalogContact | null;
+  /**
+   * CDN URLs derived from the stored KEYS. Null until the logo/cover upload
+   * flow (T-007) commits one; the model stores keys, never URLs.
+   */
+  logoUrl: string | null;
+  coverImageUrl: string | null;
+  /** See {@link PUBLIC_PROFILE_FIELDS}. */
+  publicFields: readonly string[];
+  updatedAt: string;
+}
+
+/** `null` for an unset key — never a `.../undefined` URL. */
+function cdnUrlForKey(key: string | undefined): string | null {
+  return key ? `${CLOUDFRONT_BASE}/${key}` : null;
+}
+
+/** The ONE profile DTO mapper. */
+export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
+  return {
+    id: c.id as string,
+    name: c.name,
+    businessName: c.businessName ?? null,
+    contact: c.contact ?? null,
+    logoUrl: cdnUrlForKey(c.logoKey),
+    coverImageUrl: cdnUrlForKey(c.coverImageKey),
+    publicFields: PUBLIC_PROFILE_FIELDS,
+    updatedAt: c.updatedAt.toISOString(),
+  };
+}
+
+/** Loads the caller's business profile, or null when they have no catalog. */
+export async function getBusinessProfile(userId: string): Promise<BusinessProfileDto | null> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return null;
+
+  return toBusinessProfileDto(catalog);
+}
+
+export type UpdateBusinessProfileResult =
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'UPDATED'; profile: BusinessProfileDto };
+
+/**
+ * Updates the business profile (feature 60).
+ *
+ * Writes through the SAME `$set` + `$inc draftRevision` as {@link updateCatalog}
+ * — editing the profile is an authoring change like any other, so it must light
+ * up the "draft changes not yet live" badge (feature 38). Splitting these into
+ * two write paths is exactly how one of them would end up forgetting the bump.
+ */
+export async function updateBusinessProfile(
+  userId: string,
+  input: UpdateBusinessProfileInput
+): Promise<UpdateBusinessProfileResult> {
+  const updated = await applyCatalogPatch(userId, input);
+  if (!updated) return { outcome: 'NOT_FOUND' };
+
+  return { outcome: 'UPDATED', profile: toBusinessProfileDto(updated) };
 }
 
 /**

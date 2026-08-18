@@ -124,12 +124,31 @@ void main() {
     await tester.pumpWidget(_app(() => Completer<Uint8List?>().future));
     await tester.pump();
 
+    // Scoped to the Profile action by its glyph: the app bar carries the Catalog
+    // entry point too, and this test is about the way to Profile surviving a
+    // stalled picture — not about how many actions the bar happens to have.
     final button = find.descendant(
       of: find.byType(AppBar),
-      matching: find.byType(IconButton),
+      matching: find.widgetWithIcon(IconButton, Icons.account_circle_outlined),
     );
     expect(button, findsOneWidget);
     expect(tester.widget<IconButton>(button).onPressed, isNotNull);
     expect(find.byIcon(Icons.account_circle_outlined), findsOneWidget);
+  });
+
+  testWidgets('the app bar offers the Catalog entry point alongside Profile',
+      (tester) async {
+    // The catalog is reachable from Projects (T-006). A stalled avatar fetch
+    // must not take it down with it either — the two actions are independent.
+    await tester.pumpWidget(_app(() => Completer<Uint8List?>().future));
+    await tester.pump();
+
+    final catalog = find.descendant(
+      of: find.byType(AppBar),
+      matching: find.widgetWithIcon(IconButton, Icons.storefront_outlined),
+    );
+    expect(catalog, findsOneWidget);
+    expect(tester.widget<IconButton>(catalog).onPressed, isNotNull);
+    expect(find.byIcon(Icons.storefront_outlined), findsOneWidget);
   });
 }

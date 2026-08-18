@@ -96,6 +96,20 @@ export const updateCatalogSchema = z
 
 export type UpdateCatalogInput = z.infer<typeof updateCatalogSchema>;
 
+/**
+ * PATCH /catalog/profile — the business-profile screen's write.
+ *
+ * Deliberately the SAME schema object as {@link updateCatalogSchema}, not a
+ * copy: the profile screen edits a SUBSET of the catalog document (there is no
+ * separate profile row — see 03-architecture-proposal.md §6, "Changes to
+ * existing collections: none"), so a second schema would be two places to keep
+ * a bound in sync and one place to forget. The endpoints differ in the DTO they
+ * RETURN, not in what they accept.
+ */
+export const updateBusinessProfileSchema = updateCatalogSchema;
+
+export type UpdateBusinessProfileInput = UpdateCatalogInput;
+
 // ── Categories ──────────────────────────────────────────────────────────────
 
 export const createCategorySchema = z

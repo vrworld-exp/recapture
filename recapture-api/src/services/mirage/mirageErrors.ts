@@ -3,6 +3,11 @@
 // Turning a Mirage failure into something ReCapture can act on. This is the
 // hardest part of the whole integration and it deserves its own file.
 //
+// ⚠ mirage-be has been edited since docs/next-phase/01-codebase-findings.md was
+// written (create-item now takes `imgOnly` from the body, and update-restaurant
+// has become a partial update). The citations in this file were re-verified
+// against the CURRENT mirage-be; the ones in the docs were not.
+//
 // WHY IT IS HARD: Mirage returns HTTP 400 for validation errors, for not-found,
 // for a bad api key, for a non-admin token, AND from its global 404 handler
 // (mirage-be/index.js:221). The status code alone therefore classifies nothing.
@@ -126,8 +131,8 @@ export const MIRAGE_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
 
   // ── auth: the admin JWT ───────────────────────────────────────────────────
   // middleware.js:52,61,69 "<jwt error> | Login again please with valid email
-  // and password." (403), :28 "…No token found." (401), :85 "Data in token is
-  // bad or inomplete)" (401), :105 "Payload is empty , LogIn again" (401).
+  // and password." (403), :29 "…No token found." (401), :85 and :186 "Data in
+  // token is bad or inomplete)" (401), :105 "Payload is empty , LogIn again" (401).
   {
     statuses: [400, 401, 403],
     match: /login again|jwt expired|jwt malformed|jwt must be provided|no token found|data in token/i,
@@ -135,8 +140,8 @@ export const MIRAGE_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
     failureClass: 'auth',
     message: 'Mirage rejected the admin credential.',
   },
-  // middleware.js:142 "Bad Request.(Please logIn)" and :149 "Only chef can
-  // access this api." — the latter is isAdmin's message, a copy-paste bug in
+  // middleware.js:118,142 "Bad Request.(Please logIn)" and :125,149 "Only chef
+  // can access this api." — the latter is isAdmin's message, a copy-paste bug in
   // Mirage (it guards `role === "admin"`). Both are 400, both mean the token is
   // not an admin token. Matching the literal string is the only option.
   {
@@ -148,9 +153,10 @@ export const MIRAGE_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
   },
 
   // ── reconcile ─────────────────────────────────────────────────────────────
-  // adminController.js:220 "Restaurant already exist. Name should be unique",
-  // :567 "Category already exist.Category name should be unique",
-  // :896 "Product already exist.Product name should be unique".
+  // adminController.js:288 "Restaurant already exist. Name should be unique",
+  // :732 / :898 "Category already exist.Category name should be unique",
+  // :1092 / :1374 "Product already exist.Product name should be unique".
+  // Every one of them is HTTP 400 — Mirage never signals this on a 2xx.
   // Mirage does NOT return the existing id, which is why this is its own class:
   // the caller has to go and find it.
   {
@@ -162,7 +168,7 @@ export const MIRAGE_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
   },
 
   // ── terminal: the asset was refused ───────────────────────────────────────
-  // multer's own LIMIT_FILE_SIZE surfaces as "File too large"; libs/multer.js
+  // multer's own LIMIT_FILE_SIZE surfaces as "File too large"; libs/multer.js:7
   // caps at 100 MB. Our preflight (MIRAGE_MAX_ASSET_BYTES) should reject first,
   // so reaching here means the preflight and the cap disagree.
   {
@@ -200,13 +206,19 @@ export const MIRAGE_CLASSIFICATION_RULES: readonly ClassificationRule[] = [
   },
 
   // ── terminal: a referenced entity is gone ─────────────────────────────────
-  // adminController.js:877 "Category not found", :884 "Restaurant not found",
-  // :1305 "No item found with given itemId (…)" (404), :440/:487 "Invalid
+  // adminController.js:876,1074 "Category not found", :443,1081 "Restaurant not
+  // found", :1646 "No item found with given itemId (…)" (404), :597,644 "Invalid
   // restaurant name or id (…)".
+  //
+  // ⚠ This rule also swallows Mirage's global 404 body ("Path not found.(400)",
+  // index.js:221), whose text contains "not found" too. Both outcomes are
+  // terminal so nothing retries wrongly, but a caller must not read NOT_FOUND as
+  // proof that a specific parent entity was deleted — key that on the operation
+  // being performed, not on the code alone.
   //
   // This class is load-bearing for the cascade bug: Mirage's delete-item also
   // deletes the CATEGORY when it removed that category's last item
-  // (adminController.js:1312-1319), so the next create-item against the stale
+  // (adminController.js:1660-1676), so the next create-item against the stale
   // mapping lands exactly here. The processor's response is to clear the
   // mapping and re-create, not to fail the product.
   {

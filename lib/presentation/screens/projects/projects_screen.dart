@@ -22,6 +22,7 @@ import '../../widgets/offline_retry_modal.dart';
 import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
+import '../catalog/catalog_screen.dart';
 import 'live_projects_view.dart';
 import 'capture_mode_sheet.dart';
 import 'model_building_screen.dart';
@@ -558,7 +559,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
         elevation: 0,
         automaticallyImplyLeading: false,
         title: Text('Projects', style: Theme.of(context).textTheme.titleLarge),
-        actions: const [_ProfileAvatarAction()],
+        // Catalog first, then the account — the storefront is a destination
+        // the user works in; Profile is where they go to leave.
+        actions: const [CatalogEntryAction(), _ProfileAvatarAction()],
       ),
       // Creating a project belongs to My projects; the Live tab is read-only.
       floatingActionButton: showLive

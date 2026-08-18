@@ -23,6 +23,7 @@ import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
+import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
@@ -66,6 +67,43 @@ abstract final class AppRoutes {
   /// Sign out). Protected like every non-auth route.
   static const profile = '/profile';
 
+  // ── Catalog (the storefront authoring surface) ────────────────────────────
+  // Declared as ONE flat group under /catalog so a deep link from a QR-adjacent
+  // context, a push from the grid and a cold start all resolve identically.
+  // Registration below lags this list on purpose: a constant exists as soon as
+  // the path is decided, but a GoRoute is only added once its screen does — a
+  // route wired to a screen that does not exist yet is a crash, not a stub.
+
+  /// The catalog shell — grid of products, or the first-run empty state.
+  static const catalog = '/catalog';
+
+  /// Catalog metadata: name, business name, logo, cover (feature 2).
+  static const catalogSettings = '/catalog/settings';
+
+  /// The draft rendered in the public page's shape, before publishing.
+  static const catalogPreview = '/catalog/preview';
+
+  /// Publish status, progress and partial-failure retry.
+  static const catalogPublish = '/catalog/publish';
+
+  /// The QR code for the frozen public URL — view, download, share.
+  static const catalogQr = '/catalog/qr';
+
+  /// Category manager with drag reorder.
+  static const catalogCategories = '/catalog/categories';
+
+  /// Add a product — existing model, fresh scan, or image-only.
+  static const productNew = '/catalog/products/new';
+
+  /// One product's editor. `:productId` = the catalog product id.
+  static const productDetail = '/catalog/products/:productId';
+
+  /// The business profile behind the storefront (features 58-60).
+  static const businessProfile = '/profile/business';
+
+  /// Customer-facing analytics for the published catalog (feature 66).
+  static const catalogAnalytics = '/catalog/analytics';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -106,6 +144,16 @@ abstract final class AppRouteNames {
   static const projects = 'projects';
   static const createProject = 'createProject';
   static const profile = 'profile';
+  static const catalog = 'catalog';
+  static const catalogSettings = 'catalogSettings';
+  static const catalogPreview = 'catalogPreview';
+  static const catalogPublish = 'catalogPublish';
+  static const catalogQr = 'catalogQr';
+  static const catalogCategories = 'catalogCategories';
+  static const productNew = 'productNew';
+  static const productDetail = 'productDetail';
+  static const businessProfile = 'businessProfile';
+  static const catalogAnalytics = 'catalogAnalytics';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const modelViewer = 'modelViewer';
@@ -211,6 +259,20 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.profile,
         name: AppRouteNames.profile,
         builder: (_, __) => const FlowBackScope(child: ProfileScreen()),
+      ),
+      // The catalog shell — a STANDALONE top-level destination like /profile,
+      // reached with go() from the Projects app bar, so a cold deep-link to
+      // /catalog behaves identically to the in-app entry. FlowBackScope maps
+      // back → /projects (flowBackRouteFor) when there is nothing to pop.
+      //
+      // The rest of the /catalog/* constants above are NOT registered yet —
+      // their screens land with their own tasks. Until then an unknown
+      // /catalog/... location falls through to errorBuilder, which is the
+      // honest outcome; a placeholder route would look like a broken feature.
+      GoRoute(
+        path: AppRoutes.catalog,
+        name: AppRouteNames.catalog,
+        builder: (_, __) => const FlowBackScope(child: CatalogScreen()),
       ),
       // Staff-only per-project Preview gallery. Reached via push (hardware back
       // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel

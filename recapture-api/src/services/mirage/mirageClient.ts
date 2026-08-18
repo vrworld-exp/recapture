@@ -277,9 +277,10 @@ function buildMultipart(spec: RequestSpec, fields: Record<string, ScalarField>):
 async function send<T>(spec: RequestSpec, retriedAuth = false): Promise<T> {
   const fields: Record<string, ScalarField> = { ...(spec.fields ?? {}) };
   if (spec.assetTargets) {
-    // Non-negotiable on every write: Mirage takes both from the BODY and stores
-    // `${CLOUD_FRONT_URL}/${key}` verbatim (adminController.js:200-201, 530,
-    // 798-799, 1045-1046).
+    // Non-negotiable on every write: Mirage destructures both from the BODY and
+    // stores `${CLOUD_FRONT_URL}/${key}` verbatim (adminController.js:244, 385,
+    // 686, 832, 980 destructure them; :197, 317, 487, 763, 925 build the URL).
+    // Omit them and a customer-facing URL becomes the literal "undefined/<key>".
     fields.CLOUD_FRONT_URL = env.MIRAGE_ASSET_CDN_URL;
     fields.BUCKET_NAME = env.MIRAGE_ASSET_BUCKET;
   }
@@ -577,7 +578,7 @@ export const mirageClient: MirageClient = {
    * everything to 400.
    *
    * ⚠ The caller must handle the cascade: Mirage also deletes the CATEGORY when
-   * this was its last item (adminController.js:1312-1319), so any cached
+   * this was its last item (adminController.js:1660-1676), so any cached
    * `mirageCategoryId` for that category is now stale and must be cleared.
    */
   async deleteItem(id: string): Promise<{ existed: boolean }> {

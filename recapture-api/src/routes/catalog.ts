@@ -22,11 +22,18 @@ import {
   createProductSchema,
   listProductsQuerySchema,
   reorderSchema,
+  updateBusinessProfileSchema,
   updateCatalogSchema,
   updateCategorySchema,
   updateProductSchema,
 } from '@/validation/catalogSchemas';
-import { createCatalog, getCatalog, updateCatalog } from '@/services/catalogService';
+import {
+  createCatalog,
+  getBusinessProfile,
+  getCatalog,
+  updateBusinessProfile,
+  updateCatalog,
+} from '@/services/catalogService';
 import {
   createCategory,
   deleteCategory,
@@ -140,6 +147,54 @@ router.patch(
     });
 
     res.status(200).json({ status: 'success', catalog: result.catalog });
+  })
+);
+
+// ── Business profile (features 58, 60) ──────────────────────────────────────
+//
+// A profile-shaped VIEW of the same catalog document — there is no separate
+// profile row, and `User` is deliberately not involved (it is near-PII-free and
+// `GET /auth/me` is masked-only). The profile DTO carries `publicFields` so the
+// client marks ReCapture-only fields from ONE source of truth instead of
+// hardcoding Mirage's carried-field list.
+
+/** GET /catalog/profile — the caller's business profile. */
+router.get(
+  '/profile',
+  asyncHandler(async (req, res) => {
+    const profile = await getBusinessProfile(req.user!.userId);
+    if (!profile) return noCatalog(res);
+
+    res.status(200).json({ status: 'success', profile });
+  })
+);
+
+/**
+ * PATCH /catalog/profile — edit the business profile.
+ *
+ * Bumps `draftRevision` like every other authoring write: branding reaches
+ * customers only at publish (feature 59), so an edit here must light up the
+ * "draft changes not yet live" badge (feature 38).
+ */
+router.patch(
+  '/profile',
+  asyncHandler(async (req, res) => {
+    const parsed = updateBusinessProfileSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+    const result = await updateBusinessProfile(userId, parsed.data);
+
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+
+    track(AnalyticsEvent.CATALOG_UPDATED, {
+      user_id_hash: hashIdentifier(userId),
+      catalog_id: result.profile.id,
+      // Names only, never values — the profile holds phone/email/address.
+      fields: Object.keys(parsed.data),
+    });
+
+    res.status(200).json({ status: 'success', profile: result.profile });
   })
 );
 
