@@ -15,7 +15,7 @@
 // Hermetic: in-memory MongoDB, no network. Indexes are synced explicitly
 // because the category name-uniqueness rule IS a partial unique index, and
 // mongodb-memory-server starts with an empty collection and no indexes.
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import mongoose, { Types } from 'mongoose';
 import jwt from 'jsonwebtoken';
@@ -29,6 +29,8 @@ import { ProjectModel } from '@/models/ProjectModel';
 import { Catalog } from '@/models/Catalog';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct } from '@/models/CatalogProduct';
+import { s3Client } from '@/config/s3';
+import { HeadObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 const app = createApp();
 let mongod: MongoMemoryServer;
@@ -47,6 +49,7 @@ afterAll(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all([
     User.deleteMany({}),
     Project.deleteMany({}),
@@ -96,6 +99,68 @@ async function makeSucceededModel(userId: string): Promise<string> {
     },
   });
   return model.id as string;
+}
+
+/**
+ * A permissive scripted S3. Product-image commits HEAD the object they are about
+ * to bind, so every image-only create in this file would otherwise reach AWS.
+ * The key-space and containment rules are pinned properly in
+ * tests/product-image-keys.test.ts and tests/catalog-product-images.test.ts;
+ * here S3 just has to say yes.
+ */
+const s3Objects = new Map<string, number>();
+
+beforeEach(() => {
+  s3Objects.clear();
+  vi.spyOn(s3Client, 'send').mockImplementation((command: unknown) => {
+    if (command instanceof HeadObjectCommand) {
+      const key = command.input.Key as string;
+      if (!s3Objects.has(key)) {
+        const err = new Error('NotFound');
+        err.name = 'NotFound';
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ ContentLength: s3Objects.get(key) }) as never;
+    }
+    if (command instanceof ListObjectsV2Command) {
+      const prefix = (command.input.Prefix as string) ?? '';
+      return Promise.resolve({
+        Contents: [...s3Objects.entries()]
+          .filter(([key]) => key.startsWith(prefix))
+          .map(([Key, Size]) => ({ Key, Size })),
+        IsTruncated: false,
+      }) as never;
+    }
+    if (command instanceof DeleteObjectCommand) {
+      s3Objects.delete(command.input.Key as string);
+      return Promise.resolve({}) as never;
+    }
+    return Promise.reject(new Error(`unscripted S3 command: ${String(command)}`));
+  });
+});
+
+/**
+ * Creates an image-only product the way the app does: presign a slot, "upload"
+ * to it, then create WITH the committed key. An image-only product with no image
+ * is refused at create (it could never publish), so there is no shorter path.
+ */
+async function createImageOnly(
+  auth: Auth,
+  body: Record<string, unknown>,
+  expectStatus = 201
+) {
+  const slot = await request(app)
+    .post('/catalog/products/image/upload-url')
+    .set(auth)
+    .send({ contentType: 'image/jpeg' })
+    .expect(200);
+  s3Objects.set(slot.body.key, 1024);
+
+  return request(app)
+    .post('/catalog/products')
+    .set(auth)
+    .send({ ...body, type: 'IMAGE_ONLY', imageKey: slot.body.key })
+    .expect(expectStatus);
 }
 
 async function createCatalogFor(auth: Auth, name = 'My Shop'): Promise<string> {
@@ -257,11 +322,7 @@ describe('catalog categories', () => {
     const cat = await request(app).post('/catalog/categories').set(auth).send({ name: 'Drinks' });
     const categoryId = cat.body.category.id as string;
 
-    await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte', categoryId })
-      .expect(201);
+    await createImageOnly(auth, { name: 'Latte', categoryId });
 
     const del = await request(app)
       .delete(`/catalog/categories/${categoryId}`)
@@ -302,11 +363,7 @@ describe('catalog products', () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
 
-    const res = await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte', price: 250, tags: ['Hot', 'hot', 'NEW'] })
-      .expect(201);
+    const res = await createImageOnly(auth, { name: 'Latte', price: 250, tags: ['Hot', 'hot', 'NEW'] });
 
     expect(res.body.product.type).toBe('IMAGE_ONLY');
     expect(res.body.product.price).toBe(250);
@@ -391,27 +448,16 @@ describe('catalog products', () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
 
-    await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte' })
-      .expect(201);
+    await createImageOnly(auth, { name: 'Latte' });
 
-    const res = await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte' })
-      .expect(409);
+    const res = await createImageOnly(auth, { name: 'Latte' }, 409);
     expect(res.body.code).toBe('DUPLICATE_NAME');
   });
 
   it('patch distinguishes "not sent" from an explicit null', async () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
-    const created = await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte', price: 250 });
+    const created = await createImageOnly(auth, { name: 'Latte', price: 250 });
     const productId = created.body.product.id as string;
 
     // Not sent → untouched.
@@ -438,14 +484,8 @@ describe('catalog products', () => {
     const cat = await request(app).post('/catalog/categories').set(auth).send({ name: 'Drinks' });
     const categoryId = cat.body.category.id as string;
 
-    await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte', categoryId });
-    await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Muffin' });
+    await createImageOnly(auth, { name: 'Latte', categoryId });
+    await createImageOnly(auth, { name: 'Muffin' });
 
     const inCat = await request(app)
       .get('/catalog/products')
@@ -472,10 +512,7 @@ describe('catalog products', () => {
   it('search treats regex metacharacters literally', async () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
-    await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte' });
+    await createImageOnly(auth, { name: 'Latte' });
 
     // Unescaped, `.*` would match everything.
     const res = await request(app)
@@ -490,10 +527,7 @@ describe('catalog products', () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
     for (const name of ['A', 'B', 'C']) {
-      await request(app)
-        .post('/catalog/products')
-        .set(auth)
-        .send({ type: 'IMAGE_ONLY', name });
+      await createImageOnly(auth, { name });
     }
 
     const first = await request(app)
@@ -527,10 +561,7 @@ describe('catalog products', () => {
   it('archives and restores, and archived rows are hidden by default', async () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
-    const created = await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte' });
+    const created = await createImageOnly(auth, { name: 'Latte' });
     const productId = created.body.product.id as string;
 
     await request(app).post(`/catalog/products/${productId}/archive`).set(auth).expect(200);
@@ -554,10 +585,7 @@ describe('catalog products', () => {
   it('delete is idempotent and keeps the row for the publish worker', async () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
-    const created = await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte' });
+    const created = await createImageOnly(auth, { name: 'Latte' });
     const productId = created.body.product.id as string;
 
     await request(app).delete(`/catalog/products/${productId}`).set(auth).expect(200);
@@ -576,10 +604,7 @@ describe('catalog products', () => {
     await createCatalogFor(auth);
     const ids: string[] = [];
     for (const name of ['A', 'B']) {
-      const r = await request(app)
-        .post('/catalog/products')
-        .set(auth)
-        .send({ type: 'IMAGE_ONLY', name });
+      const r = await createImageOnly(auth, { name });
       ids.push(r.body.product.id);
     }
 
@@ -610,10 +635,7 @@ describe('catalog products', () => {
 
     const start = await revision();
 
-    const created = await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte' });
+    const created = await createImageOnly(auth, { name: 'Latte' });
     expect(await revision()).toBe(start + 1);
 
     const productId = created.body.product.id as string;
@@ -631,11 +653,7 @@ describe('catalog products', () => {
   it('never exposes projection bookkeeping on a product', async () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
-    const res = await request(app)
-      .post('/catalog/products')
-      .set(auth)
-      .send({ type: 'IMAGE_ONLY', name: 'Latte' })
-      .expect(201);
+    const res = await createImageOnly(auth, { name: 'Latte' });
 
     for (const leaked of [
       'mirageItemId',

@@ -7,6 +7,25 @@ import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_category.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
+import 'catalog_products_repository.dart';
+
+/// Which branding image a slot is for.
+///
+/// Both live in the SAME key space as product images and differ only in the
+/// reserved slot name they occupy, so the client sends the name rather than
+/// hitting two near-identical endpoints.
+///
+/// ⚠ Only the logo reaches customers — it becomes the Mirage restaurant icon at
+/// publish. The cover has no Mirage counterpart at all. Read that from
+/// [BusinessProfile.publicFields] rather than restating it in the UI.
+enum BrandingSlot { logo, cover }
+
+extension BrandingSlotX on BrandingSlot {
+  String get apiValue => switch (this) {
+        BrandingSlot.logo => 'logo',
+        BrandingSlot.cover => 'cover',
+      };
+}
 
 /// Data access for the catalog root and its categories.
 ///
@@ -38,6 +57,19 @@ abstract interface class CatalogRepository {
     String? name,
     String? businessName,
     BusinessContact? contact,
+  });
+
+  /// Mints a presigned slot to upload the logo or cover image into (feature 2).
+  Future<ProductImageSlot> createBrandingSlot({
+    required BrandingSlot slot,
+    required ProductImageContentType contentType,
+  });
+
+  /// Binds an uploaded object as the logo or cover, and returns the refreshed
+  /// profile. Call it only after the PUT to the slot's url has succeeded.
+  Future<BusinessProfile> commitBranding({
+    required BrandingSlot slot,
+    required String key,
   });
 
   /// The catalog's categories plus the uncategorized bucket's size.
@@ -107,6 +139,46 @@ class RemoteCatalogRepository implements CatalogRepository {
           },
         );
         return _catalogFrom(res.data);
+      });
+
+  @override
+  Future<ProductImageSlot> createBrandingSlot({
+    required BrandingSlot slot,
+    required ProductImageContentType contentType,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/logo/upload-url',
+          data: {'slot': slot.apiValue, 'contentType': contentType.apiValue},
+        );
+        final body = res.data;
+        if (body == null || body['key'] is! String || body['url'] is! String) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return ProductImageSlot.fromMap(body);
+      });
+
+  @override
+  Future<BusinessProfile> commitBranding({
+    required BrandingSlot slot,
+    required String key,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.put<Map<String, dynamic>>(
+          '/catalog/logo',
+          data: {'slot': slot.apiValue, 'key': key},
+        );
+        final profile = res.data?['profile'];
+        if (profile is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return BusinessProfile.fromMap(profile);
       });
 
   @override

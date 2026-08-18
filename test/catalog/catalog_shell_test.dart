@@ -15,6 +15,7 @@ import 'package:recapture/app/routes/flow_back.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_notifier.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
+import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -55,6 +56,20 @@ class _FakeCatalogRepo implements CatalogRepository {
     BusinessContact? contact,
   }) async =>
       Catalog.fromMap(golden.catalogGolden());
+
+  @override
+  Future<ProductImageSlot> createBrandingSlot({
+    required BrandingSlot slot,
+    required ProductImageContentType contentType,
+  }) =>
+      throw UnimplementedError('not used here');
+
+  @override
+  Future<BusinessProfile> commitBranding({
+    required BrandingSlot slot,
+    required String key,
+  }) =>
+      throw UnimplementedError('not used here');
 
   @override
   Future<CatalogCategoryList> listCategories() async => CatalogCategoryList.empty;

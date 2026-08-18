@@ -354,6 +354,160 @@ void main() {
     });
   });
 
+  group('product images and duplicate', () {
+    test('createImageSlot omits productId for the pre-create upload', () async {
+      // Feature 13: an image-only product is created WITH its key, so the first
+      // upload has no product to name yet.
+      final repo = RemoteCatalogProductsRepository(always({
+        'status': 'success',
+        'key': 'dev/catalog/c1/products/slot/img.jpg',
+        'url': 'https://s3/put',
+        'expiresAt': '2026-08-18T10:00:00.000Z',
+      }));
+
+      final slot = await repo.createImageSlot(
+        contentType: ProductImageContentType.webp,
+      );
+
+      final body = requests.single.data as Map;
+      expect(requests.single.uri.path, '/catalog/products/image/upload-url');
+      expect(body['contentType'], 'image/webp');
+      expect(body.containsKey('productId'), isFalse);
+      expect(slot.key, 'dev/catalog/c1/products/slot/img.jpg');
+      expect(slot.url, 'https://s3/put');
+      expect(slot.expiresAt, DateTime.parse('2026-08-18T10:00:00.000Z'));
+    });
+
+    test('createImageSlot names the product when replacing an image', () async {
+      final repo = RemoteCatalogProductsRepository(always({
+        'status': 'success',
+        'key': 'k',
+        'url': 'u',
+      }));
+
+      await repo.createImageSlot(
+        contentType: ProductImageContentType.jpeg,
+        productId: 'p1',
+      );
+
+      expect((requests.single.data as Map)['productId'], 'p1');
+    });
+
+    test('a slot response missing its url fails loudly', () async {
+      // A slot with no url is unusable; surfacing it as a value would fail later
+      // at the PUT, far from the cause.
+      final repo = RemoteCatalogProductsRepository(always({'status': 'success', 'key': 'k'}));
+
+      await expectLater(
+        repo.createImageSlot(contentType: ProductImageContentType.png),
+        throwsA(isA<CatalogFailure>()
+            .having((f) => f.code, 'code', 'MALFORMED_RESPONSE')),
+      );
+    });
+
+    test('create sends the image key for an image-only product', () async {
+      final repo = RemoteCatalogProductsRepository(
+        always({'status': 'success', 'product': golden.productGolden()}, status: 201),
+      );
+
+      await repo.create(
+        type: ProductType.imageOnly,
+        name: 'Mug',
+        imageKey: 'dev/catalog/c1/products/slot/img.jpg',
+      );
+
+      final body = requests.single.data as Map;
+      expect(body['type'], 'IMAGE_ONLY');
+      expect(body['imageKey'], 'dev/catalog/c1/products/slot/img.jpg');
+      expect(body.containsKey('sourceModelId'), isFalse);
+    });
+
+    test('commitImage PUTs the key to the product', () async {
+      final repo = RemoteCatalogProductsRepository(
+        always({'status': 'success', 'product': golden.productGolden()}),
+      );
+
+      await repo.commitImage('p1', 'dev/catalog/c1/products/p1/img.jpg');
+
+      expect(requests.single.uri.path, '/catalog/products/p1/image');
+      expect(requests.single.method, 'PUT');
+      expect((requests.single.data as Map)['key'], 'dev/catalog/c1/products/p1/img.jpg');
+    });
+
+    test('a conversion carries its asset in the same request', () async {
+      // The server refuses a type change that arrives without the asset its new
+      // type needs, so the client must never split them across two calls.
+      final repo = RemoteCatalogProductsRepository(
+        always({'status': 'success', 'product': golden.productGolden()}),
+      );
+
+      await repo.update('p1', type: ProductType.threeD, sourceModelId: 'm1');
+
+      final body = requests.single.data as Map;
+      expect(body['type'], 'THREE_D');
+      expect(body['sourceModelId'], 'm1');
+    });
+
+    test('update never sends the local unknown type', () async {
+      final repo = RemoteCatalogProductsRepository(
+        always({'status': 'success', 'product': golden.productGolden()}),
+      );
+
+      await repo.update('p1', name: 'X', type: ProductType.unknown);
+
+      expect((requests.single.data as Map).containsKey('type'), isFalse);
+    });
+
+    test('duplicate omits the name when the server should choose it', () async {
+      final repo = RemoteCatalogProductsRepository(
+        always({'status': 'success', 'product': golden.productGolden()}, status: 201),
+      );
+
+      await repo.duplicate('p1');
+      expect(requests.single.uri.path, '/catalog/products/p1/duplicate');
+      expect(requests.single.data as Map, isEmpty);
+
+      await repo.duplicate('p1', name: 'Chosen');
+      expect((requests.last.data as Map)['name'], 'Chosen');
+    });
+  });
+
+  group('branding uploads', () {
+    test('createBrandingSlot names the slot', () async {
+      final repo = RemoteCatalogRepository(always({
+        'status': 'success',
+        'key': 'dev/catalog/c1/products/logo/img.png',
+        'url': 'https://s3/put',
+      }));
+
+      await repo.createBrandingSlot(
+        slot: BrandingSlot.cover,
+        contentType: ProductImageContentType.png,
+      );
+
+      final body = requests.single.data as Map;
+      expect(requests.single.uri.path, '/catalog/logo/upload-url');
+      expect(body['slot'], 'cover');
+      expect(body['contentType'], 'image/png');
+    });
+
+    test('commitBranding returns the refreshed profile', () async {
+      final repo = RemoteCatalogRepository(
+        always({'status': 'success', 'profile': golden.profileGolden()}),
+      );
+
+      final profile = await repo.commitBranding(
+        slot: BrandingSlot.logo,
+        key: 'dev/catalog/c1/products/logo/img.png',
+      );
+
+      expect(requests.single.uri.path, '/catalog/logo');
+      expect(requests.single.method, 'PUT');
+      expect((requests.single.data as Map)['slot'], 'logo');
+      expect(profile.logoUrl, 'https://cdn.example.com/logo.jpg');
+    });
+  });
+
   group('BusinessProfileRepository', () {
     test('fetch reads GET /catalog/profile', () async {
       final repo = RemoteBusinessProfileRepository(

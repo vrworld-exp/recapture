@@ -11,6 +11,7 @@
 //   • Nothing here talks to Mirage. Products are drafts until the publish worker
 //     projects them; the `mirage*` and `sync*` fields are worker-owned and this
 //     service never writes them.
+import { randomUUID } from 'crypto';
 import { Types, type FilterQuery } from 'mongoose';
 import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
@@ -24,10 +25,17 @@ import type {
 } from '@/models/types/catalog.types';
 import { encodePositionCursor, type PositionCursor } from '@/utils/cursor';
 import { bumpDraftRevision, findOwnedCatalog } from '@/services/catalogService';
+import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
+import { env } from '@/config/env';
+import { presignObjectPutUrl } from '@/services/s3ObjectStore';
+import { checkCatalogImageKey, sweepSupersededImages } from '@/services/catalogImages';
+import { buildProductImageKey, productImageExtensionFor } from '@/utils/productImageKeys';
 import type {
   BulkProductsInput,
   CreateProductInput,
+  DuplicateProductInput,
   ListProductsQuery,
+  ProductImageUploadUrlInput,
   UpdateProductInput,
 } from '@/validation/catalogSchemas';
 
@@ -60,6 +68,16 @@ export interface ProductDto {
   createdAt: string;
 }
 
+/**
+ * The public CDN URL for a stored product-image key, or null when there is none.
+ *
+ * Never `${CLOUDFRONT_BASE}/undefined` — an absent key is an absent image, and a
+ * broken URL on a customer-facing card is worse than no card image at all.
+ */
+function productImageUrl(imageKey: string | undefined): string | null {
+  return imageKey ? `${CLOUDFRONT_BASE}/${imageKey}` : null;
+}
+
 /** The ONE product DTO mapper — every product response serializes through here. */
 export function toProductDto(p: ICatalogProduct): ProductDto {
   return {
@@ -76,7 +94,11 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     position: p.position,
     glbUrl: p.assets?.glbUrl ?? null,
     usdzUrl: p.assets?.usdzUrl ?? null,
-    thumbnailUrl: p.assets?.thumbnailUrl ?? null,
+    // The card image: a 3D product's is the model's generated preview, an
+    // image-only product's is DERIVED from its stored key. Derived rather than
+    // stored so the key stays the single truth — a stored URL would be a second
+    // copy to keep in step every time the image is replaced.
+    thumbnailUrl: p.assets?.thumbnailUrl ?? productImageUrl(p.assets?.imageKey),
     syncStatus: p.syncStatus,
     syncError: p.syncError?.message ?? null,
     isArchived: Boolean(p.archivedAt),
@@ -198,6 +220,10 @@ export type CreateProductResult =
   | { outcome: 'MODEL_NOT_FOUND' }
   | { outcome: 'MODEL_NOT_READY' }
   | { outcome: 'DUPLICATE_NAME' }
+  | { outcome: 'INVALID_KEY' }
+  | { outcome: 'FORBIDDEN' }
+  | { outcome: 'OBJECT_NOT_FOUND' }
+  | { outcome: 'TOO_LARGE' }
   | { outcome: 'CREATED'; product: ProductDto };
 
 /**
@@ -242,6 +268,16 @@ export async function createProduct(
     assets = resolved.assets;
     sourceProjectId = resolved.projectId;
     sourceModelId = resolved.modelId;
+  } else {
+    // IMAGE_ONLY. `imageKey` is guaranteed present by the schema's superRefine,
+    // and it is CLIENT-SUPPLIED — so it goes through the same containment guard
+    // as a later replacement rather than being trusted because it arrived with a
+    // create. The upload happened first (there was no product to scope it to),
+    // which is exactly why the key carries the catalog id.
+    const check = await checkCatalogImageKey(catalogId, input.imageKey as string);
+    if (check.outcome !== 'OK') return check;
+
+    assets = { imageKey: input.imageKey as string };
   }
 
   // Mirage enforces unique item names per restaurant, so a duplicate is caught
@@ -360,6 +396,12 @@ export type UpdateProductResult =
   | { outcome: 'NOT_FOUND' }
   | { outcome: 'CATEGORY_NOT_FOUND' }
   | { outcome: 'DUPLICATE_NAME' }
+  | { outcome: 'MODEL_NOT_FOUND' }
+  | { outcome: 'MODEL_NOT_READY' }
+  | { outcome: 'INVALID_KEY' }
+  | { outcome: 'FORBIDDEN' }
+  | { outcome: 'OBJECT_NOT_FOUND' }
+  | { outcome: 'TOO_LARGE' }
   | { outcome: 'UPDATED'; product: ProductDto };
 
 /**
@@ -418,6 +460,46 @@ export async function updateProduct(
   if (input.featured !== undefined) set.featured = input.featured;
   if (input.position !== undefined) set.position = input.position;
 
+  // ── Assets: replace a model (15), replace an image (16), convert a type (17)
+  //
+  // The resulting type is whatever the request asks for, defaulting to the
+  // current one. The schema guarantees a conversion arrives WITH its asset, so
+  // by here "which asset was sent" already determines a consistent end state.
+  const nextType = input.type ?? existing.type;
+
+  if (input.sourceModelId !== undefined) {
+    const resolved = await resolveOwnedModel(existing.userId, input.sourceModelId);
+    if (resolved.outcome !== 'OK') return resolved;
+
+    // The card image comes with the model — a 3D product shows its generated
+    // preview, so a leftover uploaded image would compete with it.
+    set.assets = resolved.assets;
+    set.sourceProjectId = resolved.projectId;
+    set.sourceModelId = resolved.modelId;
+    set.type = 'THREE_D';
+  } else if (input.imageKey !== undefined) {
+    const check = await checkCatalogImageKey(catalogId, input.imageKey);
+    if (check.outcome !== 'OK') return check;
+
+    if (nextType === 'IMAGE_ONLY') {
+      // Converting away from 3D: the model URLs go with it, or the product would
+      // still render in a viewer it no longer has a model for.
+      set.assets = { imageKey: input.imageKey };
+      set.type = 'IMAGE_ONLY';
+      set.sourceProjectId = null;
+      set.sourceModelId = null;
+    } else {
+      set['assets.imageKey'] = input.imageKey;
+    }
+  } else if (input.type !== undefined && input.type !== existing.type) {
+    // Unreachable through the route (the schema requires the asset), but a
+    // direct service caller must not be able to leave a product typed for an
+    // asset it does not have.
+    return { outcome: 'MODEL_NOT_FOUND' };
+  }
+
+  const previousImageKey = existing.assets?.imageKey;
+
   const updated = await CatalogProduct.findOneAndUpdate(
     { _id: id, catalogId, deletedAt: null },
     { $set: set },
@@ -428,7 +510,107 @@ export async function updateProduct(
 
   await bumpDraftRevision(catalogId);
 
+  // The pointer has already flipped, so a sweep failure is an orphan rather than
+  // a broken product. Only sweep when the image actually moved.
+  const nextImageKey = updated.assets?.imageKey;
+  if (previousImageKey && previousImageKey !== nextImageKey) {
+    await sweepSupersededImages(nextImageKey ?? previousImageKey, previousImageKey);
+  }
+
   return { outcome: 'UPDATED', product: toProductDto(updated) };
+}
+
+// ── Duplicate (feature 18) ──────────────────────────────────────────────────
+
+export type DuplicateProductResult =
+  | { outcome: 'NO_CATALOG' }
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'DUPLICATE_NAME' }
+  | { outcome: 'CREATED'; product: ProductDto };
+
+/**
+ * Duplicates a product.
+ *
+ * The copy carries every AUTHORING field and none of the identity, mapping or
+ * sync state: mirageItemId, publishedSnapshot, syncStatus and syncError all
+ * start fresh, because the copy is a different Mirage item that has never been
+ * published. Copying mirageItemId would make two ReCapture products claim the
+ * same Mirage item, and the next publish would have them overwrite each other.
+ *
+ * The image KEY is shared rather than copied: objects here are immutable (a
+ * replacement writes a NEW key), so two products pointing at one object is safe,
+ * and a sweep only ever runs against the key a product currently holds.
+ */
+export async function duplicateProduct(
+  userId: string,
+  productId: string,
+  input: DuplicateProductInput
+): Promise<DuplicateProductResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NO_CATALOG' };
+
+  const catalogId = catalog._id as Types.ObjectId;
+  const source = await CatalogProduct.findOne({
+    _id: new Types.ObjectId(productId),
+    catalogId,
+    deletedAt: null,
+  }).exec();
+  if (!source) return { outcome: 'NOT_FOUND' };
+
+  const name = input.name ?? (await nextCopyName(catalogId, source.name));
+  if (!name) return { outcome: 'DUPLICATE_NAME' };
+
+  const clash = await CatalogProduct.findOne({ catalogId, name, deletedAt: null })
+    .select('_id')
+    .exec();
+  if (clash) return { outcome: 'DUPLICATE_NAME' };
+
+  const created = await CatalogProduct.create({
+    catalogId,
+    userId: source.userId,
+    type: source.type,
+    name,
+    ...(source.description !== undefined ? { description: source.description } : {}),
+    ...(source.price !== undefined ? { price: source.price } : {}),
+    currency: source.currency,
+    categoryId: source.categoryId ?? null,
+    tags: source.tags ?? [],
+    availability: source.availability,
+    featured: source.featured,
+    position: await nextProductPosition(catalogId),
+    ...(source.sourceProjectId ? { sourceProjectId: source.sourceProjectId } : {}),
+    ...(source.sourceModelId ? { sourceModelId: source.sourceModelId } : {}),
+    ...(source.assets ? { assets: { ...source.assets } } : {}),
+    // syncStatus defaults to NEVER — deliberately NOT copied. See above.
+  });
+
+  await bumpDraftRevision(catalogId);
+
+  return { outcome: 'CREATED', product: toProductDto(created) };
+}
+
+/**
+ * The first free copy name, or null when there is no room.
+ *
+ * Auto-renaming is not cosmetic: Mirage keys items by name within a restaurant,
+ * so two products sharing a name would collide at publish — long after the user
+ * pressed Duplicate and stopped thinking about it.
+ */
+async function nextCopyName(
+  catalogId: Types.ObjectId,
+  sourceName: string
+): Promise<string | null> {
+  const MAX_COPIES = 50;
+  // Leave room for the suffix inside the model's 120-char name bound.
+  const base = sourceName.slice(0, 100);
+  for (let n = 1; n <= MAX_COPIES; n++) {
+    const candidate = n === 1 ? base + ' (copy)' : base + ' (copy ' + n + ')';
+    const taken = await CatalogProduct.findOne({ catalogId, name: candidate, deletedAt: null })
+      .select('_id')
+      .exec();
+    if (!taken) return candidate;
+  }
+  return null;
 }
 
 // ── Archive / restore / delete ──────────────────────────────────────────────
@@ -638,3 +820,149 @@ export async function bulkProducts(
 
   return { outcome: 'OK', affected: result.modifiedCount };
 }
+
+// ── Product images (features 13, 16) ────────────────────────────────────────
+//
+// The same three-step shape as the avatar flow — presign → PUT to S3 → commit —
+// for the same reason: image bytes never pass through this API, and the commit
+// is a pointer flip that only happens once the object demonstrably exists.
+//
+// The one structural difference is WHERE the bytes land. An avatar goes to the
+// private raw bucket behind short-lived presigned GETs because it is a
+// photograph of a person; a product image goes to BUCKET_ARTIFACTS behind
+// CloudFront because it is public catalog content a customer's browser loads
+// directly. Opposite decision, opposite reason.
+
+/** What a presigned upload slot hands back to the client. */
+export interface ProductImageSlotDto {
+  /** The key to PUT to, and then to send back at commit. */
+  key: string;
+  /** A WRITE bearer credential for exactly that key until `expiresAt`. */
+  url: string;
+  expiresAt: string;
+}
+
+export type ProductImageSlotResult =
+  | { outcome: 'NO_CATALOG' }
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'OK'; slot: ProductImageSlotDto };
+
+/**
+ * Mints one presigned PUT slot for a product image.
+ *
+ * `productId` is optional on purpose. An image-only product is created WITH its
+ * committed key (feature 13), so at upload time the product does not exist yet
+ * and the slot segment is a fresh uuid. When a product IS named, the slot is its
+ * id — and the caller's ownership of it is checked here, so a presigned URL can
+ * never be minted against another business's product.
+ */
+export async function createProductImageSlot(
+  userId: string,
+  input: ProductImageUploadUrlInput
+): Promise<ProductImageSlotResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NO_CATALOG' };
+
+  const catalogId = catalog._id as Types.ObjectId;
+
+  let slotId: string;
+  if (input.productId) {
+    const product = await CatalogProduct.findOne({
+      _id: new Types.ObjectId(input.productId),
+      catalogId,
+      deletedAt: null,
+    })
+      .select('_id')
+      .exec();
+    // Foreign or missing are indistinguishable — the enumeration-safe rule.
+    if (!product) return { outcome: 'NOT_FOUND' };
+    slotId = input.productId;
+  } else {
+    // A staging slot. It is only ever a grouping, never an authorization claim:
+    // the commit re-derives ownership from the key's catalogId segment.
+    slotId = randomUUID();
+  }
+
+  const key = buildProductImageKey(
+    catalogId.toHexString(),
+    slotId,
+    randomUUID(),
+    productImageExtensionFor(input.contentType)
+  );
+
+  // The declared content type is part of the SIGNATURE, so the uploader can only
+  // ever store an object of that type at that key.
+  const url = await presignObjectPutUrl(
+    BUCKET_ARTIFACTS,
+    key,
+    env.PRODUCT_IMAGE_UPLOAD_URL_TTL_SECONDS,
+    input.contentType
+  );
+
+  return {
+    outcome: 'OK',
+    slot: {
+      key,
+      url,
+      expiresAt: new Date(
+        Date.now() + env.PRODUCT_IMAGE_UPLOAD_URL_TTL_SECONDS * 1000
+      ).toISOString(),
+    },
+  };
+}
+
+export type CommitProductImageResult =
+  | { outcome: 'NO_CATALOG' }
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'INVALID_KEY' }
+  | { outcome: 'FORBIDDEN' }
+  | { outcome: 'OBJECT_NOT_FOUND' }
+  | { outcome: 'TOO_LARGE' }
+  | { outcome: 'COMMITTED'; product: ProductDto };
+
+/**
+ * Binds an uploaded object to a product (feature 16 — replace a product image).
+ *
+ * ORDERING: the pointer flips FIRST, then the old objects are swept. A crash
+ * between the two leaves an orphaned object in the bucket; the reverse order
+ * would leave a product pointing at something that no longer exists. The avatar
+ * flow makes the same trade for the same reason — an orphan costs storage, a
+ * dangling pointer costs the user their picture.
+ */
+export async function commitProductImage(
+  userId: string,
+  productId: string,
+  key: string
+): Promise<CommitProductImageResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NO_CATALOG' };
+
+  const catalogId = catalog._id as Types.ObjectId;
+  const product = await CatalogProduct.findOne({
+    _id: new Types.ObjectId(productId),
+    catalogId,
+    deletedAt: null,
+  }).exec();
+  if (!product) return { outcome: 'NOT_FOUND' };
+
+  const check = await checkCatalogImageKey(catalogId, key);
+  if (check.outcome !== 'OK') return check;
+
+  const previousKey = product.assets?.imageKey;
+
+  const updated = await CatalogProduct.findOneAndUpdate(
+    { _id: product._id, catalogId, deletedAt: null },
+    { $set: { 'assets.imageKey': key } },
+    { new: true, runValidators: true }
+  ).exec();
+  if (!updated) return { outcome: 'NOT_FOUND' };
+
+  await bumpDraftRevision(catalogId);
+
+  // From here the commit has already succeeded; a sweep failure is an orphan,
+  // never a broken product, so it must not fail the request.
+  await sweepSupersededImages(key, previousKey);
+
+  return { outcome: 'COMMITTED', product: toProductDto(updated) };
+}
+

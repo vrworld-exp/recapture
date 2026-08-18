@@ -9,13 +9,20 @@
 // unpublished changes" signal (§7.10); there is no per-field dirty tracking and
 // nothing recomputes it at read time, so a write that forgets to bump leaves a
 // change permanently invisible to the publish screen.
+import { randomUUID } from 'crypto';
 import { Types } from 'mongoose';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
-import { CLOUDFRONT_BASE } from '@/config/s3';
+import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
+import { env } from '@/config/env';
+import { presignObjectPutUrl } from '@/services/s3ObjectStore';
+import { checkCatalogImageKey, sweepSupersededImages } from '@/services/catalogImages';
+import { buildBrandingImageKey, productImageExtensionFor } from '@/utils/productImageKeys';
 import type { CatalogContact, CatalogStatus } from '@/models/types/catalog.types';
 import type {
+  BrandingCommitInput,
+  BrandingUploadUrlInput,
   CreateCatalogInput,
   UpdateBusinessProfileInput,
   UpdateCatalogInput,
@@ -334,6 +341,109 @@ export async function updateBusinessProfile(
   if (!updated) return { outcome: 'NOT_FOUND' };
 
   return { outcome: 'UPDATED', profile: toBusinessProfileDto(updated) };
+}
+
+// ── Branding images (feature 2) ─────────────────────────────────────────────
+//
+// The logo and cover ride the SAME key space, bucket and containment rules as a
+// product image (see utils/productImageKeys.ts) — they differ only in living
+// under a reserved slot name instead of a product id.
+//
+// The cover has no Mirage counterpart at all and never reaches the public page;
+// the logo becomes the restaurant `icon` at publish. The profile DTO's
+// `publicFields` is what tells the client which is which.
+
+/** What a presigned branding slot hands back to the client. */
+export interface BrandingSlotDto {
+  key: string;
+  /** A WRITE bearer credential for exactly that key until `expiresAt`. */
+  url: string;
+  expiresAt: string;
+}
+
+export type BrandingSlotResult =
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'OK'; slot: BrandingSlotDto };
+
+/** Mints one presigned PUT slot for the catalog logo or cover. */
+export async function createBrandingImageSlot(
+  userId: string,
+  input: BrandingUploadUrlInput
+): Promise<BrandingSlotResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NOT_FOUND' };
+
+  const key = buildBrandingImageKey(
+    (catalog._id as Types.ObjectId).toHexString(),
+    input.slot,
+    randomUUID(),
+    productImageExtensionFor(input.contentType)
+  );
+
+  // The declared content type is part of the SIGNATURE, so the uploader can only
+  // ever store an object of that type at that key.
+  const url = await presignObjectPutUrl(
+    BUCKET_ARTIFACTS,
+    key,
+    env.PRODUCT_IMAGE_UPLOAD_URL_TTL_SECONDS,
+    input.contentType
+  );
+
+  return {
+    outcome: 'OK',
+    slot: {
+      key,
+      url,
+      expiresAt: new Date(
+        Date.now() + env.PRODUCT_IMAGE_UPLOAD_URL_TTL_SECONDS * 1000
+      ).toISOString(),
+    },
+  };
+}
+
+export type CommitBrandingResult =
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'INVALID_KEY' }
+  | { outcome: 'FORBIDDEN' }
+  | { outcome: 'OBJECT_NOT_FOUND' }
+  | { outcome: 'TOO_LARGE' }
+  | { outcome: 'COMMITTED'; profile: BusinessProfileDto };
+
+/**
+ * Binds an uploaded object as the catalog logo or cover.
+ *
+ * Bumps `draftRevision` like every other authoring write: branding reaches
+ * customers only at publish, so changing it must light up the "draft changes not
+ * yet live" badge.
+ *
+ * ORDERING: the pointer flips first, then the old objects are swept — a crash
+ * between the two leaves an orphan rather than a catalog pointing at an object
+ * that no longer exists.
+ */
+export async function commitBrandingImage(
+  userId: string,
+  input: BrandingCommitInput
+): Promise<CommitBrandingResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NOT_FOUND' };
+
+  const catalogId = catalog._id as Types.ObjectId;
+  const check = await checkCatalogImageKey(catalogId, input.key);
+  if (check.outcome !== 'OK') return check;
+
+  const field = input.slot === 'logo' ? 'logoKey' : 'coverImageKey';
+  const previousKey = input.slot === 'logo' ? catalog.logoKey : catalog.coverImageKey;
+
+  const updated = await Catalog.findOneAndUpdate(
+    { _id: catalogId, deletedAt: null },
+    { $set: { [field]: input.key }, $inc: { draftRevision: 1 } },
+    { new: true, runValidators: true }
+  ).exec();
+  if (!updated) return { outcome: 'NOT_FOUND' };
+
+  await sweepSupersededImages(input.key, previousKey);
+
+  return { outcome: 'COMMITTED', profile: toBusinessProfileDto(updated) };
 }
 
 /**

@@ -15,12 +15,17 @@ import { decodePositionCursor, type PositionCursor } from '@/utils/cursor';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import {
+  brandingCommitSchema,
+  brandingUploadUrlSchema,
   bulkProductsSchema,
   catalogEntityIdParamsSchema,
   createCatalogSchema,
   createCategorySchema,
   createProductSchema,
+  duplicateProductSchema,
   listProductsQuerySchema,
+  productImageCommitSchema,
+  productImageUploadUrlSchema,
   reorderSchema,
   updateBusinessProfileSchema,
   updateCatalogSchema,
@@ -28,6 +33,8 @@ import {
   updateProductSchema,
 } from '@/validation/catalogSchemas';
 import {
+  commitBrandingImage,
+  createBrandingImageSlot,
   createCatalog,
   getBusinessProfile,
   getCatalog,
@@ -43,14 +50,19 @@ import {
 } from '@/services/catalogCategoriesService';
 import {
   bulkProducts,
+  commitProductImage,
   createProduct,
+  createProductImageSlot,
   deleteProduct,
+  duplicateProduct,
   getProduct,
   listProducts,
   reorderProducts,
   setProductArchived,
   updateProduct,
 } from '@/services/catalogProductsService';
+import { consumeRateWindow } from '@/utils/rateLimit';
+import { env } from '@/config/env';
 import type { Response } from 'express';
 import type { ZodError } from 'zod';
 
@@ -85,6 +97,32 @@ function fail(res: Response, httpStatus: number, code: string, message: string):
  */
 function noCatalog(res: Response): void {
   fail(res, 404, 'CATALOG_NOT_FOUND', 'You do not have a catalog yet.');
+}
+
+/**
+ * The one place a rejected image key becomes a response.
+ *
+ * Four distinct statuses rather than one, because each has a different fix and
+ * the client shows a different next action: re-upload, pick a smaller file, or
+ * "this is not yours". FORBIDDEN is the ONE place in this router that is not
+ * enumeration-safe, and deliberately so — the key is a value the client already
+ * holds, so a 403 leaks nothing it did not already know, and collapsing it into
+ * 404 would leave a user with a valid image staring at "product not found".
+ */
+function failImageKey(
+  res: Response,
+  outcome: 'INVALID_KEY' | 'FORBIDDEN' | 'OBJECT_NOT_FOUND' | 'TOO_LARGE'
+): void {
+  switch (outcome) {
+    case 'INVALID_KEY':
+      return fail(res, 422, 'INVALID_KEY', 'That image key is not valid.');
+    case 'FORBIDDEN':
+      return fail(res, 403, 'FORBIDDEN', 'That image does not belong to this catalog.');
+    case 'OBJECT_NOT_FOUND':
+      return fail(res, 409, 'OBJECT_NOT_FOUND', 'Upload the image before saving it.');
+    case 'TOO_LARGE':
+      return fail(res, 413, 'PAYLOAD_TOO_LARGE', 'That image is too large. Please choose a smaller one.');
+  }
 }
 
 // ── Catalog ─────────────────────────────────────────────────────────────────
@@ -147,6 +185,65 @@ router.patch(
     });
 
     res.status(200).json({ status: 'success', catalog: result.catalog });
+  })
+);
+
+/**
+ * POST /catalog/logo/upload-url — mint a presigned PUT slot for the logo or the
+ * cover image (feature 2).
+ *
+ * One route with a `slot` field rather than two near-identical ones: they differ
+ * only in which field the commit writes.
+ */
+router.post(
+  '/logo/upload-url',
+  asyncHandler(async (req, res) => {
+    const parsed = brandingUploadUrlSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `product-image-upload:${userId}`,
+      env.PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await createBrandingImageSlot(userId, parsed.data);
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+
+    res.status(200).json({ status: 'success', ...result.slot });
+  })
+);
+
+/** PUT /catalog/logo — bind an uploaded object as the logo or cover. */
+router.put(
+  '/logo',
+  asyncHandler(async (req, res) => {
+    const parsed = brandingCommitSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+    const result = await commitBrandingImage(userId, parsed.data);
+
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome !== 'COMMITTED') return failImageKey(res, result.outcome);
+
+    track(AnalyticsEvent.CATALOG_UPDATED, {
+      user_id_hash: hashIdentifier(userId),
+      catalog_id: result.profile.id,
+      fields: [parsed.data.slot],
+    });
+
+    res.status(200).json({ status: 'success', profile: result.profile });
   })
 );
 
@@ -390,6 +487,11 @@ router.post(
           'DUPLICATE_NAME',
           'A product with that name already exists in your catalog.'
         );
+      case 'INVALID_KEY':
+      case 'FORBIDDEN':
+      case 'OBJECT_NOT_FOUND':
+      case 'TOO_LARGE':
+        return failImageKey(res, result.outcome);
       case 'CREATED':
         break;
     }
@@ -461,6 +563,88 @@ router.post(
   })
 );
 
+/**
+ * POST /catalog/products/image/upload-url — mint ONE presigned PUT slot.
+ *
+ * STATIC, so it is declared before `/products/:id` per the file header.
+ *
+ * Stateless and cheap (a local SigV4 presign — no S3 call, no DB write), so it
+ * carries its own generous rate window rather than anything heavier, exactly
+ * like the avatar and model-image slots.
+ *
+ * The returned `url` is a WRITE bearer credential for that one key until
+ * `expiresAt`: this response body is the ONLY place it may appear — never a log
+ * line, never an analytics property.
+ */
+router.post(
+  '/products/image/upload-url',
+  asyncHandler(async (req, res) => {
+    const parsed = productImageUploadUrlSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `product-image-upload:${userId}`,
+      env.PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await createProductImageSlot(userId, parsed.data);
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'NOT_FOUND', 'Product not found.');
+    }
+
+    res.status(200).json({ status: 'success', ...result.slot });
+  })
+);
+
+/**
+ * PUT /catalog/products/:id/image — bind an uploaded object to a product
+ * (features 13, 16).
+ *
+ * Separate from `PATCH /products/:id` on purpose: this one has to prove the
+ * object exists and is within the size cap before it flips the pointer, and
+ * folding that into the general field patch would mean every rename paid for an
+ * S3 HEAD.
+ */
+router.put(
+  '/products/:id/image',
+  asyncHandler(async (req, res) => {
+    const params = catalogEntityIdParamsSchema.safeParse(req.params);
+    if (!params.success) return badRequest(res, params.error);
+
+    const parsed = productImageCommitSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+    const result = await commitProductImage(userId, params.data.id, parsed.data.key);
+
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'NOT_FOUND', 'Product not found.');
+    }
+    if (result.outcome !== 'COMMITTED') return failImageKey(res, result.outcome);
+
+    track(AnalyticsEvent.CATALOG_PRODUCT_UPDATED, {
+      user_id_hash: hashIdentifier(userId),
+      product_id: result.product.id,
+      fields: ['imageKey'],
+    });
+
+    res.status(200).json({ status: 'success', product: result.product });
+  })
+);
+
 router.get(
   '/products/:id',
   asyncHandler(async (req, res) => {
@@ -504,6 +688,22 @@ router.patch(
           'DUPLICATE_NAME',
           'A product with that name already exists in your catalog.'
         );
+      case 'MODEL_NOT_FOUND':
+        // Not-owned and not-existing collapse into one answer — never confirm
+        // someone else's model exists.
+        return fail(res, 404, 'MODEL_NOT_FOUND', 'That 3D model was not found.');
+      case 'MODEL_NOT_READY':
+        return fail(
+          res,
+          409,
+          'MODEL_NOT_READY',
+          'That 3D model is not finished yet. Wait for it to complete, then try again.'
+        );
+      case 'INVALID_KEY':
+      case 'FORBIDDEN':
+      case 'OBJECT_NOT_FOUND':
+      case 'TOO_LARGE':
+        return failImageKey(res, result.outcome);
       case 'UPDATED':
         break;
     }
@@ -515,6 +715,49 @@ router.patch(
     });
 
     res.status(200).json({ status: 'success', product: result.product });
+  })
+);
+
+/**
+ * POST /catalog/products/:id/duplicate (feature 18).
+ *
+ * The copy is auto-renamed unless the caller names it. That is not cosmetic:
+ * Mirage keys items by name within a restaurant, so two products sharing a name
+ * would collide at publish — long after the user pressed Duplicate.
+ */
+router.post(
+  '/products/:id/duplicate',
+  asyncHandler(async (req, res) => {
+    const params = catalogEntityIdParamsSchema.safeParse(req.params);
+    if (!params.success) return badRequest(res, params.error);
+
+    const parsed = duplicateProductSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+    const result = await duplicateProduct(userId, params.data.id, parsed.data);
+
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'NOT_FOUND', 'Product not found.');
+    }
+    if (result.outcome === 'DUPLICATE_NAME') {
+      return fail(
+        res,
+        409,
+        'DUPLICATE_NAME',
+        'A product with that name already exists in your catalog.'
+      );
+    }
+
+    track(AnalyticsEvent.CATALOG_PRODUCT_CREATED, {
+      user_id_hash: hashIdentifier(userId),
+      product_id: result.product.id,
+      product_type: result.product.type,
+      has_category: result.product.categoryId !== null,
+    });
+
+    res.status(201).json({ status: 'success', product: result.product });
   })
 );
 

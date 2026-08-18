@@ -2,6 +2,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/catalog_json.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
 import '../../domain/entities/product_type.dart';
@@ -24,6 +25,42 @@ class CatalogProductPage {
   bool get hasMore => nextCursor != null;
 
   static const empty = CatalogProductPage(items: <CatalogProduct>[]);
+}
+
+/// One presigned upload slot: where to PUT the bytes, and the key to send back
+/// at commit.
+///
+/// [url] is a WRITE bearer credential for exactly that key until [expiresAt].
+/// It belongs in a PUT and nowhere else — never a log line, never analytics.
+class ProductImageSlot {
+  const ProductImageSlot({
+    required this.key,
+    required this.url,
+    required this.expiresAt,
+  });
+
+  final String key;
+  final String url;
+  final DateTime? expiresAt;
+
+  factory ProductImageSlot.fromMap(Map<String, dynamic> map) => ProductImageSlot(
+        key: (map['key'] ?? '').toString(),
+        url: (map['url'] ?? '').toString(),
+        expiresAt: catalogDate(map['expiresAt']),
+      );
+}
+
+/// The image content types the backend will presign. Sending anything else is a
+/// 400: the type is baked into the signature, so this set also fixes what can
+/// ever be stored.
+enum ProductImageContentType { jpeg, png, webp }
+
+extension ProductImageContentTypeX on ProductImageContentType {
+  String get apiValue => switch (this) {
+        ProductImageContentType.jpeg => 'image/jpeg',
+        ProductImageContentType.png => 'image/png',
+        ProductImageContentType.webp => 'image/webp',
+      };
 }
 
 /// The bulk actions `POST /catalog/products/bulk` accepts (feature 30).
@@ -64,9 +101,15 @@ abstract interface class CatalogProductsRepository {
 
   /// Creates a product.
   ///
-  /// A 3D product REQUIRES [sourceModelId] — a finished model the caller owns —
-  /// and an image-only product must not carry one; the server enforces both. The
-  /// asset URLs are copied server-side from that model and frozen on the product.
+  /// The two types need different things and the server enforces both:
+  ///   • 3D REQUIRES [sourceModelId] — a finished model the caller owns — and
+  ///     must not carry [imageKey]; its card image is the model's generated
+  ///     preview. The asset URLs are copied server-side and frozen on the
+  ///     product, so a later regeneration cannot change what is published.
+  ///   • image-only REQUIRES [imageKey] — an already-uploaded object. The upload
+  ///     therefore comes FIRST: [createImageSlot] with no product id, PUT the
+  ///     bytes, then create with the key. A product with no image could never
+  ///     publish, which is why it is refused up front rather than at publish.
   Future<CatalogProduct> create({
     required ProductType type,
     required String name,
@@ -77,11 +120,15 @@ abstract interface class CatalogProductsRepository {
     ProductAvailability? availability,
     bool? featured,
     String? sourceModelId,
+    String? imageKey,
   });
 
-  /// Patches editable fields. `type` is deliberately NOT patchable: converting
-  /// image-only → 3D forces a delete-and-recreate on Mirage (the product gets a
-  /// new public link), so it needs its own deliberate flow.
+  /// Patches editable fields, replaces the backing asset, or converts the type.
+  ///
+  /// A conversion must carry the asset its new type needs IN THE SAME call —
+  /// [type] `threeD` with [sourceModelId], or [type] `imageOnly` with
+  /// [imageKey]. That is what stops a one-word patch leaving a product typed for
+  /// an asset it does not have; the server returns 400 otherwise.
   ///
   /// [categoryId] uses a sentinel so that passing null explicitly means "move to
   /// Uncategorized", distinct from omitting it.
@@ -94,7 +141,27 @@ abstract interface class CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductType? type,
+    String? sourceModelId,
+    String? imageKey,
   });
+
+  /// Mints a presigned slot to upload a product image into.
+  ///
+  /// Omit [productId] when the product does not exist yet (the image-only create
+  /// flow); pass it when replacing an existing product's image.
+  Future<ProductImageSlot> createImageSlot({
+    required ProductImageContentType contentType,
+    String? productId,
+  });
+
+  /// Binds an uploaded object to a product (feature 16). Call it only after the
+  /// PUT to the slot's url has succeeded — the server checks the object exists.
+  Future<CatalogProduct> commitImage(String productId, String key);
+
+  /// Duplicates a product (feature 18). The copy is auto-renamed unless [name]
+  /// is given, because Mirage keys items by name within a restaurant.
+  Future<CatalogProduct> duplicate(String id, {String? name});
 
   /// Archive (feature 19) — hides the product and removes it from the public
   /// catalog on the next publish, reversibly.
@@ -185,6 +252,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
     ProductAvailability? availability,
     bool? featured,
     String? sourceModelId,
+    String? imageKey,
   }) =>
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -199,6 +267,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
             if (availability != null) 'availability': availability.apiValue,
             if (featured != null) 'featured': featured,
             if (sourceModelId != null) 'sourceModelId': sourceModelId,
+            if (imageKey != null) 'imageKey': imageKey,
           },
         );
         return _productFrom(res.data);
@@ -214,6 +283,9 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductType? type,
+    String? sourceModelId,
+    String? imageKey,
   }) =>
       mapCatalogErrors(() async {
         final res = await _dio.patch<Map<String, dynamic>>(
@@ -228,7 +300,55 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
             if (tags != null) 'tags': tags,
             if (availability != null) 'availability': availability.apiValue,
             if (featured != null) 'featured': featured,
+            // `unknown` is this build's fallback for a value it does not
+            // recognise; sending it would be a 400 on a strict enum.
+            if (type != null && type != ProductType.unknown) 'type': type.apiValue,
+            if (sourceModelId != null) 'sourceModelId': sourceModelId,
+            if (imageKey != null) 'imageKey': imageKey,
           },
+        );
+        return _productFrom(res.data);
+      });
+
+  @override
+  Future<ProductImageSlot> createImageSlot({
+    required ProductImageContentType contentType,
+    String? productId,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/products/image/upload-url',
+          data: {
+            'contentType': contentType.apiValue,
+            if (productId != null) 'productId': productId,
+          },
+        );
+        final body = res.data;
+        if (body == null || body['key'] is! String || body['url'] is! String) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return ProductImageSlot.fromMap(body);
+      });
+
+  @override
+  Future<CatalogProduct> commitImage(String productId, String key) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.put<Map<String, dynamic>>(
+          '/catalog/products/$productId/image',
+          data: {'key': key},
+        );
+        return _productFrom(res.data);
+      });
+
+  @override
+  Future<CatalogProduct> duplicate(String id, {String? name}) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/products/$id/duplicate',
+          data: {if (name != null) 'name': name},
         );
         return _productFrom(res.data);
       });

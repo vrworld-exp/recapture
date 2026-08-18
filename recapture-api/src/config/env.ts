@@ -373,6 +373,14 @@ const envSchema = z.object({
   CATALOG_PRODUCT_IMAGE_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880), // 5 MiB
   /** Presigned-PUT TTL for a product-image upload slot (seconds). */
   PRODUCT_IMAGE_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /**
+   * Presigned product-image slots per user per window. Higher than the avatar
+   * cap: a business setting up a catalog uploads a photo per product, and the
+   * whole first session is legitimately dozens of them.
+   */
+  PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(120),
+  /** Sliding window for the product-image slot cap (seconds). */
+  PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /**

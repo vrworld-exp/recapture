@@ -15,6 +15,7 @@ import {
   PRODUCT_AVAILABILITIES,
   PRODUCT_TYPES,
 } from '@/models/types/catalog.types';
+import { BRANDING_SLOTS, PRODUCT_IMAGE_CONTENT_TYPES } from '@/utils/productImageKeys';
 
 // A Mongo ObjectId as a 24-char hex string. Validated here so a malformed id is
 // a 400 that never reaches the DB, and mongoose stays out of the validation
@@ -110,6 +111,32 @@ export const updateBusinessProfileSchema = updateCatalogSchema;
 
 export type UpdateBusinessProfileInput = UpdateCatalogInput;
 
+/**
+ * POST /catalog/logo/upload-url — mint a presigned PUT slot for a branding image
+ * (feature 2).
+ *
+ * The same three-step shape as a product image, and the same closed content-type
+ * set, because it is the same key space and the same bucket.
+ */
+export const brandingUploadUrlSchema = z
+  .object({
+    slot: z.enum(BRANDING_SLOTS),
+    contentType: z.enum(PRODUCT_IMAGE_CONTENT_TYPES),
+  })
+  .strict();
+
+export type BrandingUploadUrlInput = z.infer<typeof brandingUploadUrlSchema>;
+
+/** PUT /catalog/logo — bind an uploaded object as the logo or cover. */
+export const brandingCommitSchema = z
+  .object({
+    slot: z.enum(BRANDING_SLOTS),
+    key: z.string().trim().min(1).max(512),
+  })
+  .strict();
+
+export type BrandingCommitInput = z.infer<typeof brandingCommitSchema>;
+
 // ── Categories ──────────────────────────────────────────────────────────────
 
 export const createCategorySchema = z
@@ -190,6 +217,16 @@ export const createProductSchema = z
     featured: z.boolean().optional(),
     position: z.number().int().min(0).optional(),
     sourceModelId: objectId('model id').optional(),
+    /**
+     * A COMMITTED product-image key (from POST /catalog/products/image/upload-url
+     * followed by the PUT to S3). Required for an image-only product and
+     * forbidden for a 3D one — see the superRefine below.
+     *
+     * Bounded rather than free-form: the key is parsed strictly by
+     * productImageKeys.ts, and a 512-char ceiling stops a pathological body
+     * reaching that parser at all.
+     */
+    imageKey: z.string().trim().min(1).max(512).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -207,17 +244,43 @@ export const createProductSchema = z
         message: 'An image-only product cannot have sourceModelId',
       });
     }
+    // An image-only product with no image is a card with nothing on it, and it
+    // can never publish (the §7.7 gate rejects it). Refuse it here, where the
+    // user is still looking at the form, rather than at publish time.
+    if (value.type === 'IMAGE_ONLY' && !value.imageKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imageKey'],
+        message: 'An image-only product needs an uploaded image',
+      });
+    }
+    if (value.type === 'THREE_D' && value.imageKey) {
+      // A 3D product's card image is the model's generated preview; accepting a
+      // second source would leave two fields racing to be "the picture".
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imageKey'],
+        message: 'A 3D product uses its model preview, not an uploaded image',
+      });
+    }
   });
 
 export type CreateProductInput = z.infer<typeof createProductSchema>;
 
 /**
- * PATCH /catalog/products/:id.
+ * PATCH /catalog/products/:id (features 14, 15, 17).
  *
- * `type` is NOT patchable here. Converting IMAGE_ONLY → THREE_D changes what
- * has to happen on the Mirage side (§12 edge case 7) and needs its own endpoint
- * that can reason about the published item — allowing it as a field patch would
- * make a one-word body silently trigger a delete-and-recreate on publish.
+ * `type` IS patchable — but only in a request that also carries the asset the
+ * new type needs. That constraint is the whole safety property: an earlier
+ * revision of this schema refused `type` outright, on the grounds that a
+ * one-word body should not be able to trigger a conversion. Requiring the
+ * matching asset in the SAME request addresses that directly, and a conversion
+ * that arrives without its asset is a 400 rather than a product left in a state
+ * it has no asset for.
+ *
+ * The publish planner needs no extra marker to notice a conversion: the
+ * `publishedSnapshot` already records the `type` that was last pushed, so a
+ * conversion is just another field that differs.
  */
 export const updateProductSchema = z
   .object({
@@ -229,10 +292,40 @@ export const updateProductSchema = z
     availability: z.enum(PRODUCT_AVAILABILITIES).optional(),
     featured: z.boolean().optional(),
     position: z.number().int().min(0).optional(),
+    /** Convert the product to this type. Requires the matching asset below. */
+    type: z.enum(PRODUCT_TYPES).optional(),
+    /** Replace the backing 3D model (feature 15), or supply one for a conversion. */
+    sourceModelId: objectId('model id').optional(),
+    /** Replace the image (feature 16), or supply one for a conversion. */
+    imageKey: z.string().trim().min(1).max(512).optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {
     message: 'Provide at least one field to update',
+  })
+  .superRefine((value, ctx) => {
+    if (value.type === 'THREE_D' && !value.sourceModelId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sourceModelId'],
+        message: 'Converting to a 3D product needs sourceModelId in the same request',
+      });
+    }
+    if (value.type === 'IMAGE_ONLY' && !value.imageKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imageKey'],
+        message: 'Converting to an image-only product needs imageKey in the same request',
+      });
+    }
+    // Two assets in one request would leave the resulting type ambiguous.
+    if (value.sourceModelId && value.imageKey) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['imageKey'],
+        message: 'Send a model or an image, not both',
+      });
+    }
   });
 
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
@@ -301,6 +394,54 @@ export const bulkProductsSchema = z
   });
 
 export type BulkProductsInput = z.infer<typeof bulkProductsSchema>;
+
+/**
+ * POST /catalog/products/:id/duplicate (feature 18).
+ *
+ * `name` is optional: the service auto-renames to avoid Mirage's
+ * per-restaurant name collision when the caller does not choose one.
+ */
+export const duplicateProductSchema = z
+  .object({
+    name: z.string().trim().min(1).max(PRODUCT_NAME_MAX).optional(),
+  })
+  .strict();
+
+export type DuplicateProductInput = z.infer<typeof duplicateProductSchema>;
+
+// ── Product images (features 13, 16) ────────────────────────────────────────
+
+/**
+ * POST /catalog/products/image/upload-url — mint one presigned PUT slot.
+ *
+ * `productId` is OPTIONAL because the upload can legitimately come first: an
+ * image-only product is created WITH its committed key (feature 13), so at
+ * upload time there is no product yet. When it is absent the route mints a
+ * staging slot; when it is present the slot is that product's id and the route
+ * checks the caller owns it.
+ */
+export const productImageUploadUrlSchema = z
+  .object({
+    contentType: z.enum(PRODUCT_IMAGE_CONTENT_TYPES),
+    productId: objectId('product id').optional(),
+  })
+  .strict();
+
+export type ProductImageUploadUrlInput = z.infer<typeof productImageUploadUrlSchema>;
+
+/**
+ * PUT /catalog/products/:id/image — bind an uploaded object to a product.
+ *
+ * The key is client-supplied, which is exactly why it is parsed strictly and
+ * checked against the caller's own catalog before anything is written.
+ */
+export const productImageCommitSchema = z
+  .object({
+    key: z.string().trim().min(1).max(512),
+  })
+  .strict();
+
+export type ProductImageCommitInput = z.infer<typeof productImageCommitSchema>;
 
 // ── Shared param schemas ────────────────────────────────────────────────────
 
