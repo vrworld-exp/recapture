@@ -82,6 +82,28 @@ export function productImageExtensionFor(
   return EXT_BY_CONTENT_TYPE[contentType];
 }
 
+/** Extension → the content type that was bound into its presigned signature. */
+const CONTENT_TYPE_BY_EXT: Readonly<Record<ProductImageExtension, ProductImageContentType>> = {
+  jpg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+};
+
+/**
+ * The content type of a stored object, derived from its KEY.
+ *
+ * The key's extension is authoritative: presigning bound the content type into
+ * the signature, so nothing else can be stored there. Callers that re-upload a
+ * stored image somewhere else (the publish worker streaming a logo into Mirage)
+ * label it from here rather than from S3's `ContentType`, which degrades to
+ * `application/octet-stream` for objects written by other paths.
+ */
+export function productImageContentTypeFor(
+  ext: ProductImageExtension
+): ProductImageContentType {
+  return CONTENT_TYPE_BY_EXT[ext];
+}
+
 /** Thrown by the builders on any invalid segment — callers never receive a
  * malformed key. */
 export class ProductImageKeyError extends Error {

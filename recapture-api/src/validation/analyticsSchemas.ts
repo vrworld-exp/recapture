@@ -82,6 +82,7 @@ export const AnalyticsEvent = {
   CATALOG_PRODUCT_ARCHIVED: 'catalog_product_archived',
   CATALOG_PRODUCT_DELETED: 'catalog_product_deleted',
   CATALOG_PRODUCTS_BULK_ACTION: 'catalog_products_bulk_action',
+  CATALOG_CLIENT_PROVISIONED: 'catalog_client_provisioned',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -508,6 +509,24 @@ const catalogCreatedProps = z
   })
   .strict();
 
+/**
+ * The catalog was bound to a Mirage restaurant — the moment its public URL is
+ * minted and frozen, and therefore the moment the QR becomes printable. Emitted
+ * ONCE per catalog for the rest of its life.
+ *
+ * The Mirage restaurant id is deliberately absent: it is another system's
+ * identifier and the customer-facing URL is built from it, so it is closer to a
+ * public address than to an opaque analytics id.
+ */
+const catalogClientProvisionedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    /** True when an existing Mirage restaurant was adopted instead of created. */
+    adopted_existing: z.boolean(),
+  })
+  .strict();
+
 const catalogUpdatedProps = z
   .object({
     user_id_hash: z.string().min(1),
@@ -639,6 +658,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_PRODUCT_ARCHIVED]: catalogProductArchivedProps,
   [AnalyticsEvent.CATALOG_PRODUCT_DELETED]: catalogProductDeletedProps,
   [AnalyticsEvent.CATALOG_PRODUCTS_BULK_ACTION]: catalogProductsBulkActionProps,
+  [AnalyticsEvent.CATALOG_CLIENT_PROVISIONED]: catalogClientProvisionedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

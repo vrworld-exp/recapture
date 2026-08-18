@@ -141,6 +141,21 @@ CatalogSchema.index({ userId: 1 }, { unique: true });
 // staff/ops listing and any future backfill sweep.
 CatalogSchema.index({ status: 1, updatedAt: -1 });
 
+// ONE catalog per Mirage restaurant, enforced by the database.
+//
+// Provisioning ADOPTS a Mirage restaurant whose name matches (§7.5) — which is
+// what lets a pilot business that already exists in Mirage keep its page. The
+// hazard is the other direction: two ReCapture users who both call their
+// catalog "Blue Cafe" would otherwise adopt the SAME restaurant, and the second
+// one's publish would write its products into the first one's public page.
+//
+// Partial rather than sparse so the constraint applies to exactly the documents
+// that carry a mapping; an unprovisioned catalog holds no slot.
+CatalogSchema.index(
+  { mirageRestaurantId: 1 },
+  { unique: true, partialFilterExpression: { mirageRestaurantId: { $type: 'string' } } }
+);
+
 export const Catalog = model<ICatalog>('Catalog', CatalogSchema);
 
 export {
