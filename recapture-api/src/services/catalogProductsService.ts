@@ -64,6 +64,19 @@ export interface ProductDto {
   glbUrl: string | null;
   usdzUrl: string | null;
   thumbnailUrl: string | null;
+  /**
+   * WHICH capture and WHICH of its models back this product — the owner's own
+   * ids, safe to return to that owner and to nobody else (every route through
+   * here is already scoped by `findOwnedCatalog`).
+   *
+   * Both null on an image-only product. They exist so an editor can open the
+   * model picker on the right capture with the right row already selected;
+   * without them a client can only re-pick blind. Nothing else about the model
+   * belongs here — the model LIST is read from the projects surface, which is
+   * where models live.
+   */
+  sourceProjectId: string | null;
+  sourceModelId: string | null;
   syncStatus: SyncStatus;
   /** OUR message for the last failure, never Mirage's prose. */
   syncError: string | null;
@@ -103,6 +116,9 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     // stored so the key stays the single truth — a stored URL would be a second
     // copy to keep in step every time the image is replaced.
     thumbnailUrl: p.assets?.thumbnailUrl ?? productImageUrl(p.assets?.imageKey),
+    // Field by field, like everything else here — never a spread of the record.
+    sourceProjectId: p.sourceProjectId ? p.sourceProjectId.toHexString() : null,
+    sourceModelId: p.sourceModelId ? p.sourceModelId.toHexString() : null,
     syncStatus: p.syncStatus,
     syncError: p.syncError?.message ?? null,
     isArchived: Boolean(p.archivedAt),

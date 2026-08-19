@@ -34,36 +34,44 @@ import 'app_router.dart';
 String? flowBackRouteFor(String location) {
   // The Preview gallery path carries a concrete project id (`:id`), so it can't
   // be matched by the exact-string switch below — detect it by shape first.
-  if (location.startsWith('/admin/projects/') && location.endsWith('/preview')) {
+  if (location.startsWith('/admin/projects/') &&
+      location.endsWith('/preview')) {
     return AppRoutes.projects;
   }
+  // Same shape problem: the change-model path carries a concrete product id.
+  // Normally pushed (so this never fires); the mapping is for the cold
+  // deep-link, where there is no catalog underneath to pop to.
+  if (location.startsWith('/catalog/products/') &&
+      location.endsWith('/model')) {
+    return AppRoutes.catalog;
+  }
   return switch (location) {
-      AppRoutes.otpVerify => AppRoutes.auth,
-      AppRoutes.createProject => AppRoutes.projects,
-      AppRoutes.profile => AppRoutes.projects,
-      // The catalog shell is a top-level destination reached with go() from
-      // Projects, so it has nothing to pop — back lands on Projects rather than
-      // exiting the app. Its sub-screens map back to the shell as they land.
-      AppRoutes.catalog => AppRoutes.projects,
-      // Normally pushed from the shell (so this never fires); the mapping is
-      // for the cold deep-link, where there is no shell underneath to pop to.
-      AppRoutes.productNew => AppRoutes.catalog,
-      AppRoutes.preCapture => AppRoutes.projects,
-      AppRoutes.permissions => AppRoutes.preCapture,
-      AppRoutes.levelAIntro => AppRoutes.permissions,
-      AppRoutes.levelAReview => AppRoutes.levelACapture,
-      AppRoutes.levelAComplete => AppRoutes.levelAReview,
-      AppRoutes.levelBIntro => AppRoutes.levelAComplete,
-      AppRoutes.levelBReview => AppRoutes.levelBCapture,
-      AppRoutes.levelBComplete => AppRoutes.levelBReview,
-      AppRoutes.levelCIntro => AppRoutes.levelBComplete,
-      AppRoutes.levelCReview => AppRoutes.levelCCapture,
-      AppRoutes.levelCComplete => AppRoutes.levelCReview,
-      AppRoutes.processing => AppRoutes.projects,
-      AppRoutes.modelReady => AppRoutes.projects,
-      AppRoutes.arPreview => AppRoutes.modelReady,
-      _ => null,
-    };
+    AppRoutes.otpVerify => AppRoutes.auth,
+    AppRoutes.createProject => AppRoutes.projects,
+    AppRoutes.profile => AppRoutes.projects,
+    // The catalog shell is a top-level destination reached with go() from
+    // Projects, so it has nothing to pop — back lands on Projects rather than
+    // exiting the app. Its sub-screens map back to the shell as they land.
+    AppRoutes.catalog => AppRoutes.projects,
+    // Normally pushed from the shell (so this never fires); the mapping is
+    // for the cold deep-link, where there is no shell underneath to pop to.
+    AppRoutes.productNew => AppRoutes.catalog,
+    AppRoutes.preCapture => AppRoutes.projects,
+    AppRoutes.permissions => AppRoutes.preCapture,
+    AppRoutes.levelAIntro => AppRoutes.permissions,
+    AppRoutes.levelAReview => AppRoutes.levelACapture,
+    AppRoutes.levelAComplete => AppRoutes.levelAReview,
+    AppRoutes.levelBIntro => AppRoutes.levelAComplete,
+    AppRoutes.levelBReview => AppRoutes.levelBCapture,
+    AppRoutes.levelBComplete => AppRoutes.levelBReview,
+    AppRoutes.levelCIntro => AppRoutes.levelBComplete,
+    AppRoutes.levelCReview => AppRoutes.levelCCapture,
+    AppRoutes.levelCComplete => AppRoutes.levelCReview,
+    AppRoutes.processing => AppRoutes.projects,
+    AppRoutes.modelReady => AppRoutes.projects,
+    AppRoutes.arPreview => AppRoutes.modelReady,
+    _ => null,
+  };
 }
 
 /// The one BACK behavior every back affordance (system key, AppBar arrow)

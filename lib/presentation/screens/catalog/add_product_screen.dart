@@ -7,15 +7,15 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/product_create_notifier.dart';
-import '../../../application/projects/owner_model_state_notifier.dart';
-import '../../../application/projects/projects_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/product_availability.dart';
 import '../../../domain/entities/product_type.dart';
+import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
-import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/app_text_field.dart';
+import '../../widgets/model_picker_field.dart';
+import '../projects/model_viewer_screen.dart';
 
 /// Hand-synced with `createProductSchema` in
 /// `recapture-api/src/validation/catalogSchemas.ts` (there is no shared package
@@ -38,7 +38,12 @@ const int kProductDescriptionMaxLength = 2000;
 /// carries an image preview and a project list, which a 360-wide dialog cannot
 /// hold on a phone without becoming a scroll-within-a-scroll.
 class AddProductScreen extends ConsumerStatefulWidget {
-  const AddProductScreen({super.key});
+  const AddProductScreen({super.key, this.renderBuilder});
+
+  /// How a previewed model is rendered. Injectable for tests only — the real
+  /// renderer drives a WebView, which has no platform implementation in a
+  /// widget test. Null means the viewer's own default.
+  final ModelRenderBuilder? renderBuilder;
 
   @override
   ConsumerState<AddProductScreen> createState() => _AddProductScreenState();
@@ -54,10 +59,23 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
   ProductAvailability _availability = ProductAvailability.inStock;
   bool _featured = false;
 
-  /// The project whose finished model backs a 3D product. The model ID itself
-  /// is resolved from this by [ownerModelStateProvider] — a project is what the
-  /// user recognises, a model id is not.
+  /// The capture whose model backs a 3D product. A capture is what the user
+  /// recognises; it is the way IN to the models, not the answer.
   String? _selectedProjectId;
+
+  /// THE ANSWER: which of that capture's models this product will use.
+  ///
+  /// Real state, not derived from the project. It used to be a getter that read
+  /// whatever single model `GET /projects/:id` called the latest — which,
+  /// per AGENTS.md, silently becomes the `optimized` record once one succeeds.
+  /// A user who regenerated because the first result was wrong had no way to
+  /// say which result they meant. Now they pick it, and this holds the pick.
+  ///
+  /// Cleared with [_selectedProjectId] on every capture change: a model id
+  /// belonging to the PREVIOUS capture reaching [_submit] is the one bug this
+  /// feature could introduce, so it is made structurally impossible rather than
+  /// checked for.
+  String? _selectedModelId;
 
   PickedProductImage? _image;
 
@@ -74,20 +92,38 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
     super.dispose();
   }
 
-  /// The chosen project's finished model, or null when nothing is chosen yet.
-  /// Watched rather than fetched once: a project can be picked, changed and
-  /// picked again before Create is pressed.
-  String? get _selectedModelId {
-    final projectId = _selectedProjectId;
-    if (projectId == null) return null;
-    final model = ref.watch(ownerModelStateProvider(projectId)).valueOrNull?.model;
-    return model != null && model.isViewable ? model.id : null;
+  /// Opens one model in the 3D viewer and comes straight back.
+  ///
+  /// The call shape is copied from `owner_model_history_screen.dart` on
+  /// purpose: a DIRECT push, never the `modelViewer` named route, because that
+  /// route resolves the record out of the STAFF provider and an owner only ever
+  /// 403s on it. No approve (staff-only), no regenerate and no optimize — the
+  /// picker's only jobs are select and preview, and a new pending record
+  /// appearing mid-form is a distraction nobody asked for.
+  ///
+  /// Nothing here touches form state, so returning leaves the selection, the
+  /// scroll position and every typed field exactly as they were.
+  void _openModelPreview(ProjectModelView model) {
+    if (!model.isViewable) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ModelViewerScreen(
+          model: model,
+          title: 'Preview',
+          onRegenerate: null,
+          onOptimize: null,
+          renderBuilder:
+              widget.renderBuilder ?? ModelViewerScreen.defaultRenderBuilder,
+        ),
+      ),
+    );
   }
 
   Future<void> _pickImage() async {
     setState(() => _failureMessage = null);
     try {
-      final picked = await ref.read(productImagePickerProvider).pickProductImage();
+      final picked =
+          await ref.read(productImagePickerProvider).pickProductImage();
       if (picked == null || !mounted) return; // cancelled
       setState(() => _image = picked);
     } on ProductImagePickException catch (error) {
@@ -96,7 +132,8 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(
-        () => _failureMessage = "That image couldn't be read. Please choose another.",
+        () => _failureMessage =
+            "That image couldn't be read. Please choose another.",
       );
     }
   }
@@ -111,7 +148,10 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
     // reject, so it is checked in the same breath.
     final sourceModelId = _type == ProductType.threeD ? _selectedModelId : null;
     if (_type == ProductType.threeD && sourceModelId == null) {
-      setState(() => _failureMessage = 'Choose a finished 3D model for this product.');
+      setState(
+        () =>
+            _failureMessage = 'Choose which 3D model this product should use.',
+      );
       return;
     }
     if (_type == ProductType.imageOnly && _image == null) {
@@ -186,123 +226,151 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
         title: Text('Add product', style: theme.textTheme.titleLarge),
       ),
       body: SafeArea(
-        child: Form(
-          key: _formKey,
-          child: ListView(
-            padding: const EdgeInsets.all(AppSpacing.screenPadding),
-            children: [
-              _SourceSelector(
-                type: _type,
-                enabled: !submitting,
-                onChanged: (type) => setState(() {
-                  _type = type;
-                  _failureMessage = null;
-                }),
-              ),
-              const SizedBox(height: AppSpacing.xxl),
-              if (_type == ProductType.threeD)
-                _ModelSourceField(
-                  selectedProjectId: _selectedProjectId,
-                  enabled: !submitting,
-                  onChanged: (projectId) => setState(() {
-                    _selectedProjectId = projectId;
-                    _failureMessage = null;
-                  }),
-                )
-              else
-                _ImageSourceField(
-                  image: _image,
-                  enabled: !submitting,
-                  onPick: _pickImage,
-                  onClear: () => setState(() => _image = null),
-                ),
-              const SizedBox(height: AppSpacing.xxl),
-              AppTextField(
-                label: 'Product name',
-                hint: 'e.g. Paneer Tikka',
-                controller: _nameController,
-                enabled: !submitting,
-                maxLength: kProductNameMaxLength,
-                textInputAction: TextInputAction.next,
-                validator: (value) => (value ?? '').trim().isEmpty
-                    ? 'Give this product a name.'
-                    : null,
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              AppTextField(
-                label: 'Price (optional)',
-                hint: 'e.g. 249',
-                controller: _priceController,
-                enabled: !submitting,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                // Digits and at most one dot. The keyboard type is a HINT on
-                // web and on some Android IMEs — a desktop browser hands over a
-                // full hardware keyboard regardless — so the formatter is what
-                // actually holds the field to a number.
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+        // The form is a single column of controls, and a 1200-point-wide
+        // browser window would stretch every one of them across the monitor —
+        // including the model tiles, whose thumbnail and Preview button would
+        // end up at opposite ends of the screen. Decided from the CONSTRAINTS
+        // (a ConstrainedBox that simply does nothing on a phone), never from
+        // `kIsWeb`: a small browser window is a phone layout.
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: kModelPickerMaxWidth),
+            child: Form(
+              key: _formKey,
+              child: ListView(
+                padding: const EdgeInsets.all(AppSpacing.screenPadding),
+                children: [
+                  _SourceSelector(
+                    type: _type,
+                    enabled: !submitting,
+                    onChanged: (type) => setState(() {
+                      _type = type;
+                      _failureMessage = null;
+                    }),
+                  ),
+                  const SizedBox(height: AppSpacing.xxl),
+                  if (_type == ProductType.threeD)
+                    _FieldShell(
+                      label: '3D model',
+                      child: ModelPickerField(
+                        selectedProjectId: _selectedProjectId,
+                        selectedModelId: _selectedModelId,
+                        enabled: !submitting,
+                        onProjectChanged: (projectId) => setState(() {
+                          _selectedProjectId = projectId;
+                          // Cleared IN THE SAME setState as the capture. See
+                          // [_selectedModelId].
+                          _selectedModelId = null;
+                          _failureMessage = null;
+                        }),
+                        onModelChanged: (modelId) => setState(() {
+                          _selectedModelId = modelId;
+                          _failureMessage = null;
+                        }),
+                        onPreview: _openModelPreview,
+                      ),
+                    )
+                  else
+                    _ImageSourceField(
+                      image: _image,
+                      enabled: !submitting,
+                      onPick: _pickImage,
+                      onClear: () => setState(() => _image = null),
+                    ),
+                  const SizedBox(height: AppSpacing.xxl),
+                  AppTextField(
+                    label: 'Product name',
+                    hint: 'e.g. Paneer Tikka',
+                    controller: _nameController,
+                    enabled: !submitting,
+                    maxLength: kProductNameMaxLength,
+                    textInputAction: TextInputAction.next,
+                    validator: (value) => (value ?? '').trim().isEmpty
+                        ? 'Give this product a name.'
+                        : null,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  AppTextField(
+                    label: 'Price (optional)',
+                    hint: 'e.g. 249',
+                    controller: _priceController,
+                    enabled: !submitting,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    // Digits and at most one dot. The keyboard type is a HINT on
+                    // web and on some Android IMEs — a desktop browser hands over a
+                    // full hardware keyboard regardless — so the formatter is what
+                    // actually holds the field to a number.
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                    ],
+                    textInputAction: TextInputAction.next,
+                    validator: (value) {
+                      final raw = (value ?? '').trim();
+                      if (raw.isEmpty) return null; // optional
+                      final parsed = double.tryParse(raw);
+                      if (parsed == null) {
+                        return 'Enter a number, like 249 or 249.50';
+                      }
+                      if (parsed < 0) return 'A price cannot be negative.';
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  AppTextField(
+                    label: 'Description (optional)',
+                    hint: 'What customers should know about it',
+                    controller: _descriptionController,
+                    enabled: !submitting,
+                    maxLength: kProductDescriptionMaxLength,
+                    maxLines: 4,
+                    minLines: 2,
+                    textInputAction: TextInputAction.newline,
+                  ),
+                  const SizedBox(height: AppSpacing.xxl),
+                  _AvailabilityField(
+                    value: _availability,
+                    enabled: !submitting,
+                    onChanged: (value) => setState(() => _availability = value),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  _FeaturedField(
+                    value: _featured,
+                    enabled: !submitting,
+                    onChanged: (value) => setState(() => _featured = value),
+                  ),
+                  if (_failureMessage != null) ...[
+                    const SizedBox(height: AppSpacing.xxl),
+                    Text(
+                      _failureMessage!,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: AppColors.error),
+                    ),
+                  ],
+                  const SizedBox(height: AppSpacing.xxl),
+                  AppButton(
+                    // The upload is the slow half of an image create, so it gets its
+                    // own label — one undifferentiated spinner over a 5 MiB upload
+                    // reads as a hang.
+                    label: switch (step) {
+                      ProductCreateStep.uploadingImage => 'Uploading photo…',
+                      ProductCreateStep.creating => 'Adding…',
+                      ProductCreateStep.idle => 'Add product',
+                    },
+                    isLoading: submitting,
+                    onPressed: _submit,
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  Text(
+                    'This is a draft edit. Customers see it after you publish.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: AppColors.textMuted),
+                    textAlign: TextAlign.center,
+                  ),
                 ],
-                textInputAction: TextInputAction.next,
-                validator: (value) {
-                  final raw = (value ?? '').trim();
-                  if (raw.isEmpty) return null; // optional
-                  final parsed = double.tryParse(raw);
-                  if (parsed == null) return 'Enter a number, like 249 or 249.50';
-                  if (parsed < 0) return 'A price cannot be negative.';
-                  return null;
-                },
               ),
-              const SizedBox(height: AppSpacing.lg),
-              AppTextField(
-                label: 'Description (optional)',
-                hint: 'What customers should know about it',
-                controller: _descriptionController,
-                enabled: !submitting,
-                maxLength: kProductDescriptionMaxLength,
-                maxLines: 4,
-                minLines: 2,
-                textInputAction: TextInputAction.newline,
-              ),
-              const SizedBox(height: AppSpacing.xxl),
-              _AvailabilityField(
-                value: _availability,
-                enabled: !submitting,
-                onChanged: (value) => setState(() => _availability = value),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              _FeaturedField(
-                value: _featured,
-                enabled: !submitting,
-                onChanged: (value) => setState(() => _featured = value),
-              ),
-              if (_failureMessage != null) ...[
-                const SizedBox(height: AppSpacing.xxl),
-                Text(
-                  _failureMessage!,
-                  style: theme.textTheme.bodySmall?.copyWith(color: AppColors.error),
-                ),
-              ],
-              const SizedBox(height: AppSpacing.xxl),
-              AppButton(
-                // The upload is the slow half of an image create, so it gets its
-                // own label — one undifferentiated spinner over a 5 MiB upload
-                // reads as a hang.
-                label: switch (step) {
-                  ProductCreateStep.uploadingImage => 'Uploading photo…',
-                  ProductCreateStep.creating => 'Adding…',
-                  ProductCreateStep.idle => 'Add product',
-                },
-                isLoading: submitting,
-                onPressed: _submit,
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              Text(
-                'This is a draft edit. Customers see it after you publish.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: AppColors.textMuted),
-                textAlign: TextAlign.center,
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -409,136 +477,6 @@ class _SourceOption extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// Picks the project whose finished model backs a 3D product.
-///
-/// Lists PROJECTS, not models: a project has a name the user gave it, and a
-/// model has an id. Only projects with a viewable model are offered —
-/// `modelCount` is the server's own count of SUCCEEDED models, so a project
-/// still building one is correctly absent rather than offered and then refused.
-class _ModelSourceField extends ConsumerWidget {
-  const _ModelSourceField({
-    required this.selectedProjectId,
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  final String? selectedProjectId;
-  final bool enabled;
-  final ValueChanged<String?> onChanged;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final projectsAsync = ref.watch(projectsProvider);
-
-    return _FieldShell(
-      label: '3D model',
-      child: projectsAsync.when(
-        loading: () => const Padding(
-          padding: EdgeInsets.all(AppSpacing.lg),
-          child: Center(child: AppLoadingIndicator()),
-        ),
-        error: (_, __) => _FieldNote(
-          'We could not load your captures. Pull to refresh on Projects, then '
-          'come back.',
-          color: AppColors.error,
-        ),
-        data: (projects) {
-          final ready = projects.where((p) => p.hasViewableModels).toList();
-          if (ready.isEmpty) {
-            return _FieldNote(
-              'You have no finished 3D models yet. Capture something first, or '
-              'add this product as a photo instead.',
-            );
-          }
-
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: selectedProjectId,
-                isExpanded: true,
-                dropdownColor: AppColors.surface2,
-                decoration: const InputDecoration(
-                  hintText: 'Choose a finished capture',
-                ),
-                items: [
-                  for (final project in ready)
-                    DropdownMenuItem(
-                      value: project.id,
-                      child: Text(
-                        project.name,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-                onChanged: enabled ? onChanged : null,
-              ),
-              if (selectedProjectId != null) ...[
-                const SizedBox(height: AppSpacing.md),
-                _SelectedModelStatus(projectId: selectedProjectId!),
-              ],
-              const SizedBox(height: AppSpacing.sm),
-              Text(
-                "The model's files are copied onto the product, so regenerating "
-                'it later will not change what customers see.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: AppColors.textMuted),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// Confirms the chosen project really has a usable model before Create is
-/// pressed, rather than letting the server say so afterwards.
-class _SelectedModelStatus extends ConsumerWidget {
-  const _SelectedModelStatus({required this.projectId});
-
-  final String projectId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final modelAsync = ref.watch(ownerModelStateProvider(projectId));
-
-    return modelAsync.when(
-      loading: () => _FieldNote('Checking that capture…'),
-      error: (_, __) => _FieldNote(
-        'We could not check that capture. Please try another.',
-        color: AppColors.error,
-      ),
-      data: (state) {
-        final model = state.model;
-        if (model == null || !model.isViewable) {
-          return _FieldNote(
-            'That capture has no finished 3D model yet.',
-            color: AppColors.warning,
-          );
-        }
-        return Row(
-          children: [
-            const Icon(Icons.check_circle_outline,
-                color: AppColors.success, size: 18),
-            const SizedBox(width: AppSpacing.sm),
-            Expanded(
-              child: Text(
-                'Ready to use',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: AppColors.success),
-              ),
-            ),
-          ],
-        );
-      },
     );
   }
 }
@@ -765,21 +703,5 @@ class _FieldShell extends StatelessWidget {
           const SizedBox(height: AppSpacing.sm),
           child,
         ],
-      );
-}
-
-class _FieldNote extends StatelessWidget {
-  const _FieldNote(this.text, {this.color});
-
-  final String text;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) => Text(
-        text,
-        style: Theme.of(context)
-            .textTheme
-            .bodySmall
-            ?.copyWith(color: color ?? AppColors.textMuted, height: 1.4),
       );
 }

@@ -45,7 +45,8 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     if (created == null || !mounted) return; // cancelled
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${created.name} is ready. Add your first product.')),
+      SnackBar(
+          content: Text('${created.name} is ready. Add your first product.')),
     );
   }
 
@@ -146,10 +147,18 @@ class _CatalogBody extends StatelessWidget {
             fillsViewport: false,
           )
         else ...[
+          // The change-3D-model screen (AppRoutes.productModel) is registered
+          // and works, but the grid it would normally be tapped from is
+          // T-017's job — so its address is spelled out here for the same
+          // reason the Add product button below exists: without it the screen
+          // is unreachable, and building a grid to hang it off would be
+          // building someone else's feature.
           const _CatalogMessage(
             icon: Icons.grid_view_outlined,
             title: 'Products',
-            body: 'The product grid arrives with the next release.',
+            body: 'The product grid arrives with the next release. Until then, '
+                'open /catalog/products/<product id>/model to point a 3D '
+                'product at a different model.',
             fillsViewport: false,
           ),
           const SizedBox(height: AppSpacing.xxl),
@@ -195,7 +204,8 @@ class _CatalogHeaderCard extends StatelessWidget {
             const SizedBox(height: AppSpacing.xs),
             Text(
               catalog.businessName!,
-              style: textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
+              style: textTheme.bodyMedium
+                  ?.copyWith(color: AppColors.textSecondary),
             ),
           ],
           const SizedBox(height: AppSpacing.md),
@@ -205,7 +215,9 @@ class _CatalogHeaderCard extends StatelessWidget {
             children: [
               _Chip(
                 label: catalog.status.label,
-                color: catalog.status.isLive ? AppColors.success : AppColors.textMuted,
+                color: catalog.status.isLive
+                    ? AppColors.success
+                    : AppColors.textMuted,
               ),
               // Feature 38. Server-derived — never recomputed here.
               if (catalog.hasUnpublishedChanges)
@@ -221,7 +233,8 @@ class _CatalogHeaderCard extends StatelessWidget {
           Text(
             '${catalog.counts.products} products · '
             '${catalog.counts.categories} categories',
-            style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+            style:
+                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
           ),
         ],
       ),
@@ -348,7 +361,8 @@ class CatalogEntryAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) => IconButton(
         tooltip: 'Catalog',
-        icon: const Icon(Icons.storefront_outlined, color: AppColors.textSecondary),
+        icon: const Icon(Icons.storefront_outlined,
+            color: AppColors.textSecondary),
         onPressed: () => context.goNamed(AppRouteNames.catalog),
       );
 }

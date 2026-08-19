@@ -62,6 +62,8 @@ Map<String, dynamic> productGolden() => {
       'glbUrl': 'https://cdn.example.com/model.glb',
       'usdzUrl': 'https://cdn.example.com/model.usdz',
       'thumbnailUrl': 'https://cdn.example.com/preview.jpg',
+      'sourceProjectId': '6a83dd464aea89d1d2d28d80',
+      'sourceModelId': '6a83dd464aea89d1d2d28d90',
       'syncStatus': 'SYNCED',
       'syncError': null,
       'isArchived': false,
@@ -109,11 +111,13 @@ void main() {
       expect(catalog.businessName, 'Mocha Foods Pvt Ltd');
       expect(catalog.status, CatalogStatus.published);
       expect(catalog.status.isLive, isTrue);
-      expect(catalog.publicUrl, 'https://menu.example.com/6a83dd464aea89d1d2d28d51');
+      expect(catalog.publicUrl,
+          'https://menu.example.com/6a83dd464aea89d1d2d28d51');
       expect(catalog.isProvisioned, isTrue);
       expect(catalog.hasUnpublishedChanges, isFalse);
       expect(catalog.isPublishing, isFalse);
-      expect(catalog.lastPublishedAt, DateTime.parse('2026-08-17T10:30:00.000Z'));
+      expect(
+          catalog.lastPublishedAt, DateTime.parse('2026-08-17T10:30:00.000Z'));
       expect(catalog.counts.products, 12);
       expect(catalog.counts.archivedProducts, 3);
       expect(catalog.counts.categories, 4);
@@ -176,12 +180,14 @@ void main() {
       expect(catalog.status.isLive, isFalse);
     });
 
-    test('canPublish is false while a run is in flight or there is nothing to send',
+    test(
+        'canPublish is false while a run is in flight or there is nothing to send',
         () {
       final ready = Catalog.fromMap(catalogGolden());
       expect(ready.canPublish, isTrue);
 
-      final publishing = Catalog.fromMap(catalogGolden()..['isPublishing'] = true);
+      final publishing =
+          Catalog.fromMap(catalogGolden()..['isPublishing'] = true);
       expect(publishing.canPublish, isFalse);
 
       final empty = Catalog.fromMap(catalogGolden()
@@ -189,7 +195,8 @@ void main() {
       expect(empty.canPublish, isFalse);
     });
 
-    test('copyWith cannot move the public URL — a printed QR depends on it', () {
+    test('copyWith cannot move the public URL — a printed QR depends on it',
+        () {
       final catalog = Catalog.fromMap(catalogGolden());
       final renamed = catalog.copyWith(name: 'Renamed Cafe');
 
@@ -218,6 +225,9 @@ void main() {
       expect(product.glbUrl, 'https://cdn.example.com/model.glb');
       expect(product.usdzUrl, 'https://cdn.example.com/model.usdz');
       expect(product.thumbnailUrl, 'https://cdn.example.com/preview.jpg');
+      // WHICH capture and WHICH of its models — what the model picker opens on.
+      expect(product.sourceProjectId, '6a83dd464aea89d1d2d28d80');
+      expect(product.sourceModelId, '6a83dd464aea89d1d2d28d90');
       expect(product.syncStatus, ProductSyncStatus.synced);
       expect(product.syncError, isNull);
       expect(product.isArchived, isFalse);
@@ -236,7 +246,23 @@ void main() {
       expect(restored.featured, original.featured);
       expect(restored.position, original.position);
       expect(restored.glbUrl, original.glbUrl);
+      expect(restored.sourceProjectId, original.sourceProjectId);
+      expect(restored.sourceModelId, original.sourceModelId);
       expect(restored.syncStatus, original.syncStatus);
+    });
+
+    test('the model pointers tolerate a backend that does not send them', () {
+      // Additive fields: a client one deploy ahead of the API must render the
+      // product, not crash the grid — and an image-only product legitimately
+      // has neither.
+      final map = productGolden()
+        ..remove('sourceProjectId')
+        ..remove('sourceModelId');
+      final product = CatalogProduct.fromMap(map);
+
+      expect(product.sourceProjectId, isNull);
+      expect(product.sourceModelId, isNull);
+      expect(product.name, 'Walnut Chair');
     });
 
     test('an image-only product carries no model URLs and cannot offer 3D', () {
@@ -253,7 +279,8 @@ void main() {
     test('an unknown type never promises 3D or AR', () {
       // A build one deploy behind must degrade to the LESS capable rendering,
       // not offer an AR button that cannot work.
-      final product = CatalogProduct.fromMap(productGolden()..['type'] = 'HOLOGRAM');
+      final product =
+          CatalogProduct.fromMap(productGolden()..['type'] = 'HOLOGRAM');
       expect(product.type, ProductType.unknown);
       expect(product.canViewInThreeD, isFalse);
     });
@@ -265,7 +292,8 @@ void main() {
     });
 
     test('a null categoryId means Uncategorized', () {
-      final product = CatalogProduct.fromMap(productGolden()..['categoryId'] = null);
+      final product =
+          CatalogProduct.fromMap(productGolden()..['categoryId'] = null);
       expect(product.categoryId, isNull);
       expect(product.isUncategorized, isTrue);
     });
@@ -273,7 +301,8 @@ void main() {
     test('surfaces a sync failure with our own message', () {
       final product = CatalogProduct.fromMap(productGolden()
         ..['syncStatus'] = 'FAILED'
-        ..['syncError'] = 'A product with this name already exists. Rename it.');
+        ..['syncError'] =
+            'A product with this name already exists. Rename it.');
 
       expect(product.syncStatus, ProductSyncStatus.failed);
       expect(product.hasSyncFailure, isTrue);
@@ -293,7 +322,8 @@ void main() {
       expect(product.position, 0);
     });
 
-    test('copyWith distinguishes "move to Uncategorized" from "leave it alone"', () {
+    test('copyWith distinguishes "move to Uncategorized" from "leave it alone"',
+        () {
       final product = CatalogProduct.fromMap(productGolden());
 
       // Omitted → unchanged.
@@ -371,7 +401,8 @@ void main() {
     test('an absent publicFields marks everything ReCapture-only', () {
       // Understating what reaches customers is the safe direction: the user is
       // never told a field is public when it is not.
-      final profile = BusinessProfile.fromMap(profileGolden()..remove('publicFields'));
+      final profile =
+          BusinessProfile.fromMap(profileGolden()..remove('publicFields'));
       expect(profile.publicFields, isEmpty);
       expect(profile.isPublic('name'), isFalse);
     });
@@ -392,7 +423,8 @@ void main() {
       expect(contact.toMap().containsKey('socials'), isFalse);
     });
 
-    test('blank strings collapse to null so the UI has one "nothing here" case', () {
+    test('blank strings collapse to null so the UI has one "nothing here" case',
+        () {
       final profile = BusinessProfile.fromMap(profileGolden()
         ..['businessName'] = '   '
         ..['logoUrl'] = '');
@@ -439,7 +471,8 @@ void main() {
     test('parsing is case-insensitive and total', () {
       expect(CatalogStatusX.fromApiValue('published'), CatalogStatus.published);
       expect(ProductTypeX.fromApiValue(''), ProductType.unknown);
-      expect(ProductSyncStatusX.fromApiValue('nonsense'), ProductSyncStatus.unknown);
+      expect(ProductSyncStatusX.fromApiValue('nonsense'),
+          ProductSyncStatus.unknown);
       expect(
         ProductAvailabilityX.fromApiValue('out_of_stock'),
         ProductAvailability.outOfStock,

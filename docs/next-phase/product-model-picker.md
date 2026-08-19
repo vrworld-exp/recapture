@@ -1,3 +1,5 @@
+
+✅✅✅✅✅✅✅✅✅✅✅✅✅✅
 # Implementation Prompt — Pick a Specific Model for a Product (Add + Change)
 
 **Scope:** Flutter client (one codebase, ships to **Android APK and Web**) plus

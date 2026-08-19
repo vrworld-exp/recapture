@@ -25,6 +25,7 @@ import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
+import '../../presentation/screens/catalog/change_product_model_screen.dart';
 import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
@@ -97,7 +98,18 @@ abstract final class AppRoutes {
   static const productNew = '/catalog/products/new';
 
   /// One product's editor. `:productId` = the catalog product id.
+  /// Still UNREGISTERED — the editor screen does not exist yet.
   static const productDetail = '/catalog/products/:productId';
+
+  /// Re-point one 3D product at a different model.
+  ///
+  /// A SIBLING of [productDetail] rather than that route itself, deliberately:
+  /// this is a single-purpose screen, and registering it as the product editor
+  /// would pre-empt whatever the real editor turns out to be — a later editor
+  /// would then have to either absorb this screen or take its URL away from
+  /// anyone who bookmarked it. As a sibling it can keep working underneath the
+  /// editor when that lands, or be dropped without touching it.
+  static const productModel = '/catalog/products/:productId/model';
 
   /// The business profile behind the storefront (features 58-60).
   static const businessProfile = '/profile/business';
@@ -153,6 +165,7 @@ abstract final class AppRouteNames {
   static const catalogCategories = 'catalogCategories';
   static const productNew = 'productNew';
   static const productDetail = 'productDetail';
+  static const productModel = 'productModel';
   static const businessProfile = 'businessProfile';
   static const catalogAnalytics = 'catalogAnalytics';
   static const previewGallery = 'previewGallery';
@@ -288,6 +301,20 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.productNew,
         builder: (_, __) => const FlowBackScope(child: AddProductScreen()),
       ),
+      // Change one product's 3D model. Takes ONLY the id from the path and
+      // fetches the product itself, so a browser reload on this URL behaves
+      // exactly like a push from inside the app (nothing arrives via `extra`,
+      // which a reload does not carry) and a stale id shows the mapped
+      // not-found state rather than a blank.
+      GoRoute(
+        path: AppRoutes.productModel,
+        name: AppRouteNames.productModel,
+        builder: (context, state) => FlowBackScope(
+          child: ChangeProductModelScreen(
+            productId: state.pathParameters['productId'] ?? '',
+          ),
+        ),
+      ),
       // Staff-only per-project Preview gallery. Reached via push (hardware back
       // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel
       // through navigateBack so a go()-replaced entry can't exit the app either.
@@ -395,7 +422,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                   coveragePct: 92,
                   rejected: 1,
                 ),
-                primaryLabel: meshy ? 'Finish — go to summary' : 'Start Level B',
+                primaryLabel:
+                    meshy ? 'Finish — go to summary' : 'Start Level B',
                 onStartLevelB: meshy
                     ? () => context.go(AppRoutes.captureSummary)
                     : () => context.go(AppRoutes.levelBIntro),
@@ -425,8 +453,9 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           levelName: 'Top Ring',
           nextRoute: AppRoutes.levelBReview,
           instructions: kLevelBCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+          retakeRequest: state.extra is RetakeRequest
+              ? state.extra! as RetakeRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -495,8 +524,9 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           levelName: 'Low Ring',
           nextRoute: AppRoutes.levelCReview,
           instructions: kLevelCCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+          retakeRequest: state.extra is RetakeRequest
+              ? state.extra! as RetakeRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -566,9 +596,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // never a button that would 404.
         builder: (_, state) => FlowBackScope(
           child: ProcessingScreen(
-            projectId: state.extra is String && (state.extra! as String).isNotEmpty
-                ? state.extra! as String
-                : null,
+            projectId:
+                state.extra is String && (state.extra! as String).isNotEmpty
+                    ? state.extra! as String
+                    : null,
           ),
         ),
       ),

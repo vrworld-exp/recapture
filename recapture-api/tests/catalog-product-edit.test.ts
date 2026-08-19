@@ -180,6 +180,33 @@ describe('replace the backing model (feature 15)', () => {
     expect(res.body.product.usdzUrl).toContain('second.usdz');
     expect(res.body.product.thumbnailUrl).toContain('second.jpg');
     expect(res.body.product.type).toBe('THREE_D');
+    // The pointers move with the assets. A client editor opens the model
+    // picker on these, so a stale sourceModelId would have it preselect the
+    // model the product no longer uses.
+    expect(res.body.product.sourceModelId).toBe(second);
+    expect(created.body.product.sourceModelId).toBe(first);
+    expect(res.body.product.sourceProjectId).toEqual(expect.any(String));
+  });
+
+  it('exposes both model pointers on a 3D product, and neither on an image-only one', async () => {
+    const { auth, id: userId } = await makeUser();
+    await createCatalogFor(auth);
+    const modelId = await makeSucceededModel(userId);
+
+    const threeD = await request(app)
+      .post('/catalog/products')
+      .set(auth)
+      .send({ type: 'THREE_D', name: 'Chair', sourceModelId: modelId })
+      .expect(201);
+
+    expect(threeD.body.product.sourceModelId).toBe(modelId);
+    expect(threeD.body.product.sourceProjectId).toEqual(expect.any(String));
+
+    // An image-only product has no capture behind it, and null is the honest
+    // answer — not an omitted field the client has to guess about.
+    const imageOnly = await createImageOnly(auth, 'Mug');
+    expect(imageOnly.body.product.sourceProjectId).toBeNull();
+    expect(imageOnly.body.product.sourceModelId).toBeNull();
   });
 
   it("refuses another user's model, indistinguishably from a missing one", async () => {
@@ -250,6 +277,9 @@ describe('convert a product type (feature 17)', () => {
     expect(res.body.product.glbUrl).toBeNull();
     expect(res.body.product.usdzUrl).toBeNull();
     expect(res.body.product.thumbnailUrl).toBe(`https://test.cloudfront.net/${key}`);
+    // The pointers go with them, or the picker would still claim a capture.
+    expect(res.body.product.sourceProjectId).toBeNull();
+    expect(res.body.product.sourceModelId).toBeNull();
   });
 
   it('refuses a conversion that does not carry its asset', async () => {

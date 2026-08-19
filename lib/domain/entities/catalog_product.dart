@@ -36,6 +36,8 @@ class CatalogProduct {
     this.glbUrl,
     this.usdzUrl,
     this.thumbnailUrl,
+    this.sourceProjectId,
+    this.sourceModelId,
     this.syncStatus = ProductSyncStatus.never,
     this.syncError,
     this.isArchived = false,
@@ -81,6 +83,17 @@ class CatalogProduct {
   /// uploaded photo for an image-only one.
   final String? thumbnailUrl;
 
+  /// WHICH capture and WHICH of its models back a 3D product — the owner's own
+  /// ids, mirrored from ProductDto.
+  ///
+  /// Both null on an image-only product, and both null against a backend that
+  /// predates the fields: they are parsed defensively so an older server leaves
+  /// the app working rather than crashing the grid. They exist so the model
+  /// picker can open on the right capture with the right row already selected;
+  /// the model LIST itself still comes from the projects surface.
+  final String? sourceProjectId;
+  final String? sourceModelId;
+
   final ProductSyncStatus syncStatus;
 
   /// OUR message for the last sync failure — the backend never passes Mirage's
@@ -122,6 +135,8 @@ class CatalogProduct {
         glbUrl: catalogText(map['glbUrl']),
         usdzUrl: catalogText(map['usdzUrl']),
         thumbnailUrl: catalogText(map['thumbnailUrl']),
+        sourceProjectId: catalogText(map['sourceProjectId']),
+        sourceModelId: catalogText(map['sourceModelId']),
         syncStatus:
             ProductSyncStatusX.fromApiValue((map['syncStatus'] ?? '').toString()),
         syncError: catalogText(map['syncError']),
@@ -147,6 +162,8 @@ class CatalogProduct {
         'glbUrl': glbUrl,
         'usdzUrl': usdzUrl,
         'thumbnailUrl': thumbnailUrl,
+        'sourceProjectId': sourceProjectId,
+        'sourceModelId': sourceModelId,
         'syncStatus': syncStatus.apiValue,
         'syncError': syncError,
         'isArchived': isArchived,
@@ -191,6 +208,8 @@ class CatalogProduct {
         glbUrl: glbUrl,
         usdzUrl: usdzUrl,
         thumbnailUrl: thumbnailUrl,
+        sourceProjectId: sourceProjectId,
+        sourceModelId: sourceModelId,
         syncStatus: syncStatus ?? this.syncStatus,
         syncError: syncError ?? this.syncError,
         isArchived: isArchived ?? this.isArchived,
