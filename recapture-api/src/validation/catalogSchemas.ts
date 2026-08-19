@@ -430,6 +430,21 @@ export const productImageUploadUrlSchema = z
 export type ProductImageUploadUrlInput = z.infer<typeof productImageUploadUrlSchema>;
 
 /**
+ * POST /catalog/products/image/bytes — the QUERY of the one-call upload.
+ *
+ * There is no body schema to pair with this: the body IS the image, and its
+ * type is sniffed from the bytes rather than declared. `productId` carries the
+ * same optional meaning as on the slot schema above.
+ */
+export const productImageBytesQuerySchema = z
+  .object({
+    productId: objectId('product id').optional(),
+  })
+  .strict();
+
+export type ProductImageBytesQuery = z.infer<typeof productImageBytesQuerySchema>;
+
+/**
  * PUT /catalog/products/:id/image — bind an uploaded object to a product.
  *
  * The key is client-supplied, which is exactly why it is parsed strictly and

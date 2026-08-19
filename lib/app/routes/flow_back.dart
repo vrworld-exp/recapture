@@ -45,6 +45,9 @@ String? flowBackRouteFor(String location) {
       // Projects, so it has nothing to pop — back lands on Projects rather than
       // exiting the app. Its sub-screens map back to the shell as they land.
       AppRoutes.catalog => AppRoutes.projects,
+      // Normally pushed from the shell (so this never fires); the mapping is
+      // for the cold deep-link, where there is no shell underneath to pop to.
+      AppRoutes.productNew => AppRoutes.catalog,
       AppRoutes.preCapture => AppRoutes.projects,
       AppRoutes.permissions => AppRoutes.preCapture,
       AppRoutes.levelAIntro => AppRoutes.permissions,

@@ -8,7 +8,7 @@
 // BEFORE the parameterised `/products/:id`. Declared the other way round,
 // `:id` swallows the literal string "reorder" and the request 400s on an
 // invalid ObjectId — a bug that looks like a validation problem.
-import { Router } from 'express';
+import { Router, raw } from 'express';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
 import { decodePositionCursor, type PositionCursor } from '@/utils/cursor';
@@ -24,6 +24,7 @@ import {
   createProductSchema,
   duplicateProductSchema,
   listProductsQuerySchema,
+  productImageBytesQuerySchema,
   productImageCommitSchema,
   productImageUploadUrlSchema,
   reorderSchema,
@@ -59,8 +60,13 @@ import {
   listProducts,
   reorderProducts,
   setProductArchived,
+  storeProductImageBytes,
   updateProduct,
 } from '@/services/catalogProductsService';
+import {
+  PRODUCT_IMAGE_CONTENT_TYPES,
+  type ProductImageContentType,
+} from '@/utils/productImageKeys';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import type { Response } from 'express';
@@ -607,6 +613,134 @@ router.post(
     res.status(200).json({ status: 'success', ...result.slot });
   })
 );
+
+/**
+ * POST /catalog/products/image/bytes — upload a product image in ONE call: the
+ * raw image body goes to S3 server-side and the key it landed on comes back.
+ * Feed that key to `POST /catalog/products` (image-only create) or to
+ * `PUT /catalog/products/:id/image` (replace), exactly as if it had been
+ * presigned.
+ *
+ * STATIC, so it is declared before `/products/:id` per the file header.
+ *
+ * WHY THIS EXISTS ALONGSIDE THE PRESIGNED SLOT. The three-step flow
+ * (upload-url → PUT to S3 → commit) keeps image bytes off this API and is the
+ * right shape for a native client. It cannot work from the BROWSER build: the
+ * PUT is cross-origin to the artifacts bucket, which serves no CORS policy —
+ * the same wall that forced `POST /auth/me/avatar/bytes` and the admin
+ * photo-bytes proxy. A product image is a single ≤5 MiB file, so proxying it
+ * costs little; this reasoning does NOT extend to capture uploads, which must
+ * stay direct-to-S3.
+ *
+ * The body is the image itself (Content-Type: image/jpeg | image/png |
+ * image/webp), not multipart — no parser dependency, and the type is
+ * unambiguous.
+ *
+ * The declared Content-Type is NOT trusted: the magic bytes decide, so a
+ * mislabelled body cannot store an object whose stored type lies about its
+ * content.
+ *
+ * `productId` rides in the QUERY, not the body — the body is the image. It is
+ * optional for the same reason it is optional on the slot route: an image-only
+ * product is created WITH its key, so the upload comes first and the product
+ * does not exist yet.
+ */
+router.post(
+  '/products/image/bytes',
+  // Only these types are parsed at all; anything else leaves req.body unset and
+  // falls through to the 415 below. `limit` is the first line of defence on
+  // size — the explicit check after it is the second.
+  raw({
+    type: [...PRODUCT_IMAGE_CONTENT_TYPES],
+    limit: env.CATALOG_PRODUCT_IMAGE_MAX_BYTES,
+  }),
+  asyncHandler(async (req, res) => {
+    const params = productImageBytesQuerySchema.safeParse(req.query);
+    if (!params.success) return badRequest(res, params.error);
+
+    const body: unknown = req.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      return fail(
+        res,
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'Send the image as a JPEG, PNG or WebP body.'
+      );
+    }
+    if (body.length > env.CATALOG_PRODUCT_IMAGE_MAX_BYTES) {
+      return fail(
+        res,
+        413,
+        'PAYLOAD_TOO_LARGE',
+        'That image is too large. Please choose a smaller one.'
+      );
+    }
+
+    // The bytes, not the header, decide what this is.
+    const sniffed = sniffProductImageContentType(body);
+    if (sniffed === null) {
+      return fail(
+        res,
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'That file is not a JPEG, PNG or WebP.'
+      );
+    }
+
+    const userId = req.user!.userId;
+    // The same window as the presigned slot, and deliberately the SAME key:
+    // the two routes are alternative spellings of one action, so a client
+    // cannot double its budget by alternating between them.
+    const rate = await consumeRateWindow(
+      `product-image-upload:${userId}`,
+      env.PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await storeProductImageBytes(userId, {
+      bytes: body,
+      contentType: sniffed,
+      productId: params.data.productId,
+    });
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'NOT_FOUND', 'Product not found.');
+    }
+
+    res.status(200).json({ status: 'success', key: result.key });
+  })
+);
+
+/**
+ * JPEG/PNG/WebP by MAGIC BYTES, or null. Mirrors the client's sniffer exactly,
+ * and the pair must not be able to disagree — the stored content type is
+ * derived from this, and the key's extension from that.
+ */
+function sniffProductImageContentType(bytes: Buffer): ProductImageContentType | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (bytes.length >= 8 && png.every((b, i) => bytes[i] === b)) return 'image/png';
+  // RIFF....WEBP — the four size bytes at 4..7 are skipped on purpose.
+  if (
+    bytes.length >= 12 &&
+    bytes.toString('ascii', 0, 4) === 'RIFF' &&
+    bytes.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
 
 /**
  * PUT /catalog/products/:id/image — bind an uploaded object to a product

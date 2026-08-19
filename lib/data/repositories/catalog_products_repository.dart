@@ -1,5 +1,6 @@
 // lib/data/repositories/catalog_products_repository.dart
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/catalog_json.dart';
@@ -152,6 +153,27 @@ abstract interface class CatalogProductsRepository {
   /// flow); pass it when replacing an existing product's image.
   Future<ProductImageSlot> createImageSlot({
     required ProductImageContentType contentType,
+    String? productId,
+  });
+
+  /// Uploads image bytes in ONE call and returns the key they landed on. Feed
+  /// that key to [create] (image-only) or [commitImage] (replace) exactly as if
+  /// it had come from [createImageSlot].
+  ///
+  /// THIS is the path the app actually uses. The presigned three-step flow
+  /// above cannot work in the BROWSER build — the PUT is cross-origin to the
+  /// artifacts bucket, which serves no CORS policy — and the avatar feature hit
+  /// the identical wall and resolved it the identical way. One path for web and
+  /// native beats two that diverge, so [createImageSlot] is kept for native
+  /// callers that want the bytes off our API but is not what the add-product
+  /// screen calls.
+  ///
+  /// [contentType] must have been sniffed from the bytes themselves; the server
+  /// sniffs them again and derives the stored type from ITS answer, so a
+  /// mislabelled body cannot store a lie.
+  Future<String> uploadImageBytes(
+    Uint8List bytes, {
+    required String contentType,
     String? productId,
   });
 
@@ -331,6 +353,38 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
           );
         }
         return ProductImageSlot.fromMap(body);
+      });
+
+  @override
+  Future<String> uploadImageBytes(
+    Uint8List bytes, {
+    required String contentType,
+    String? productId,
+  }) =>
+      mapCatalogErrors(() async {
+        // The raw image IS the body — not multipart, not JSON. The app Dio is
+        // right (unlike the direct-to-S3 PUT this replaces): the endpoint is
+        // ours and needs the Bearer token.
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/products/image/bytes',
+          data: Stream.value(bytes),
+          queryParameters: {if (productId != null) 'productId': productId},
+          options: Options(
+            headers: {
+              Headers.contentTypeHeader: contentType,
+              Headers.contentLengthHeader: bytes.length,
+            },
+          ),
+        );
+
+        final key = res.data?['key'];
+        if (key is! String || key.isEmpty) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return key;
       });
 
   @override

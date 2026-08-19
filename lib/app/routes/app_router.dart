@@ -23,6 +23,7 @@ import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
+import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
@@ -266,13 +267,26 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       // back → /projects (flowBackRouteFor) when there is nothing to pop.
       //
       // The rest of the /catalog/* constants above are NOT registered yet —
-      // their screens land with their own tasks. Until then an unknown
-      // /catalog/... location falls through to errorBuilder, which is the
-      // honest outcome; a placeholder route would look like a broken feature.
+      // their screens land with their own tasks (the shell and add-product are
+      // registered below). Until then an unknown /catalog/... location falls
+      // through to errorBuilder, which is the honest outcome; a placeholder
+      // route would look like a broken feature.
       GoRoute(
         path: AppRoutes.catalog,
         name: AppRouteNames.catalog,
         builder: (_, __) => const FlowBackScope(child: CatalogScreen()),
+      ),
+      // Add a product. STATIC, and declared before any `/catalog/products/:id`
+      // route lands so the literal "new" cannot be swallowed as a product id —
+      // the same ordering rule the backend router follows for this path.
+      //
+      // Pushed from the catalog shell rather than go()n, so back pops straight
+      // to it; FlowBackScope covers the cold deep-link case, where there is
+      // nothing to pop and back maps to /catalog.
+      GoRoute(
+        path: AppRoutes.productNew,
+        name: AppRouteNames.productNew,
+        builder: (_, __) => const FlowBackScope(child: AddProductScreen()),
       ),
       // Staff-only per-project Preview gallery. Reached via push (hardware back
       // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel

@@ -49,6 +49,16 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     );
   }
 
+  /// Opens the add-product form.
+  ///
+  /// push, not go: /catalog is a top-level destination reached with go(), and
+  /// pushing the form on top of it is what lets back pop straight back to the
+  /// catalog. Nothing is refreshed here — [ProductCreateNotifier] already
+  /// refreshed the catalog before the form popped, so the header's counts and
+  /// the "Draft changes not yet live" badge are current by the time this
+  /// screen is visible again.
+  void _addProduct() => context.pushNamed(AppRouteNames.productNew);
+
   @override
   Widget build(BuildContext context) {
     final catalogAsync = ref.watch(catalogProvider);
@@ -84,7 +94,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           ),
           data: (catalog) => catalog == null
               ? _NoCatalogYet(onCreate: _createCatalog)
-              : _CatalogBody(catalog: catalog),
+              : _CatalogBody(catalog: catalog, onAddProduct: _addProduct),
         ),
       ),
     );
@@ -111,9 +121,10 @@ class _NoCatalogYet extends StatelessWidget {
 /// A catalog exists. For now this is the header plus the empty/coming-soon body;
 /// the product grid lands with T-017.
 class _CatalogBody extends StatelessWidget {
-  const _CatalogBody({required this.catalog});
+  const _CatalogBody({required this.catalog, required this.onAddProduct});
 
   final Catalog catalog;
+  final VoidCallback onAddProduct;
 
   @override
   Widget build(BuildContext context) {
@@ -125,22 +136,35 @@ class _CatalogBody extends StatelessWidget {
         _CatalogHeaderCard(catalog: catalog),
         const SizedBox(height: AppSpacing.xxl),
         if (catalog.counts.products == 0)
-          const _CatalogMessage(
+          _CatalogMessage(
             icon: Icons.inventory_2_outlined,
             title: 'No products yet',
             body: 'Add a product from a model you have already captured, '
-                'scan something new, or upload a photo.',
+                'or upload a photo.',
             actionLabel: 'Add product',
-            onAction: null,
+            onAction: onAddProduct,
             fillsViewport: false,
           )
-        else
+        else ...[
           const _CatalogMessage(
             icon: Icons.grid_view_outlined,
             title: 'Products',
             body: 'The product grid arrives with the next release.',
             fillsViewport: false,
           ),
+          const SizedBox(height: AppSpacing.xxl),
+          // The grid is not here yet, so this is the ONLY way to reach the form
+          // once the catalog is no longer empty — without it, adding a second
+          // product would be impossible until T-017 lands.
+          Center(
+            child: AppButton(
+              label: 'Add product',
+              icon: Icons.add,
+              isFullWidth: false,
+              onPressed: onAddProduct,
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -288,8 +312,9 @@ class _CatalogMessage extends StatelessWidget {
             AppButton(
               label: actionLabel!,
               isFullWidth: false,
-              // A null onAction leaves the button disabled through the theme —
-              // the step is named, but nothing pretends to work yet.
+              // Nullable so a caller CAN name a step that is not wired yet, and
+              // the theme greys it. No caller does any more — pass an action
+              // with the label rather than shipping a button that does nothing.
               onPressed: onAction,
             ),
           ],

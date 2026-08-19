@@ -355,6 +355,62 @@ void main() {
   });
 
   group('product images and duplicate', () {
+    test('uploadImageBytes posts the raw bytes with their sniffed type', () async {
+      // The BYTES path, not the presigned one, is what the app actually uses:
+      // a presigned PUT is cross-origin to a bucket that serves no CORS policy,
+      // so it cannot work in the browser build at all. Pin the wire shape —
+      // raw body, no multipart, no JSON wrapper.
+      final repo = RemoteCatalogProductsRepository(always({
+        'status': 'success',
+        'key': 'dev/catalog/c1/products/slot/img.jpg',
+      }));
+
+      final key = await repo.uploadImageBytes(
+        Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0]),
+        contentType: 'image/jpeg',
+      );
+
+      final request = requests.single;
+      expect(request.uri.path, '/catalog/products/image/bytes');
+      expect(request.method, 'POST');
+      expect(request.headers[Headers.contentTypeHeader], 'image/jpeg');
+      expect(request.headers[Headers.contentLengthHeader], 4);
+      // No product to name yet — the object is staged and bound by the create.
+      expect(request.uri.queryParameters.containsKey('productId'), isFalse);
+      expect(key, 'dev/catalog/c1/products/slot/img.jpg');
+    });
+
+    test('uploadImageBytes names the product when replacing an image', () async {
+      final repo = RemoteCatalogProductsRepository(always({
+        'status': 'success',
+        'key': 'dev/catalog/c1/products/p1/img.png',
+      }));
+
+      await repo.uploadImageBytes(
+        Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]),
+        contentType: 'image/png',
+        productId: 'p1',
+      );
+
+      // The query, not the body — the body is the image.
+      expect(requests.single.uri.queryParameters['productId'], 'p1');
+    });
+
+    test('an upload response missing its key fails loudly', () async {
+      // A 2xx without the key is a broken contract, not an empty result: the
+      // create that follows would send `imageKey: null` and be refused with a
+      // message about a field the user never saw.
+      final repo = RemoteCatalogProductsRepository(always({'status': 'success'}));
+
+      await expectLater(
+        repo.uploadImageBytes(
+          Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0]),
+          contentType: 'image/jpeg',
+        ),
+        throwsA(isA<CatalogFailure>()),
+      );
+    });
+
     test('createImageSlot omits productId for the pre-create upload', () async {
       // Feature 13: an image-only product is created WITH its key, so the first
       // upload has no product to name yet.

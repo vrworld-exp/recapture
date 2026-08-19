@@ -141,6 +141,14 @@ void main() {
     expect(find.text('No catalog yet'), findsNothing);
     expect(find.text('No products yet'), findsOneWidget);
     expect(find.text('Cafe Mocha'), findsOneWidget);
+
+    // The CTA has to be LIVE. It shipped wired to a null callback, which the
+    // theme greys out — the catalog looked broken on web and on the APK alike,
+    // with no way to add a product at all.
+    final cta = tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Add product'),
+    );
+    expect(cta.onPressed, isNotNull);
   });
 
   testWidgets('shows the publish state chips a populated catalog carries',
@@ -313,6 +321,13 @@ void main() {
       // /catalog is reached with go(), which REPLACES the stack — without this
       // mapping the system back key would exit the app from the catalog.
       expect(flowBackRouteFor(AppRoutes.catalog), AppRoutes.projects);
+    });
+
+    test('back from the add-product form lands on the catalog', () {
+      // Normally the form is PUSHED, so back pops and this never fires. It is
+      // the cold deep-link that needs it: there is no shell underneath to pop
+      // to, and without a mapping back would exit the app from the form.
+      expect(flowBackRouteFor(AppRoutes.productNew), AppRoutes.catalog);
     });
   });
 }

@@ -28,6 +28,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  PutObjectCommand,
 } from '@aws-sdk/client-s3';
 
 import { createApp } from '@/app';
@@ -108,6 +109,12 @@ function scriptS3(objects: Map<string, number>) {
         IsTruncated: false,
       }) as never;
     }
+    if (command instanceof PutObjectCommand) {
+      const key = command.input.Key as string;
+      const body = command.input.Body as Uint8Array;
+      objects.set(key, body.length);
+      return Promise.resolve({}) as never;
+    }
     if (command instanceof DeleteObjectCommand) {
       const key = command.input.Key as string;
       deleted.push(key);
@@ -140,6 +147,164 @@ async function uploadedSlot(
   objects.set(res.body.key, size);
   return res.body.key as string;
 }
+
+describe('POST /catalog/products/image/bytes', () => {
+  // The one-call upload the CLIENTS actually use. The presigned flow below
+  // cannot work from the browser build — the PUT is cross-origin to a bucket
+  // that serves no CORS policy — so this route is the only path that works on
+  // web and native alike, and it has to land on the same key space with the
+  // same containment as the presigned one.
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+  const webp = Buffer.concat([
+    Buffer.from('RIFF', 'ascii'),
+    Buffer.from([0x00, 0x00, 0x00, 0x00]),
+    Buffer.from('WEBP', 'ascii'),
+    Buffer.from([0x00, 0x00, 0x00, 0x00]),
+  ]);
+
+  it('requires a token and a catalog', async () => {
+    await request(app)
+      .post('/catalog/products/image/bytes')
+      .set('Content-Type', 'image/jpeg')
+      .send(jpeg)
+      .expect(401);
+
+    const { auth } = await makeUser();
+    await request(app)
+      .post('/catalog/products/image/bytes')
+      .set(auth)
+      .set('Content-Type', 'image/jpeg')
+      .send(jpeg)
+      .expect(404);
+  });
+
+  it('stores the bytes and returns a key in the product key space', async () => {
+    const { auth } = await makeUser();
+    const catalogId = await createCatalogFor(auth);
+    const objects = new Map<string, number>();
+    scriptS3(objects);
+
+    const res = await request(app)
+      .post('/catalog/products/image/bytes')
+      .set(auth)
+      .set('Content-Type', 'image/jpeg')
+      .send(jpeg)
+      .expect(200);
+
+    const key = res.body.key as string;
+    expect(key.startsWith(`dev/catalog/${catalogId}/products/`)).toBe(true);
+    expect(key.endsWith('.jpg')).toBe(true);
+    // The bytes really landed — not just a key handed back.
+    expect(objects.get(key)).toBe(jpeg.length);
+  });
+
+  it('derives the stored type from the BYTES, not the declared header', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+    scriptS3(new Map());
+
+    // A PNG body announced as JPEG. The extension follows the sniff, so the
+    // stored object cannot lie about its content.
+    const res = await request(app)
+      .post('/catalog/products/image/bytes')
+      .set(auth)
+      .set('Content-Type', 'image/jpeg')
+      .send(png)
+      .expect(200);
+
+    expect((res.body.key as string).endsWith('.png')).toBe(true);
+  });
+
+  it('accepts webp — a catalog grid loads dozens of these', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+    scriptS3(new Map());
+
+    const res = await request(app)
+      .post('/catalog/products/image/bytes')
+      .set(auth)
+      .set('Content-Type', 'image/webp')
+      .send(webp)
+      .expect(200);
+
+    expect((res.body.key as string).endsWith('.webp')).toBe(true);
+  });
+
+  it('refuses a body that is not an image we accept', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+    scriptS3(new Map());
+
+    // Parsed (the declared type is allowed) but the bytes are not an image.
+    await request(app)
+      .post('/catalog/products/image/bytes')
+      .set(auth)
+      .set('Content-Type', 'image/jpeg')
+      .send(Buffer.from('this is not an image at all', 'ascii'))
+      .expect(415);
+
+    // Not parsed at all — the type never reaches the raw() filter.
+    await request(app)
+      .post('/catalog/products/image/bytes')
+      .set(auth)
+      .set('Content-Type', 'application/pdf')
+      .send(jpeg)
+      .expect(415);
+  });
+
+  it("404s on another business's product rather than saying it exists", async () => {
+    const owner = await makeUser();
+    await createCatalogFor(owner.auth);
+    const stranger = await makeUser();
+    await createCatalogFor(stranger.auth, 'Other Shop');
+    scriptS3(new Map());
+
+    const created = await request(app)
+      .post('/catalog/products')
+      .set(owner.auth)
+      .send({ type: 'IMAGE_ONLY', name: 'Theirs', imageKey: await bytesKey(owner.auth, jpeg) })
+      .expect(201);
+
+    await request(app)
+      .post('/catalog/products/image/bytes')
+      .query({ productId: created.body.product.id })
+      .set(stranger.auth)
+      .set('Content-Type', 'image/jpeg')
+      .send(jpeg)
+      .expect(404);
+  });
+
+  it('produces a key the image-only create accepts', async () => {
+    // The whole point of the route: upload, then create WITH the key, in the
+    // order an image-only product requires.
+    const { auth } = await makeUser();
+    const objects = new Map<string, number>();
+    scriptS3(objects);
+    await createCatalogFor(auth);
+
+    const key = await bytesKey(auth, jpeg);
+    const res = await request(app)
+      .post('/catalog/products')
+      .set(auth)
+      .send({ type: 'IMAGE_ONLY', name: 'Paneer Tikka', price: 249, imageKey: key })
+      .expect(201);
+
+    expect(res.body.product.type).toBe('IMAGE_ONLY');
+    expect(res.body.product.name).toBe('Paneer Tikka');
+  });
+
+  /** Upload bytes through the route and return the key they landed on. */
+  async function bytesKey(auth: Auth, body: Buffer): Promise<string> {
+    const res = await request(app)
+      .post('/catalog/products/image/bytes')
+      .set(auth)
+      .set('Content-Type', 'image/jpeg')
+      .send(body)
+      .expect(200);
+    return res.body.key as string;
+  }
+});
 
 describe('POST /catalog/products/image/upload-url', () => {
   it('requires a token and a catalog', async () => {

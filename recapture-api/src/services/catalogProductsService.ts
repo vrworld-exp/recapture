@@ -27,9 +27,13 @@ import { encodePositionCursor, type PositionCursor } from '@/utils/cursor';
 import { bumpDraftRevision, findOwnedCatalog } from '@/services/catalogService';
 import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
-import { presignObjectPutUrl } from '@/services/s3ObjectStore';
+import { presignObjectPutUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import { checkCatalogImageKey, sweepSupersededImages } from '@/services/catalogImages';
-import { buildProductImageKey, productImageExtensionFor } from '@/utils/productImageKeys';
+import {
+  buildProductImageKey,
+  productImageExtensionFor,
+  type ProductImageContentType,
+} from '@/utils/productImageKeys';
 import type {
   BulkProductsInput,
   CreateProductInput,
@@ -909,6 +913,70 @@ export async function createProductImageSlot(
       ).toISOString(),
     },
   };
+}
+
+export type ProductImageBytesResult =
+  | { outcome: 'NO_CATALOG' }
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'OK'; key: string };
+
+/**
+ * Stores product-image bytes SERVER-SIDE and returns the key they landed on —
+ * the one-call alternative to presign → PUT → commit.
+ *
+ * WHY THIS EXISTS ALONGSIDE createProductImageSlot. The presigned flow keeps
+ * image bytes off this API and works from a native client, but it cannot work
+ * from the BROWSER build at all: the PUT is cross-origin to the artifacts
+ * bucket, which serves no CORS policy. `POST /auth/me/avatar/bytes` hit the
+ * identical wall and resolved it the identical way — one path for web and
+ * native beats two that diverge. A product image is a single ≤5 MiB file, so
+ * proxying it costs little; this reasoning still does NOT extend to capture
+ * uploads, which must stay direct-to-S3.
+ *
+ * The key space, the ownership boundary and the slot semantics are EXACTLY
+ * those of [createProductImageSlot] — same builder, same optional `productId`
+ * meaning — so an image uploaded through either route is indistinguishable
+ * afterwards and `commitProductImage` accepts both without knowing which ran.
+ *
+ * The caller must have already sniffed `contentType` from the bytes themselves;
+ * the route does that, so a mislabelled body cannot store an object whose
+ * stored type lies about its content.
+ */
+export async function storeProductImageBytes(
+  userId: string,
+  input: { bytes: Buffer; contentType: ProductImageContentType; productId?: string }
+): Promise<ProductImageBytesResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NO_CATALOG' };
+
+  const catalogId = catalog._id as Types.ObjectId;
+
+  let slotId: string;
+  if (input.productId) {
+    const product = await CatalogProduct.findOne({
+      _id: new Types.ObjectId(input.productId),
+      catalogId,
+      deletedAt: null,
+    })
+      .select('_id')
+      .exec();
+    // Foreign or missing are indistinguishable — the enumeration-safe rule.
+    if (!product) return { outcome: 'NOT_FOUND' };
+    slotId = input.productId;
+  } else {
+    slotId = randomUUID();
+  }
+
+  const key = buildProductImageKey(
+    catalogId.toHexString(),
+    slotId,
+    randomUUID(),
+    productImageExtensionFor(input.contentType)
+  );
+
+  await putObjectBytes(BUCKET_ARTIFACTS, key, input.bytes, input.contentType);
+
+  return { outcome: 'OK', key };
 }
 
 export type CommitProductImageResult =
