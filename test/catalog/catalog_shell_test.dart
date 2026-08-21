@@ -24,6 +24,7 @@ import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/presentation/screens/catalog/catalog_screen.dart';
 
 import 'catalog_entities_test.dart' as golden;
+import 'product_grid_test.dart' show FakeProductsRepository, pageOf;
 
 /// Auth held still, so [CatalogNotifier]'s sign-out listener can be exercised
 /// without the real notifier's session restore touching secure storage.
@@ -109,6 +110,13 @@ Widget _app(_FakeCatalogRepo repo) => ProviderScope(
       overrides: [
         authProvider.overrideWith(_StubAuth.new),
         catalogRepositoryProvider.overrideWithValue(repo),
+        // The shell now hosts the product grid, which fetches on build. Without
+        // this override it would reach the real Dio — the one thing every test
+        // in this suite is not allowed to do. An empty page keeps these tests
+        // about the SHELL; the grid's own states live in product_grid_test.
+        catalogProductsRepositoryProvider.overrideWithValue(
+          FakeProductsRepository((_) async => pageOf([])),
+        ),
       ],
       child: const MaterialApp(home: CatalogScreen()),
     );

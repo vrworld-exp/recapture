@@ -1,3 +1,4 @@
+✅✅✅✅✅✅✅✅     from f1  to f2 only.
 # ReCapture Flutter Client Prompts — F1 … F12
 
 Repo root for every prompt in this file: `phase2/ReCapture/` (work happens in `lib/` and `test/`).

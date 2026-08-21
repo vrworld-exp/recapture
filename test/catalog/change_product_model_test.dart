@@ -48,8 +48,8 @@ class _FakeProductsRepo implements CatalogProductsRepository {
     String id, {
     String? name,
     String? description,
-    double? price,
-    Object? categoryId,
+    Object? price = kCatalogUnchanged,
+    Object? categoryId = kCatalogUnchanged,
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,

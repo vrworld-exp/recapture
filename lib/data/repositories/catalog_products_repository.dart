@@ -131,14 +131,24 @@ abstract interface class CatalogProductsRepository {
   /// [imageKey]. That is what stops a one-word patch leaving a product typed for
   /// an asset it does not have; the server returns 400 otherwise.
   ///
-  /// [categoryId] uses a sentinel so that passing null explicitly means "move to
-  /// Uncategorized", distinct from omitting it.
+  /// [categoryId] and [price] use a sentinel so that passing null explicitly
+  /// means "move to Uncategorized" / "clear the price", distinct from omitting
+  /// them. Both are nullable on the server schema, and both are things a user
+  /// genuinely does: an unpriced product is a normal catalog entry, and a price
+  /// that cannot be REMOVED once typed is a field with a one-way door in it.
+  ///
+  /// The sentinel defaults are declared HERE as well as on the implementation,
+  /// and that is load-bearing: a call site resolves defaults from the STATIC
+  /// type, which is this interface. Without them, `update(id, name: 'x')`
+  /// through this type passes `categoryId: null` — an explicit "move to
+  /// Uncategorized" nobody asked for, on every patch that does not mention the
+  /// category.
   Future<CatalogProduct> update(
     String id, {
     String? name,
     String? description,
-    double? price,
-    Object? categoryId,
+    Object? price = kCatalogUnchanged,
+    Object? categoryId = kCatalogUnchanged,
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
@@ -207,7 +217,7 @@ abstract interface class CatalogProductsRepository {
   Future<int> bulk({
     required BulkProductAction action,
     required List<String> ids,
-    Object? categoryId,
+    Object? categoryId = kCatalogUnchanged,
   });
 }
 
@@ -300,8 +310,8 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
     String id, {
     String? name,
     String? description,
-    double? price,
-    Object? categoryId = _unset,
+    Object? price = kCatalogUnchanged,
+    Object? categoryId = kCatalogUnchanged,
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
@@ -315,10 +325,11 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
           data: {
             if (name != null) 'name': name,
             if (description != null) 'description': description,
-            if (price != null) 'price': price,
-            // Explicit null is meaningful — it moves the product to
-            // Uncategorized — so the sentinel, not null, marks "unchanged".
-            if (!identical(categoryId, _unset)) 'categoryId': categoryId,
+            // Explicit null is meaningful for both of these — it CLEARS the
+            // price and moves the product to Uncategorized — so the sentinel,
+            // not null, is what marks "unchanged".
+            if (!identical(price, kCatalogUnchanged)) 'price': price,
+            if (!identical(categoryId, kCatalogUnchanged)) 'categoryId': categoryId,
             if (tags != null) 'tags': tags,
             if (availability != null) 'availability': availability.apiValue,
             if (featured != null) 'featured': featured,
@@ -437,7 +448,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
   Future<int> bulk({
     required BulkProductAction action,
     required List<String> ids,
-    Object? categoryId = _unset,
+    Object? categoryId = kCatalogUnchanged,
   }) =>
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -447,7 +458,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
             'ids': ids,
             // SET_CATEGORY needs the key even when the value is null
             // (Uncategorized); every other action is rejected if it is present.
-            if (!identical(categoryId, _unset)) 'categoryId': categoryId,
+            if (!identical(categoryId, kCatalogUnchanged)) 'categoryId': categoryId,
           },
         );
         final affected = res.data?['affected'];
@@ -469,7 +480,14 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
 }
 
 /// Sentinel for "argument not supplied" where null is itself a valid value.
-const Object _unset = Object();
+///
+/// PUBLIC, and it has to be: `price` and `categoryId` are nullable on the server
+/// and null MEANS something (clear the price, move to Uncategorized), so every
+/// layer that forwards one of them — notifier, editor — must be able to say
+/// "unchanged" in the same word this file compares against. A second sentinel
+/// somewhere up the stack would not be `identical` to this one, and would be
+/// serialised into the request body as a bare Object.
+const Object kCatalogUnchanged = Object();
 
 /// App-wide catalog products repository.
 final catalogProductsRepositoryProvider = Provider<CatalogProductsRepository>(

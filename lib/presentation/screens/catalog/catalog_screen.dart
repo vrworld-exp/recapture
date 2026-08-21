@@ -7,13 +7,17 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/catalog/catalog_categories_notifier.dart';
 import '../../../application/catalog/catalog_notifier.dart';
+import '../../../application/catalog/catalog_products_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog.dart';
+import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
-import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_message.dart';
 import 'create_catalog_dialog.dart';
+import 'product_grid_section.dart';
 
 /// The catalog shell — the storefront authoring surface's home.
 ///
@@ -21,8 +25,10 @@ import 'create_catalog_dialog.dart';
 ///   • **No catalog yet** (`AsyncData(null)`) → the create prompt. This is a
 ///     first-run state, not an error; the server's 404 is translated to null by
 ///     the repository so it never reaches the UI as a failure.
-///   • **A catalog with no products** → the add-your-first-product prompt.
-///   • **A catalog with products** → the grid (T-017 fills this in).
+///   • **A catalog** → the header card, then the product surface, which owns its
+///     own empty / filtered-empty / loading / error states
+///     ([ProductGridSection]) because only it knows which of them applies.
+///   • **A failed load** → the error state with a retry.
 ///
 /// Nothing here reaches customers. Every write on this surface is a draft edit;
 /// the live catalog only moves when the user presses Publish (feature 57).
@@ -54,11 +60,35 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   ///
   /// push, not go: /catalog is a top-level destination reached with go(), and
   /// pushing the form on top of it is what lets back pop straight back to the
-  /// catalog. Nothing is refreshed here — [ProductCreateNotifier] already
-  /// refreshed the catalog before the form popped, so the header's counts and
-  /// the "Draft changes not yet live" badge are current by the time this
-  /// screen is visible again.
-  void _addProduct() => context.pushNamed(AppRouteNames.productNew);
+  /// catalog. The grid is refreshed on return because a product created while
+  /// this screen was covered is not in the page it already holds.
+  Future<void> _addProduct() async {
+    await context.pushNamed(AppRouteNames.productNew);
+    if (!mounted) return;
+    await ref.read(catalogProductsProvider.notifier).refresh();
+  }
+
+  /// Opens one product's editor, then re-reads it: the editor returns after an
+  /// arbitrary number of saves, and the card behind it is a snapshot from
+  /// whenever its page was fetched.
+  Future<void> _openProduct(CatalogProduct product) async {
+    await context.pushNamed(
+      AppRouteNames.productDetail,
+      pathParameters: {'productId': product.id},
+    );
+    if (!mounted) return;
+    await ref.read(catalogProductsProvider.notifier).refresh();
+    await ref.read(catalogProvider.notifier).refresh();
+  }
+
+  /// Pull-to-refresh pulls everything the screen shows: the catalog's own header
+  /// counts, the product pages, and the category chips. Refreshing one of the
+  /// three is how a header claiming 12 products ends up over a grid of 11.
+  Future<void> _refreshAll() => Future.wait([
+        ref.read(catalogProvider.notifier).refresh(),
+        ref.read(catalogProductsProvider.notifier).refresh(),
+        ref.read(catalogCategoriesProvider.notifier).refresh(),
+      ]);
 
   @override
   Widget build(BuildContext context) {
@@ -81,10 +111,10 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
       body: RefreshIndicator(
         color: AppColors.mirageRed,
         backgroundColor: AppColors.surface1,
-        onRefresh: () => ref.read(catalogProvider.notifier).refresh(),
+        onRefresh: _refreshAll,
         child: catalogAsync.when(
           loading: () => const Center(child: AppLoadingIndicator()),
-          error: (error, _) => _CatalogMessage(
+          error: (error, _) => CatalogMessage(
             icon: Icons.cloud_off_outlined,
             title: "We couldn't load your catalog",
             body: error is CatalogFailure
@@ -95,7 +125,11 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
           ),
           data: (catalog) => catalog == null
               ? _NoCatalogYet(onCreate: _createCatalog)
-              : _CatalogBody(catalog: catalog, onAddProduct: _addProduct),
+              : _CatalogBody(
+                  catalog: catalog,
+                  onAddProduct: _addProduct,
+                  onOpenProduct: _openProduct,
+                ),
         ),
       ),
     );
@@ -109,7 +143,7 @@ class _NoCatalogYet extends StatelessWidget {
   final VoidCallback onCreate;
 
   @override
-  Widget build(BuildContext context) => _CatalogMessage(
+  Widget build(BuildContext context) => CatalogMessage(
         icon: Icons.storefront_outlined,
         title: 'No catalog yet',
         body: 'Your catalog is the storefront customers open when they scan '
@@ -119,62 +153,75 @@ class _NoCatalogYet extends StatelessWidget {
       );
 }
 
-/// A catalog exists. For now this is the header plus the empty/coming-soon body;
-/// the product grid lands with T-017.
-class _CatalogBody extends StatelessWidget {
-  const _CatalogBody({required this.catalog, required this.onAddProduct});
+/// A catalog exists: the header card, then the product surface.
+///
+/// ONE scroll view for both. The grid is composed in as slivers rather than
+/// nested as its own scrollable, so the header scrolls away with the products,
+/// pull-to-refresh covers the whole screen, and infinite scroll has a single set
+/// of metrics to watch.
+class _CatalogBody extends ConsumerWidget {
+  const _CatalogBody({
+    required this.catalog,
+    required this.onAddProduct,
+    required this.onOpenProduct,
+  });
 
   final Catalog catalog;
   final VoidCallback onAddProduct;
+  final ValueChanged<CatalogProduct> onOpenProduct;
 
   @override
-  Widget build(BuildContext context) {
-    return ListView(
-      // Always scrollable so pull-to-refresh works even when the body is short.
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(AppSpacing.screenPadding),
-      children: [
-        _CatalogHeaderCard(catalog: catalog),
-        const SizedBox(height: AppSpacing.xxl),
-        if (catalog.counts.products == 0)
-          _CatalogMessage(
-            icon: Icons.inventory_2_outlined,
-            title: 'No products yet',
-            body: 'Add a product from a model you have already captured, '
-                'or upload a photo.',
-            actionLabel: 'Add product',
-            onAction: onAddProduct,
-            fillsViewport: false,
-          )
-        else ...[
-          // The change-3D-model screen (AppRoutes.productModel) is registered
-          // and works, but the grid it would normally be tapped from is
-          // T-017's job — so its address is spelled out here for the same
-          // reason the Add product button below exists: without it the screen
-          // is unreachable, and building a grid to hang it off would be
-          // building someone else's feature.
-          const _CatalogMessage(
-            icon: Icons.grid_view_outlined,
-            title: 'Products',
-            body: 'The product grid arrives with the next release. Until then, '
-                'open /catalog/products/<product id>/model to point a 3D '
-                'product at a different model.',
-            fillsViewport: false,
-          ),
-          const SizedBox(height: AppSpacing.xxl),
-          // The grid is not here yet, so this is the ONLY way to reach the form
-          // once the catalog is no longer empty — without it, adding a second
-          // product would be impossible until T-017 lands.
-          Center(
-            child: AppButton(
-              label: 'Add product',
-              icon: Icons.add,
-              isFullWidth: false,
-              onPressed: onAddProduct,
+  Widget build(BuildContext context, WidgetRef ref) {
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) =>
+          ProductGridSection.handleScrollNotification(ref, notification),
+      child: CustomScrollView(
+        // Always scrollable so pull-to-refresh works even when the body is
+        // shorter than the viewport (an empty or filtered-empty catalog).
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.screenPadding,
+              AppSpacing.screenPadding,
+              AppSpacing.screenPadding,
+              0,
+            ),
+            sliver: SliverMainAxisGroup(
+              slivers: [
+                SliverToBoxAdapter(child: _CatalogHeaderCard(catalog: catalog)),
+                const SliverToBoxAdapter(
+                  child: SizedBox(height: AppSpacing.xxl),
+                ),
+                SliverToBoxAdapter(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Products',
+                          style: Theme.of(context).textTheme.headlineMedium,
+                        ),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('Add product'),
+                        onPressed: onAddProduct,
+                      ),
+                    ],
+                  ),
+                ),
+                const SliverToBoxAdapter(
+                  child: SizedBox(height: AppSpacing.md),
+                ),
+                ProductGridSection(
+                  onOpenProduct: onOpenProduct,
+                  onAddProduct: onAddProduct,
+                ),
+              ],
             ),
           ),
         ],
-      ],
+      ),
     );
   }
 }
@@ -264,90 +311,6 @@ class _Chip extends StatelessWidget {
           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
         ),
       );
-}
-
-/// The one centred icon + title + body + optional CTA block this screen uses for
-/// every empty, error and not-yet-built state. One widget rather than four
-/// near-identical ones, so they cannot drift apart visually.
-class _CatalogMessage extends StatelessWidget {
-  const _CatalogMessage({
-    required this.icon,
-    required this.title,
-    required this.body,
-    this.actionLabel,
-    this.onAction,
-    this.fillsViewport = true,
-  });
-
-  final IconData icon;
-  final String title;
-  final String body;
-  final String? actionLabel;
-  final VoidCallback? onAction;
-
-  /// Whether this block owns the whole screen (the no-catalog / error states) or
-  /// sits inside an already-scrolling list.
-  final bool fillsViewport;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    final content = Padding(
-      padding: const EdgeInsets.all(AppSpacing.xxl),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 96,
-            height: 96,
-            decoration: BoxDecoration(
-              color: AppColors.surface1,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.royalGold.withValues(alpha: 0.3),
-                width: 0.5,
-              ),
-            ),
-            child: Icon(icon, color: AppColors.textMuted, size: 40),
-          ),
-          const SizedBox(height: AppSpacing.xxl),
-          Text(title, style: textTheme.titleLarge, textAlign: TextAlign.center),
-          const SizedBox(height: AppSpacing.sm),
-          Text(
-            body,
-            style: textTheme.bodyMedium
-                ?.copyWith(color: AppColors.textSecondary, height: 1.5),
-            textAlign: TextAlign.center,
-          ),
-          if (actionLabel != null) ...[
-            const SizedBox(height: AppSpacing.xxl),
-            AppButton(
-              label: actionLabel!,
-              isFullWidth: false,
-              // Nullable so a caller CAN name a step that is not wired yet, and
-              // the theme greys it. No caller does any more — pass an action
-              // with the label rather than shipping a button that does nothing.
-              onPressed: onAction,
-            ),
-          ],
-        ],
-      ),
-    );
-
-    if (!fillsViewport) return content;
-
-    // Fill the viewport so pull-to-refresh stays available on a short body.
-    return LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(minHeight: constraints.maxHeight),
-          child: Center(child: content),
-        ),
-      ),
-    );
-  }
 }
 
 /// The Projects app-bar entry point to the catalog.

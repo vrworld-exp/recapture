@@ -26,6 +26,7 @@ import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/catalog/change_product_model_screen.dart';
+import '../../presentation/screens/catalog/product_editor_screen.dart';
 import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
@@ -98,7 +99,6 @@ abstract final class AppRoutes {
   static const productNew = '/catalog/products/new';
 
   /// One product's editor. `:productId` = the catalog product id.
-  /// Still UNREGISTERED — the editor screen does not exist yet.
   static const productDetail = '/catalog/products/:productId';
 
   /// Re-point one 3D product at a different model.
@@ -280,10 +280,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       // back → /projects (flowBackRouteFor) when there is nothing to pop.
       //
       // The rest of the /catalog/* constants above are NOT registered yet —
-      // their screens land with their own tasks (the shell and add-product are
-      // registered below). Until then an unknown /catalog/... location falls
-      // through to errorBuilder, which is the honest outcome; a placeholder
-      // route would look like a broken feature.
+      // their screens land with their own tasks (the shell, add-product, the
+      // product editor and the model swap are registered below). Until then an
+      // unknown /catalog/... location falls through to errorBuilder, which is
+      // the honest outcome; a placeholder route would look like a broken
+      // feature.
       GoRoute(
         path: AppRoutes.catalog,
         name: AppRouteNames.catalog,
@@ -300,6 +301,25 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.productNew,
         name: AppRouteNames.productNew,
         builder: (_, __) => const FlowBackScope(child: AddProductScreen()),
+      ),
+      // One product's editor. Registered AFTER the static `products/new` above
+      // so the literal "new" cannot be swallowed as a product id, and BEFORE
+      // nothing in particular — `:productId/model` is a longer, more specific
+      // path and go_router matches it on its own.
+      //
+      // `onExit` is the BROWSER BACK guard. A PopScope inside the screen covers
+      // the system gesture and the Android hardware button, but a browser's back
+      // button is a router event that never reaches the widget — without this,
+      // web users lose typed edits in the one way phone users cannot.
+      GoRoute(
+        path: AppRoutes.productDetail,
+        name: AppRouteNames.productDetail,
+        onExit: (context, state) => confirmDiscardProductEdits(context),
+        builder: (context, state) => FlowBackScope(
+          child: ProductEditorScreen(
+            productId: state.pathParameters['productId'] ?? '',
+          ),
+        ),
       ),
       // Change one product's 3D model. Takes ONLY the id from the path and
       // fetches the product itself, so a browser reload on this URL behaves

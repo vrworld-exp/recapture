@@ -32,6 +32,7 @@ import '../../../application/catalog/product_detail_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_products_repository.dart';
 import '../../../domain/entities/catalog_product.dart';
+import '../../../domain/entities/product_type.dart';
 import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
@@ -217,6 +218,43 @@ class _ChangeModelFormState extends ConsumerState<_ChangeModelForm> {
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: AppColors.textMuted),
             ),
+            // Feature 17. Arriving here from an IMAGE-ONLY product is not a
+            // model swap, it is a CONVERSION: saving replaces the photo with the
+            // model's preview and gives customers a 3D card where they had a
+            // picture. The server does that from the same PATCH (a
+            // `sourceModelId` alone sets type THREE_D), so the difference is
+            // invisible unless it is said out loud — before the save, not after.
+            if (!product.type.supportsThreeD) ...[
+              const SizedBox(height: AppSpacing.lg),
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
+                  border: Border.all(
+                    color: AppColors.warning.withValues(alpha: 0.3),
+                    width: 0.5,
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.swap_horiz,
+                        size: 16, color: AppColors.warning),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Text(
+                        'This is a photo product. Saving a model converts it to '
+                        'a 3D product: the photo is replaced by the model, and '
+                        'customers see the change at your next publish.',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textSecondary),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: AppSpacing.xxl),
             ModelPickerField(
               selectedProjectId: _selectedProjectId,
