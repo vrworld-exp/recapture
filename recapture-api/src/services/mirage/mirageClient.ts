@@ -21,6 +21,9 @@
 // Endpoint ids (M1, M2, …) refer to the table in
 // docs/next-phase/01-codebase-findings.md, each of which cites a real handler in
 // mirage-be/src/Controllers/.
+import { randomBytes } from 'crypto';
+import { Readable } from 'stream';
+
 import axios, { type AxiosInstance, type AxiosResponse } from 'axios';
 import { env } from '@/config/env';
 import {
@@ -33,13 +36,19 @@ import type {
   CreateCategoryInput,
   CreateItemInput,
   CreateRestaurantInput,
+  DeleteItemOptions,
+  DeleteItemResult,
+  MirageAddress,
   MirageAnalyticsQuery,
   MirageAnalyticsSummary,
+  MirageAvailability,
   MirageCategory,
+  MirageFileField,
   MirageFileUpload,
   MirageItem,
   MiragePublicCatalog,
   MirageRestaurant,
+  MirageSocialLinks,
   MirageTimeseriesPoint,
   MirageTopProductRow,
   UpdateCategoryInput,
@@ -53,7 +62,10 @@ export interface MirageClient {
   listRestaurants(): Promise<MirageRestaurant[]>;
   /** M2 — provision a restaurant. Its `_id` becomes the permanent public URL. */
   createRestaurant(input: CreateRestaurantInput): Promise<MirageRestaurant>;
-  /** M3 — branding. Both `name` and `location` must always be sent. */
+  /**
+   * M3 — branding, and the `isPublished` flag feature 39's unpublish flips.
+   * A PARTIAL update since the phase-2 rework: omitted fields are left alone.
+   */
   updateRestaurant(id: string, input: UpdateRestaurantInput): Promise<MirageRestaurant>;
   /**
    * M4 — DESTROYS the restaurant, its categories and its items, and with them
@@ -64,20 +76,24 @@ export interface MirageClient {
   listCategories(restaurantRef: string): Promise<MirageCategory[]>;
   /** M5 — create a category. Required before any item can reference it. */
   createCategory(input: CreateCategoryInput): Promise<MirageCategory>;
-  /** M6 — rename a category. */
+  /** M6 — rename a category, or just reorder it. */
   updateCategory(id: string, input: UpdateCategoryInput): Promise<MirageCategory>;
   /** M12 — a category's items. The reconcile read for products. */
   listItemsForCategory(categoryRef: string): Promise<MirageItem[]>;
   /** M8 — create an item. Persist the returned id before doing anything else. */
   createItem(input: CreateItemInput): Promise<MirageItem>;
-  /** M9 — update an item. Cannot change description, category or imgOnly. */
+  /**
+   * M9 — update an item. Now applies `description` and `category` too, and
+   * re-derives `imgOnly` from what the document ends up holding.
+   */
   updateItem(id: string, input: UpdateItemInput): Promise<MirageItem>;
   /**
-   * M10 — HARD delete. Also deletes the item's CATEGORY when it was that
-   * category's last item. Resolves `{ existed: false }` when the item was
-   * already gone, so a replayed delete is a success, not a failure.
+   * M10 — HARD delete. By default it also deletes the item's CATEGORY when it
+   * was that category's last item; `keepCategory` opts out. Resolves
+   * `{ existed: false }` when the item was already gone, so a replayed delete is
+   * a success, not a failure.
    */
-  deleteItem(id: string): Promise<{ existed: boolean }>;
+  deleteItem(id: string, options?: DeleteItemOptions): Promise<DeleteItemResult>;
   /** M14 — the public page's own read. Post-publish verification. */
   getPublicCatalog(slug: string): Promise<MiragePublicCatalog>;
   /** M27 */
@@ -210,6 +226,46 @@ function invalidateAdminToken(): void {
 
 type ScalarField = string | number | boolean | undefined;
 
+/**
+ * What a caller may put in a request field.
+ *
+ * Everything Mirage receives is a STRING: every admin write goes through
+ * multer's `uploadFieldsMW`, so the body arrives as `"true"`, `"3"`,
+ * `'["a","b"]'`, and helper.js's `parse*Field` functions coerce it back. The
+ * client serialises here so no call site has to remember which of Mirage's
+ * fields wants JSON and which wants a bare scalar.
+ */
+type FieldValue =
+  | string
+  | number
+  | boolean
+  | readonly string[]
+  | Record<string, string | undefined>
+  | undefined;
+
+/**
+ * One field, as Mirage's parsers expect to read it.
+ *
+ *   string[]  -> a JSON array string  (parseTagsField, helper.js:50-71)
+ *   object    -> a JSON object string (parseObjectField, helper.js:113-124)
+ *   boolean   -> "true"/"false"       (parseBooleanField, helper.js:22-33)
+ *   number    -> its decimal form     (parseNumberField, helper.js:35-47)
+ *
+ * An empty object serialises to `undefined`, not `"{}"`: Mirage reads an empty
+ * value as "field absent", and an object with nothing in it is an update that
+ * says nothing.
+ */
+function serializeField(value: FieldValue): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return JSON.stringify(value);
+  const entries = Object.entries(value as Record<string, string | undefined>).filter(
+    ([, entry]) => entry !== undefined
+  );
+  return entries.length > 0 ? JSON.stringify(Object.fromEntries(entries)) : undefined;
+}
+
 interface RequestSpec {
   method: 'get' | 'post' | 'put' | 'delete';
   path: string;
@@ -219,9 +275,9 @@ interface RequestSpec {
   requiresAdmin: boolean;
   query?: Record<string, ScalarField>;
   /** Form/JSON fields. Undefined values are dropped. */
-  fields?: Record<string, ScalarField>;
-  /** Multipart file parts, keyed by Mirage's field name (`image` | `object`). */
-  files?: Partial<Record<'image' | 'object', MirageFileUpload>>;
+  fields?: Record<string, FieldValue>;
+  /** Multipart file parts, keyed by Mirage's field name (multer.js:15-19). */
+  files?: Partial<Record<MirageFileField, MirageFileUpload>>;
   /** Inject CLOUD_FRONT_URL + BUCKET_NAME. True for every write. */
   assetTargets?: boolean;
   /**
@@ -259,23 +315,98 @@ function isFailure(res: AxiosResponse<unknown>): boolean {
   return body?.status === false;
 }
 
-function buildMultipart(spec: RequestSpec, fields: Record<string, ScalarField>): FormData {
-  const form = new FormData();
+/**
+ * The multipart body, encoded BY HAND as a stream.
+ *
+ * WHY NOT `FormData` + `Blob`. The spec-compliant pair would require every part
+ * to exist as an in-memory Blob first, which for a 90 MiB GLB means holding the
+ * whole model in this process — twice, counting the copy `new Uint8Array(buf)`
+ * makes. Render's instance does not survive two concurrent publishes doing that.
+ * Encoding it ourselves lets a `stream` part be piped straight from S3 into the
+ * socket, so peak memory is one 64 KiB chunk regardless of file size. It costs
+ * about forty lines and no dependency (`form-data` would be a second HTTP-ish
+ * library for one function).
+ *
+ * The boundary is random per request, as the format requires. Every part header
+ * is ASCII and every value we interpolate is either a serialised field or a
+ * filename we chose ourselves — never caller-controlled prose — so there is
+ * nothing here that can inject a premature boundary.
+ */
+interface MultipartBody {
+  stream: Readable;
+  contentType: string;
+  /**
+   * Exact length, so the request goes out with a real Content-Length rather
+   * than chunked. Computable only because every stream part declares its size —
+   * which the asset preflight already had to fetch anyway.
+   */
+  contentLength: number;
+}
+
+const CRLF = '\r\n';
+
+function partHeader(boundary: string, field: string, file?: MirageFileUpload): string {
+  const disposition = file
+    ? `form-data; name="${field}"; filename="${file.filename}"`
+    : `form-data; name="${field}"`;
+  const type = file ? `Content-Type: ${file.contentType}${CRLF}` : '';
+  return `--${boundary}${CRLF}Content-Disposition: ${disposition}${CRLF}${type}${CRLF}`;
+}
+
+export function buildMultipart(
+  spec: Pick<RequestSpec, 'files'>,
+  fields: Record<string, string>
+): MultipartBody {
+  const boundary = `----recapture${randomBytes(16).toString('hex')}`;
+  const files = Object.entries(spec.files ?? {}).filter(
+    (entry): entry is [MirageFileField, MirageFileUpload] => Boolean(entry[1])
+  );
+
+  const preludes: string[] = [];
   for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined) form.append(key, String(value));
+    preludes.push(`${partHeader(boundary, key)}${value}${CRLF}`);
   }
-  for (const [field, file] of Object.entries(spec.files ?? {})) {
-    if (!file) continue;
-    // Buffer → Blob: axios streams the spec-compliant FormData itself. Mirage
-    // writes the part to disk and readFileSync's it regardless, so nothing is
-    // gained by streaming into it.
-    form.append(field, new Blob([new Uint8Array(file.bytes)], { type: file.contentType }), file.filename);
+
+  const epilogue = `--${boundary}--${CRLF}`;
+
+  let contentLength = Buffer.byteLength(preludes.join(''), 'utf8') + Buffer.byteLength(epilogue);
+  for (const [field, file] of files) {
+    contentLength +=
+      Buffer.byteLength(partHeader(boundary, field, file), 'utf8') +
+      (file.kind === 'bytes' ? file.bytes.byteLength : file.size) +
+      Buffer.byteLength(CRLF);
   }
-  return form;
+
+  async function* body(): AsyncGenerator<Buffer> {
+    for (const prelude of preludes) yield Buffer.from(prelude, 'utf8');
+    for (const [field, file] of files) {
+      yield Buffer.from(partHeader(boundary, field, file), 'utf8');
+      if (file.kind === 'bytes') {
+        yield file.bytes;
+      } else {
+        // The whole point: chunks flow through, nothing accumulates.
+        for await (const chunk of file.open()) {
+          yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        }
+      }
+      yield Buffer.from(CRLF, 'utf8');
+    }
+    yield Buffer.from(epilogue, 'utf8');
+  }
+
+  return {
+    stream: Readable.from(body()),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    contentLength,
+  };
 }
 
 async function send<T>(spec: RequestSpec, retriedAuth = false): Promise<T> {
-  const fields: Record<string, ScalarField> = { ...(spec.fields ?? {}) };
+  const fields: Record<string, string> = {};
+  for (const [key, value] of Object.entries(spec.fields ?? {})) {
+    const serialized = serializeField(value);
+    if (serialized !== undefined) fields[key] = serialized;
+  }
   if (spec.assetTargets) {
     // Non-negotiable on every write: Mirage destructures both from the BODY and
     // stores `${CLOUD_FRONT_URL}/${key}` verbatim (adminController.js:244, 385,
@@ -289,11 +420,18 @@ async function send<T>(spec: RequestSpec, retriedAuth = false): Promise<T> {
   const headers: Record<string, string> = {};
   if (spec.requiresAdmin) headers.token = await getAdminToken();
 
-  const body = hasFiles
-    ? buildMultipart(spec, fields)
-    : Object.keys(fields).length > 0
-      ? Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined))
-      : undefined;
+  let body: unknown;
+  if (hasFiles) {
+    const multipart = buildMultipart(spec, fields);
+    body = multipart.stream;
+    headers['content-type'] = multipart.contentType;
+    // Without this axios falls back to chunked encoding. multer copes, but a
+    // real length is what lets Mirage's proxy reject an oversize body up front
+    // instead of after 90 MiB have already crossed the wire.
+    headers['content-length'] = String(multipart.contentLength);
+  } else if (Object.keys(fields).length > 0) {
+    body = fields;
+  }
 
   let res: AxiosResponse<unknown>;
   try {
@@ -374,7 +512,41 @@ function requireId(raw: Record<string, unknown>, context: string): string {
   return id;
 }
 
+function strList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}
+
+/** Picks a fixed set of string keys out of a nested Mirage block. */
+function pickStrings<K extends string>(
+  value: unknown,
+  keys: readonly K[]
+): Partial<Record<K, string>> | undefined {
+  const raw = asRecord(value);
+  if (!raw) return undefined;
+  const out: Partial<Record<K, string>> = {};
+  for (const key of keys) {
+    const found = str(raw[key]);
+    if (found) out[key] = found;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+const SOCIAL_LINK_KEYS = [
+  'instagram',
+  'facebook',
+  'x',
+  'youtube',
+  'linkedin',
+  'whatsapp',
+] as const;
+const ADDRESS_KEYS = ['line1', 'line2', 'city', 'state', 'postalCode', 'country'] as const;
+
 function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
+  const socialLinks = pickStrings<keyof MirageSocialLinks & string>(
+    raw.socialLinks,
+    SOCIAL_LINK_KEYS
+  );
+  const address = pickStrings<keyof MirageAddress & string>(raw.address, ADDRESS_KEYS);
   return {
     id: requireId(raw, 'read restaurant'),
     name: str(raw.name) ?? '',
@@ -382,6 +554,13 @@ function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
     ...(str(raw.icon) ? { icon: str(raw.icon) } : {}),
     ...(str(raw.phone) ? { phone: str(raw.phone) } : {}),
     ...(str(raw.description) ? { description: str(raw.description) } : {}),
+    ...(str(raw.website) ? { website: str(raw.website) } : {}),
+    ...(socialLinks ? { socialLinks } : {}),
+    ...(address ? { address } : {}),
+    // Absent on documents written before the field existed, and Mirage treats
+    // only an EXPLICIT false as unpublished — so absence must stay absence here
+    // rather than collapsing to a default we would then read back as truth.
+    ...(typeof raw.isPublished === 'boolean' ? { isPublished: raw.isPublished } : {}),
     ...(str(raw.clientType) ? { clientType: str(raw.clientType) } : {}),
     categoryIds: idList(raw.categories),
   };
@@ -393,12 +572,14 @@ function toCategory(raw: Record<string, unknown>): MirageCategory {
     name: str(raw.name) ?? '',
     ...(idOf(raw.restaurant) ? { restaurantId: idOf(raw.restaurant) } : {}),
     ...(str(raw.image) ? { image: str(raw.image) } : {}),
+    ...(num(raw.sortPosition) !== undefined ? { sortPosition: num(raw.sortPosition) } : {}),
     productIds: idList(raw.products),
   };
 }
 
 function toItem(raw: Record<string, unknown>): MirageItem {
   const model = asRecord(raw.model);
+  const availability = str(raw.availability);
   return {
     id: requireId(raw, 'read item'),
     name: str(raw.name) ?? '',
@@ -410,6 +591,12 @@ function toItem(raw: Record<string, unknown>): MirageItem {
     ...(idOf(raw.category) ? { categoryId: idOf(raw.category) } : {}),
     ...(idOf(raw.restaurant) ? { restaurantId: idOf(raw.restaurant) } : {}),
     ...(typeof raw.imgOnly === 'boolean' ? { imgOnly: raw.imgOnly } : {}),
+    ...(Array.isArray(raw.tags) ? { tags: strList(raw.tags) } : {}),
+    ...(availability === 'IN_STOCK' || availability === 'OUT_OF_STOCK'
+      ? { availability: availability as MirageAvailability }
+      : {}),
+    ...(typeof raw.featured === 'boolean' ? { featured: raw.featured } : {}),
+    ...(num(raw.sortPosition) !== undefined ? { sortPosition: num(raw.sortPosition) } : {}),
   };
 }
 
@@ -449,12 +636,29 @@ export const mirageClient: MirageClient = {
       context: 'create restaurant',
       requiresAdmin: true,
       assetTargets: true,
-      fields: { name: input.name, location: input.location, phoneNo: input.phoneNo },
+      fields: {
+        name: input.name,
+        location: input.location,
+        phoneNo: input.phoneNo,
+        description: input.description,
+        website: input.website,
+        socialLinks: input.socialLinks,
+        address: input.address,
+        isPublished: input.isPublished,
+      },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
     return toRestaurant(data);
   },
 
+  /**
+   * A PARTIAL update since the phase-2 rework (adminController.js:378-404) — an
+   * omitted field is left alone rather than 400-ing the call. That is what makes
+   * `{ isPublished: false }` legal on its own, which feature 39's unpublish
+   * needs: it must take the page down without touching branding, and above all
+   * without `delete-restaurant`, which would destroy the `_id` behind every
+   * printed QR.
+   */
   async updateRestaurant(id: string, input: UpdateRestaurantInput): Promise<MirageRestaurant> {
     const data = await send<Record<string, unknown>>({
       method: 'put',
@@ -462,8 +666,16 @@ export const mirageClient: MirageClient = {
       context: 'update restaurant',
       requiresAdmin: true,
       assetTargets: true,
-      // BOTH must be strings on every call — this is a full replace, not a patch.
-      fields: { name: input.name, location: input.location, phoneNo: input.phoneNo },
+      fields: {
+        name: input.name,
+        location: input.location,
+        phoneNo: input.phoneNo,
+        description: input.description,
+        website: input.website,
+        socialLinks: input.socialLinks,
+        address: input.address,
+        isPublished: input.isPublished,
+      },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
     return toRestaurant(data);
@@ -496,7 +708,11 @@ export const mirageClient: MirageClient = {
       context: 'create category',
       requiresAdmin: true,
       assetTargets: true,
-      fields: { name: input.name, restaurant: input.restaurantId },
+      fields: {
+        name: input.name,
+        restaurant: input.restaurantId,
+        sortPosition: input.sortPosition,
+      },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
     return toCategory(data);
@@ -509,7 +725,7 @@ export const mirageClient: MirageClient = {
       context: 'update category',
       requiresAdmin: true,
       assetTargets: true,
-      fields: { name: input.name },
+      fields: { name: input.name, sortPosition: input.sortPosition },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
     return toCategory(data);
@@ -546,15 +762,34 @@ export const mirageClient: MirageClient = {
         price: input.price,
         description: input.description,
         isNonVeg: input.isNonVeg,
+        tags: input.tags,
+        availability: input.availability,
+        featured: input.featured,
+        sortPosition: input.sortPosition,
+        // URL transfer mode (M1). Serialised like any other field; the
+        // current Mirage handlers ignore them, which is exactly why the
+        // default transfer mode still sends bytes.
+        imageUrl: input.assetUrls?.imageUrl,
+        objectUrl: input.assetUrls?.objectUrl,
+        objectIosUrl: input.assetUrls?.objectIosUrl,
       },
       files: {
         ...(input.image ? { image: input.image } : {}),
         ...(input.object ? { object: input.object } : {}),
+        ...(input.objectIos ? { objectIos: input.objectIos } : {}),
       },
     });
     return toItem(data);
   },
 
+  /**
+   * `description` and `category` ARE applied now (adminController.js:1460-1490),
+   * so a re-filed product keeps its Mirage id and with it its whole analytics
+   * history. `imgOnly` is re-derived by Mirage from the document's own state
+   * afterwards, which is why nothing here sends it.
+   *
+   * ⚠ `name` should be sent on every update, changed or not — see UpdateItemInput.
+   */
   async updateItem(id: string, input: UpdateItemInput): Promise<MirageItem> {
     const data = await send<Record<string, unknown>>({
       method: 'put',
@@ -562,10 +797,27 @@ export const mirageClient: MirageClient = {
       context: 'update item',
       requiresAdmin: true,
       assetTargets: true,
-      fields: { name: input.name, price: input.price, isNonVeg: input.isNonVeg },
+      fields: {
+        name: input.name,
+        price: input.price,
+        description: input.description,
+        category: input.categoryId,
+        isNonVeg: input.isNonVeg,
+        tags: input.tags,
+        availability: input.availability,
+        featured: input.featured,
+        sortPosition: input.sortPosition,
+        // URL transfer mode (M1). Serialised like any other field; the
+        // current Mirage handlers ignore them, which is exactly why the
+        // default transfer mode still sends bytes.
+        imageUrl: input.assetUrls?.imageUrl,
+        objectUrl: input.assetUrls?.objectUrl,
+        objectIosUrl: input.assetUrls?.objectIosUrl,
+      },
       files: {
         ...(input.image ? { image: input.image } : {}),
         ...(input.object ? { object: input.object } : {}),
+        ...(input.objectIos ? { objectIos: input.objectIos } : {}),
       },
     });
     return toItem(data);
@@ -577,23 +829,30 @@ export const mirageClient: MirageClient = {
    * (adminController.js:1303-1308) — the one route that does not flatten
    * everything to 400.
    *
-   * ⚠ The caller must handle the cascade: Mirage also deletes the CATEGORY when
-   * this was its last item (adminController.js:1660-1676), so any cached
-   * `mirageCategoryId` for that category is now stale and must be cleared.
+   * ⚠ THE CASCADE. By default Mirage also deletes the CATEGORY when this was
+   * its last item (adminController.js:1660-1672). `keepCategory: true` opts out
+   * (`?keepCategory=true`, adminController.js:1655-1656), which is what a
+   * publish wants — an archived product must not silently destroy the category
+   * its siblings will be filed under on the next run.
+   *
+   * The response's `deletedCategory` flag is reported back either way, because a
+   * Mirage deployment that predates the query flag will still cascade, and the
+   * caller has to clear its cached `mirageCategoryId` when it does.
    */
-  async deleteItem(id: string): Promise<{ existed: boolean }> {
+  async deleteItem(id: string, options: DeleteItemOptions = {}): Promise<DeleteItemResult> {
     try {
-      await send<unknown>({
+      const body = await send<Record<string, unknown>>({
         method: 'delete',
         path: `/delete-item/${encodeURIComponent(id)}`,
         context: 'delete item',
         requiresAdmin: true,
         dataKey: null,
+        ...(options.keepCategory ? { query: { keepCategory: true } } : {}),
       });
-      return { existed: true };
+      return { existed: true, deletedCategory: body?.deletedCategory === true };
     } catch (error) {
       if (error instanceof MirageError && error.code === MirageErrorCode.NOT_FOUND) {
-        return { existed: false };
+        return { existed: false, deletedCategory: false };
       }
       throw error;
     }

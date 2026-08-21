@@ -9,6 +9,7 @@ import {
 import {
   CAPTURE_PROCESSING_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
+  MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
   JobState,
   StageProgress,
@@ -164,7 +165,17 @@ const JobErrorSchema = new Schema<JobError>(
  * for a project. A project can have multiple jobs over time (re-captures).
  */
 export interface IJob extends Document {
-  projectId: Types.ObjectId;
+  /**
+   * The project this job acts on.
+   *
+   * ⚠ OPTIONAL BECAUSE ONE JOB TYPE HAS NO PROJECT. Every capture/model job is
+   * about a project; MIRAGE_CATALOG_PUBLISH is about a CatalogPublishRun, and a
+   * catalog is not a project. Rather than invent a placeholder id (which would
+   * make `{projectId, createdAt}` queries return catalog jobs), the field is
+   * conditionally required — see the schema below — and every reader that means
+   * "the capture job" already filters on `jobType` anyway.
+   */
+  projectId?: Types.ObjectId;
   userId: Types.ObjectId;
 
   /** Manifest/protocol version — used to handle schema evolution gracefully */
@@ -295,7 +306,11 @@ const JobSchema = new Schema<IJob>(
     projectId: {
       type: Schema.Types.ObjectId,
       ref: 'Project',
-      required: true,
+      // Required for every job type whose unit of work IS a project. A catalog
+      // publish has none, and a required-always field would force a fake id.
+      required(this: IJob) {
+        return this.jobType !== MIRAGE_CATALOG_PUBLISH_JOB_TYPE;
+      },
     },
     userId: {
       type: Schema.Types.ObjectId,

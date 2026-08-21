@@ -22,7 +22,13 @@ import { MODEL_SOURCES } from '@/models/types/projectModel.types';
 import { ADMIN_DELETE_MODES } from '@/validation/adminSchemas';
 // And for the catalog product kind (THREE_D | IMAGE_ONLY) and the bulk-action
 // verb — the same constants the /catalog routes validate against.
-import { PRODUCT_TYPES } from '@/models/types/catalog.types';
+import {
+  PRODUCT_TYPES,
+  PUBLISH_ACTIONS,
+  PUBLISH_MODES,
+  PUBLISH_RUN_STATES,
+  PUBLISH_TARGET_KINDS,
+} from '@/models/types/catalog.types';
 import { BULK_PRODUCT_ACTIONS } from '@/validation/catalogSchemas';
 
 /**
@@ -83,6 +89,21 @@ export const AnalyticsEvent = {
   CATALOG_PRODUCT_DELETED: 'catalog_product_deleted',
   CATALOG_PRODUCTS_BULK_ACTION: 'catalog_products_bulk_action',
   CATALOG_CLIENT_PROVISIONED: 'catalog_client_provisioned',
+  // ── Publish runs (the worker's own lifecycle) ─────────────────────────────
+  // Emitted by the publish PROCESSOR, not by a route: the run is a background
+  // unit and the endpoint that enqueues it knows nothing about how it went.
+  CATALOG_PUBLISH_STARTED: 'catalog_publish_started',
+  CATALOG_PUBLISH_FINISHED: 'catalog_publish_finished',
+  CATALOG_PUBLISH_TARGET_FAILED: 'catalog_publish_target_failed',
+  // ── Publish REQUESTS (the endpoints) ──────────────────────────────────────
+  // Separate from the run lifecycle above because they answer a different
+  // question: how often does a user TRY to publish, and what stops them. A
+  // blocked attempt never produces a run at all, so it is invisible to the
+  // events above — and it is the number that says whether the gates are
+  // helping or just in the way.
+  CATALOG_PUBLISH_REQUESTED: 'catalog_publish_requested',
+  CATALOG_UNPUBLISH_REQUESTED: 'catalog_unpublish_requested',
+  CATALOG_QR_RENDERED: 'catalog_qr_rendered',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -612,6 +633,98 @@ const adminAccessDeniedProps = z
   .strict();
 
 /**
+ * A publish run began.
+ *
+ * NOTE what is absent and must stay absent: no product names, no category
+ * names, no business name, no phone or email. `targetName` is catalog content
+ * and the run entries are where it belongs — an analytics pipeline is a
+ * different blast radius (catalog.types.ts, PublishRunEntry).
+ */
+const catalogPublishStartedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    run_id: z.string().min(1),
+    mode: z.enum(PUBLISH_MODES),
+    /** Steps the planner emitted — the denominator of "7 of 10 published". */
+    planned_total: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const catalogPublishFinishedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    run_id: z.string().min(1),
+    mode: z.enum(PUBLISH_MODES),
+    state: z.enum(PUBLISH_RUN_STATES),
+    total: z.number().int().nonnegative(),
+    synced: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * One target failed inside an otherwise-continuing run.
+ *
+ * ⚠ The ReCapture failure code travels as `failure_reason`, NOT as `code`:
+ * utils/analytics.ts strips any property whose NAME contains "code" as a
+ * suspected OTP/secret leak, so a prop called `code` (or `error_code`, or
+ * `failure_code`) would be silently dropped and this event would carry no
+ * diagnosis at all.
+ */
+const catalogPublishTargetFailedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    run_id: z.string().min(1),
+    target: z.enum(PUBLISH_TARGET_KINDS),
+    action: z.enum(PUBLISH_ACTIONS),
+    /** The UPPER_SNAKE ReCapture code. Never Mirage prose. */
+    failure_reason: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * A publish attempt, whatever came of it.
+ *
+ * `blocked_by` carries the gate codes, never their messages — the messages name
+ * products ("\"Chair\" has no photo yet"), and a product name is catalog content
+ * that must not leave the owner's own responses.
+ */
+const catalogPublishRequestedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    mode: z.enum(PUBLISH_MODES),
+    outcome: z.enum(['QUEUED', 'BLOCKED', 'IN_PROGRESS', 'NAME_TAKEN', 'NOTHING_TO_RETRY']),
+    /** How many gates failed. Zero on a successful request. */
+    gate_count: z.number().int().nonnegative(),
+    /** The distinct UPPER_SNAKE gate codes, deduplicated. Never messages. */
+    blocked_by: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
+const catalogUnpublishRequestedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    outcome: z.enum(['QUEUED', 'NOT_PUBLISHED', 'IN_PROGRESS']),
+  })
+  .strict();
+
+/** A QR render. No URL, no business name — the format and the size, nothing else. */
+const catalogQrRenderedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    format: z.enum(['png', 'pdf']),
+    size: z.number().int().positive(),
+  })
+  .strict();
+
+/**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
  * is a compile error.
@@ -659,6 +772,12 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_PRODUCT_DELETED]: catalogProductDeletedProps,
   [AnalyticsEvent.CATALOG_PRODUCTS_BULK_ACTION]: catalogProductsBulkActionProps,
   [AnalyticsEvent.CATALOG_CLIENT_PROVISIONED]: catalogClientProvisionedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_STARTED]: catalogPublishStartedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_FINISHED]: catalogPublishFinishedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_TARGET_FAILED]: catalogPublishTargetFailedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_REQUESTED]: catalogPublishRequestedProps,
+  [AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED]: catalogUnpublishRequestedProps,
+  [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

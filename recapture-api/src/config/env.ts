@@ -361,10 +361,50 @@ const envSchema = z.object({
    * a multipart request as an unclassifiable 413.
    */
   MIRAGE_MAX_ASSET_BYTES: z.coerce.number().int().positive().default(94_371_840), // 90 MiB
+  /**
+   * How a product's assets reach Mirage.
+   *
+   *   bytes — read the object out of S3 as a STREAM and pipe it into the
+   *           multipart request. Works against Mirage as it exists today, and
+   *           costs one round trip of the whole file through this process.
+   *   url   — send the ReCapture CloudFront URL and let Mirage fetch it
+   *           server-side. Vastly cheaper (a 90 MiB model becomes a message),
+   *           but it requires Mirage prompt M1: the current create-item and
+   *           update-item handlers read files from `req.files` only and ignore a
+   *           URL in the body entirely, so switching this on before M1 lands
+   *           publishes products with NO assets.
+   *
+   * Defaults to `bytes` for exactly that reason — the safe mode is the one that
+   * works against the Mirage that is deployed, not the one that is planned.
+   */
+  MIRAGE_ASSET_TRANSFER_MODE: z.enum(['bytes', 'url']).default('bytes'),
   /** Max publish runs one user may request per window. */
   PUBLISH_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
   /** Sliding window for the publish cap (seconds). */
   PUBLISH_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * Retries allowed per publish window. Tighter than PUBLISH_MAX_PER_WINDOW on
+   * purpose: Retry is one tap sitting next to a list of failures, and a user
+   * whose product keeps failing will tap it repeatedly — each tap being another
+   * job against a Mirage that has to wake up.
+   */
+  PUBLISH_RETRY_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  /**
+   * QR renders per window. Rendering is cheap but not free — a 2048 px PNG is
+   * a real sharp resize — and the response is highly cacheable, so a client
+   * hitting this hard is a client ignoring the ETag.
+   */
+  CATALOG_QR_MAX_PER_WINDOW: z.coerce.number().int().positive().default(60),
+  CATALOG_QR_WINDOW_SECONDS: z.coerce.number().int().positive().default(600),
+  /**
+   * Publish runs retained per catalog for the activity log (feature 55).
+   *
+   * A COUNT, not a TTL. Expiring on age would leave a business that publishes
+   * twice a year with an empty history screen while one publishing hourly still
+   * accumulated a month of noise; "the last N" is what a history list means to
+   * a person. Pruned on write, so the bound holds continuously.
+   */
+  CATALOG_ACTIVITY_RETAINED_RUNS: z.coerce.number().int().positive().default(50),
   /**
    * Hard ceiling on a stored product image, in bytes. Enforced at COMMIT time
    * (presigning cannot enforce a size) exactly as AVATAR_MAX_BYTES is. Larger

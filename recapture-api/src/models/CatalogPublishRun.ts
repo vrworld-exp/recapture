@@ -13,11 +13,13 @@
 import { Schema, model, Document, Types } from 'mongoose';
 import {
   PUBLISH_ACTIONS,
+  PUBLISH_MODES,
   PUBLISH_OUTCOMES,
   PUBLISH_RUN_STATES,
   PUBLISH_TARGET_KINDS,
   type PublishRunCounts,
   type PublishRunEntry,
+  type PublishMode,
   type PublishRunError,
   type PublishRunState,
 } from './types/catalog.types';
@@ -34,6 +36,13 @@ export interface ICatalogPublishRun extends Document {
    * because the user kept editing while the run was in flight.
    */
   snapshotRevision: number;
+  /**
+   * What this run was asked to do. Fixed at creation and never re-decided — the
+   * planner takes it as an input, and the status endpoint needs it to tell an
+   * UNPUBLISH run apart from a FULL one (they finish with very different
+   * counts and mean very different things to the user).
+   */
+  mode: PublishMode;
   state: PublishRunState;
   counts: PublishRunCounts;
   startedAt?: Date;
@@ -89,6 +98,9 @@ const CatalogPublishRunSchema = new Schema<ICatalogPublishRun>(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     jobId: { type: Schema.Types.ObjectId, ref: 'Job', required: true },
     snapshotRevision: { type: Number, required: true },
+    // Defaulted so runs written before this field existed read as FULL, which
+    // is what every one of them was.
+    mode: { type: String, enum: PUBLISH_MODES, required: true, default: 'FULL' },
     state: { type: String, enum: PUBLISH_RUN_STATES, required: true, default: 'QUEUED' },
     counts: {
       type: PublishRunCountsSchema,

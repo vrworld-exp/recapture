@@ -24,6 +24,14 @@ export const MESHY_MODEL_GENERATION_JOB_TYPE = 'MESHY_MODEL_GENERATION';
  * pipeline.
  */
 export const MODEL_OPTIMIZATION_JOB_TYPE = 'MODEL_OPTIMIZATION';
+/**
+ * Projecting one catalog onto Mirage. Carries
+ * `payload.{catalogId, publishRunId, mode, productIds?}` — no upload, no
+ * project. Unlike the three above it does not act on a ProjectModel at all: its
+ * unit of work is a CatalogPublishRun, and the run document (not the job) is
+ * what the publish screen reads.
+ */
+export const MIRAGE_CATALOG_PUBLISH_JOB_TYPE = 'MIRAGE_CATALOG_PUBLISH';
 
 /**
  * Job processing lifecycle states.

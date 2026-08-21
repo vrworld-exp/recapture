@@ -18,6 +18,8 @@ export {
   type MirageClient,
 } from './mirageClient';
 
+export { MIRAGE_AVAILABILITIES, bytesUpload } from './mirageTypes';
+
 export {
   MirageError,
   MirageErrorCode,
@@ -33,15 +35,24 @@ export type {
   CreateCategoryInput,
   CreateItemInput,
   CreateRestaurantInput,
+  DeleteItemOptions,
+  DeleteItemResult,
+  MirageAddress,
   MirageAnalyticsKpis,
   MirageAnalyticsQuery,
   MirageAnalyticsRange,
   MirageAnalyticsSummary,
+  MirageAssetUrls,
+  MirageAvailability,
+  MirageBytesUpload,
   MirageCategory,
+  MirageFileField,
   MirageFileUpload,
+  MirageStreamUpload,
   MirageItem,
   MiragePublicCatalog,
   MirageRestaurant,
+  MirageSocialLinks,
   MirageTimeseriesPoint,
   MirageTopProductRow,
   UpdateCategoryInput,

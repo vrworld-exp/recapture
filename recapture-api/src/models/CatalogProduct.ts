@@ -74,11 +74,17 @@ export interface ICatalogProduct extends Document {
    */
   mirageItemId?: string;
   /**
-   * The Mirage category the item was filed under at the last sync. A category
-   * MOVE is invisible to Mirage's update-item (it ignores `category`
-   * entirely — adminController.js:1038-1047), so the planner compares this
-   * against the product's current category to detect a move it cannot express
-   * as an UPDATE.
+   * The Mirage category the item was filed under at the last sync.
+   *
+   * ⚠ THE OLD REASON FOR THIS FIELD IS GONE, THE FIELD IS NOT. update-item used
+   * to ignore `category`, so a move had to be published as delete + recreate;
+   * the current handler applies it and repoints both back-references
+   * (adminController.js:1452-1481), so a move is an ordinary UPDATE and the
+   * Mirage item id — with its whole analytics history — survives. What this
+   * field still answers is "which Mirage category does Mirage think this item is
+   * in", which is what lets the planner notice a re-filing caused by something
+   * other than an edit (the delete-item cascade re-creating a category under a
+   * NEW id) and what tells productSync whether to send `categoryId` at all.
    */
   mirageCategoryIdAtSync?: string;
   syncStatus: SyncStatus;

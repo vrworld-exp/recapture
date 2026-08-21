@@ -162,10 +162,24 @@ export interface ProductPublishedSnapshot {
   categoryId?: string | null;
   /** The Mirage category the item was actually filed under. */
   mirageCategoryId?: string;
+  /** Display order as last pushed (Mirage's `sortPosition`) — feature 48. */
+  position?: number;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;
   imageKey?: string;
+  /**
+   * How each Mirage file slot's bytes were identified at the last push
+   * (see services/catalog/assetUploader.ts). The URL fields above catch an
+   * asset that was REPLACED; this catches one whose key was overwritten in
+   * place, which is the case a URL comparison cannot see — and it is what makes
+   * "republishing with unchanged assets uploads nothing" exact rather than
+   * merely usually right.
+   *
+   * Deliberately untyped here beyond a shape: it lives in a Mixed field and its
+   * contents are the asset layer's business, not the planner's.
+   */
+  assetIdentities?: Record<string, { source: string; etag?: string; size?: number }>;
   /** When this snapshot was written. */
   at?: Date;
 }
@@ -212,6 +226,24 @@ export type PublishAction = (typeof PUBLISH_ACTIONS)[number];
 /** What actually happened when the processor ran it. */
 export const PUBLISH_OUTCOMES = ['SUCCEEDED', 'FAILED', 'SKIPPED'] as const;
 export type PublishOutcome = (typeof PUBLISH_OUTCOMES)[number];
+
+/**
+ * What a run was asked to do. The mode is chosen by the endpoint that enqueues
+ * the run and is fixed for that run's lifetime — it is an input to the planner,
+ * never something the processor re-decides.
+ *
+ *   FULL         — the whole catalog: provision if needed, categories, then
+ *                  every live product, then the deletes.
+ *   RETRY_FAILED — feature 53. Plans ONLY the rows whose `syncStatus` is
+ *                  FAILED, so a user tapping Retry after "8 of 10 published"
+ *                  re-attempts two products, not ten.
+ *   UNPUBLISH    — feature 39. Deletes the published ITEMS and nothing else.
+ *                  The Mirage restaurant, its ObjectId, the public URL and
+ *                  every printed QR survive deliberately (§7.6); republishing
+ *                  restores the same URL.
+ */
+export const PUBLISH_MODES = ['FULL', 'RETRY_FAILED', 'UNPUBLISH'] as const;
+export type PublishMode = (typeof PUBLISH_MODES)[number];
 
 /**
  * One target's outcome within a run. The `entries[]` array of these doubles as

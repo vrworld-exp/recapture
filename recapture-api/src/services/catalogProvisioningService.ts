@@ -31,6 +31,7 @@ import {
   assertMirageConfigured,
   MirageError,
   MirageErrorCode,
+  bytesUpload,
   type MirageFileUpload,
   type MirageRestaurant,
 } from '@/services/mirage';
@@ -222,13 +223,15 @@ async function loadLogoUpload(catalog: ICatalog): Promise<MirageFileUpload | und
     return undefined;
   }
 
-  return {
-    filename: `logo.${parsed.value.ext}`,
+  // Buffered rather than streamed on purpose: a logo is bounded to
+  // PRODUCT_IMAGE_MAX_BYTES, and the streaming shape exists for models.
+  return bytesUpload(
+    `logo.${parsed.value.ext}`,
     // Derived from the KEY, not from S3's ContentType: the extension is what the
     // presigned signature bound at upload, so it cannot disagree with the bytes.
-    contentType: productImageContentTypeFor(parsed.value.ext),
-    bytes: fetched.body,
-  };
+    productImageContentTypeFor(parsed.value.ext),
+    fetched.body
+  );
 }
 
 /** Result of the one irreversible write. */

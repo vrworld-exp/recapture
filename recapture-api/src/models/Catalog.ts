@@ -44,6 +44,20 @@ export interface ICatalog extends Document {
   mirageRestaurantId?: string;
   mirageProvisionedAt?: Date;
   /**
+   * The materialised "Uncategorized" Mirage category (feature 26).
+   *
+   * ReCapture lets a product have no category; Mirage's create-item does not —
+   * it rejects a missing or invalid category ObjectId outright
+   * (adminController.js:1030-1040). So the bucket is created on demand, at most
+   * once, the first time a run has an uncategorized product to file, and its id
+   * is remembered here so later runs reuse it instead of colliding on the name.
+   *
+   * Worker-owned, like every other `mirage*` field. CLEARED when Mirage's
+   * delete-item cascade removes it, exactly as `CatalogCategory.mirageCategoryId`
+   * is — a stale id here makes the next create-item fail on a dead parent.
+   */
+  mirageUncategorizedCategoryId?: string;
+  /**
    * The customer-facing catalog URL. FROZEN at provisioning: written once and
    * read back verbatim by the QR renderer, the share sheet and every response.
    *
@@ -115,6 +129,7 @@ const CatalogSchema = new Schema<ICatalog>(
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },
+    mirageUncategorizedCategoryId: { type: String },
     publicUrl: { type: String },
     publicUrlScheme: { type: String, enum: PUBLIC_URL_SCHEMES },
     draftRevision: { type: Number, required: true, default: 0 },

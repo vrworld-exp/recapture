@@ -553,7 +553,14 @@ describe('mirageClient — request plumbing', () => {
     // there" is a success with existed:false.
     stubTransport({ status: 404, data: { status: false, message: 'No item found with given itemId (i1)' } });
 
-    await expect(mirageClient.deleteItem('i1')).resolves.toEqual({ existed: false });
+    // `deletedCategory` is reported on every outcome: a Mirage that predates
+    // the ?keepCategory flag cascades regardless, and the caller has to clear
+    // its cached mirageCategoryId when it does. Nothing was deleted here, so
+    // nothing cascaded.
+    await expect(mirageClient.deleteItem('i1')).resolves.toEqual({
+      existed: false,
+      deletedCategory: false,
+    });
   });
 
   it('a transport throw becomes a retryable MirageError, not a raw axios error', async () => {

@@ -22,10 +22,12 @@ export interface ICatalogCategory extends Document {
    * The Mirage category this maps to. Like every mapping field it is written by
    * the publish worker only.
    *
-   * ⚠ It is CLEARED when Mirage's delete-item removes the category's last item:
-   * M10 cascade-deletes the category itself
-   * (adminController.js:1312-1319), so a stale id here makes the next
-   * create-item fail with `400 "Category not found"`. Clearing forces a
+   * ⚠ It is CLEARED when Mirage's delete-item removes the category's last item.
+   * The publish path passes `?keepCategory=true` to opt OUT of that cascade
+   * (adminController.js:1651-1672), but a deployment predating the flag
+   * cascades anyway and reports it in `deletedCategory` — at which point a stale
+   * id here would make the next create-item fail with `400 "Category not
+   * found"`. `categorySync.repairCascadedCategory` clears it, which forces a
    * re-create on the next run.
    */
   mirageCategoryId?: string;

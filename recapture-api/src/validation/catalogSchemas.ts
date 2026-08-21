@@ -467,3 +467,61 @@ export const catalogEntityIdParamsSchema = z
   .strict();
 
 export type CatalogEntityIdParams = z.infer<typeof catalogEntityIdParamsSchema>;
+
+/**
+ * GET /catalog/qr query.
+ *
+ * `size` is CLAMPED by the renderer rather than rejected here — a client asking
+ * for 4000 px wants "as big as possible", and a 400 for that is pedantry. What
+ * IS rejected is a non-numeric size, because that is a bug in the caller rather
+ * than a preference.
+ */
+export const catalogQrQuerySchema = z
+  .object({
+    format: z.enum(['png', 'pdf']).default('png'),
+    size: z.coerce.number().int().positive().optional(),
+  })
+  .strict();
+
+/** GET /catalog/activity query. The cursor is opaque; the service validates it. */
+export const catalogActivityQuerySchema = z
+  .object({
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce.number().int().positive().max(50).optional(),
+  })
+  .strict();
+
+/**
+ * GET /catalog/analytics/* query.
+ *
+ * `.strict()` is doing real work here: a client-supplied `restaurant` would be
+ * REJECTED rather than silently dropped, which is the loudest way to say that
+ * the scope is not theirs to choose. The service ignores it regardless — this
+ * is the second lock on the same door.
+ */
+const isoDay = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
+
+export const catalogAnalyticsQuerySchema = z
+  .object({
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+  })
+  .strict()
+  .refine((value) => !value.from || !value.to || value.from <= value.to, {
+    message: 'from must not be after to',
+    path: ['from'],
+  });
+
+export const catalogTopProductsQuerySchema = z
+  .object({
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    limit: z.coerce.number().int().positive().max(100).optional(),
+  })
+  .strict()
+  .refine((value) => !value.from || !value.to || value.from <= value.to, {
+    message: 'from must not be after to',
+    path: ['from'],
+  });

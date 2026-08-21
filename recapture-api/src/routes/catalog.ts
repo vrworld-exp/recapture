@@ -18,7 +18,11 @@ import {
   brandingCommitSchema,
   brandingUploadUrlSchema,
   bulkProductsSchema,
+  catalogActivityQuerySchema,
+  catalogAnalyticsQuerySchema,
   catalogEntityIdParamsSchema,
+  catalogQrQuerySchema,
+  catalogTopProductsQuerySchema,
   createCatalogSchema,
   createCategorySchema,
   createProductSchema,
@@ -33,6 +37,24 @@ import {
   updateCategorySchema,
   updateProductSchema,
 } from '@/validation/catalogSchemas';
+import { listCatalogActivity } from '@/services/catalogActivityService';
+import {
+  EMPTY_SUMMARY,
+  getCatalogAnalyticsSummary,
+  getCatalogAnalyticsTimeseries,
+  getCatalogAnalyticsTopProducts,
+  resolveRange,
+  type AnalyticsResult,
+} from '@/services/catalogAnalyticsService';
+import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
+import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
+import {
+  getPublishStatus,
+  requestPublish,
+  requestRetry,
+  requestUnpublish,
+  type RequestPublishResult,
+} from '@/services/catalogPublishService';
 import {
   commitBrandingImage,
   createBrandingImageSlot,
@@ -132,6 +154,106 @@ function failImageKey(
 }
 
 // ── Catalog ─────────────────────────────────────────────────────────────────
+
+/** 429, with the retry hint the client backs off on. */
+function rateLimited(res: Response, retryAfter: number): void {
+  res.status(429).json({
+    status: 'error',
+    code: 'RATE_LIMITED',
+    message: 'Too many requests. Please try again shortly.',
+    retryAfter,
+  });
+}
+
+/**
+ * 409 with the ACTIVE run's id, so the client can go straight to polling it
+ * instead of showing an error and making the user press Publish again.
+ */
+function publishInProgress(res: Response, runId: string): void {
+  res.status(409).json({
+    status: 'error',
+    code: 'PUBLISH_IN_PROGRESS',
+    message: 'A publish is already running for this catalog.',
+    runId,
+  });
+}
+
+/** The caller's catalog id, for analytics props. Empty when they have none. */
+async function catalogIdFor(userId: string): Promise<string> {
+  const catalog = await getCatalog(userId);
+  return catalog?.id ?? '';
+}
+
+/**
+ * The ONE mapping from a publish/retry result to a response.
+ *
+ * Shared by both endpoints so a gate rendered by /publish can never differ from
+ * the same gate rendered by /publish/retry, and so the analytics event is
+ * emitted from exactly one place.
+ */
+async function respondToPublishRequest(
+  res: Response,
+  userId: string,
+  mode: 'FULL' | 'RETRY_FAILED',
+  result: RequestPublishResult
+): Promise<void> {
+  if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+
+  const catalogId = await catalogIdFor(userId);
+  const gates = result.outcome === 'BLOCKED' ? result.gates : [];
+
+  track(AnalyticsEvent.CATALOG_PUBLISH_REQUESTED, {
+    user_id_hash: hashIdentifier(userId),
+    catalog_id: catalogId,
+    mode,
+    outcome: result.outcome,
+    gate_count: gates.length,
+    // Codes only. A gate MESSAGE names a product, and a product name is the
+    // owner's catalog content — it must not travel into analytics.
+    ...(gates.length > 0 ? { blocked_by: [...new Set(gates.map((gate) => gate.code))] } : {}),
+  });
+
+  switch (result.outcome) {
+    case 'IN_PROGRESS':
+      return publishInProgress(res, result.runId);
+
+    case 'BLOCKED':
+      // EVERY failing gate, not the first — the client renders a checklist, and
+      // fixing one problem at a time is three round trips and three
+      // disappointments.
+      res.status(422).json({
+        status: 'error',
+        code: 'PUBLISH_BLOCKED',
+        message: 'This catalog is not ready to publish yet.',
+        gates: result.gates,
+      });
+      return;
+
+    case 'NAME_TAKEN':
+      res.status(409).json({
+        status: 'error',
+        code: result.code,
+        message: 'That catalog name is already in use. Try the suggested one.',
+        fields: { name: result.suggestedName },
+      });
+      return;
+
+    case 'NOTHING_TO_RETRY':
+      // A retry with nothing failed is the state the user asked for, so it is a
+      // success with a zero-count run rather than an error.
+      res.status(200).json({ status: 'success', runId: null, queued: false });
+      return;
+
+    case 'QUEUED':
+      res.status(202).json({
+        status: 'success',
+        runId: result.run.runId,
+        queued: true,
+        ...(result.mapping ? { publicUrl: result.mapping.publicUrl } : {}),
+      });
+      return;
+  }
+}
 
 /** GET /catalog — the caller's catalog, or 404 before they create one. */
 router.get(
@@ -955,5 +1077,296 @@ for (const [path, archived] of [
     })
   );
 }
+
+// ── Publish (features 36–39, 52, 53, 56, 57) ────────────────────────────────
+//
+// ⚠ DECLARED AFTER `/products/:id` IS FINE, BUT `/publish/status` AND
+// `/publish/retry` MUST PRECEDE NOTHING — there is no `/publish/:id`, so the
+// usual ordering hazard does not apply here. Keep it that way: adding one would
+// make these two literals reachable only by luck.
+
+/**
+ * POST /catalog/publish — feature 36.
+ *
+ * 202, not 200: publishing is a background run and the response is a receipt,
+ * not a result. The client polls `/publish/status` from here.
+ */
+router.post(
+  '/publish',
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.userId;
+
+    const rate = await consumeRateWindow(
+      `catalog-publish:${userId}`,
+      env.PUBLISH_MAX_PER_WINDOW,
+      env.PUBLISH_WINDOW_SECONDS
+    );
+    if (rate.limited) return rateLimited(res, rate.retryAfter);
+
+    const idempotencyKey = req.header('Idempotency-Key') ?? undefined;
+    const result = await requestPublish(userId, {
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+
+    return respondToPublishRequest(res, userId, 'FULL', result);
+  })
+);
+
+/** POST /catalog/publish/retry — feature 53. Only the FAILED rows. */
+router.post(
+  '/publish/retry',
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.userId;
+
+    // Rate-limited harder than publish itself: Retry is one tap next to a list
+    // of failures, and a frustrated user taps it repeatedly.
+    const rate = await consumeRateWindow(
+      `catalog-publish-retry:${userId}`,
+      env.PUBLISH_RETRY_MAX_PER_WINDOW,
+      env.PUBLISH_WINDOW_SECONDS
+    );
+    if (rate.limited) return rateLimited(res, rate.retryAfter);
+
+    const result = await requestRetry(userId);
+    return respondToPublishRequest(res, userId, 'RETRY_FAILED', result);
+  })
+);
+
+/**
+ * GET /catalog/publish/status — features 37, 38, 52.
+ *
+ * Server truth: two devices polling during one run see the identical payload,
+ * because none of it is derived from anything the client holds.
+ */
+router.get(
+  '/publish/status',
+  asyncHandler(async (req, res) => {
+    const result = await getPublishStatus(req.user!.userId);
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+
+    res.status(200).json({ status: 'success', publish: result.status });
+  })
+);
+
+/**
+ * POST /catalog/unpublish — feature 39.
+ *
+ * Takes the ITEMS down and flips the restaurant's `isPublished`. The restaurant
+ * document, its ObjectId, the public URL and every printed QR survive
+ * deliberately; republishing restores the same page at the same link.
+ */
+router.post(
+  '/unpublish',
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.userId;
+
+    const rate = await consumeRateWindow(
+      `catalog-publish:${userId}`,
+      env.PUBLISH_MAX_PER_WINDOW,
+      env.PUBLISH_WINDOW_SECONDS
+    );
+    if (rate.limited) return rateLimited(res, rate.retryAfter);
+
+    const result = await requestUnpublish(userId);
+
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome === 'IN_PROGRESS') return publishInProgress(res, result.runId);
+
+    track(AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED, {
+      user_id_hash: hashIdentifier(userId),
+      catalog_id: await catalogIdFor(userId),
+      outcome: result.outcome,
+    });
+
+    if (result.outcome === 'NOT_PUBLISHED') {
+      // A DRAFT catalog was never live. Success with nothing to do beats an
+      // error the client would have to special-case.
+      res.status(200).json({ status: 'success', unpublished: false, runId: null });
+      return;
+    }
+
+    res.status(202).json({ status: 'success', unpublished: true, runId: result.run.runId });
+  })
+);
+
+/**
+ * GET /catalog/qr?format=png|pdf&size=<px> — features 31–35.
+ *
+ * Rendered from `catalog.publicUrl` VERBATIM. This route never composes a URL,
+ * which is what makes feature 32 ("a printed sticker keeps working") a property
+ * of the code rather than a rule somebody has to remember.
+ *
+ * Highly cacheable by construction: the URL never changes, so neither does the
+ * image. The strong ETag lets a client — or a CDN in front of us — skip the
+ * render entirely on a repeat request.
+ */
+router.get(
+  '/qr',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogQrQuerySchema.safeParse(req.query);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+
+    const rate = await consumeRateWindow(
+      `catalog-qr:${userId}`,
+      env.CATALOG_QR_MAX_PER_WINDOW,
+      env.CATALOG_QR_WINDOW_SECONDS
+    );
+    if (rate.limited) return rateLimited(res, rate.retryAfter);
+
+    const catalog = await getCatalog(userId);
+    if (!catalog) return noCatalog(res);
+
+    if (!catalog.publicUrl) {
+      // A URL is minted at provisioning and never before. Inventing one here
+      // would produce a QR that resolves to nothing — worse than no QR, because
+      // it might get printed.
+      return fail(
+        res,
+        409,
+        'CATALOG_NOT_PUBLISHED',
+        'Publish your catalog first — the QR code is created when it goes live.'
+      );
+    }
+
+    const { format, size } = parsed.data;
+    const clamped = clampQrSize(size);
+
+    // Keyed on everything that can change the bytes and nothing that cannot.
+    // The catalog's revision is deliberately ABSENT: editing a product does not
+    // change the code, and including it would invalidate a cache on every save.
+    const etag = strongETag({ url: catalog.publicUrl, name: catalog.name, format, size: clamped });
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
+      res.status(304).end();
+      return;
+    }
+
+    const rendered = await renderCatalogQr({
+      publicUrl: catalog.publicUrl,
+      catalogName: catalog.name,
+      format,
+      size: clamped,
+    });
+
+    track(AnalyticsEvent.CATALOG_QR_RENDERED, {
+      user_id_hash: hashIdentifier(userId),
+      catalog_id: catalog.id,
+      format,
+      size: clamped,
+    });
+
+    res.setHeader('Content-Type', rendered.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
+    res.status(200).send(rendered.body);
+  })
+);
+
+/**
+ * GET /catalog/activity?cursor=&limit= — feature 55.
+ *
+ * Paged, newest-first history across runs. Read-only over the `entries[]` the
+ * publish processor already writes, which is why this feature needed no new
+ * collection and no second write path.
+ */
+router.get(
+  '/activity',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogActivityQuerySchema.safeParse(req.query);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const result = await listCatalogActivity(req.user!.userId, parsed.data);
+
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome === 'BAD_CURSOR') {
+      // A tampered or cross-list cursor. 400, never a 500 and never a silently
+      // wrong page.
+      return fail(res, 400, 'INVALID_CURSOR', 'That page cursor is not valid.');
+    }
+
+    res.status(200).json({ status: 'success', ...result.page });
+  })
+);
+
+// ── Analytics (features 61–66) ──────────────────────────────────────────────
+//
+// Three proxied reads of Mirage's admin-scoped reports, each with the
+// `restaurant` id injected server-side from the caller's own mapping. A
+// `restaurant` in the request is IGNORED — see catalogAnalyticsService.
+
+/** Maps an analytics result onto the house envelope. One place, three routes. */
+function respondToAnalytics<T>(
+  res: Response,
+  result: AnalyticsResult<T>,
+  empty: () => T
+): void {
+  switch (result.outcome) {
+    case 'NOT_FOUND':
+      return noCatalog(res);
+    case 'EMPTY':
+      // Never published: there is nothing to report and no Mirage call was
+      // made. An empty payload, not an error — the dashboard renders "no data
+      // yet", which is the truth.
+      res.status(200).json({ status: 'success', ...empty() });
+      return;
+    case 'UNAVAILABLE':
+      // Mirage being down degrades the dashboard; it does not break it.
+      res.status(503).json({
+        status: 'error',
+        code: result.code,
+        message: 'Analytics are unavailable right now. Please try again shortly.',
+      });
+      return;
+    case 'OK':
+      res.status(200).json({ status: 'success', ...result.data });
+      return;
+  }
+}
+
+router.get(
+  '/analytics/summary',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogAnalyticsQuerySchema.safeParse(req.query);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const result = await getCatalogAnalyticsSummary(req.user!.userId, parsed.data);
+    respondToAnalytics(res, result, () => EMPTY_SUMMARY(resolveRange(parsed.data)));
+  })
+);
+
+router.get(
+  '/analytics/timeseries',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogAnalyticsQuerySchema.safeParse(req.query);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const result = await getCatalogAnalyticsTimeseries(req.user!.userId, parsed.data);
+    respondToAnalytics(res, result, () => ({
+      range: resolveRange(parsed.data),
+      points: [],
+    }));
+  })
+);
+
+router.get(
+  '/analytics/top-products',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogTopProductsQuerySchema.safeParse(req.query);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const result = await getCatalogAnalyticsTopProducts(req.user!.userId, parsed.data);
+    respondToAnalytics(res, result, () => ({
+      range: resolveRange(parsed.data),
+      rows: [],
+      totals: {
+        '3D': { views: 0, arViews: 0, products: 0 },
+        IMAGE_ONLY: { views: 0, arViews: 0, products: 0 },
+        UNKNOWN: { views: 0, arViews: 0, products: 0 },
+      },
+    }));
+  })
+);
 
 export default router;
