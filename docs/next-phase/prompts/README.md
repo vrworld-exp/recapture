@@ -19,6 +19,11 @@ Files in this pack:
 | `02-recapture-client-prompts.md` | F1–F12 | `phase2/ReCapture/lib/` (Flutter — app **and** web) |
 | `03-mirage-prompts.md` | M1–M5 | `phase2/mirage-be-phase-2-recap/` + `phase2/mirage-fe/` |
 
+> `02-recapture-client-prompts.md` is also available **split into six self-contained two-prompt
+> batches** in [`client-batches/`](client-batches/README.md) — F1+F2, F3+F4, F5+F6, F7+F8, F9+F10,
+> F11+F12. Same shared context and platform rules in every file; the prompt text is a verbatim
+> extract. Hand one batch to one session instead of the whole twelve-prompt file.
+
 ---
 
 ## Current state — verified against the working tree
