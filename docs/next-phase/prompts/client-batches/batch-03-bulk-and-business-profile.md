@@ -1,3 +1,4 @@
+✅✅✅✅✅✅✅
 # ReCapture Client — Batch 03 · F5 + F6 · Bulk Actions and Business Profile
 
 > **Status: ⬜ todo.** F5 depends on **F1, F3, F4**. F6 depends on nothing beyond the existing

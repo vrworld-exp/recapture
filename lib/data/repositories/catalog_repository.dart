@@ -1,5 +1,6 @@
 // lib/data/repositories/catalog_repository.dart
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/business_profile.dart';
@@ -65,8 +66,30 @@ abstract interface class CatalogRepository {
     required ProductImageContentType contentType,
   });
 
+  /// Uploads branding bytes in ONE call and returns the key they landed on.
+  /// Feed that key to [commitBranding] exactly as if it had come from
+  /// [createBrandingSlot].
+  ///
+  /// THIS is the path the profile screen actually uses, for the same reason
+  /// [CatalogProductsRepository.uploadImageBytes] is the path the add-product
+  /// screen uses: the presigned PUT above is cross-origin to the artifacts
+  /// bucket, which serves no CORS policy, so it cannot work in the BROWSER
+  /// build. One path for web and native beats two that diverge.
+  ///
+  /// [contentType] must have been sniffed from the bytes themselves; the server
+  /// sniffs them again and derives the stored type from ITS answer.
+  Future<String> uploadBrandingBytes(
+    Uint8List bytes, {
+    required BrandingSlot slot,
+    required String contentType,
+  });
+
   /// Binds an uploaded object as the logo or cover, and returns the refreshed
-  /// profile. Call it only after the PUT to the slot's url has succeeded.
+  /// profile. Call it only after the bytes have landed — via
+  /// [uploadBrandingBytes], or a PUT to a [createBrandingSlot] url.
+  ///
+  /// SEPARATE from the upload on purpose: a commit that fails after a
+  /// successful upload must be retryable WITHOUT re-uploading the image.
   Future<BusinessProfile> commitBranding({
     required BrandingSlot slot,
     required String key,
@@ -162,6 +185,37 @@ class RemoteCatalogRepository implements CatalogRepository {
       });
 
   @override
+  Future<String> uploadBrandingBytes(
+    Uint8List bytes, {
+    required BrandingSlot slot,
+    required String contentType,
+  }) =>
+      mapCatalogErrors(() async {
+        // The raw image IS the body — not multipart, not JSON. The app Dio is
+        // right: the endpoint is ours and needs the Bearer token.
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/logo/bytes',
+          data: Stream.value(bytes),
+          queryParameters: {'slot': slot.apiValue},
+          options: Options(
+            headers: {
+              Headers.contentTypeHeader: contentType,
+              Headers.contentLengthHeader: bytes.length,
+            },
+          ),
+        );
+
+        final key = res.data?['key'];
+        if (key is! String || key.isEmpty) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return key;
+      });
+
+  @override
   Future<BusinessProfile> commitBranding({
     required BrandingSlot slot,
     required String key,
@@ -219,7 +273,8 @@ class RemoteCatalogRepository implements CatalogRepository {
 
   @override
   Future<int> deleteCategory(String id) => mapCatalogErrors(() async {
-        final res = await _dio.delete<Map<String, dynamic>>('/catalog/categories/$id');
+        final res =
+            await _dio.delete<Map<String, dynamic>>('/catalog/categories/$id');
         final moved = res.data?['movedProductCount'];
         return moved is num && moved >= 0 ? moved.toInt() : 0;
       });

@@ -7,6 +7,19 @@ import 'catalog_json.dart';
 const int kMaxBusinessNameLength = 120;
 const int kMaxCatalogNameLength = 120;
 
+/// Contact-block bounds, mirrored from the same `contactSchema` Zod object.
+///
+/// Hand-synced, because there is no shared package (AGENTS.md §0.1). They are
+/// checked client-side ONLY so an over-long value is caught beside the field
+/// instead of coming back as a 400 with the whole form to re-read; the server
+/// remains the authority and rejects it too.
+const int kMaxContactPhoneLength = 32;
+const int kMaxContactEmailLength = 254;
+const int kMaxContactAddressLength = 300;
+const int kMaxContactWebsiteLength = 200;
+const int kMaxSocialLinkLength = 200;
+const int kMaxWhatsappLength = 40;
+
 /// Social handles/links on a business profile.
 ///
 /// ⚠ ReCapture-only — Mirage's restaurant schema has no social fields, so none

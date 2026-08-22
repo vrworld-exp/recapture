@@ -16,9 +16,14 @@ import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
-import { presignObjectPutUrl } from '@/services/s3ObjectStore';
+import { presignObjectPutUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import { checkCatalogImageKey, sweepSupersededImages } from '@/services/catalogImages';
-import { buildBrandingImageKey, productImageExtensionFor } from '@/utils/productImageKeys';
+import {
+  buildBrandingImageKey,
+  productImageExtensionFor,
+  type BrandingSlot,
+  type ProductImageContentType,
+} from '@/utils/productImageKeys';
 import type { CatalogContact, CatalogStatus } from '@/models/types/catalog.types';
 import type {
   BrandingCommitInput,
@@ -399,6 +404,44 @@ export async function createBrandingImageSlot(
       ).toISOString(),
     },
   };
+}
+
+export type BrandingImageBytesResult =
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'OK'; key: string };
+
+/**
+ * Stores branding bytes in ONE call and returns the key they landed on. Feed
+ * that key straight to {@link commitBrandingImage}, exactly as if it had been
+ * presigned.
+ *
+ * WHY THIS EXISTS ALONGSIDE {@link createBrandingImageSlot}, and it is the same
+ * reason `storeProductImageBytes` exists alongside the product slot: the
+ * presigned PUT is cross-origin to BUCKET_ARTIFACTS, which serves no CORS
+ * policy (docs/aws-storage-and-cdn.md), so it cannot work from the BROWSER
+ * build. A logo is one small file, so proxying it costs little — the reasoning
+ * does NOT extend to capture uploads, which stay direct-to-S3.
+ *
+ * The key lands under the RESERVED slot segment (`.../products/logo/`), not a
+ * uuid one, so the commit's prefix sweep still collects the superseded image.
+ */
+export async function storeBrandingImageBytes(
+  userId: string,
+  input: { bytes: Buffer; contentType: ProductImageContentType; slot: BrandingSlot }
+): Promise<BrandingImageBytesResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NOT_FOUND' };
+
+  const key = buildBrandingImageKey(
+    (catalog._id as Types.ObjectId).toHexString(),
+    input.slot,
+    randomUUID(),
+    productImageExtensionFor(input.contentType)
+  );
+
+  await putObjectBytes(BUCKET_ARTIFACTS, key, input.bytes, input.contentType);
+
+  return { outcome: 'OK', key };
 }
 
 export type CommitBrandingResult =

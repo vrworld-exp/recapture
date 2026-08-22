@@ -41,6 +41,7 @@ Future<bool> showTypedConfirmDialog(
   required String confirmationText,
   List<String> warnings = const <String>[],
   String confirmLabel = 'Delete',
+  String hintText = 'Product name',
 }) async {
   final result = await showDialog<bool>(
     context: context,
@@ -52,6 +53,7 @@ Future<bool> showTypedConfirmDialog(
       confirmationText: confirmationText,
       warnings: warnings,
       confirmLabel: confirmLabel,
+      hintText: hintText,
     ),
   );
   return result ?? false;
@@ -64,6 +66,7 @@ class _TypedConfirmDialog extends StatefulWidget {
     required this.confirmationText,
     required this.warnings,
     required this.confirmLabel,
+    required this.hintText,
   });
 
   final String title;
@@ -71,6 +74,10 @@ class _TypedConfirmDialog extends StatefulWidget {
   final String confirmationText;
   final List<String> warnings;
   final String confirmLabel;
+
+  /// What the field is asking for. A bulk delete has no single product name to
+  /// type, so the phrase — and therefore the hint — is not always a name.
+  final String hintText;
 
   @override
   State<_TypedConfirmDialog> createState() => _TypedConfirmDialogState();
@@ -166,7 +173,7 @@ class _TypedConfirmDialogState extends State<_TypedConfirmDialog> {
               // is open — a submit on a half-typed name must do nothing.
               onSubmitted: (_) => _confirm(),
               style: theme.textTheme.bodyLarge,
-              decoration: const InputDecoration(hintText: 'Product name'),
+              decoration: InputDecoration(hintText: widget.hintText),
             ),
           ],
         ),

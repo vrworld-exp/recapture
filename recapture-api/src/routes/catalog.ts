@@ -15,6 +15,7 @@ import { decodePositionCursor, type PositionCursor } from '@/utils/cursor';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import {
+  brandingBytesQuerySchema,
   brandingCommitSchema,
   brandingUploadUrlSchema,
   bulkProductsSchema,
@@ -61,6 +62,7 @@ import {
   createCatalog,
   getBusinessProfile,
   getCatalog,
+  storeBrandingImageBytes,
   updateBusinessProfile,
   updateCatalog,
 } from '@/services/catalogService';
@@ -349,6 +351,86 @@ router.post(
     if (result.outcome === 'NOT_FOUND') return noCatalog(res);
 
     res.status(200).json({ status: 'success', ...result.slot });
+  })
+);
+
+/**
+ * POST /catalog/logo/bytes — upload the logo or cover in ONE call: the raw
+ * image body goes to S3 server-side and the key it landed on comes back. Feed
+ * that key to `PUT /catalog/logo`, exactly as if it had been presigned.
+ *
+ * The browser half of feature 2, and it exists for the same reason
+ * `POST /catalog/products/image/bytes` does: the presigned PUT above is
+ * cross-origin to the artifacts bucket, which serves no CORS policy, so the web
+ * build cannot use it. Native clients may use either.
+ *
+ * Same rate window as the presigned slot, deliberately the SAME key: the two
+ * routes are alternative spellings of one action, so alternating between them
+ * must not double the budget.
+ */
+router.post(
+  '/logo/bytes',
+  raw({
+    type: [...PRODUCT_IMAGE_CONTENT_TYPES],
+    limit: env.CATALOG_PRODUCT_IMAGE_MAX_BYTES,
+  }),
+  asyncHandler(async (req, res) => {
+    const params = brandingBytesQuerySchema.safeParse(req.query);
+    if (!params.success) return badRequest(res, params.error);
+
+    const body: unknown = req.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      return fail(
+        res,
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'Send the image as a JPEG, PNG or WebP body.'
+      );
+    }
+    if (body.length > env.CATALOG_PRODUCT_IMAGE_MAX_BYTES) {
+      return fail(
+        res,
+        413,
+        'PAYLOAD_TOO_LARGE',
+        'That image is too large. Please choose a smaller one.'
+      );
+    }
+
+    // The bytes, not the header, decide what this is.
+    const sniffed = sniffProductImageContentType(body);
+    if (sniffed === null) {
+      return fail(
+        res,
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'That file is not a JPEG, PNG or WebP.'
+      );
+    }
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `product-image-upload:${userId}`,
+      env.PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await storeBrandingImageBytes(userId, {
+      bytes: body,
+      contentType: sniffed,
+      slot: params.data.slot,
+    });
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+
+    res.status(200).json({ status: 'success', key: result.key });
   })
 );
 

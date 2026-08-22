@@ -38,6 +38,7 @@ class AppTextField extends StatelessWidget {
     this.inputFormatters,
     this.autocorrect = true,
     this.enableSuggestions = true,
+    this.autofillHints,
   });
 
   /// Persistent label — shown above field when focused/filled,
@@ -77,6 +78,15 @@ class AppTextField extends StatelessWidget {
   final Widget? prefixIcon;
 
   final List<TextInputFormatter>? inputFormatters;
+
+  /// What the platform's autofill should offer for this field
+  /// (`AutofillHints.telephoneNumber`, `.email`, `.url`, …).
+  ///
+  /// Worth passing wherever the value is one the user already has stored:
+  /// browsers and both mobile keyboards read these, and a contact form without
+  /// them makes people type their own phone number by hand.
+  final Iterable<String>? autofillHints;
+
   final bool autocorrect;
   final bool enableSuggestions;
 
@@ -98,6 +108,7 @@ class AppTextField extends StatelessWidget {
       maxLines: maxLines,
       minLines: minLines,
       inputFormatters: inputFormatters,
+      autofillHints: autofillHints,
       autocorrect: autocorrect,
       enableSuggestions: enableSuggestions,
       style: Theme.of(context).textTheme.bodyLarge,

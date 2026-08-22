@@ -127,6 +127,21 @@ export const brandingUploadUrlSchema = z
 
 export type BrandingUploadUrlInput = z.infer<typeof brandingUploadUrlSchema>;
 
+/**
+ * POST /catalog/logo/bytes — the QUERY of the one-call branding upload.
+ *
+ * There is no body schema to pair with this: the body IS the image, and its
+ * type is sniffed from the bytes rather than declared. Only the slot has to be
+ * named, and it rides in the query for the same reason `productId` does.
+ */
+export const brandingBytesQuerySchema = z
+  .object({
+    slot: z.enum(BRANDING_SLOTS),
+  })
+  .strict();
+
+export type BrandingBytesQuery = z.infer<typeof brandingBytesQuerySchema>;
+
 /** PUT /catalog/logo — bind an uploaded object as the logo or cover. */
 export const brandingCommitSchema = z
   .object({

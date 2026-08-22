@@ -24,6 +24,7 @@ import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
+import '../../presentation/screens/catalog/business_profile_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/catalog/category_manager_screen.dart';
 import '../../presentation/screens/catalog/change_product_model_screen.dart';
@@ -282,14 +283,28 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       //
       // The rest of the /catalog/* constants above are NOT registered yet —
       // their screens land with their own tasks (the shell, add-product, the
-      // product editor, the model swap and the category manager are registered
-      // below). Until then an unknown /catalog/... location falls through to
-      // errorBuilder, which is the honest outcome; a placeholder route would
-      // look like a broken feature.
+      // product editor, the model swap, the category manager and the business
+      // profile are registered below). Until then an unknown /catalog/...
+      // location falls through to errorBuilder, which is the honest outcome; a
+      // placeholder route would look like a broken feature.
       GoRoute(
         path: AppRoutes.catalog,
         name: AppRouteNames.catalog,
         builder: (_, __) => const FlowBackScope(child: CatalogScreen()),
+      ),
+      // The business profile — name, branding, contact and socials (features
+      // 58-60, 2). STATIC, and declared before the product routes for the same
+      // reason the category manager is.
+      //
+      // `onExit` is the BROWSER BACK guard, exactly as on the product editor: a
+      // PopScope inside the screen covers the system gesture and the Android
+      // hardware button, but a browser's back button is a router event that
+      // never reaches the widget.
+      GoRoute(
+        path: AppRoutes.catalogSettings,
+        name: AppRouteNames.catalogSettings,
+        onExit: (context, state) => confirmDiscardProfileEdits(context),
+        builder: (_, __) => const FlowBackScope(child: BusinessProfileScreen()),
       ),
       // The category manager. STATIC, and declared before the product routes
       // for the same reason `products/new` is: a literal segment must never be

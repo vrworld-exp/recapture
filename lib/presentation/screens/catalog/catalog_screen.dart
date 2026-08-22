@@ -7,6 +7,7 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/catalog/bulk_selection_notifier.dart';
 import '../../../application/catalog/catalog_categories_notifier.dart';
 import '../../../application/catalog/catalog_notifier.dart';
 import '../../../application/catalog/catalog_products_notifier.dart';
@@ -15,6 +16,7 @@ import '../../../domain/entities/catalog.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_actions.dart';
 import 'create_catalog_dialog.dart';
@@ -82,12 +84,20 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     await ref.read(catalogProvider.notifier).refresh();
   }
 
+  /// Opens the business profile — name, logo, cover, contact and socials.
+  ///
+  /// push, not go: /catalog/settings is a sub-screen of the shell, so back pops
+  /// straight back to it. The profile and the header card read the same catalog
+  /// notifier, which the profile refreshes on every write, so nothing needs
+  /// refreshing on return.
+  void _openBusinessProfile() =>
+      context.pushNamed(AppRouteNames.catalogSettings);
+
   /// Opens the category manager. Categories are not decoration: Mirage's
   /// create-item requires a real category id, so this is where a catalog becomes
   /// publishable. The grid's chips and the editor's picker read the same list,
   /// so nothing needs refreshing on return.
-  void _openCategories() =>
-      context.pushNamed(AppRouteNames.catalogCategories);
+  void _openCategories() => context.pushNamed(AppRouteNames.catalogCategories);
 
   /// Pull-to-refresh pulls everything the screen shows: the catalog's own header
   /// counts, the product pages, and the category chips. Refreshing one of the
@@ -101,21 +111,34 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   @override
   Widget build(BuildContext context) {
     final catalogAsync = ref.watch(catalogProvider);
+    final selecting = ref.watch(
+      bulkSelectionProvider.select((selection) => selection.isActive),
+    );
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: 'Back',
-          // navigateBack, not Navigator.pop: this screen is reached with go(),
-          // so there is usually nothing to pop and a bare pop would do nothing.
-          onPressed: () => navigateBack(context),
-        ),
-        title: Text('Catalog', style: Theme.of(context).textTheme.titleLarge),
-      ),
+      // Selection REPLACES the screen's chrome rather than adding to it. The
+      // count belongs where the title was, and the way out has to be as
+      // prominent as the actions it guards.
+      appBar: selecting
+          ? const BulkSelectionAppBar()
+          : AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back',
+                // navigateBack, not Navigator.pop: this screen is reached with
+                // go(), so there is usually nothing to pop and a bare pop would
+                // do nothing.
+                onPressed: () => navigateBack(context),
+              ),
+              title: Text(
+                'Catalog',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+      bottomNavigationBar: selecting ? const BulkActionBar() : null,
       body: RefreshIndicator(
         color: AppColors.mirageRed,
         backgroundColor: AppColors.surface1,
@@ -138,6 +161,9 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                   onAddProduct: _addProduct,
                   onOpenProduct: _openProduct,
                   onOpenCategories: _openCategories,
+                  onOpenBusinessProfile: _openBusinessProfile,
+                  onSelect: () =>
+                      ref.read(bulkSelectionProvider.notifier).enter(),
                 ),
         ),
       ),
@@ -174,72 +200,114 @@ class _CatalogBody extends ConsumerWidget {
     required this.onAddProduct,
     required this.onOpenProduct,
     required this.onOpenCategories,
+    required this.onOpenBusinessProfile,
+    required this.onSelect,
   });
 
   final Catalog catalog;
   final VoidCallback onAddProduct;
   final ValueChanged<CatalogProduct> onOpenProduct;
   final VoidCallback onOpenCategories;
+  final VoidCallback onOpenBusinessProfile;
+
+  /// Enters selection mode. Always offered, not only on web: a button is the
+  /// discoverable half of a feature whose other entry point is a long-press
+  /// that nothing on screen advertises.
+  final VoidCallback onSelect;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return NotificationListener<ScrollNotification>(
-      onNotification: (notification) =>
-          ProductGridSection.handleScrollNotification(ref, notification),
-      child: CustomScrollView(
-        // Always scrollable so pull-to-refresh works even when the body is
-        // shorter than the viewport (an empty or filtered-empty catalog).
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.screenPadding,
-              AppSpacing.screenPadding,
-              AppSpacing.screenPadding,
-              0,
-            ),
-            sliver: SliverMainAxisGroup(
-              slivers: [
-                SliverToBoxAdapter(child: _CatalogHeaderCard(catalog: catalog)),
-                const SliverToBoxAdapter(
-                  child: SizedBox(height: AppSpacing.xxl),
-                ),
-                SliverToBoxAdapter(
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
+    final selecting = ref.watch(
+      bulkSelectionProvider.select((selection) => selection.isActive),
+    );
+
+    // The keyboard half of selection: Ctrl/Cmd+A over the grid, Escape to
+    // leave. Wrapped around the scroll view because a shortcut only fires while
+    // the focus is inside the widget declaring it, and after a click on a card
+    // the focus is on that card.
+    return BulkSelectionShortcuts(
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (notification) =>
+            ProductGridSection.handleScrollNotification(ref, notification),
+        child: CustomScrollView(
+          // Always scrollable so pull-to-refresh works even when the body is
+          // shorter than the viewport (an empty or filtered-empty catalog).
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.screenPadding,
+                AppSpacing.screenPadding,
+                AppSpacing.screenPadding,
+                0,
+              ),
+              sliver: SliverMainAxisGroup(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: _CatalogHeaderCard(
+                      catalog: catalog,
+                      onOpenBusinessProfile: onOpenBusinessProfile,
+                    ),
+                  ),
+                  const SliverToBoxAdapter(
+                    child: SizedBox(height: AppSpacing.xxl),
+                  ),
+                  SliverToBoxAdapter(
+                    // Wrap, not Row: a heading plus three buttons does not fit a
+                    // phone width, and an overflow stripe is not a header.
+                    child: Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      alignment: WrapAlignment.spaceBetween,
+                      children: [
+                        Text(
                           'Products',
                           style: Theme.of(context).textTheme.headlineMedium,
                         ),
-                      ),
-                      TextButton.icon(
-                        icon: const Icon(Icons.category_outlined, size: 18),
-                        label: const Text('Categories'),
-                        onPressed: onOpenCategories,
-                      ),
-                      TextButton.icon(
-                        icon: const Icon(Icons.add, size: 18),
-                        label: const Text('Add product'),
-                        onPressed: onAddProduct,
-                      ),
-                    ],
+                        // Hidden while selecting: the selection bars own the
+                        // screen's actions then, and these would compete with
+                        // them for the same tap.
+                        if (!selecting)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              TextButton.icon(
+                                icon: const Icon(Icons.checklist, size: 18),
+                                label: const Text('Select'),
+                                onPressed: onSelect,
+                              ),
+                              TextButton.icon(
+                                icon: const Icon(
+                                  Icons.category_outlined,
+                                  size: 18,
+                                ),
+                                label: const Text('Categories'),
+                                onPressed: onOpenCategories,
+                              ),
+                              TextButton.icon(
+                                icon: const Icon(Icons.add, size: 18),
+                                label: const Text('Add product'),
+                                onPressed: onAddProduct,
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
                   ),
-                ),
-                const SliverToBoxAdapter(
-                  child: SizedBox(height: AppSpacing.md),
-                ),
-                ProductGridSection(
-                  onOpenProduct: onOpenProduct,
-                  onAddProduct: onAddProduct,
-                  // The menu owns its own confirmations, undo and feedback, so
-                  // the shell hands it the anchor and stays out of the way.
-                  onProductMenu: showProductActionsMenu,
-                ),
-              ],
+                  const SliverToBoxAdapter(
+                    child: SizedBox(height: AppSpacing.md),
+                  ),
+                  ProductGridSection(
+                    onOpenProduct: onOpenProduct,
+                    onAddProduct: onAddProduct,
+                    // The menu owns its own confirmations, undo and feedback,
+                    // so the shell hands it the anchor and stays out of the way.
+                    onProductMenu: showProductActionsMenu,
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -247,9 +315,13 @@ class _CatalogBody extends ConsumerWidget {
 
 /// The catalog's identity and publish state at a glance (features 4, 37, 38).
 class _CatalogHeaderCard extends StatelessWidget {
-  const _CatalogHeaderCard({required this.catalog});
+  const _CatalogHeaderCard({
+    required this.catalog,
+    required this.onOpenBusinessProfile,
+  });
 
   final Catalog catalog;
+  final VoidCallback onOpenBusinessProfile;
 
   @override
   Widget build(BuildContext context) {
@@ -265,7 +337,22 @@ class _CatalogHeaderCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(catalog.name, style: textTheme.titleLarge),
+          Row(
+            children: [
+              Expanded(
+                child: Text(catalog.name, style: textTheme.titleLarge),
+              ),
+              IconButton(
+                tooltip: 'Business profile',
+                icon: const Icon(
+                  Icons.badge_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                onPressed: onOpenBusinessProfile,
+              ),
+            ],
+          ),
           if (catalog.businessName != null) ...[
             const SizedBox(height: AppSpacing.xs),
             Text(

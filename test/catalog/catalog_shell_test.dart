@@ -7,6 +7,7 @@
 // sight of the feature would be an error screen. The repository turns it into
 // `null` and the shell renders a create prompt — these tests pin that, and the
 // two other states either side of it.
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -79,6 +80,14 @@ class _FakeCatalogRepo implements CatalogRepository {
     required ProductImageContentType contentType,
   }) =>
       throw UnimplementedError('not used here');
+
+  @override
+  Future<String> uploadBrandingBytes(
+    Uint8List bytes, {
+    required BrandingSlot slot,
+    required String contentType,
+  }) =>
+      throw UnimplementedError();
 
   @override
   Future<BusinessProfile> commitBranding({

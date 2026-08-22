@@ -12,12 +12,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/catalog/bulk_selection_notifier.dart';
 import '../../../application/catalog/catalog_categories_notifier.dart';
 import '../../../application/catalog/catalog_products_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
 import '../../../domain/entities/product_type.dart';
+import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_card.dart';
 
@@ -98,7 +100,8 @@ class ProductGridSection extends ConsumerWidget {
     }
     final metrics = notification.metrics;
     if (!metrics.hasContentDimensions) return false;
-    if (metrics.pixels >= metrics.maxScrollExtent - kProductGridPrefetchExtent) {
+    if (metrics.pixels >=
+        metrics.maxScrollExtent - kProductGridPrefetchExtent) {
       // The notifier owns every guard against a double fetch (in-flight, no
       // cursor, a failed append awaiting retry), which is why this can be
       // called on every scroll frame without a local latch of its own.
@@ -118,6 +121,9 @@ class ProductGridSection extends ConsumerWidget {
         const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.md)),
         const SliverToBoxAdapter(child: _ProductFilterBar()),
         const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.lg)),
+        // What a select-all covered, and what a filter change just did to the
+        // selection. Collapses to nothing when there is neither.
+        const SliverToBoxAdapter(child: BulkSelectionNotice()),
         if (state.isLoading && state.items.isEmpty)
           const _SkeletonGrid()
         else if (state.error != null)
@@ -265,8 +271,7 @@ class _ProductFilterBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final query = ref.watch(catalogProductsProvider.select((s) => s.query));
     final notifier = ref.read(catalogProductsProvider.notifier);
-    final categories =
-        ref.watch(catalogCategoriesProvider).valueOrNull;
+    final categories = ref.watch(catalogCategoriesProvider).valueOrNull;
 
     return Wrap(
       spacing: AppSpacing.sm,
@@ -412,16 +417,53 @@ class _ProductGrid extends ConsumerWidget {
   final ValueChanged<CatalogProduct> onOpenProduct;
   final ProductMenuCallback? onProductMenu;
 
+  /// One card's primary activation.
+  ///
+  /// The whole click grammar of selection mode lives here, in one place, so the
+  /// card stays pure presentation and the phone and browser gestures cannot
+  /// drift apart:
+  ///   • not selecting, plain tap        → open the product
+  ///   • not selecting, Ctrl/Cmd+click   → ENTER selection with this product
+  ///   • selecting, plain tap or click   → toggle
+  ///   • selecting, Shift+click          → extend the range from the anchor
+  ///
+  /// Long-press (which the card routes to [_onSelectToggle]) enters selection on
+  /// a phone, where there is no modifier to hold.
+  void _onActivate(WidgetRef ref, CatalogProduct product) {
+    final selection = ref.read(bulkSelectionProvider);
+    final notifier = ref.read(bulkSelectionProvider.notifier);
+
+    if (!selection.isActive) {
+      if (bulkAddModifierHeld()) {
+        notifier.enter(product.id);
+        return;
+      }
+      onOpenProduct(product);
+      return;
+    }
+    _onSelectToggle(ref, product);
+  }
+
+  void _onSelectToggle(WidgetRef ref, CatalogProduct product) {
+    final notifier = ref.read(bulkSelectionProvider.notifier);
+    if (bulkRangeModifierHeld()) {
+      notifier.selectRangeTo(product.id);
+      return;
+    }
+    notifier.toggle(product.id);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final selection = ref.watch(bulkSelectionProvider);
+
     return SliverLayoutBuilder(
       builder: (context, constraints) {
         // SliverConstraints carries the cross-axis extent, which is the real
         // measured width of this grid — not the window's, not the screen's.
         final width = constraints.crossAxisExtent;
         final columns = productGridColumns(width);
-        final cellWidth =
-            (width - AppSpacing.md * (columns - 1)) / columns;
+        final cellWidth = (width - AppSpacing.md * (columns - 1)) / columns;
         final handles = productGridUsesDragHandle(width);
 
         return SliverGrid(
@@ -432,8 +474,7 @@ class _ProductGrid extends ConsumerWidget {
             // Derived from the measured column width so the square image plus
             // its text block always fits — a fixed ratio overflows the moment
             // the text scale or the column count changes.
-            childAspectRatio:
-                cellWidth / (cellWidth + _kCardTextExtent),
+            childAspectRatio: cellWidth / (cellWidth + _kCardTextExtent),
           ),
           delegate: SliverChildBuilderDelegate(
             (context, index) {
@@ -450,16 +491,32 @@ class _ProductGrid extends ConsumerWidget {
                   builder: (cellContext) {
                     final card = ProductCard(
                       product: product,
-                      onTap: () => onOpenProduct(product),
-                      onMore: onProductMenu == null
+                      onTap: () => _onActivate(ref, product),
+                      // Null while selecting: an overflow menu that archived ONE
+                      // product from inside a twenty-product selection is a
+                      // second, contradictory answer to the same question.
+                      onMore: onProductMenu == null || selection.isActive
                           ? null
                           : () => onProductMenu!(cellContext, product),
-                      dragHandle: state.canReorder && handles
-                          ? _DragHandle(index: index)
+                      // Null unless selecting, so the checkbox is absent rather
+                      // than present-and-unchecked on an ordinary grid.
+                      isSelected: selection.isActive
+                          ? selection.contains(product.id)
                           : null,
+                      // Passed even when NOT selecting: this is what the card's
+                      // long-press routes to, and long-press is how a phone
+                      // enters selection mode in the first place.
+                      onSelectedChanged: (_) => _onSelectToggle(ref, product),
+                      dragHandle:
+                          state.canReorder && handles && !selection.isActive
+                              ? _DragHandle(index: index)
+                              : null,
                     );
 
-                    return state.canReorder
+                    // Reordering is suspended while selecting: a long-press is
+                    // spoken for, and a drag that moved a card the user meant to
+                    // tick is not a reorder anyone asked for.
+                    return state.canReorder && !selection.isActive
                         ? _ReorderableCell(
                             index: index,
                             // On a phone the whole card is the drag target
@@ -520,9 +577,7 @@ class _ReorderableCell extends ConsumerWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.sm),
             border: Border.all(
-              color: highlighted
-                  ? AppColors.mirageRed
-                  : Colors.transparent,
+              color: highlighted ? AppColors.mirageRed : Colors.transparent,
               width: 2,
             ),
           ),
@@ -736,8 +791,7 @@ class _GridFooter extends ConsumerWidget {
             TextButton.icon(
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Load more'),
-              onPressed:
-                  ref.read(catalogProductsProvider.notifier).retryAppend,
+              onPressed: ref.read(catalogProductsProvider.notifier).retryAppend,
             ),
           ],
         ),

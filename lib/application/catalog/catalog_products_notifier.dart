@@ -502,6 +502,78 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
     }
   }
 
+  /// Applies a bulk run's SUCCEEDED ids to the loaded pages, in place.
+  ///
+  /// In place rather than a refetch, deliberately. A refetch resets to page 1,
+  /// and a user who has scrolled through four pages to select forty products
+  /// does not want the grid to snap back to twenty the moment the action lands.
+  ///
+  /// Only the ids the server agreed to are passed in — a failed item must stay
+  /// exactly as it was, or the grid would show an archive that did not happen.
+  void applyBulkOutcome({
+    required BulkProductAction action,
+    required List<String> ids,
+    Object? categoryId = kCatalogUnchanged,
+  }) {
+    if (ids.isEmpty) return;
+    final touched = ids.toSet();
+
+    switch (action) {
+      case BulkProductAction.delete:
+        state = state.copyWith(
+          items: [
+            for (final item in state.items)
+              if (!touched.contains(item.id)) item,
+          ],
+        );
+
+      case BulkProductAction.archive:
+      case BulkProductAction.restore:
+        final archived = action == BulkProductAction.archive;
+        // With the Archived chip ON the rows stay and change appearance; with it
+        // OFF the query would no longer return the archived ones, so they leave.
+        // Same rule as the single-row [archive], for the same reason: guessing
+        // the other way makes the grid disagree with the server's own answer to
+        // the query on screen.
+        state = state.copyWith(
+          items: [
+            for (final item in state.items)
+              if (!touched.contains(item.id))
+                item
+              else if (state.query.includeArchived)
+                item.copyWith(isArchived: archived)
+              else if (!archived)
+                item,
+          ],
+        );
+
+      case BulkProductAction.setCategory:
+        final target = identical(categoryId, kCatalogUnchanged)
+            ? null
+            : categoryId as String?;
+        final filter = state.query.categoryId;
+        // A row moved OUT of the category being filtered on has left this view —
+        // keeping it would show a "Chairs" filter listing something that is no
+        // longer a chair. `kUncategorizedFilterId` is the literal the server
+        // reads for "no category", so it is compared against a null target.
+        bool stillMatches() {
+          if (filter == null) return true;
+          if (filter == kUncategorizedFilterId) return target == null;
+          return filter == target;
+        }
+
+        state = state.copyWith(
+          items: [
+            for (final item in state.items)
+              if (!touched.contains(item.id))
+                item
+              else if (stillMatches())
+                item.copyWith(categoryId: target),
+          ],
+        );
+    }
+  }
+
   /// Flips one row's archived flag in place, or drops it when the current query
   /// would not have returned it.
   void _applyArchived(

@@ -146,6 +146,14 @@ class FakeCategoriesRepository implements CatalogRepository {
       throw UnimplementedError();
 
   @override
+  Future<String> uploadBrandingBytes(
+    Uint8List bytes, {
+    required BrandingSlot slot,
+    required String contentType,
+  }) =>
+      throw UnimplementedError();
+
+  @override
   Future<BusinessProfile> commitBranding({
     required BrandingSlot slot,
     required String key,
