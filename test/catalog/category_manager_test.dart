@@ -8,7 +8,6 @@
 // leave the screen quietly disagreeing with it.
 //
 // Hermetic: both repositories are faked, no HTTP, no Hive.
-import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
