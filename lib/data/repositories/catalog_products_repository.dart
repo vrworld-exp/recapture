@@ -489,6 +489,13 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
 /// serialised into the request body as a bare Object.
 const Object kCatalogUnchanged = Object();
 
+/// Most product ids `POST /catalog/products/bulk` accepts in one call.
+///
+/// Mirrors the backend Zod bound exactly. A caller with more than this many —
+/// emptying a large category, a select-all over a long list — must CHUNK, and
+/// must know that a run of chunks can therefore fail halfway.
+const int kBulkProductIdLimit = 200;
+
 /// App-wide catalog products repository.
 final catalogProductsRepositoryProvider = Provider<CatalogProductsRepository>(
   (ref) => RemoteCatalogProductsRepository(ref.watch(dioProvider)),

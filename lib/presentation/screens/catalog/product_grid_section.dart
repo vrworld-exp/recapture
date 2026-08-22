@@ -21,6 +21,12 @@ import '../../../domain/entities/product_type.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_card.dart';
 
+/// Opens one product's overflow menu, anchored at the card's own context.
+typedef ProductMenuCallback = void Function(
+  BuildContext anchor,
+  CatalogProduct product,
+);
+
 /// How many columns the grid uses at [width].
 ///
 /// Decided from the CONSTRAINTS the grid is handed, never from `kIsWeb`: a
@@ -70,9 +76,13 @@ class ProductGridSection extends ConsumerWidget {
   /// The first-run empty state's CTA. Null hides it.
   final VoidCallback? onAddProduct;
 
-  /// Opens a product's overflow menu (archive / duplicate / delete). Null hides
+  /// Opens a product's overflow menu (archive / restore / delete). Null hides
   /// the button rather than rendering one that opens nothing.
-  final ValueChanged<CatalogProduct>? onProductMenu;
+  ///
+  /// The [BuildContext] is the CELL's, and it is the anchor: the menu opens over
+  /// the card it belongs to, which on a five-column grid is the only way to see
+  /// which product is about to be archived.
+  final ProductMenuCallback? onProductMenu;
 
   /// Fires the next-page load when a scroll approaches the end.
   ///
@@ -400,7 +410,7 @@ class _ProductGrid extends ConsumerWidget {
 
   final CatalogProductsState state;
   final ValueChanged<CatalogProduct> onOpenProduct;
-  final ValueChanged<CatalogProduct>? onProductMenu;
+  final ProductMenuCallback? onProductMenu;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -428,30 +438,41 @@ class _ProductGrid extends ConsumerWidget {
           delegate: SliverChildBuilderDelegate(
             (context, index) {
               final product = state.items[index];
-              final card = ProductCard(
-                product: product,
-                onTap: () => onOpenProduct(product),
-                onMore: onProductMenu == null
-                    ? null
-                    : () => onProductMenu!(product),
-                dragHandle: state.canReorder && handles
-                    ? _DragHandle(index: index)
-                    : null,
-              );
 
+              // The Builder is what gives the overflow menu something to anchor
+              // to. A `SliverChildBuilderDelegate` hands its builder the
+              // SLIVER's context, whose render object is the whole grid — a
+              // menu positioned from that opens over the wrong product. This
+              // context resolves to the cell's own box.
               return KeyedSubtree(
                 key: ValueKey<String>(product.id),
-                child: state.canReorder
-                    ? _ReorderableCell(
-                        index: index,
-                        // On a phone the whole card is the drag target
-                        // (long-press); on a wide layout only the handle is, so
-                        // a mouse drag across a card stays a scroll/select
-                        // gesture rather than an accidental reorder.
-                        draggableWhole: !handles,
-                        child: card,
-                      )
-                    : card,
+                child: Builder(
+                  builder: (cellContext) {
+                    final card = ProductCard(
+                      product: product,
+                      onTap: () => onOpenProduct(product),
+                      onMore: onProductMenu == null
+                          ? null
+                          : () => onProductMenu!(cellContext, product),
+                      dragHandle: state.canReorder && handles
+                          ? _DragHandle(index: index)
+                          : null,
+                    );
+
+                    return state.canReorder
+                        ? _ReorderableCell(
+                            index: index,
+                            // On a phone the whole card is the drag target
+                            // (long-press); on a wide layout only the handle
+                            // is, so a mouse drag across a card stays a
+                            // scroll/select gesture rather than an accidental
+                            // reorder.
+                            draggableWhole: !handles,
+                            child: card,
+                          )
+                        : card;
+                  },
+                ),
               );
             },
             childCount: state.items.length,

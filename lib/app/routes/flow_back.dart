@@ -56,6 +56,7 @@ String? flowBackRouteFor(String location) {
     // Normally pushed from the shell (so this never fires); the mapping is
     // for the cold deep-link, where there is no shell underneath to pop to.
     AppRoutes.productNew => AppRoutes.catalog,
+    AppRoutes.catalogCategories => AppRoutes.catalog,
     AppRoutes.preCapture => AppRoutes.projects,
     AppRoutes.permissions => AppRoutes.preCapture,
     AppRoutes.levelAIntro => AppRoutes.permissions,

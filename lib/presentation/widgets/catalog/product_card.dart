@@ -104,13 +104,21 @@ class ProductCard extends StatelessWidget {
                   bottom: AppSpacing.sm,
                   left: AppSpacing.sm,
                   right: AppSpacing.sm,
+                  // spaceBetween rather than a Spacer: a Spacer is a TIGHT
+                  // flex child, so it claims half the free width and squeezes
+                  // the pill beside it below the width of its own icon in a
+                  // two-column phone grid. Alignment pushes the two apart
+                  // without either of them competing for space.
                   child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Flexible(
                         child: SyncStatusPill(status: product.syncStatus),
                       ),
-                      const Spacer(),
-                      if (product.isArchived) const _ArchivedBadge(),
+                      if (product.isArchived) ...[
+                        const SizedBox(width: AppSpacing.xs),
+                        const Flexible(child: _ArchivedBadge()),
+                      ],
                     ],
                   ),
                 ),
@@ -413,6 +421,9 @@ class _ArchivedBadge extends StatelessWidget {
         ),
         child: const Text(
           'Archived',
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: AppTypography.sizeLabel,
             fontWeight: FontWeight.w500,

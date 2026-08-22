@@ -25,6 +25,7 @@ import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
+import '../../presentation/screens/catalog/category_manager_screen.dart';
 import '../../presentation/screens/catalog/change_product_model_screen.dart';
 import '../../presentation/screens/catalog/product_editor_screen.dart';
 import '../../presentation/screens/profile/profile_screen.dart';
@@ -281,14 +282,22 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       //
       // The rest of the /catalog/* constants above are NOT registered yet —
       // their screens land with their own tasks (the shell, add-product, the
-      // product editor and the model swap are registered below). Until then an
-      // unknown /catalog/... location falls through to errorBuilder, which is
-      // the honest outcome; a placeholder route would look like a broken
-      // feature.
+      // product editor, the model swap and the category manager are registered
+      // below). Until then an unknown /catalog/... location falls through to
+      // errorBuilder, which is the honest outcome; a placeholder route would
+      // look like a broken feature.
       GoRoute(
         path: AppRoutes.catalog,
         name: AppRouteNames.catalog,
         builder: (_, __) => const FlowBackScope(child: CatalogScreen()),
+      ),
+      // The category manager. STATIC, and declared before the product routes
+      // for the same reason `products/new` is: a literal segment must never be
+      // matchable as an id.
+      GoRoute(
+        path: AppRoutes.catalogCategories,
+        name: AppRouteNames.catalogCategories,
+        builder: (_, __) => const FlowBackScope(child: CategoryManagerScreen()),
       ),
       // Add a product. STATIC, and declared before any `/catalog/products/:id`
       // route lands so the literal "new" cannot be swallowed as a product id —

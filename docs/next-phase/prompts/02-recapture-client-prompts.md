@@ -1,4 +1,4 @@
-✅✅✅✅✅✅✅✅     from f1  to f2 only.
+from f1  to f2 Completed you have to work from f2 onword.
 # ReCapture Flutter Client Prompts — F1 … F12
 
 Repo root for every prompt in this file: `phase2/ReCapture/` (work happens in `lib/` and `test/`).

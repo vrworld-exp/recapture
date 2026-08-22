@@ -39,6 +39,8 @@ import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/app_status_pill.dart';
 import '../../widgets/app_text_field.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/product_actions.dart';
 import '../../widgets/model_picker_field.dart' show kModelPickerMaxWidth;
 
 /// Width at or above which the form splits into two columns.
@@ -398,6 +400,49 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
     }
   }
 
+  /// Archives or restores the product (features 19, 20).
+  ///
+  /// Does NOT leave the screen. Archiving is reversible and the product stays
+  /// fully editable while archived, so popping back to the grid would take the
+  /// user somewhere they did not ask to go and hide the undo they might want.
+  /// The shared action invalidates this product, so the screen re-reads itself
+  /// and the banner, the badge and this button all flip from server truth.
+  Future<void> _setArchived(bool archived) async {
+    setState(() => _failureMessage = null);
+    // Captured before the await: the shared actions outlive this widget by
+    // design, and the undo they offer fires seconds later.
+    final messenger = CatalogFeedback.of(context);
+    final container = ProviderScope.containerOf(context, listen: false);
+    if (archived) {
+      await archiveProduct(messenger, container, widget.product);
+    } else {
+      await restoreProduct(messenger, container, widget.product);
+    }
+  }
+
+  /// Permanently deletes the product (feature 21), then leaves.
+  ///
+  /// Leaving is not optional here: the screen's whole subject is gone, and a
+  /// re-read would answer the API's deliberately-indistinguishable 404 and show
+  /// the user an error for something that worked.
+  Future<void> _delete() async {
+    setState(() => _failureMessage = null);
+    final messenger = CatalogFeedback.of(context);
+    final container = ProviderScope.containerOf(context, listen: false);
+
+    final deleted =
+        await deleteProduct(context, messenger, container, widget.product);
+    if (!deleted || !mounted) return;
+
+    // The exit guard is cleared FIRST. There is no longer anything to save, and
+    // asking "discard your changes?" about a product that no longer exists is a
+    // question with no right answer.
+    ref.read(productEditorDirtyProvider.notifier).state = false;
+    setUnsavedChangesWarning(false);
+    if (!mounted) return;
+    navigateBack(context);
+  }
+
   // ── Tags ──────────────────────────────────────────────────────────────────
 
   void _addTag(String raw) {
@@ -665,6 +710,34 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
             label: 'Duplicate product',
             icon: Icons.copy_all_outlined,
             onPressed: busy ? null : _duplicate,
+          ),
+          const SizedBox(height: AppSpacing.md),
+          // Archive reads as an ordinary secondary action because it IS one —
+          // reversible, and the normal way to take a product off the catalog.
+          AppButton.secondary(
+            label: widget.product.isArchived
+                ? 'Restore product'
+                : 'Archive product',
+            icon: widget.product.isArchived
+                ? Icons.unarchive_outlined
+                : Icons.inventory_2_outlined,
+            onPressed:
+                busy ? null : () => _setArchived(!widget.product.isArchived),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          // Delete is deliberately NOT a button of the same weight. It is the
+          // one action on this screen with no undo, and it sits apart from the
+          // ones that have one.
+          Center(
+            child: TextButton.icon(
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('Delete permanently'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.error,
+                disabledForegroundColor: AppColors.disabled,
+              ),
+              onPressed: busy ? null : _delete,
+            ),
           ),
           const SizedBox(height: AppSpacing.lg),
           Text(

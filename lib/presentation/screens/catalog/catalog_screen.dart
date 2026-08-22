@@ -16,6 +16,7 @@ import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/product_actions.dart';
 import 'create_catalog_dialog.dart';
 import 'product_grid_section.dart';
 
@@ -81,6 +82,13 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     await ref.read(catalogProvider.notifier).refresh();
   }
 
+  /// Opens the category manager. Categories are not decoration: Mirage's
+  /// create-item requires a real category id, so this is where a catalog becomes
+  /// publishable. The grid's chips and the editor's picker read the same list,
+  /// so nothing needs refreshing on return.
+  void _openCategories() =>
+      context.pushNamed(AppRouteNames.catalogCategories);
+
   /// Pull-to-refresh pulls everything the screen shows: the catalog's own header
   /// counts, the product pages, and the category chips. Refreshing one of the
   /// three is how a header claiming 12 products ends up over a grid of 11.
@@ -129,6 +137,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                   catalog: catalog,
                   onAddProduct: _addProduct,
                   onOpenProduct: _openProduct,
+                  onOpenCategories: _openCategories,
                 ),
         ),
       ),
@@ -164,11 +173,13 @@ class _CatalogBody extends ConsumerWidget {
     required this.catalog,
     required this.onAddProduct,
     required this.onOpenProduct,
+    required this.onOpenCategories,
   });
 
   final Catalog catalog;
   final VoidCallback onAddProduct;
   final ValueChanged<CatalogProduct> onOpenProduct;
+  final VoidCallback onOpenCategories;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -203,6 +214,11 @@ class _CatalogBody extends ConsumerWidget {
                         ),
                       ),
                       TextButton.icon(
+                        icon: const Icon(Icons.category_outlined, size: 18),
+                        label: const Text('Categories'),
+                        onPressed: onOpenCategories,
+                      ),
+                      TextButton.icon(
                         icon: const Icon(Icons.add, size: 18),
                         label: const Text('Add product'),
                         onPressed: onAddProduct,
@@ -216,6 +232,9 @@ class _CatalogBody extends ConsumerWidget {
                 ProductGridSection(
                   onOpenProduct: onOpenProduct,
                   onAddProduct: onAddProduct,
+                  // The menu owns its own confirmations, undo and feedback, so
+                  // the shell hands it the anchor and stays out of the way.
+                  onProductMenu: showProductActionsMenu,
                 ),
               ],
             ),

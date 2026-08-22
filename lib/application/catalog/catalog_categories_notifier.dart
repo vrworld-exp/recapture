@@ -1,6 +1,9 @@
 // lib/application/catalog/catalog_categories_notifier.dart
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
 import '../../domain/entities/auth_state.dart';
 import '../../domain/entities/catalog_category.dart';
@@ -45,6 +48,115 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
       if (state.valueOrNull == null) state = AsyncError(error, stack);
     }
   }
+
+  // ── Mutations (features 22-25) ────────────────────────────────────────────
+  //
+  // None of these is optimistic EXCEPT [reorder], and the split is deliberate.
+  // Create, rename and delete each return the server's own row, and adopting it
+  // costs nothing the user can feel. A drag, on the other hand, has to land
+  // under the finger immediately or it reads as a failed gesture — so that one
+  // moves first and rolls back visibly if the server disagrees.
+
+  /// Creates a category (feature 22). Appended at the end, which is where the
+  /// server puts it too.
+  ///
+  /// Throws [CatalogFailure] — a duplicate name is the server's verdict
+  /// (`DUPLICATE_NAME`) and the caller shows it beside the field.
+  Future<CatalogCategory> create(String name) async {
+    final created = await _repo.createCategory(name);
+    final current = _list;
+    state = AsyncData(CatalogCategoryList(
+      categories: [...current.categories, created],
+      uncategorizedCount: current.uncategorizedCount,
+    ));
+    return created;
+  }
+
+  /// Renames a category (feature 23).
+  ///
+  /// Allowed on a category that is already live on Mirage: the rename is a draft
+  /// edit like any other and goes live at the next publish. Nothing here says
+  /// otherwise.
+  Future<CatalogCategory> rename(String id, String name) async {
+    final updated = await _repo.renameCategory(id, name);
+    state = AsyncData(CatalogCategoryList(
+      categories: [
+        for (final category in _list.categories)
+          if (category.id == id) updated else category,
+      ],
+      uncategorizedCount: _list.uncategorizedCount,
+    ));
+    return updated;
+  }
+
+  /// Deletes a category (feature 24) and returns how many products the SERVER
+  /// moved out of it.
+  ///
+  /// That number is the one to report, and it is not always the one the
+  /// confirmation showed: `productCount` counts only live products, while the
+  /// delete moves archived ones too. The row goes immediately (the user asked
+  /// for it) and the counts are re-read, because the uncategorized bucket's size
+  /// is a server aggregate this notifier must not try to recompute.
+  Future<int> delete(String id) async {
+    final moved = await _repo.deleteCategory(id);
+    state = AsyncData(CatalogCategoryList(
+      categories: [
+        for (final category in _list.categories)
+          if (category.id != id) category,
+      ],
+      uncategorizedCount: _list.uncategorizedCount,
+    ));
+    unawaited(refresh());
+    return moved;
+  }
+
+  /// Moves the category at [oldIndex] to [newIndex] (feature 25),
+  /// optimistically.
+  ///
+  /// [newIndex] follows the `ReorderableListView` convention — counted BEFORE
+  /// the dragged row is removed — so the list, the drag handle and the keyboard
+  /// shortcut all hand their raw indices straight here.
+  ///
+  /// The server takes the FULL ordered id list and rejects anything else with
+  /// `ID_SET_MISMATCH`, so a failure means nothing moved: the rollback is
+  /// unconditional, and it is followed by a re-read because the most likely
+  /// cause of a mismatch is another device having reordered first. Last write
+  /// wins, but only after this one has seen what it is writing over.
+  Future<void> reorder(int oldIndex, int newIndex) async {
+    final previous = _list;
+    final categories = previous.categories;
+    if (oldIndex < 0 || oldIndex >= categories.length) return;
+
+    var target = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    if (target < 0) target = 0;
+    if (target >= categories.length) target = categories.length - 1;
+    if (target == oldIndex) return;
+
+    final reordered = [...categories];
+    reordered.insert(target, reordered.removeAt(oldIndex));
+    // Positions are renumbered to the array index server-side; mirroring that
+    // locally stops a later in-place update re-sorting the list.
+    final optimistic = [
+      for (var i = 0; i < reordered.length; i++)
+        reordered[i].copyWith(position: i),
+    ];
+    state = AsyncData(CatalogCategoryList(
+      categories: optimistic,
+      uncategorizedCount: previous.uncategorizedCount,
+    ));
+
+    try {
+      await _repo.reorderCategories([for (final c in optimistic) c.id]);
+    } on CatalogFailure {
+      state = AsyncData(previous);
+      unawaited(refresh());
+      rethrow;
+    }
+  }
+
+  /// The current list, or an empty one while the first load is in flight.
+  CatalogCategoryList get _list =>
+      state.valueOrNull ?? CatalogCategoryList.empty;
 }
 
 /// The app-wide category list.
