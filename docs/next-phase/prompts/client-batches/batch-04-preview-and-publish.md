@@ -1,3 +1,4 @@
+✅✅✅✅✅
 # ReCapture Client — Batch 04 · F7 + F8 · Catalog Preview and Publish + QR
 
 > **Status: ⬜ todo.** F7 depends on **F1**. F8 depends on **backend B4 and B5** — do not start F8
