@@ -25,6 +25,7 @@ import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/presentation/screens/catalog/category_manager_screen.dart';
+import 'catalog_repo_publish_defaults.dart';
 
 import 'catalog_entities_test.dart' as golden;
 import 'product_grid_test.dart' as grid;
@@ -53,7 +54,7 @@ class BulkCall {
 }
 
 /// A catalog repository whose category list the test drives.
-class FakeCategoriesRepository implements CatalogRepository {
+class FakeCategoriesRepository with CatalogRepoPublishDefaults implements CatalogRepository {
   FakeCategoriesRepository(this.categories, {this.uncategorizedCount = 0});
 
   List<CatalogCategory> categories;

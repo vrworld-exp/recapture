@@ -15,6 +15,7 @@ import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
+import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
@@ -93,6 +94,38 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   void _openBusinessProfile() =>
       context.pushNamed(AppRouteNames.catalogSettings);
 
+  /// Opens the preview — the draft in the public page's shape (feature 5).
+  ///
+  /// push, not go: it is a sub-screen of the shell, so back pops straight back.
+  /// Nothing is refreshed on return: the preview reads its own copy of the
+  /// draft, and a fix made from inside it re-reads that copy itself. What CAN
+  /// change underneath is a product the user edited from a preview warning, so
+  /// the grid is re-pulled for the same reason opening a product editor does.
+  Future<void> _openPreview() async {
+    await context.pushNamed(AppRouteNames.catalogPreview);
+    if (!mounted) return;
+    await ref.read(catalogProductsProvider.notifier).refresh();
+  }
+
+  /// Opens the publish screen — the pre-flight checklist, the live run, and
+  /// whatever the last one left behind (features 36-39).
+  ///
+  /// The catalog notifier is re-read on return because the header's own chips
+  /// (Published / Draft changes / Publishing) are server-derived and a run that
+  /// finished while the user was on that screen has moved all three. The
+  /// publish notifier refreshes it as it polls, so this is only the belt to
+  /// that braces — and it costs one request on a screen the user just left.
+  Future<void> _openPublish() async {
+    await context.pushNamed(AppRouteNames.catalogPublish);
+    if (!mounted) return;
+    await ref.read(catalogProvider.notifier).refresh();
+  }
+
+  /// Opens the QR screen. Offered whenever the catalog has been provisioned —
+  /// including while it is UNPUBLISHED, because taking a catalog offline keeps
+  /// the link and the code alive and a business may still need to reprint one.
+  void _openQr() => context.pushNamed(AppRouteNames.catalogQr);
+
   /// Opens the category manager. Categories are not decoration: Mirage's
   /// create-item requires a real category id, so this is where a catalog becomes
   /// publishable. The grid's chips and the editor's picker read the same list,
@@ -162,6 +195,9 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                   onOpenProduct: _openProduct,
                   onOpenCategories: _openCategories,
                   onOpenBusinessProfile: _openBusinessProfile,
+                  onOpenPreview: _openPreview,
+                  onOpenPublish: _openPublish,
+                  onOpenQr: _openQr,
                   onSelect: () =>
                       ref.read(bulkSelectionProvider.notifier).enter(),
                 ),
@@ -201,6 +237,9 @@ class _CatalogBody extends ConsumerWidget {
     required this.onOpenProduct,
     required this.onOpenCategories,
     required this.onOpenBusinessProfile,
+    required this.onOpenPreview,
+    required this.onOpenPublish,
+    required this.onOpenQr,
     required this.onSelect,
   });
 
@@ -209,6 +248,9 @@ class _CatalogBody extends ConsumerWidget {
   final ValueChanged<CatalogProduct> onOpenProduct;
   final VoidCallback onOpenCategories;
   final VoidCallback onOpenBusinessProfile;
+  final VoidCallback onOpenPreview;
+  final VoidCallback onOpenPublish;
+  final VoidCallback onOpenQr;
 
   /// Enters selection mode. Always offered, not only on web: a button is the
   /// discoverable half of a feature whose other entry point is a long-press
@@ -247,6 +289,9 @@ class _CatalogBody extends ConsumerWidget {
                     child: _CatalogHeaderCard(
                       catalog: catalog,
                       onOpenBusinessProfile: onOpenBusinessProfile,
+                      onOpenPreview: onOpenPreview,
+                      onOpenPublish: onOpenPublish,
+                      onOpenQr: onOpenQr,
                     ),
                   ),
                   const SliverToBoxAdapter(
@@ -318,10 +363,16 @@ class _CatalogHeaderCard extends StatelessWidget {
   const _CatalogHeaderCard({
     required this.catalog,
     required this.onOpenBusinessProfile,
+    required this.onOpenPreview,
+    required this.onOpenPublish,
+    required this.onOpenQr,
   });
 
   final Catalog catalog;
   final VoidCallback onOpenBusinessProfile;
+  final VoidCallback onOpenPreview;
+  final VoidCallback onOpenPublish;
+  final VoidCallback onOpenQr;
 
   @override
   Widget build(BuildContext context) {
@@ -388,6 +439,45 @@ class _CatalogHeaderCard extends StatelessWidget {
             '${catalog.counts.categories} categories',
             style:
                 textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          // Wrap, not Row: this grows as the publish surfaces land, and a
+          // header that overflows on a phone is not a header.
+          Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: [
+              AppButton(
+                key: const ValueKey('catalog_publish_cta'),
+                // "Publish changes" once something is live: the first press
+                // creates a public page, every one after that updates one, and
+                // those are different promises.
+                label: catalog.isNeverPublished
+                    ? 'Publish'
+                    : 'Publish changes',
+                icon: Icons.cloud_upload_outlined,
+                isFullWidth: false,
+                onPressed: onOpenPublish,
+              ),
+              AppButton.secondary(
+                key: const ValueKey('catalog_preview_cta'),
+                label: 'Preview',
+                icon: Icons.visibility_outlined,
+                isFullWidth: false,
+                onPressed: onOpenPreview,
+              ),
+              // Only once a URL exists. Before the first publish there is no
+              // code to show, and an entry point to an explanation of why the
+              // thing is missing is worse than no entry point.
+              if (catalog.isProvisioned)
+                AppButton.secondary(
+                  key: const ValueKey('catalog_qr_cta'),
+                  label: 'QR code',
+                  icon: Icons.qr_code_2,
+                  isFullWidth: false,
+                  onPressed: onOpenQr,
+                ),
+            ],
           ),
         ],
       ),

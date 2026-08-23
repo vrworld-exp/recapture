@@ -58,6 +58,12 @@ String? flowBackRouteFor(String location) {
     AppRoutes.productNew => AppRoutes.catalog,
     AppRoutes.catalogCategories => AppRoutes.catalog,
     AppRoutes.catalogSettings => AppRoutes.catalog,
+    AppRoutes.catalogPreview => AppRoutes.catalog,
+    AppRoutes.catalogPublish => AppRoutes.catalog,
+    // Back from the QR lands on the shell, not on publish: the QR is reachable
+    // from both, and a cold deep-link (a bookmark, a link a business mailed
+    // themselves) has no publish screen behind it to return to.
+    AppRoutes.catalogQr => AppRoutes.catalog,
     AppRoutes.preCapture => AppRoutes.projects,
     AppRoutes.permissions => AppRoutes.preCapture,
     AppRoutes.levelAIntro => AppRoutes.permissions,

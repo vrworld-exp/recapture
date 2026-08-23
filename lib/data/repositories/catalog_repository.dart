@@ -1,11 +1,17 @@
 // lib/data/repositories/catalog_repository.dart
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/catalog/publish_gate.dart';
+import '../../domain/catalog/publish_request_result.dart';
+import '../../domain/catalog/publish_status.dart';
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_category.dart';
+import '../../domain/entities/catalog_json.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
 import 'catalog_products_repository.dart';
@@ -110,6 +116,96 @@ abstract interface class CatalogRepository {
   /// Writes a new category order. Send the FULL ordered id list: the server
   /// rejects a partial set with ID_SET_MISMATCH rather than guessing.
   Future<void> reorderCategories(List<String> orderedIds);
+
+  // ── Publish (features 31-39, 52, 53, 68, 69) ──────────────────────────────
+  //
+  // All five live on this ONE seam. Publishing is a property of the CATALOG,
+  // not of its products: a run provisions the restaurant, syncs the categories,
+  // then the products, then the deletes, and the QR is minted by the same act.
+  // Splitting them across repositories would put four callers in charge of a
+  // single state machine that only the server owns.
+
+  /// Asks for a full publish (feature 36).
+  ///
+  /// Answers a [PublishRequestResult] rather than throwing for the expected
+  /// refusals — a run already in flight, a blocked gate set, a name Mirage has
+  /// taken. See that file for why each is a value and not an error.
+  ///
+  /// [idempotencyKey] rides the `Idempotency-Key` header: a retry after a lost
+  /// 202 must not start a SECOND run against a catalog the first one is already
+  /// holding.
+  Future<PublishRequestResult> publish({String? idempotencyKey});
+
+  /// Re-runs ONLY the rows whose sync status is FAILED (feature 53), so a user
+  /// tapping Retry after "8 of 10 published" re-attempts two products, not ten.
+  Future<PublishRequestResult> retryFailedPublish();
+
+  /// The whole publish picture (features 37, 38, 52). Server truth — poll this,
+  /// never derive progress locally.
+  Future<PublishStatus> publishStatus();
+
+  /// Takes the published ITEMS offline (feature 39).
+  ///
+  /// The Mirage restaurant, the public URL and every printed QR survive
+  /// deliberately: republishing restores the same page at the same link, which
+  /// is why the confirmation copy can promise a printed sticker keeps working.
+  Future<UnpublishResult> unpublish();
+
+  /// The catalog's QR code as bytes (features 31-35).
+  ///
+  /// BYTES, not a URL, and one method for both platforms. The endpoint needs
+  /// the Bearer token, so a browser cannot simply navigate an anchor at it the
+  /// way the preview-gallery download does with a presigned S3 link — and a
+  /// second, url-shaped path for web would be a second thing to keep correct.
+  /// The two platforms differ only in what they DO with the bytes: a share
+  /// sheet on mobile, a blob download in the browser.
+  ///
+  /// Rendered from `catalog.publicUrl` verbatim, server-side. Answers a
+  /// [CatalogFailure] with `CATALOG_NOT_PUBLISHED` before the first publish —
+  /// a URL is minted at provisioning and never invented, because a QR that
+  /// resolves to nothing is worse than no QR: it might get printed.
+  Future<CatalogQrImage> fetchQr({
+    CatalogQrFormat format = CatalogQrFormat.png,
+    int? size,
+  });
+}
+
+/// The two formats the QR endpoint renders. PNG for the screen and for sharing,
+/// PDF for printing at a size a sticker press can use.
+enum CatalogQrFormat { png, pdf }
+
+extension CatalogQrFormatX on CatalogQrFormat {
+  /// Must match the backend `catalogQrQuerySchema` enum exactly.
+  String get apiValue => switch (this) {
+        CatalogQrFormat.png => 'png',
+        CatalogQrFormat.pdf => 'pdf',
+      };
+
+  String get label => switch (this) {
+        CatalogQrFormat.png => 'PNG',
+        CatalogQrFormat.pdf => 'PDF',
+      };
+}
+
+/// One rendered QR, ready to draw, share or download.
+class CatalogQrImage {
+  const CatalogQrImage({
+    required this.bytes,
+    required this.contentType,
+    required this.fileName,
+    required this.format,
+  });
+
+  final Uint8List bytes;
+
+  /// `image/png` or `application/pdf`, as the server sent it.
+  final String contentType;
+
+  /// The server's own filename, so a saved file is named after the catalog
+  /// rather than after whatever the client would have guessed.
+  final String fileName;
+
+  final CatalogQrFormat format;
 }
 
 /// Concrete [CatalogRepository] over the app Dio (Bearer attach + 401-refresh
@@ -286,6 +382,205 @@ class RemoteCatalogRepository implements CatalogRepository {
           data: {'ids': orderedIds},
         );
       });
+
+  // ── Publish ───────────────────────────────────────────────────────────────
+
+  @override
+  Future<PublishRequestResult> publish({String? idempotencyKey}) =>
+      _requestPublish(
+        '/catalog/publish',
+        idempotencyKey: idempotencyKey,
+      );
+
+  @override
+  Future<PublishRequestResult> retryFailedPublish() =>
+      _requestPublish('/catalog/publish/retry');
+
+  /// The shared body of publish and retry: identical response shapes, identical
+  /// refusals, one place that maps them.
+  Future<PublishRequestResult> _requestPublish(
+    String path, {
+    String? idempotencyKey,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        path,
+        options: idempotencyKey == null
+            ? null
+            : Options(headers: {'Idempotency-Key': idempotencyKey}),
+      );
+
+      final body = res.data;
+      final runId = body?['runId'];
+      if (runId is! String || runId.isEmpty) {
+        // 200 with `queued: false` — a retry that found nothing failed. The
+        // outcome the user asked for, so it is not a broken contract.
+        return const PublishNothingToRetry();
+      }
+      return PublishQueued(
+        runId: runId,
+        publicUrl: catalogText(body?['publicUrl']),
+      );
+    } on DioException catch (error) {
+      final result = _refusalFrom(error);
+      if (result != null) return result;
+      throw CatalogFailure.fromDio(error);
+    }
+  }
+
+  /// Maps the EXPECTED refusals onto values. Returns null for anything else,
+  /// which the caller turns into a [CatalogFailure].
+  PublishRequestResult? _refusalFrom(DioException error) {
+    final body = error.response?.data;
+    if (body is! Map) return null;
+
+    switch (body['code']) {
+      case 'PUBLISH_IN_PROGRESS':
+        final runId = body['runId'];
+        // Without an id there is nothing to poll, so this degrades to a plain
+        // failure rather than a screen watching a run it cannot name.
+        return runId is String && runId.isNotEmpty
+            ? PublishAlreadyRunning(runId)
+            : null;
+
+      case 'PUBLISH_BLOCKED':
+        return PublishBlocked(PublishGate.listFrom(body['gates']));
+
+      case 'CATALOG_NAME_TAKEN':
+        final fields = body['fields'];
+        final suggested = fields is Map ? fields['name'] : null;
+        return suggested is String && suggested.isNotEmpty
+            ? PublishNameTaken(suggested)
+            : null;
+
+      default:
+        return null;
+    }
+  }
+
+  @override
+  Future<PublishStatus> publishStatus() => mapCatalogErrors(() async {
+        final res =
+            await _dio.get<Map<String, dynamic>>('/catalog/publish/status');
+        final publish = res.data?['publish'];
+        if (publish is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return PublishStatus.fromMap(publish);
+      });
+
+  @override
+  Future<UnpublishResult> unpublish() async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>('/catalog/unpublish');
+      final body = res.data;
+      // `unpublished: false` is the 200 for a catalog that was never live.
+      if (body?['unpublished'] != true) return const UnpublishNotPublished();
+
+      final runId = body?['runId'];
+      return runId is String && runId.isNotEmpty
+          ? UnpublishQueued(runId)
+          : const UnpublishNotPublished();
+    } on DioException catch (error) {
+      final body = error.response?.data;
+      if (body is Map && body['code'] == 'PUBLISH_IN_PROGRESS') {
+        final runId = body['runId'];
+        if (runId is String && runId.isNotEmpty) {
+          return UnpublishAlreadyRunning(runId);
+        }
+      }
+      throw CatalogFailure.fromDio(error);
+    }
+  }
+
+  @override
+  Future<CatalogQrImage> fetchQr({
+    CatalogQrFormat format = CatalogQrFormat.png,
+    int? size,
+  }) async {
+    try {
+      final res = await _dio.get<List<int>>(
+        '/catalog/qr',
+        queryParameters: {
+          'format': format.apiValue,
+          if (size != null) 'size': size,
+        },
+        options: Options(responseType: ResponseType.bytes),
+      );
+
+      final data = res.data;
+      if (data == null || data.isEmpty) {
+        throw const CatalogFailure(
+          code: 'MALFORMED_RESPONSE',
+          message: 'Something went wrong. Please try again.',
+        );
+      }
+
+      return CatalogQrImage(
+        bytes: Uint8List.fromList(data),
+        contentType: res.headers.value(Headers.contentTypeHeader) ??
+            (format == CatalogQrFormat.png ? 'image/png' : 'application/pdf'),
+        fileName:
+            _qrFileName(res.headers.value('content-disposition')) ??
+                'catalog-qr.${format.apiValue}',
+        format: format,
+      );
+    } on DioException catch (error) {
+      // THE ONE ENDPOINT WHOSE ERRORS NEED DECODING BY HAND. Asking for bytes
+      // applies to the FAILURE body too, so a 409 CATALOG_NOT_PUBLISHED comes
+      // back as a byte array and `CatalogFailure.fromDio` — which looks for a
+      // Map — would flatten it to a generic "something went wrong". That
+      // matters here more than anywhere: "publish first, the QR is created when
+      // it goes live" is the single most useful sentence this screen can say,
+      // and it is carried entirely by that code.
+      throw CatalogFailure.fromDio(_withDecodedBody(error));
+    }
+  }
+
+  /// Re-reads a bytes-mode error response as the house JSON envelope.
+  ///
+  /// Best effort by design: a proxy's HTML page, a truncated body or a 502 from
+  /// the platform leaves the exception exactly as it was, and the caller gets
+  /// the generic sentence — which is the right outcome for a body that is not
+  /// ours.
+  static DioException _withDecodedBody(DioException error) {
+    final response = error.response;
+    final data = response?.data;
+    if (response == null || data is! List<int>) return error;
+
+    try {
+      final decoded = jsonDecode(utf8.decode(data));
+      if (decoded is! Map<String, dynamic>) return error;
+      return error.copyWith(
+        response: Response<dynamic>(
+          data: decoded,
+          statusCode: response.statusCode,
+          headers: response.headers,
+          requestOptions: response.requestOptions,
+        ),
+      );
+    } on FormatException {
+      return error;
+    }
+  }
+
+  /// The filename out of `Content-Disposition: attachment; filename="..."`.
+  ///
+  /// Sanitised rather than trusted: it becomes a filename on the user's device,
+  /// and a value carrying a path separator would write outside the directory
+  /// the caller chose. The server builds it from a slug of the catalog's own
+  /// name, so this only ever has to defend against a bug.
+  static String? _qrFileName(String? disposition) {
+    if (disposition == null) return null;
+    final match = RegExp(r'filename="?([^";]+)"?').firstMatch(disposition);
+    final raw = match?.group(1)?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    final safe = raw.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    return safe.isEmpty ? null : safe;
+  }
 
   /// Unwraps `{status:"success", catalog:{...}}`. A 2xx without the payload is a
   /// broken contract, not an empty result — fail loudly rather than rendering a

@@ -27,8 +27,11 @@ import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/business_profile_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/catalog/category_manager_screen.dart';
+import '../../presentation/screens/catalog/catalog_preview_screen.dart';
+import '../../presentation/screens/catalog/catalog_qr_screen.dart';
 import '../../presentation/screens/catalog/change_product_model_screen.dart';
 import '../../presentation/screens/catalog/product_editor_screen.dart';
+import '../../presentation/screens/catalog/publish_screen.dart';
 import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
@@ -281,11 +284,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       // /catalog behaves identically to the in-app entry. FlowBackScope maps
       // back → /projects (flowBackRouteFor) when there is nothing to pop.
       //
-      // The rest of the /catalog/* constants above are NOT registered yet —
-      // their screens land with their own tasks (the shell, add-product, the
-      // product editor, the model swap, the category manager and the business
-      // profile are registered below). Until then an unknown /catalog/...
-      // location falls through to errorBuilder, which is the honest outcome; a
+      // Registered below: the shell, the business profile, the preview, publish,
+      // the QR, the category manager, add-product, the product editor and the
+      // model swap. `/catalog/analytics` is the one constant still without a
+      // screen (feature 66, its own task) — until it has one, that location
+      // falls through to errorBuilder, which is the honest outcome; a
       // placeholder route would look like a broken feature.
       GoRoute(
         path: AppRoutes.catalog,
@@ -305,6 +308,34 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogSettings,
         onExit: (context, state) => confirmDiscardProfileEdits(context),
         builder: (_, __) => const FlowBackScope(child: BusinessProfileScreen()),
+      ),
+      // The catalog preview — the draft in the public page's shape (feature 5).
+      // STATIC, declared before the product routes for the same reason the
+      // category manager is: a literal segment must never be matchable as an
+      // id. Read-only, so no onExit guard — there is nothing to discard.
+      GoRoute(
+        path: AppRoutes.catalogPreview,
+        name: AppRouteNames.catalogPreview,
+        builder: (_, __) => const FlowBackScope(child: CatalogPreviewScreen()),
+      ),
+      // Publish and the QR. STATIC, declared before the product routes for the
+      // same reason the preview is.
+      //
+      // The publish screen holds a POLL LOOP, which is why it must be a real
+      // route rather than a dialog over the shell: leaving it disposes the
+      // provider, and disposing the provider is what stops the loop. A modal
+      // that merely goes invisible would keep polling behind the catalog.
+      GoRoute(
+        path: AppRoutes.catalogPublish,
+        name: AppRouteNames.catalogPublish,
+        builder: (_, __) => const FlowBackScope(child: PublishScreen()),
+      ),
+      // Reachable in its own right, not only from the success state: a business
+      // that published last month wants the QR again without republishing.
+      GoRoute(
+        path: AppRoutes.catalogQr,
+        name: AppRouteNames.catalogQr,
+        builder: (_, __) => const FlowBackScope(child: CatalogQrScreen()),
       ),
       // The category manager. STATIC, and declared before the product routes
       // for the same reason `products/new` is: a literal segment must never be
