@@ -21,7 +21,6 @@
 // screens, and sent to the server as a capture mode. Adding `upload` to it
 // would put a fake value into every one of those. The sheet therefore resolves
 // to a [ProjectCreationChoice], and only a [CaptureChoice] touches the provider.
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -35,19 +34,6 @@ import '../../../domain/capture/capture_mode.dart';
 import '../../../domain/capture/capture_flow_variant.dart';
 import '../../../domain/entities/capture_config.dart';
 import '../../widgets/selectable_option_card.dart';
-
-/// Whether the browser can upload a photo set yet.
-///
-/// The presigned part PUTs go DIRECT to S3, and the raw-captures bucket
-/// deliberately serves no CORS policy (docs/aws-storage-and-cdn.md) — so on web
-/// every PUT fails preflight until that policy is applied. Native is unaffected
-/// and ships now; flipping this ONE constant is what switches web on, and the
-/// policy must be recorded in AGENTS.md and docs/aws-storage-and-cdn.md when it
-/// lands (it reverses a documented decision).
-///
-/// Until then the card renders DISABLED WITH A VISIBLE REASON — never
-/// enabled-and-broken.
-const bool kPhotoUploadEnabledOnWeb = false;
 
 /// What the user chose in the sheet. A sealed result rather than a widened
 /// [CaptureMode] — see the file header.
@@ -97,13 +83,11 @@ class _CaptureModeSheetState extends ConsumerState<_CaptureModeSheet> {
   // that already exists, so the common path needs no interaction.
   _Option _selected = _Option.full;
 
-  /// The upload card is offered only to staff, and on web only once the
-  /// raw-bucket CORS policy is applied. `isStaffProvider` is fail-closed on any
-  /// role-fetch failure, and the backend re-checks the role on EVERY request —
-  /// this gate is UX, never the security boundary.
+  /// The upload card is offered only to staff, on every platform.
+  /// `isStaffProvider` is fail-closed on any role-fetch failure, and the
+  /// backend re-checks the role on EVERY request — this gate is UX, never the
+  /// security boundary.
   bool get _uploadVisible => ref.watch(isStaffProvider);
-
-  bool get _uploadEnabled => !kIsWeb || kPhotoUploadEnabledOnWeb;
 
   Future<void> _confirm() async {
     if (_selected == _Option.upload) {
@@ -140,17 +124,6 @@ class _CaptureModeSheetState extends ConsumerState<_CaptureModeSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppColors.disabled,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.lg),
             Text(
               _uploadVisible
                   ? 'How do you want to add photos?'
@@ -189,15 +162,10 @@ class _CaptureModeSheetState extends ConsumerState<_CaptureModeSheet> {
               SelectableOptionCard<_Option>(
                 key: const Key('capture_mode_upload'),
                 title: 'Upload photos',
-                subtitle: _uploadEnabled
-                    ? 'Up to $kProjectPhotoMaxCount photos from your gallery.'
-                    : "Uploading from a browser isn't available yet.",
+                subtitle:
+                    'Up to $kProjectPhotoMaxCount photos from your gallery.',
                 value: _Option.upload,
                 selected: _selected,
-                // `locked` mutes the card and makes taps a no-op, which is
-                // exactly "disabled with a visible reason" — the subtitle above
-                // says WHY rather than leaving a dead card.
-                locked: !_uploadEnabled,
                 onSelect: (o) => setState(() => _selected = o),
               ),
             ],

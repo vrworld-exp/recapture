@@ -478,22 +478,28 @@ do not remove it).
   secret). Staff-only surfaces (the Projects screen's "Live projects" tab)
   gate on `isStaffProvider`; the backend re-checks the role on every request.
 
-### Web upload of artist photo sets (BLOCKED on a bucket policy)
+### Web upload of artist photo sets (LIVE on web and native)
 - The presigned part PUTs go **direct to S3**, and the avatar bytes-proxy
   precedent explicitly **does not extend here** — a 48-photo set is
   capture-sized, not avatar-sized. Do not add a bytes-proxy route for it.
-- `msxr-raw-captures` deliberately serves **no CORS policy**
-  (`docs/aws-storage-and-cdn.md`), so on web every part PUT fails preflight.
-  **NOT YET APPLIED.** Until it is, the client renders the Upload option
-  **disabled with a visible reason** on web (`kPhotoUploadEnabledOnWeb` in
-  `capture_mode_sheet.dart` — one constant, one line to flip). Native ships and
-  works today.
-- When the policy IS applied it must be scoped narrowly — `AllowedOrigins`: the
-  app's web origins only, **never `*`**; `AllowedMethods`: `PUT`, `GET`;
+- `msxr-raw-captures` now **does serve a CORS policy**, applied specifically so
+  those part PUTs survive preflight in a browser. This **reverses** the earlier
+  "no CORS on the raw bucket" decision for `PUT`/`GET` only; everything else
+  about the bucket is unchanged (private, presigned-only, public access
+  blocked). Recorded here and in `docs/aws-storage-and-cdn.md`.
+- The Upload option is therefore offered on **every platform** — the old
+  `kPhotoUploadEnabledOnWeb` gate in `capture_mode_sheet.dart` is gone. The
+  remaining gate is `isStaffProvider` (staff-only, UX; the backend re-checks the
+  role on every request).
+- The applied policy is `AllowedMethods`: `PUT`, `GET`, `HEAD`;
   `AllowedHeaders`: `content-type`; `ExposeHeaders`: `ETag` (the engine reads it
-  off every part response) — and recorded **here and in
-  `docs/aws-storage-and-cdn.md` in the same change**. It reverses a documented
-  decision and must not be a silent console edit.
+  off every part response). **`AllowedOrigins` is currently `*` — tighten it to
+  the app's web origins.** A wildcard origin does not leak objects (they stay
+  presigned-only), but it lets any page that obtains a presigned URL use it from
+  a browser, which is wider than this feature needs.
+- The **avatar** bytes-proxy (`GET /auth/me/avatar/bytes`) still exists and is
+  still the right call for displaying raw-bucket objects: reads there are not
+  presigned-PUT-shaped and go through the API by design.
 
 ### Testing
 - Hermetic: isolated store, deterministic, no real network, full teardown. Never
