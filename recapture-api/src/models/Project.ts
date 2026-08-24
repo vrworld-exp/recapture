@@ -48,8 +48,9 @@ export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
  * `upload`   an artist's hand-picked photo set, uploaded from the gallery over
  *            the same presigned-multipart transport. It has no rings and no
  *            manifest, which is why `objectSize`/`mode` are not required on it
- *            and why server-side photo AUTO-selection cannot run for it (see
- *            onDemandModelGenerationService's AUTO_SELECTION_UNAVAILABLE).
+ *            and why server-side photo selection runs a different rule for it
+ *            (`selectPhotosFromUploadedSet` — the artist's own order, since the
+ *            manifest's blur and yaw were never measured).
  *
  * The schema default backfills every pre-existing document as `capture` on
  * read, so this field needs NO migration — the same pattern `User.role`,

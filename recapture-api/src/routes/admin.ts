@@ -600,21 +600,7 @@ router.post(
         res.status(422).json({
           status: 'error',
           code: 'NOT_EXPORTABLE',
-          message: 'This project has no finalized capture to generate a model from.',
-          steps: result.steps,
-        });
-        return;
-      }
-      if (result.reason === 'AUTO_SELECTION_UNAVAILABLE') {
-        // A deliberate refusal, not a confusing failure: the selector reads
-        // blur/yaw out of a capture manifest, and an uploaded photo set has
-        // none. Hand-picking (POST /admin/projects/:id/model) still works.
-        res.status(409).json({
-          status: 'error',
-          code: 'AUTO_SELECTION_UNAVAILABLE',
-          message:
-            "This project's photos were uploaded, so there is no capture manifest to " +
-            'select from. Pick 3–4 photos by hand instead.',
+          message: 'This project has no finalized capture or photo set to generate a model from.',
           steps: result.steps,
         });
         return;

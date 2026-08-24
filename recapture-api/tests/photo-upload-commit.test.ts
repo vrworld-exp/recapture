@@ -17,6 +17,7 @@ import { Project } from '@/models/Project';
 import { Job } from '@/models/Job';
 import { User } from '@/models/User';
 import { RateWindow } from '@/models/RateWindow';
+import { LIVE_PROJECT_STATUSES } from '@/services/adminProjectsService';
 
 import { files, makeUploadProject, makeUser } from './helpers/photoUpload';
 
@@ -126,8 +127,41 @@ describe('POST /projects/:id/photos/commit', () => {
     const project = await Project.findById(projectId).exec();
     expect(project!.stats!.totalPhotos).toBe(6);
     expect(project!.stats!.lastCaptureAt).toBeInstanceOf(Date);
-    // Still DRAFT: an upload project gains no status, only photos.
-    expect(project!.status).toBe('DRAFT');
+  });
+
+  it('promotes the project to PROCESSING — a finished upload is a LIVE project', async () => {
+    // The point of the promotion: PROCESSING is in LIVE_PROJECT_STATUSES, so
+    // this is what puts an artist's upload in front of every other artist and
+    // admin, and what turns on Preview / Export / Generate. Left in DRAFT it
+    // was a private draft nobody else could ever see or work on.
+    const { artist, projectId, jobId } = await openSession(6);
+    mockS3(Array(6).fill(OK));
+
+    await request(app).post(`/projects/${projectId}/photos/commit`).set(artist.auth).send({ jobId });
+
+    const project = await Project.findById(projectId).exec();
+    expect(project!.status).toBe('PROCESSING');
+    expect(project!.statusUpdatedAt).toBeInstanceOf(Date);
+    // And it is in the set the staff Live list queries for.
+    expect(LIVE_PROJECT_STATUSES).toContain(project!.status);
+  });
+
+  it('re-asserts PROCESSING on a replay, so a crashed first commit self-heals', async () => {
+    const { artist, projectId, jobId } = await openSession(6);
+    mockS3(Array(6).fill(OK));
+    await request(app).post(`/projects/${projectId}/photos/commit`).set(artist.auth).send({ jobId });
+
+    // Simulate the gap: the job flipped to UPLOADED but the status write never
+    // landed. The replay must not shrug and return the stored counts.
+    await Project.updateOne({ _id: projectId }, { $set: { status: 'DRAFT' } }).exec();
+
+    const replay = await request(app)
+      .post(`/projects/${projectId}/photos/commit`)
+      .set(artist.auth)
+      .send({ jobId });
+
+    expect(replay.status).toBe(200);
+    expect((await Project.findById(projectId).exec())!.status).toBe('PROCESSING');
   });
 
   it('413s an over-cap object AND deletes it — the cap is only real here', async () => {

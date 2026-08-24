@@ -1,8 +1,8 @@
 // tests/photo-upload-generate.test.ts
 //
 // POST /projects/:id/photos/generate — the ONLY step in this feature that
-// spends Meshy credits, plus the deliberate refusal of server-side photo
-// AUTO-selection on an upload project.
+// spends Meshy credits, plus server-side photo selection ON an upload project
+// (which takes the artist's own order, having no manifest to rank by).
 //
 // The three load-bearing spend guards (AGENTS.md) must all still be here:
 // the per-user rate window, the Idempotency-Key replay, and the unique-index
@@ -59,7 +59,13 @@ function mockS3(count: number) {
     if (cmd.constructor.name !== 'ListObjectsV2Command') {
       throw new Error(`unexpected S3 command: ${cmd.constructor.name}`);
     }
-    const prefix = cmd.input.Prefix as string;
+    // Photos live under `{rawPrefix}uploads/`. The commit lists that namespace
+    // directly; generation lists the JOB ROOT and gets the same objects back
+    // with the `uploads/` segment still on them. Normalising here is what keeps
+    // the mock honest for both callers — without it, generation would see keys
+    // that no real bucket would ever return.
+    const listed = cmd.input.Prefix as string;
+    const prefix = listed.endsWith('uploads/') ? listed : `${listed}uploads/`;
     return {
       Contents: Array.from({ length: count }, (_, i) => ({
         Key: `${prefix}photo_${String(i + 1).padStart(4, '0')}.jpg`,
@@ -244,24 +250,32 @@ describe('the spend guards are still all three', () => {
   });
 });
 
-describe('auto-selection refuses on an upload project', () => {
-  it('POST /projects/:id/model → 409 AUTO_SELECTION_UNAVAILABLE, before any spend', async () => {
-    const { artist, projectId } = await committedProject();
+describe('server-side selection on an upload project', () => {
+  // The old contract refused this outright (409 AUTO_SELECTION_UNAVAILABLE):
+  // the selector reads blur and yaw out of a capture manifest and an uploaded
+  // set has none. That made an upload project the one project on the hub whose
+  // "Generate 3D model" button could not be pressed. It now runs a DIFFERENT
+  // rule — the artist's own upload order — instead of no rule at all.
+  it('POST /projects/:id/model enqueues from the uploaded set, in upload order', async () => {
+    const { artist, projectId, jobId } = await committedProject();
 
     const res = await request(app).post(`/projects/${projectId}/model`).set(artist.auth).send({});
 
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AUTO_SELECTION_UNAVAILABLE');
-    // Deliberate copy, not the generic "finish uploading" refusal.
-    expect(res.body.message).toContain('chosen by hand');
-    // And it names no pipeline internal.
-    for (const internal of ['Meshy', 'manifest', 'selector', 'rawPrefix', 'S3', 'blur', 'yaw']) {
-      expect(res.body.message).not.toContain(internal);
-    }
-    expect(await ProjectModel.countDocuments({}).exec()).toBe(0);
+    expect(res.status).toBe(202);
+    const record = await ProjectModel.findOne({}).exec();
+    expect(record).not.toBeNull();
+    // PINNED to the photo-upload job, exactly like a hand-picked selection.
+    expect(record!.jobId.toHexString()).toBe(jobId);
+    // The first four, in key order — never a manifest-derived `images/…` key.
+    expect(record!.selectedKeys).toEqual([
+      'uploads/photo_0001.jpg',
+      'uploads/photo_0002.jpg',
+      'uploads/photo_0003.jpg',
+      'uploads/photo_0004.jpg',
+    ]);
   });
 
-  it('POST /admin/projects/:id/model/auto → 409 AUTO_SELECTION_UNAVAILABLE', async () => {
+  it('POST /admin/projects/:id/model/auto does the same for staff', async () => {
     const { projectId } = await committedProject();
     const admin = await makeUser('ADMIN');
 
@@ -270,8 +284,59 @@ describe('auto-selection refuses on an upload project', () => {
       .set(admin.auth)
       .send({});
 
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe('AUTO_SELECTION_UNAVAILABLE');
+    expect(res.status).toBe(201);
+    expect(res.body.model.selectedKeys).toHaveLength(4);
+    // The staff trace says WHY those photos — and says honestly that nothing
+    // was measured, rather than reporting zeroes as a quality verdict.
+    expect(res.body.trace.poolSize).toBe(6);
+    expect(res.body.trace.unplacedCount).toBe(6);
+    const loadManifest = res.body.steps.find(
+      (entry: { step: string }) => entry.step === 'LOAD_MANIFEST'
+    );
+    expect(loadManifest.status).toBe('SKIPPED');
+  });
+
+  it('DECLINES a set too small to build from, and spends nothing', async () => {
+    const { artist, projectId } = await committedProject();
+    // Everything but two photos has since been curated away.
+    mockS3(2);
+
+    const res = await request(app).post(`/projects/${projectId}/model`).set(artist.auth).send({});
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('NOT_SELECTABLE');
     expect(await ProjectModel.countDocuments({}).exec()).toBe(0);
+  });
+
+  it('never selects out of the soft-deleted namespace', async () => {
+    const { artist, projectId } = await committedProject();
+    // A curated-away photo is MOVED to `{rawPrefix}deleted/…`, so it is still
+    // under the job root the generation lists. Selecting it back out would
+    // undo the curation silently — and hand Meshy a photo staff removed.
+    vi.spyOn(s3Client, 'send').mockImplementation((async (cmd: {
+      constructor: { name: string };
+      input: { Prefix?: string };
+    }) => {
+      const listed = cmd.input.Prefix as string;
+      const root = listed.endsWith('uploads/') ? listed.slice(0, -'uploads/'.length) : listed;
+      return {
+        Contents: [
+          ...Array.from({ length: 4 }, (_, i) => ({
+            Key: `${root}uploads/photo_${String(i + 1).padStart(4, '0')}.jpg`,
+            Size: OK,
+          })),
+          { Key: `${root}deleted/uploads/photo_0009.jpg`, Size: OK },
+        ],
+        IsTruncated: false,
+      };
+    }) as never);
+
+    const res = await request(app).post(`/projects/${projectId}/model`).set(artist.auth).send({});
+
+    expect(res.status).toBe(202);
+    const record = await ProjectModel.findOne({}).exec();
+    for (const key of record!.selectedKeys) {
+      expect(key.startsWith('deleted/')).toBe(false);
+    }
   });
 });

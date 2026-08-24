@@ -29,7 +29,12 @@ import { Types } from 'mongoose';
 import { BUCKET_RAW } from '@/config/s3';
 import { env } from '@/config/env';
 import { Job, PHOTO_UPLOAD_JOB_TYPE, type IJob } from '@/models/Job';
-import { getProject, setProjectCaptureStats, type ProjectListItem } from '@/services/projectsService';
+import {
+  getProject,
+  setProjectCaptureStats,
+  updateProjectStatus,
+  type ProjectListItem,
+} from '@/services/projectsService';
 import { DELETED_KEY_PREFIX, isContainedRelativeKey } from '@/services/adminProjectsService';
 import {
   deleteObject,
@@ -279,9 +284,13 @@ export type CommitPhotoUploadResult =
  * two concurrent commits cannot both win (AGENTS.md: atomicity without
  * transactions).
  *
- * It deliberately does NOT set `Job.state = 'QUEUED'` and does not touch
- * `Project.status`: a PHOTO_UPLOAD job is never processed, and an upload
- * project stays DRAFT until it has a model.
+ * It deliberately does NOT set `Job.state = 'QUEUED'`: a PHOTO_UPLOAD job is
+ * never processed, and QUEUED is the claimable state.
+ *
+ * It DOES promote the project to PROCESSING — see {@link finalizeUploadProject}.
+ * That is what makes a finished upload a first-class project: it enters the
+ * staff Live list (LIVE_PROJECT_STATUSES) and every exportable surface, exactly
+ * like a finalized capture.
  */
 export async function commitPhotoUpload(input: {
   userId: string;
@@ -300,6 +309,9 @@ export async function commitPhotoUpload(input: {
   if (!job || !job.upload) return { outcome: 'JOB_NOT_FOUND' };
 
   if (job.state === 'UPLOADED') {
+    // Self-heal: a crash between the original flip and the status write would
+    // otherwise leave a committed upload stranded in DRAFT, invisible to Live.
+    await finalizeUploadProject(project, job.upload.uploadedFilesCount, job.updatedAt);
     return {
       outcome: 'COMMITTED',
       projectId: project.id,
@@ -347,12 +359,9 @@ export async function commitPhotoUpload(input: {
     { new: true }
   ).exec();
 
-  // Hub-card stats. `setProjectCaptureStats` is named for the capture funnel
-  // but its semantics are exactly what is needed here — "this many photos
-  // landed, at this instant" — so it is reused rather than duplicated. Without
-  // this write `stats.totalPhotos` stays 0 and the Hub card reads "0 photos"
-  // on a project holding 48.
-  await setProjectCaptureStats(input.projectId, objects.length, new Date());
+  // Hub-card stats + the PROCESSING promotion, through the one funnel both
+  // the fresh commit and the idempotent replay call.
+  await finalizeUploadProject(project, objects.length, (updated ?? job).updatedAt);
 
   return {
     outcome: 'COMMITTED',
@@ -364,6 +373,46 @@ export async function commitPhotoUpload(input: {
     // job is already UPLOADED — the same end state, reported honestly.
     alreadyCommitted: updated === null,
   };
+}
+
+/**
+ * The single funnel every COMMITTED outcome runs through — fresh flip and
+ * idempotent replay alike — so a committed upload always ends in the same
+ * project state. Modelled on finalize's `queuedResult` (jobsService), for the
+ * same two reasons: a replay must re-assert rather than skip (self-healing a
+ * crash between the job flip and these writes), and the status write must
+ * happen AFTER the job's own state write.
+ *
+ * Two writes, in this order:
+ *
+ * 1. `stats.totalPhotos` — `setProjectCaptureStats` is named for the capture
+ *    funnel but its semantics are exactly what is needed ("this many photos
+ *    landed, at this instant"), so it is reused rather than duplicated. Without
+ *    it the Hub card reads "0 photos" on a project holding 48. [landedAt] is
+ *    the job's own UPLOADED-flip instant, not `new Date()`, for the reason
+ *    finalize passes `queuedAt`: a replay must rewrite IDENTICAL values, or
+ *    every retried commit nudges the project's "last capture" forward and
+ *    reorders the Hub list for no real event.
+ * 2. `status` → PROCESSING. THIS is what makes a finished upload a first-class
+ *    project rather than a private draft: PROCESSING is in
+ *    `LIVE_PROJECT_STATUSES`, so the set becomes visible to every artist and
+ *    admin on the staff Live list, and it is the status the exportable
+ *    surfaces (export, preview gallery, Generate) gate on — the same
+ *    PROCESSING a finalized capture lands in, deliberately, so neither list
+ *    has to learn what an upload project is.
+ *
+ * A project already past DRAFT is left alone: PROCESSING → PROCESSING is a
+ * self-transition (which `updateProjectStatus` warns about), and COMPLETED →
+ * PROCESSING would drag a project with a finished model backwards.
+ */
+async function finalizeUploadProject(
+  project: ProjectListItem,
+  photoCount: number,
+  landedAt: Date
+): Promise<void> {
+  await setProjectCaptureStats(project.id, photoCount, landedAt);
+  if (project.status === 'PROCESSING' || project.status === 'COMPLETED') return;
+  await updateProjectStatus(project.id, 'PROCESSING');
 }
 
 // ── List ─────────────────────────────────────────────────────────────────────

@@ -53,19 +53,25 @@ class Project {
 
   /// What the card's PRIMARY action should be — status AND source together.
   ///
-  /// `DRAFT` is the one status that means two different things. On a capture
-  /// project it is an unfinished session, so "Resume" walks back into the
-  /// capture flow. On an UPLOAD project there is nothing to resume: the photos
-  /// are already on S3 and the project is complete as an upload. What is left
-  /// is choosing which photos a model gets built from, so the action says that
-  /// instead of borrowing capture's word for it.
+  /// An upload project resolves WITHOUT consulting the status table at all,
+  /// because every word in it is a capture word and none of them are true here:
+  /// the photos are already on S3, so there is no session to "Resume", nothing
+  /// is "Processing…" (no worker ever claims a photo-upload job, so that
+  /// spinner would never stop), and there is no failed transfer to "Retry".
+  /// A finished model is the only real destination, so that is the only action
+  /// it can ever offer — and until one exists the card carries no primary
+  /// action at all, letting Preview / Models / Generate 3D model be the whole
+  /// row, exactly as they are on a capture project.
   ///
-  /// Every other status is shared, and deliberately so: an upload project that
-  /// is PROCESSING or COMPLETED is the same thing a capture project is, and it
-  /// gets the same "Processing…" / "View" treatment.
+  /// Resolving the two sources separately (rather than falling through for
+  /// "the statuses that happen to agree") is deliberate: the fall-through is
+  /// what would let a DRAFT upload send an artist into pre-capture — a ring
+  /// flow this project has no plan for and can never complete.
   ProjectCardAction get cardAction {
-    if (isUploadProject && status == ProjectStatus.draft) {
-      return ProjectCardAction.selectPhotos;
+    if (isUploadProject) {
+      return hasViewableModels || status == ProjectStatus.completed
+          ? ProjectCardAction.view
+          : ProjectCardAction.none;
     }
     return status.cardAction;
   }

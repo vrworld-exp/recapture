@@ -18,11 +18,11 @@
 // pushed route, so hardware back pops it.
 //
 // ── WHERE IT GOES WHEN IT FINISHES ──────────────────────────────────────────
-// The Projects hub, NOT the photo grid. An upload is finished when the photos
-// are on S3 and the project exists; asking the artist to hand-pick 3-4 photos
-// for a 3D model in the same breath conflates two decisions. The project lands
-// in the list like any other, and the grid is one tap away from there whenever
-// they want it (`projects_screen.dart` routes upload projects to it).
+// The Projects hub. An upload is finished when the photos are on S3 and the
+// project exists; asking the artist to hand-pick 3-4 photos for a 3D model in
+// the same breath conflates two decisions. The project lands in the list like
+// any other captured project — Preview, Models and "Generate 3D model", with
+// picking one tap deeper inside Preview whenever they want it.
 //
 // ── PER-PHOTO STATUS IS DERIVED, NOT INVENTED ───────────────────────────────
 // Every status on this screen comes from [ProjectPhotosState.statusForPhoto],

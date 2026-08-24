@@ -27,11 +27,9 @@ class ProjectCard extends StatelessWidget {
 
   final Project project;
 
-  /// The card's primary "continue this project" action. It backs BOTH the
-  /// capture card's "Resume" and the upload card's "Select photos" — one
-  /// callback because it means one thing to the screen ("open where this
-  /// project left off"), and the screen already routes the two sources to
-  /// their own destinations.
+  /// The card's primary "continue this project" action — the capture card's
+  /// "Resume", which walks back into the capture flow. An UPLOAD project never
+  /// fires it: it has no session to continue (see [Project.cardAction]).
   final ValueChanged<Project> onResume;
   final ValueChanged<Project> onView;
   final ValueChanged<Project> onRetry;
@@ -223,16 +221,6 @@ class ProjectCard extends StatelessWidget {
       case ProjectCardAction.resume:
         return AppButton(
           label: 'Resume',
-          isFullWidth: false,
-          isLoading: isActionInFlight,
-          onPressed: () => onResume(project),
-        );
-      case ProjectCardAction.selectPhotos:
-        // Same callback as Resume — the screen routes an upload project to its
-        // photo grid — but never the same WORD: the photos are already in, so
-        // "Resume" would promise an unfinished job that does not exist.
-        return AppButton(
-          label: 'Select photos',
           isFullWidth: false,
           isLoading: isActionInFlight,
           onPressed: () => onResume(project),

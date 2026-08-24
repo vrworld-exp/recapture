@@ -3,12 +3,20 @@
 // The artist photo grid for one UPLOAD project: the set that was uploaded,
 // hand-picked down to 3–4, then Generate.
 //
-// ── WHY HAND-PICKING IS THE ONLY WAY IN ─────────────────────────────────────
-// Server-side photo auto-selection reads blur and yaw out of a CAPTURE
-// manifest. An uploaded set has none, so the selector has nothing to sort by
-// and the server refuses that path deliberately
-// (409 AUTO_SELECTION_UNAVAILABLE). Hand-picking is the same door staff already
-// use, and it is the only one offered here.
+// ── NOT LINKED FROM THE HUB ANY MORE ────────────────────────────────────────
+// Nothing navigates here: the project card no longer offers a picker of its
+// own, because hand-picking now lives in ONE place for both sources — Preview →
+// "Create Model" → pick 3–4 → "Create Model" (preview_gallery_screen.dart).
+// Every photo route this screen calls is `requireRole('MODEL_ARTIST')`, so
+// every upload-project owner is staff and can always reach that door; this
+// screen is a second way to do the same thing, and two of them is how the two
+// drift apart.
+//
+// It is kept, unlinked, rather than deleted: `/projects/:id/photos` still
+// resolves for a deep link, and the deletion is a call to make deliberately —
+// not a side effect of moving a button. Reaching for it as the destination of
+// some NEW affordance is the mistake this note exists to stop; add that
+// affordance to Preview instead.
 //
 // On success this routes to the EXISTING model screens — no new ones are built.
 import 'package:flutter/material.dart';

@@ -385,9 +385,14 @@ const toListItem = toProjectListItem;
  * job may be created straight from DRAFT (tests/dev tools do), and a
  * COMPLETED/FAILED project can start a new job version (re-capture/retry).
  * Self-transitions (duplicate create/finalize) intentionally warn.
+ *
+ * DRAFT → PROCESSING is the UPLOAD funnel's one step: a photo-upload project
+ * never enters CAPTURING or UPLOADING (there is no capture session and no
+ * finalize gate to pass), so its commit promotes it straight out of DRAFT. It
+ * is a real transition, not a tolerated oddity — see commitPhotoUpload.
  */
 const VALID_TRANSITIONS: Partial<Record<ProjectStatus, ProjectStatus[]>> = {
-  DRAFT: ['CAPTURING', 'UPLOADING'],
+  DRAFT: ['CAPTURING', 'UPLOADING', 'PROCESSING'],
   CAPTURING: ['UPLOADING'],
   UPLOADING: ['PROCESSING'],
   PROCESSING: ['COMPLETED', 'FAILED'],

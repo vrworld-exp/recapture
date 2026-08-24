@@ -273,6 +273,88 @@ function quadrantOf(
 }
 
 /**
+ * Selects the photos to hand Meshy from an ARTIST'S UPLOADED SET — the
+ * manifest-free counterpart to {@link selectPhotosForAutoGeneration}.
+ *
+ * ── WHY THIS IS A DIFFERENT FUNCTION, NOT A RELAXED MODE ───────────────────
+ * Everything the capture selector reasons about — yaw quadrants, blur scores,
+ * the EYE ring — comes out of `capture_manifest.json`. An uploaded set has no
+ * manifest and never will: nobody measured the angles, and nobody scored the
+ * sharpness. Feeding it through the capture rules would decline 100% of real
+ * uploads on `droppedNoBlurScore`, which is a measurement gap being reported as
+ * a quality verdict.
+ *
+ * ── WHAT IT SELECTS ON INSTEAD: THE ARTIST ALREADY SELECTED ────────────────
+ * A capture is ~48 frames a phone took automatically, so choosing 4 of them is
+ * the whole problem. An upload is a handful of photos a person deliberately
+ * picked and carried through an upload screen — the curation already happened,
+ * off-server. So this takes the first {@link AUTO_TARGET_PHOTOS} in KEY ORDER,
+ * which is upload order (the commit writes zero-padded `photo_0001…` indices),
+ * and that is a defensible "the artist's first four", not a guess dressed up as
+ * a ranking. Anyone wanting different photos hand-picks them in the grid.
+ *
+ * It still DECLINES rather than generating something worthless: below
+ * {@link AUTO_MIN_PHOTOS} usable keys, Meshy cannot see enough sides of the
+ * object, and a bad generation costs exactly what a good one does.
+ *
+ * @param availableKeys Relative keys that ACTUALLY exist under the job prefix,
+ *                      already narrowed to the photo namespace by the caller
+ *                      (which is also what keeps soft-deleted objects, parked
+ *                      under `deleted/`, out of the pool).
+ */
+export function selectPhotosFromUploadedSet(
+  availableKeys: readonly string[],
+  opts: { targetCount?: number } = {}
+): AutoSelectionResult {
+  const targetCount = Math.min(
+    Math.max(opts.targetCount ?? AUTO_TARGET_PHOTOS, AUTO_MIN_PHOTOS),
+    AUTO_TARGET_PHOTOS
+  );
+  // Deduped and sorted so the answer is deterministic: S3 listings are already
+  // lexicographic, but the caller filters and maps them and this must not
+  // depend on that staying true.
+  const pool = [...new Set(availableKeys)].sort();
+
+  // The trace is the capture selector's shape, filled with what an uploaded set
+  // can honestly report. ONE shape keeps the staff generation screen, the
+  // stored `generationTrace` and `toStoredSelection` free of a second variant;
+  // the capture-only counters stay 0 because nothing was dropped for a reason
+  // that never applied. `photosInManifest` reads as "photos considered", which
+  // for an upload is the pool itself.
+  const trace: AutoSelectionTrace = {
+    ringUsed: 'ALL',
+    photosInManifest: pool.length,
+    poolSize: pool.length,
+    droppedUnresolvableKey: 0,
+    droppedMissingObject: 0,
+    droppedNoBlurScore: 0,
+    belowBlurFloor: 0,
+    warnedExcluded: 0,
+    minBlurScoreUsed: 0,
+    segmentCountUsed: null,
+    quadrantHistogram: [0, 0, 0, 0],
+    // No angles were measured, so every photo is genuinely unplaced on the
+    // circle. Saying so is the point: a staff reader must not mistake this for
+    // a capture whose orientation data went missing.
+    unplacedCount: pool.length,
+    chosen: [],
+  };
+
+  if (pool.length < AUTO_MIN_PHOTOS) {
+    return { outcome: 'DECLINED', reason: 'NO_USABLE_PHOTOS', trace };
+  }
+
+  const keys = pool.slice(0, targetCount);
+  trace.chosen = keys.map((key) => ({ key, blurScore: 0, quadrant: null }));
+  return {
+    outcome: 'SELECTED',
+    keys,
+    reason: `${keys.length} of ${pool.length} uploaded photos, in upload order (no capture manifest)`,
+    trace,
+  };
+}
+
+/**
  * Selects the photos to hand Meshy, or declines.
  *
  * @param manifest Parsed capture_manifest.json (arrives as `unknown` — it came

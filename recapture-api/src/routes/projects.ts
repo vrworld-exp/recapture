@@ -33,6 +33,7 @@ import {
   findGenerationSourceJob,
 } from '@/services/projectPhotosService';
 import { requireRole } from '@/middleware/requireRole';
+import type { ProjectSource } from '@/models/Project';
 import {
   createMeshyModelRequest,
   findProjectModelById,
@@ -349,7 +350,7 @@ router.post(
       res.status(422).json({
         status: 'error',
         code: 'NOT_SELECTABLE',
-        message: OWNER_DECLINE_MESSAGES[result.reason],
+        message: ownerDeclineMessage(result.reason, project.source),
       });
       return;
     }
@@ -387,18 +388,14 @@ const OWNER_BLOCK_CODES: Record<MappedOwnerBlockReason, string> = {
   DISABLED: 'GENERATION_UNAVAILABLE',
   USER_CAP_REACHED: 'DAILY_LIMIT_REACHED',
   NOT_EXPORTABLE: 'NOT_READY',
-  AUTO_SELECTION_UNAVAILABLE: 'AUTO_SELECTION_UNAVAILABLE',
 };
 
 const OWNER_BLOCK_MESSAGES: Record<MappedOwnerBlockReason, string> = {
   DISABLED: '3D model creation is not available right now.',
   USER_CAP_REACHED: "You've reached today's limit for creating 3D models. Try again tomorrow.",
-  NOT_EXPORTABLE: 'Finish uploading this capture before creating a 3D model.',
-  // Names no pipeline internal — not the selector, not the manifest, not a key
-  // layout, and not Meshy. It says what happened and what to do instead.
-  AUTO_SELECTION_UNAVAILABLE:
-    "This project's photos were uploaded, so photos must be chosen by hand. " +
-    'Select 3–4 photos and generate.',
+  // Covers both sources, because from here they are the same situation: the
+  // photos are not all in yet. Names no pipeline internal.
+  NOT_EXPORTABLE: 'Finish uploading this project before creating a 3D model.',
 };
 
 /**
@@ -416,6 +413,27 @@ const OWNER_DECLINE_MESSAGES: Record<
   INSUFFICIENT_SPREAD:
     'This capture only shows one side of the object. Walk all the way around it and capture again.',
 };
+
+/**
+ * The decline copy, by SOURCE — because the same reason code has two different
+ * causes and telling an artist the wrong one sends them to fix the wrong thing.
+ *
+ * On an upload project the only route to `NO_USABLE_PHOTOS` is too FEW photos
+ * (a committed set starts at `PROJECT_PHOTO_MIN_COUNT`, so it got there by
+ * having photos removed) — never blur, which nothing ever measured on an
+ * uploaded set. "Capture again in better light" would be advice for a flow this
+ * project never ran. The other two reasons are capture-only by construction: an
+ * upload has no manifest to be unreadable and no yaw to be bunched.
+ */
+function ownerDeclineMessage(
+  reason: 'MANIFEST_UNREADABLE' | 'NO_USABLE_PHOTOS' | 'INSUFFICIENT_SPREAD',
+  source: ProjectSource
+): string {
+  if (source === 'upload' && reason === 'NO_USABLE_PHOTOS') {
+    return 'This project needs at least 3 photos to build a 3D model. Add more photos and try again.';
+  }
+  return OWNER_DECLINE_MESSAGES[reason];
+}
 
 /**
  * GET /projects/:id/models — the OWNER-facing model history for their own

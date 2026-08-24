@@ -2,15 +2,26 @@
 //
 // What an UPLOAD project's card offers once its photos are in.
 //
-// The bug this pins: a finished upload landed in the list as a DRAFT, and DRAFT
-// maps to "Resume" — a capture word for an unfinished capture session. An
-// upload project has no session to resume; the photos are already on S3. Its
-// real next step is choosing which of them a 3D model gets built from, so the
-// button says that and opens the photo grid.
+// The requirement is "like a normal captured project", so the card resolves to
+// the SAME row a capture project gets — Preview, Models, Generate 3D model —
+// and offers no upload-only button of its own. Photo picking is not a card
+// action at all: it lives inside Preview (app-bar "Create Model" → pick 3–4 →
+// "Create Model"), which is the same door staff already use for a capture.
 //
-// Everything ELSE about the card stays shared with capture projects: the status
-// pill, the photo count, the Models button, the ⋮ menu, and every non-DRAFT
-// status. "Like a normal project" is the requirement — not "a special one".
+// Two capture words are what this pins against, both of which the status table
+// would hand an upload project if it were allowed to fall through:
+//
+//   • "Resume" (from DRAFT) would send the artist into pre-capture — a ring
+//     flow their project has no plan for and can never complete.
+//   • "Processing…" (from PROCESSING, which every committed upload is promoted
+//     to server-side, so it can be seen on the Live list) would spin forever,
+//     because no worker ever claims a photo-upload job.
+//
+// So an upload project resolves on its own terms: a finished model is the only
+// real destination, and until one exists the card carries no primary action —
+// leaving Preview / Models / Generate as the whole row. Models is shown even
+// with nothing in it, because it is that card's standing way in and its empty
+// state names the next step rather than dead-ending.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,11 +48,12 @@ Project _project({
 
 void main() {
   group('Project.cardAction', () {
-    test('a DRAFT upload project asks for a photo selection, never a resume',
-        () {
+    test('an upload project never resumes — that would open pre-capture', () {
+      // DRAFT is the status the fall-through is most dangerous on: it maps to
+      // "Resume", and there is no capture session to resume.
       expect(
         _project(source: ProjectSource.upload).cardAction,
-        ProjectCardAction.selectPhotos,
+        ProjectCardAction.none,
       );
     });
 
@@ -52,48 +64,72 @@ void main() {
       );
     });
 
-    test('every other status is shared by both sources', () {
+    test('a PROCESSING upload project shows no action, never a spinner', () {
+      // The status every committed upload lands in. A shared "Processing…"
+      // here would spin for good — nothing processes a photo-upload job.
+      expect(
+        _project(source: ProjectSource.upload, status: ProjectStatus.processing)
+            .cardAction,
+        ProjectCardAction.none,
+      );
+      expect(
+        _project(
+          source: ProjectSource.capture,
+          status: ProjectStatus.processing,
+        ).cardAction,
+        ProjectCardAction.processing,
+      );
+    });
+
+    test('a finished model is the ONE destination an upload card offers', () {
       for (final status in [
-        ProjectStatus.uploading,
+        ProjectStatus.draft,
         ProjectStatus.processing,
-        ProjectStatus.completed,
         ProjectStatus.failed,
-        ProjectStatus.unknown,
       ]) {
         expect(
-          _project(source: ProjectSource.upload, status: status).cardAction,
-          _project(source: ProjectSource.capture, status: status).cardAction,
-          reason: '$status must behave the same whatever the source',
+          _project(source: ProjectSource.upload, status: status, modelCount: 1)
+              .cardAction,
+          ProjectCardAction.view,
+          reason: '$status with a model must offer View',
+        );
+      }
+      // COMPLETED means the same thing without needing the count.
+      expect(
+        _project(source: ProjectSource.upload, status: ProjectStatus.completed)
+            .cardAction,
+        ProjectCardAction.view,
+      );
+    });
+
+    test('no upload status resolves to a capture-only action', () {
+      // The whole point of resolving the two sources separately: whatever the
+      // status table grows next, an upload project can only ever answer with
+      // one of these two.
+      for (final status in ProjectStatus.values) {
+        expect(
+          [ProjectCardAction.none, ProjectCardAction.view],
+          contains(_project(source: ProjectSource.upload, status: status)
+              .cardAction),
+          reason: '$status must not borrow a capture action',
         );
       }
     });
   });
 
   group('the card itself', () {
-    testWidgets('an uploaded set offers Select photos, not Resume',
+    testWidgets('an uploaded set offers no Resume and no picker of its own',
         (tester) async {
-      Project? opened;
-      await _pump(
-        tester,
-        _project(source: ProjectSource.upload),
-        onResume: (p) => opened = p,
-      );
+      await _pump(tester, _project(source: ProjectSource.upload));
 
-      expect(find.text('Select photos'), findsOneWidget);
       expect(find.text('Resume'), findsNothing);
-
-      await tester.tap(find.text('Select photos'));
-      await tester.pump();
-      // Same callback the capture card's Resume uses — the screen is what
-      // routes an upload project to its photo grid.
-      expect(opened?.id, 'p1');
+      expect(find.text('Select photos'), findsNothing);
     });
 
     testWidgets('a capture project is untouched', (tester) async {
       await _pump(tester, _project(source: ProjectSource.capture));
 
       expect(find.text('Resume'), findsOneWidget);
-      expect(find.text('Select photos'), findsNothing);
     });
 
     testWidgets('the rest of the card is the same one a capture project gets',
@@ -104,8 +140,7 @@ void main() {
         onModels: (_) {},
       );
 
-      // Photo count, status pill, Models and the ⋮ menu are all shared — the
-      // action label is the ONLY thing an upload project changes.
+      // Photo count, status pill, Models and the ⋮ menu are all shared.
       expect(find.textContaining('4 photos'), findsOneWidget);
       expect(find.text('Draft'), findsOneWidget);
       expect(find.text('Models'), findsOneWidget);
@@ -120,7 +155,33 @@ void main() {
       );
 
       expect(find.text('View'), findsOneWidget);
-      expect(find.text('Select photos'), findsNothing);
+    });
+
+    testWidgets('a committed (PROCESSING) upload reads like a live project',
+        (tester) async {
+      // The shape from the Live-projects screenshot this was built against: a
+      // Processing pill, Preview, Models, and a full-width Generate.
+      Project? opened;
+      await _pump(
+        tester,
+        _project(source: ProjectSource.upload, status: ProjectStatus.processing),
+        onPreview: (_) {},
+        onModels: (p) => opened = p,
+        onGenerate: (_) {},
+        // The Processing pill pulses forever, so there is nothing to settle.
+        settle: false,
+      );
+
+      expect(find.text('Processing'), findsOneWidget);
+      expect(find.text('Preview'), findsOneWidget);
+      expect(find.text('Models'), findsOneWidget);
+      expect(find.text('Generate 3D model'), findsOneWidget);
+      // Never the dead spinner a shared PROCESSING action would have given it.
+      expect(find.text('Processing…'), findsNothing);
+
+      await tester.tap(find.text('Models'));
+      await tester.pump();
+      expect(opened?.id, 'p1');
     });
   });
 }
@@ -130,6 +191,9 @@ Future<void> _pump(
   Project project, {
   ValueChanged<Project>? onResume,
   ValueChanged<Project>? onModels,
+  ValueChanged<Project>? onPreview,
+  ValueChanged<Project>? onGenerate,
+  bool settle = true,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -141,9 +205,15 @@ Future<void> _pump(
           onRetry: (_) {},
           onMore: (_) {},
           onModels: onModels,
+          onPreview: onPreview,
+          onGenerate: onGenerate,
         ),
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
 }

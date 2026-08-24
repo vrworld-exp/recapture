@@ -30,11 +30,6 @@ enum ProjectStatus {
 /// The single contextual action a project card offers for a given status.
 enum ProjectCardAction {
   resume,
-
-  /// An UPLOAD project whose photos are already in: the next step is picking
-  /// which of them a 3D model gets built from. Never reachable from a status
-  /// alone — see [Project.cardAction], which is what resolves it.
-  selectPhotos,
   view,
   retry,
   uploading,
