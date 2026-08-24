@@ -37,6 +37,12 @@ String? flowBackRouteFor(String location) {
   if (location.startsWith('/admin/projects/') && location.endsWith('/preview')) {
     return AppRoutes.projects;
   }
+  // Same shape rule for the artist photo grid, which the upload flow reaches by
+  // go() (replacing the finished create form) — so BACK has nothing to pop and
+  // would otherwise exit the app from the middle of the flow.
+  if (location.startsWith('/projects/') && location.endsWith('/photos')) {
+    return AppRoutes.projects;
+  }
   return switch (location) {
       AppRoutes.otpVerify => AppRoutes.auth,
       AppRoutes.createProject => AppRoutes.projects,

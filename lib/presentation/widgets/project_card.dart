@@ -26,6 +26,10 @@ class ProjectCard extends StatelessWidget {
   });
 
   final Project project;
+
+  /// The card's primary "continue this project" action — the capture card's
+  /// "Resume", which walks back into the capture flow. An UPLOAD project never
+  /// fires it: it has no session to continue (see [Project.cardAction]).
   final ValueChanged<Project> onResume;
   final ValueChanged<Project> onView;
   final ValueChanged<Project> onRetry;
@@ -134,7 +138,9 @@ class ProjectCard extends StatelessWidget {
     // model is done and the Models button is the real state. Suppress it so the
     // card doesn't spin forever. Uploading is untouched — that's a live upload,
     // not a finished model.
-    final rawAction = project.status.cardAction;
+    // Project.cardAction, not status.cardAction: a DRAFT upload project has
+    // nothing to resume, and the status alone cannot tell the two apart.
+    final rawAction = project.cardAction;
     final action =
         rawAction == ProjectCardAction.processing && project.hasViewableModels
             ? ProjectCardAction.none

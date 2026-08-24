@@ -118,7 +118,9 @@ export interface UploadPlan {
  */
 export type CreateJobResult =
   | { outcome: 'PROJECT_NOT_FOUND' }
-  | { outcome: 'SIZE_MISMATCH'; projectSize: WireSize }
+  /** `projectSize` is null when the project has no object size at all — i.e.
+   * it is an UPLOAD project, which can never host a capture job. */
+  | { outcome: 'SIZE_MISMATCH'; projectSize: WireSize | null }
   | {
       outcome: 'COUNT_INCONSISTENT';
       minimum: number;
@@ -174,7 +176,14 @@ export async function createJob(
 
   const modelSize = WIRE_TO_MODEL[input.objectSize];
   if (project.objectSize !== modelSize) {
-    return { outcome: 'SIZE_MISMATCH', projectSize: MODEL_TO_WIRE[project.objectSize] };
+    // `objectSize` is absent on an UPLOAD project — it has no rings and never
+    // enters this flow — so a capture job against one is a mismatch that cannot
+    // be resolved by re-sending a different size. `null` says exactly that;
+    // every capture project keeps naming its stored size, unchanged.
+    return {
+      outcome: 'SIZE_MISMATCH',
+      projectSize: project.objectSize ? MODEL_TO_WIRE[project.objectSize] : null,
+    };
   }
 
   // Variant range: the flow variant bounds the image count — the coverage
@@ -297,7 +306,11 @@ function planFor(job: IJob): UploadPlan {
     uploadMethod: 'S3_PRESIGNED_MULTIPART',
     bucket: upload.rawBucket,
     keyPrefix: upload.rawPrefix,
-    manifestKey: upload.manifestKey,
+    // Every CAPTURE job is created with one (see createJob) and planFor is only
+    // ever reached for capture jobs; a missing key here is a data-integrity bug
+    // that must surface rather than ship an empty string the engine would
+    // happily upload a manifest to.
+    manifestKey: requireManifestKey(upload),
     keyTemplate: `${upload.rawPrefix}{relativePath}`,
     levels: ringsForVariant(variantOf(job)),
     expiresAt: planExpiresAt(job).toISOString(),
@@ -305,6 +318,18 @@ function planFor(job: IJob): UploadPlan {
     maxParts: MAX_PARTS,
     expectedFilesCount: upload.expectedFilesCount,
   };
+}
+
+/**
+ * The job's manifest key, asserted present. `UploadInfo.manifestKey` is
+ * optional because a PHOTO_UPLOAD job has none; every capture job has one from
+ * creation, so an absent key on a capture path is corruption, not a case.
+ */
+function requireManifestKey(upload: NonNullable<IJob['upload']>): string {
+  if (!upload.manifestKey) {
+    throw new Error('Job upload block has no manifestKey (capture jobs always do).');
+  }
+  return upload.manifestKey;
 }
 
 /** The job's capture flow variant. The schema default backfills documents
@@ -319,8 +344,11 @@ function modeOf(job: IJob): CaptureMode {
   return job.captureMode ?? DEFAULT_CAPTURE_MODE;
 }
 
-/** The instant the job's upload plan stops accepting initiate/part-url calls. */
-function planExpiresAt(job: IJob): Date {
+/** The instant the job's upload plan stops accepting initiate/part-url calls.
+ * Exported so the artist photo-upload session advertises the SAME window the
+ * per-file upload guard enforces — two formulas would eventually disagree and
+ * hand the client a plan that is already expired. */
+export function planExpiresAt(job: IJob): Date {
   return new Date(job.createdAt.getTime() + env.UPLOAD_PLAN_TTL_SECONDS * 1000);
 }
 
@@ -579,7 +607,14 @@ export async function finalizeJob(
   // Verification 1: the manifest object must exist (the upload engine writes
   // it last, so its presence implies the client finished its upload pass). One
   // GET serves both this existence check and the content validation below.
-  const manifestObject = await getObjectText(rawBucket, manifestKey);
+  //
+  // A job with NO manifestKey at all (a PHOTO_UPLOAD job — which has no
+  // manifest by design and is not finalized through this route) takes the same
+  // branch: there is nothing to verify, so it is `manifest_missing`, not a
+  // crash and not a silent pass.
+  const manifestObject = manifestKey
+    ? await getObjectText(rawBucket, manifestKey)
+    : ({ outcome: 'absent' } as const);
   if (manifestObject.outcome === 'absent') {
     return {
       outcome: 'VERIFICATION_FAILED',

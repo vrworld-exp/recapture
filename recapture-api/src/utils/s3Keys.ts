@@ -243,6 +243,99 @@ export function buildManifestKey(scope: JobKeyScope): string {
   return `${buildJobKeyPrefix(scope)}${MANIFEST_FILENAME}`;
 }
 
+// ── Uploaded photo sets (PHOTO_UPLOAD jobs) ──────────────────────────────────
+//
+// An artist's hand-picked photo set lives under its OWN job prefix, in a
+// namespace that is a sibling of `deleted/` and `model-input/`:
+//
+//   {env}/{projectSlug}_{projectId}/{jobId}/uploads/photo_{nnnn}.{jpg|png|webp}
+//
+// The job id makes the prefix unique, so an upload job and a capture job on the
+// same project can never collide, and no exclusion is needed anywhere that
+// walks a CAPTURE job's prefix (`model-input/` needs one only because it shares
+// a capture job's prefix — an upload job is its own).
+//
+// KEYS ARE SERVER-ASSIGNED, NEVER CLIENT-NAMED. The client sends only
+// `{ contentType, size }` per file; the server returns the keys. That is what
+// keeps the extension and the charset controlled and stops a hostile filename
+// from ever reaching S3.
+
+/** Sub-prefix holding one PHOTO_UPLOAD job's objects. Sibling of `deleted/`. */
+export const UPLOADED_PHOTOS_KEY_PREFIX = 'uploads/';
+
+/** The image content types an uploaded photo set accepts. */
+export const UPLOADED_PHOTO_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export type UploadedPhotoContentType = (typeof UPLOADED_PHOTO_CONTENT_TYPES)[number];
+
+/**
+ * Content type → file extension. The extension derives from the VALIDATED
+ * content type, never from a caller-supplied name, and an unknown type throws
+ * rather than defaulting — the set is closed on purpose.
+ */
+const EXTENSION_BY_CONTENT_TYPE: Readonly<Record<UploadedPhotoContentType, string>> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+
+export function uploadedPhotoExtensionFor(contentType: string): string {
+  const ext = EXTENSION_BY_CONTENT_TYPE[contentType as UploadedPhotoContentType];
+  if (!ext) {
+    throw new S3KeyError(
+      `contentType must be one of ${UPLOADED_PHOTO_CONTENT_TYPES.join('/')}: ` +
+        JSON.stringify(contentType)
+    );
+  }
+  return ext;
+}
+
+/** How many digits the photo index is zero-padded to (`photo_0001`). */
+const PHOTO_INDEX_PAD = 4;
+
+/** The prefix every object of one PHOTO_UPLOAD job lives under. */
+export function buildUploadedPhotosPrefix(scope: JobKeyScope): string {
+  return `${buildJobKeyPrefix(scope)}${UPLOADED_PHOTOS_KEY_PREFIX}`;
+}
+
+/**
+ * Full uploaded-photo key: `…/{jobId}/uploads/photo_{nnnn}.{ext}`.
+ *
+ * [index] is 1-BASED and zero-padded to 4, assigned in the order the client
+ * listed its files — so the set has a stable order the gallery can rely on and
+ * a key never depends on anything the client chose to call the file.
+ */
+export function buildUploadedPhotoKey(
+  scope: JobKeyScope,
+  index: number,
+  contentType: string
+): string {
+  if (!Number.isInteger(index) || index < 1) {
+    throw new S3KeyError(`photo index must be a positive integer: ${JSON.stringify(index)}`);
+  }
+  const ext = uploadedPhotoExtensionFor(contentType);
+  const filename = requireSegment(
+    'filename',
+    `photo_${String(index).padStart(PHOTO_INDEX_PAD, '0')}.${ext}`
+  );
+  return `${buildUploadedPhotosPrefix(scope)}${filename}`;
+}
+
+/** Shape of a job-RELATIVE uploaded-photo key: `uploads/photo_0001.jpg`.
+ * Written as a literal (not composed from the constants above) because a
+ * template literal would eat the `\d` escape; the guard test below pins the two
+ * to each other. */
+const UPLOADED_PHOTO_RELATIVE_RE = /^uploads\/photo_\d{4}\.(?:jpg|png|webp)$/;
+
+/**
+ * True iff [relative] is a job-relative key this builder could have emitted.
+ * STRICT — the exact `uploads/photo_{nnnn}.{ext}` shape and nothing else — so a
+ * caller-supplied key can only ever name an object of the photo set itself,
+ * never something parked under `deleted/` and never a traversal.
+ */
+export function isUploadedPhotoRelativeKey(relative: string): boolean {
+  return typeof relative === 'string' && UPLOADED_PHOTO_RELATIVE_RE.test(relative);
+}
+
 export interface BuildImageKeyInput extends JobKeyScope {
   /** Ring name (EYE/TOP/LOW, any case) or mobile level code (A/B/C). */
   level: string;

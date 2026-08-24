@@ -17,6 +17,26 @@ const envSchema = z.object({
   CLOUDFRONT_BASE_URL: z.string().url('CLOUDFRONT_BASE_URL must be a valid URL'),
   // backedendMakeAliveUrl: z.string().url('backendMakeAliveUrl must be a valid URL'),
 
+  // ── CORS (src/app.ts) ──────────────────────────────────────────────────────
+  /**
+   * Browser origins allowed to call this API — comma-separated, matched
+   * EXACTLY (scheme + host + port, no path, no trailing slash).
+   *
+   * Only browsers are affected: the Flutter mobile builds send no Origin
+   * header, so they bypass this entirely. localhost/127.0.0.1 on any port is
+   * additionally allowed outside production, for `flutter run -d chrome`
+   * (which picks a random port every launch).
+   */
+  CORS_ALLOWED_ORIGINS: z
+    .string()
+    .default('https://recapture-live.onrender.com')
+    .transform((v) =>
+      v
+        .split(',')
+        .map((o) => o.trim().replace(/\/+$/, ''))
+        .filter(Boolean),
+    ),
+
   // ── OTP (POST /auth/send-otp) ──────────────────────────────────────────────
   // All tunables come from env; every one has a safe default so existing
   // deployments boot without new required vars.
@@ -145,6 +165,41 @@ const envSchema = z.object({
    * decoded texture memory that the same WebView has to find.
    */
   MESHY_TEXTURE_RESOLUTION: z.enum(['2k', '4k', '8k']).default('2k'),
+  // ── Artist photo-upload projects (POST /projects/:id/photos/*) ─────────────
+  //
+  // An artist uploads a hand-picked photo set instead of running a guided
+  // capture. Uploading costs nothing; GENERATING is what spends Meshy credits,
+  // and that path keeps its own guards (MESHY_CREATE_* below).
+  /**
+   * Fewest photos an upload project may commit. Below three there is nothing
+   * Meshy could ever build from — the generation surface itself requires 3–4.
+   */
+  PROJECT_PHOTO_MIN_COUNT: z.coerce.number().int().positive().default(3),
+  /**
+   * Most photos one upload project may hold. 48 matches CaptureMode.full's shot
+   * count, so a hand-uploaded set and a guided capture produce comparably sized
+   * sets. Raising it later is a one-line env change.
+   */
+  PROJECT_PHOTO_MAX_COUNT: z.coerce.number().int().positive().default(48),
+  /**
+   * Hard ceiling on ONE uploaded photo, in bytes.
+   *
+   * COST NOTE: 15 MiB x PROJECT_PHOTO_MAX_COUNT is a ~720 MiB worst-case
+   * ceiling per project in the raw bucket. Presigning cannot enforce a size, so
+   * this is only real at COMMIT time, where the route reads each object's
+   * listed size and DELETES an oversized one (the same stance the avatar commit
+   * takes). The abandoned-upload reaper this whole multipart path relies on is
+   * the raw bucket's AbortIncompleteMultipartUpload lifecycle rule.
+   */
+  PROJECT_PHOTO_MAX_BYTES: z.coerce.number().int().positive().default(15_728_640), // 15 MiB
+  /** Presigned-GET TTL for the photo grid (seconds). Matches
+   * ADMIN_EXPORT_URL_TTL_SECONDS — a presigned URL is a bearer credential. */
+  PROJECT_PHOTO_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /** Max upload SESSIONS one artist may open per window. */
+  PROJECT_PHOTO_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
+  /** Sliding window for the upload-session cap (seconds). */
+  PROJECT_PHOTO_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   /** Max Create-Model requests one staff user may make per window (credits!). */
   MESHY_CREATE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
   /** Sliding window for the Create-Model cap (seconds). */

@@ -244,6 +244,130 @@ do not remove it).
   their own rate window. Live kill switches are the `autoModelGenerationEnabled`
   / `manualModelGenerationEnabled` fields on the `client_configs` document, read
   via `getServerFlag` and deliberately NOT in `remoteConfigSchema`.
+- **`Project.source` (`capture` | `upload`) says where a project's photos came
+  from — a field, deliberately NOT a new `ProjectStatus`.** The client branches
+  on `source`, not on status, to decide what a card's primary action opens. A
+  new status would touch the schema enum, the admin list's `?status=` filter and
+  the client's label/colour/action tables for no gain — and it would defeat the
+  whole point of the promotion below, which is that the rest of the system does
+  NOT have to learn what an upload project is. The schema
+  default backfills every pre-existing document as `capture`, so there is **no
+  migration**. It ships on `ProjectListItem` through `toProjectListItem` (the ONE
+  Project DTO mapper) and is hand-synced onto the Flutter `Project` entity —
+  including its `toMap()` round-trip, without which a cached upload project
+  would read back as a capture and offer a capture action.
+- **A committed photo upload is promoted `DRAFT → PROCESSING`, and that single
+  write is what makes an artist's upload a first-class project.** `PROCESSING`
+  is in `LIVE_PROJECT_STATUSES`, so the project appears on the staff **Live
+  projects** list where every other artist and admin can work on it, and it is
+  the status the exportable surfaces gate on — Preview, Export, Models and
+  Generate all switch on with no per-surface upload special-casing. Left in
+  `DRAFT` (the original design) an upload was a private draft nobody but its
+  owner could ever see, which is the bug this fixes.
+  The write lives in `commitPhotoUpload`'s **one funnel**
+  (`finalizeUploadProject`), alongside the `stats.totalPhotos` write and
+  modelled on finalize's `queuedResult`: a replay RE-ASSERTS both rather than
+  skipping, so a crash between the job's `UPLOADED` flip and the status write
+  self-heals on the next commit. A project already `PROCESSING`/`COMPLETED` is
+  left alone — the first is a self-transition, the second would drag a project
+  with a finished model backwards. `PHOTO_UPLOAD` jobs still never reach
+  `QUEUED` and are still never processed; the PROJECT moves, the job does not.
+  Because of it, `Project.objectSize` and `Project.mode` are **conditionally
+  required**: present on a capture project, absent on an upload one. A client
+  sending either on an upload project gets a `400`, not a silent ignore — they
+  are capture concepts (object size drives camera-distance guidance an uploaded
+  set never receives; mode drives a flow that never runs), and a placeholder
+  `MEDIUM`/`GUIDED` would be a lie later reads act on.
+- **On the client, an upload is its own screen and it ENDS at the Projects
+  hub.** The Create form (upload variant) collects a NAME and the photo set and
+  nothing else — no category field, and no object size / capture mode (see
+  above). Its CTA **pushes** `PhotoUploadProgressScreen`, which starts the run
+  itself and shows a row per photo: queued / uploading / uploaded / failed. When
+  it finishes it refreshes `projectsProvider` and goes to `/projects`, so the
+  new project appears in the list like any other — it does **not** continue to
+  the photo grid. Generating a model is a separate decision the artist makes
+  later, from the project's card.
+  On the hub, an upload project's card is **Preview + Models**, plus "Generate
+  3D model" while nothing is built yet — the same row a captured project settles
+  on, with pill, photo count and ⋮ shared. The promotion above makes it
+  exportable, so the existing status-driven gating turns those on by itself, and
+  "like a normal captured project" is the requirement.
+  `Project.cardAction` returns **`none` for an upload project on every status**,
+  resolved without consulting `ProjectStatus.cardAction` at all — not by falling
+  through for the statuses that happen to agree. Every word in that table is a
+  capture word, and the fall-through is what would let `DRAFT` offer "Resume"
+  (opening pre-capture: a ring flow the project has no plan for and can never
+  complete) or `PROCESSING` — which every committed upload lands in — render a
+  "Processing…" spinner that never stops, because no worker ever claims a
+  `PHOTO_UPLOAD` job. `ProjectCardAction` has no upload-specific member.
+  **"View" is deliberately absent even once a model exists**, though it would
+  have worked: it opens the NEWEST finished model, a strict subset of what
+  Models opens, and a third labelled button in the card's `Expanded` row
+  ellipsizes all three down to unreadable stubs on a phone. Two buttons, one way
+  in, and the one that shows the whole history.
+  **Models is shown on an upload card even with nothing in it** — the one
+  gating difference from a capture card, which requires `modelCount > 0`. With
+  no primary action, Models is that card's standing entry point, and its empty
+  state is not a dead end: it names the next step ("open Preview, pick 3–4
+  photos, tap Create Model").
+- **Hand-picking photos for a generation lives in ONE place: Preview.** The
+  staff gallery's app-bar "Create Model" → pick 3–4 → "Create Model" CTA is the
+  single door, for an uploaded set exactly as for a capture — it resolves
+  through `findExportableJob`, which now finds either. `project_photos_screen`
+  (the artist grid at `/projects/:id/photos`) is therefore **no longer linked
+  from anywhere**; it is kept for deep links but must not become the
+  destination of a new affordance — add that to Preview instead. Every photo
+  route is `requireRole('MODEL_ARTIST')`, so every upload-project owner is
+  staff and can always reach Preview; a second picker would only drift.
+  The card's "Generate 3D model" remains the no-decision path (the server picks
+  — see the selection rule below), and Preview is how that choice is overridden.
+  Two constraints hold the upload screen together: the push (not a `go()` replacement) is
+  what keeps the autoDispose `projectPhotosProvider` — which holds the picked
+  set — alive under the progress screen; and the per-photo status is DERIVED
+  from the engine's aggregate `filesUploaded` count, which is a valid cursor
+  ONLY because `ChunkedUploadManager` uploads files strictly sequentially in
+  spec order. That coupling is pinned by a test in
+  `test/upload/chunked_upload_manager_test.dart` — make files concurrent and it
+  fails there rather than the screen quietly naming the wrong photo.
+- **Server-side photo selection runs a DIFFERENT RULE on an upload project, not
+  a relaxed version of the capture one.** `selectPhotosForAutoGeneration` reads
+  blur and yaw out of the capture manifest; an uploaded set has none, so putting
+  one through it declines 100% of real uploads on `droppedNoBlurScore` — a
+  measurement gap reported as a quality verdict. `selectPhotosFromUploadedSet`
+  is the counterpart: it takes the first `AUTO_TARGET_PHOTOS` in KEY ORDER,
+  which is upload order, because a capture is ~48 automatic frames (choosing 4
+  is the whole problem) while an upload is a handful a person already chose. It
+  still DECLINES below `AUTO_MIN_PHOTOS` — a bad generation costs what a good
+  one does. `generateModelOnDemand` picks the branch ONCE (`isUpload`), skips
+  the manifest step rather than recording a false failure, and narrows the
+  listing to the `uploads/` namespace — which is also what keeps a soft-deleted
+  photo, parked under `deleted/`, from being selected straight back out.
+  There is no `AUTO_SELECTION_UNAVAILABLE` refusal any more; `NOT_EXPORTABLE`
+  covers both sources, and its owner copy names no pipeline internal.
+  Hand-picking 3–4 photos (`POST /projects/:id/photos/generate`) is still there
+  — as the way to OVERRIDE that choice, not as the only way in.
+- **The artist upload surface lives on `/projects`, not `/admin`.** An artist
+  uploads into their OWN project, so ownership is proved by
+  `getProject(userId, id)` exactly as every other route in that router does, and
+  missing / not-owned / soft-deleted collapse into one identical `404`.
+  `requireRole('MODEL_ARTIST')` is applied **per-route**, never
+  `router.use(...)` — the owner routes must stay open to a plain `USER`.
+  Uploading costs nothing; **generating is what spends credits**, and that route
+  keeps all three load-bearing guards (the shared `meshy-create:{userId}` rate
+  window, the `Idempotency-Key` replay, and the unique-index race authority).
+  Its source job is resolved SERVER-SIDE (the project's newest `UPLOADED`
+  photo-upload job) and is never taken from the body.
+- **Job resolution is a PRECEDENCE rule, never one widened `$or`.**
+  `findExportableJob` runs the CAPTURE match first and falls back to an
+  `UPLOADED` photo-upload job only when the project has no capture job at all.
+  The tempting one-query version is a real bug: on a project owning both, a
+  photo-upload job created later wins a shared `createdAt: -1` sort and the
+  export silently ships the wrong set. `findExportableJobById` CAN be one query
+  (an id names exactly one document, so precedence is meaningless), and
+  `findModelSourceJobById` is now a pure alias for it — one implementation, so
+  the two rules cannot drift apart again.
+  `tests/photo-upload-guardrail.test.ts` pins all of it, including that a
+  CREATED (unverified) photo set resolves for nobody.
 - **Every generation persists a `generationTrace`** on its `ProjectModel`: the
   six synchronous request steps and the selector's counters. Those steps all
   run INSIDE one sub-second request and arrive complete in the response — there
@@ -275,7 +399,31 @@ do not remove it).
 - **`jobType` is now a real discriminator.** A project owns jobs of more than one
   type, so any query meaning "the capture job" MUST filter
   `jobType: CAPTURE_PROCESSING` (`models/types/job.types.ts`) — see
-  `findExportableJob`, where omitting it silently breaks export/preview/delete.
+  `findExportableJob`, where omitting it silently breaks export/preview/delete
+  (a MESHY_MODEL_GENERATION job is newer and carries no `upload` block). The
+  photo-upload fallback there is a SECOND filtered query, not a loosened one.
+- **`PHOTO_UPLOAD` is a job type that is NEVER PROCESSED.** It holds an artist's
+  uploaded photo set: `CREATED → UPLOADING` (flipped by the *existing*
+  `/jobs/:jobId/uploads/initiate`) `→ UPLOADED`, and it stops there.
+  - **No processor is registered for it, and a no-op one must not be added.**
+    `claimNextJob` filters on `state: 'QUEUED'` alone, jobType-agnostically — a
+    job that never queues is simply never in the claimable set. The missing
+    registration is the design, not an oversight.
+  - It carries an ordinary `upload` block, which is what makes
+    `adminDeleteProject`'s prefix sweep purge its objects from **both** buckets
+    for free.
+  - `upload.manifestKey` is **optional** because of it: an uploaded set has no
+    capture manifest. Every CAPTURE job still gets one at creation; the readers
+    that need one (finalize, the capture processor, the auto-photo selector)
+    treat its absence as `manifest_missing` rather than assuming a placeholder
+    key pointing at no object.
+  - **`POST /jobs/:jobId/uploads/{initiate,part-url,complete}` is UNCHANGED and
+    must stay so.** Its shared guard (`loadUploadableJob`) applies no `jobType`
+    filter, and its capture-ring containment check fires only when the
+    job-relative key starts with `images/` — so `uploads/photo_0001.jpg` passes
+    it as written, with identical resume, retry and progress behaviour. That is
+    the whole reason this feature is small.
+    `tests/photo-upload-transfer.test.ts` is the regression that keeps it true.
 - **`MESHY_API_KEY` is optional in `config/env.ts` and required at WORKER boot**
   (`assertMeshyConfigured()`): only the worker calls Meshy, so the API must not
   fail to boot over a secret it never uses.
@@ -290,7 +438,25 @@ do not remove it).
   {env}/{projectSlug}_{projectId}/{jobId}/model-input/…      ← reserved namespace
   {env}/{projectSlug}_{projectId}/{jobId}/deleted/…          ← soft-delete park
   {env}/{projectSlug}_{projectId}/{jobId}/models/{modelId}/… ← 3D artifacts
+  {env}/{projectSlug}_{projectId}/{jobId}/uploads/photo_{nnnn}.{jpg|png|webp}
+                                                             ← artist photo set
   ```
+
+- **`uploads/` is the artist photo-upload namespace** — a sibling of `deleted/`
+  and `model-input/`, written ONLY under a `PHOTO_UPLOAD` job's own prefix.
+  Because that job owns its prefix outright (a capture job never shares it), it
+  needs **no exclusion anywhere**: `model-input/` needs one only because it sits
+  inside a *capture* job's prefix. Builders/parser:
+  `buildUploadedPhotoKey` / `isUploadedPhotoRelativeKey` / `UPLOADED_PHOTOS_KEY_PREFIX`.
+- **Uploaded photo keys are SERVER-ASSIGNED, never client-named.** The client
+  sends only `{contentType, size}` per file; the server returns the keys. The
+  index is 1-based and zero-padded to 4 in REQUEST ORDER (so the set has a
+  stable gallery order), and the extension derives from the **validated
+  content type** (`image/jpeg → jpg`, `image/png → png`, `image/webp → webp`) —
+  never from a filename, which is how a hostile name would otherwise reach S3.
+  The assigned relative keys are persisted on the job (`payload.photoKeys`) so
+  an `Idempotency-Key` replay returns the identical set rather than re-deriving
+  one from content types it no longer has.
 
 - **`{env}` (`dev|staging|prod`) is config-driven from `NODE_ENV`, never
   hardcoded.** It is the firewall that stops a non-prod deploy from writing —
@@ -365,6 +531,12 @@ do not remove it).
   - Backend: `utils/analytics.ts → trackEvent(event, props)`.
   - Client: `lib/utils/analytics.dart → Analytics.logEvent(name, props)`.
 - Callers MUST pass only non-PII props (hashed identifiers, enum values, counts).
+- The backend registry IS typed and EXHAUSTIVE: `EVENT_SCHEMAS`
+  (`validation/analyticsSchemas.ts`) `satisfies Record<AnalyticsEventName, …>`,
+  so a new event name without a schema is a compile error. Add the name and its
+  schema together. `photo_upload_session_created` /
+  `photo_upload_committed` / `photo_upload_generation_requested` follow that
+  rule; like every other event they carry **no S3 keys and no presigned URLs**.
 - **NOT YET BUILT:** a typed `AnalyticsEvent` registry with per-event Zod schemas,
   a PII guardrail baked into the emit layer, a real destination integration, and
   a tracking-plan artifact. Until then, event names/props are validated by review.
@@ -385,6 +557,29 @@ do not remove it).
   `active_session` box (not secure storage — it is server-enforced, not a
   secret). Staff-only surfaces (the Projects screen's "Live projects" tab)
   gate on `isStaffProvider`; the backend re-checks the role on every request.
+
+### Web upload of artist photo sets (LIVE on web and native)
+- The presigned part PUTs go **direct to S3**, and the avatar bytes-proxy
+  precedent explicitly **does not extend here** — a 48-photo set is
+  capture-sized, not avatar-sized. Do not add a bytes-proxy route for it.
+- `msxr-raw-captures` now **does serve a CORS policy**, applied specifically so
+  those part PUTs survive preflight in a browser. This **reverses** the earlier
+  "no CORS on the raw bucket" decision for `PUT`/`GET` only; everything else
+  about the bucket is unchanged (private, presigned-only, public access
+  blocked). Recorded here and in `docs/aws-storage-and-cdn.md`.
+- The Upload option is therefore offered on **every platform** — the old
+  `kPhotoUploadEnabledOnWeb` gate in `capture_mode_sheet.dart` is gone. The
+  remaining gate is `isStaffProvider` (staff-only, UX; the backend re-checks the
+  role on every request).
+- The applied policy is `AllowedMethods`: `PUT`, `GET`, `HEAD`;
+  `AllowedHeaders`: `content-type`; `ExposeHeaders`: `ETag` (the engine reads it
+  off every part response). **`AllowedOrigins` is currently `*` — tighten it to
+  the app's web origins.** A wildcard origin does not leak objects (they stay
+  presigned-only), but it lets any page that obtains a presigned URL use it from
+  a browser, which is wider than this feature needs.
+- The **avatar** bytes-proxy (`GET /auth/me/avatar/bytes`) still exists and is
+  still the right call for displaying raw-bucket objects: reads there are not
+  presigned-PUT-shaped and go through the API by design.
 
 ### Testing
 - Hermetic: isolated store, deterministic, no real network, full teardown. Never

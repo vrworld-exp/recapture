@@ -154,7 +154,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     Analytics.logEvent('projects_list_viewed', {
       'project_count': projects.length,
       'has_failed_projects':
-          projects.any((p) => p.status.cardAction == ProjectCardAction.retry),
+          projects.any((p) => p.cardAction == ProjectCardAction.retry),
       'device_type': _deviceType,
     });
   }
@@ -196,6 +196,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     });
   }
 
+  /// CAPTURE projects only. An upload project can never reach here —
+  /// [Project.cardAction] gives it no "Resume", because pre-capture would walk
+  /// the artist into a ring flow their project has no plan for and can never
+  /// complete. Picking photos out of an uploaded set happens in Preview →
+  /// Create Model, the same door staff use for a capture.
   void _onResume(Project p) {
     if (!_claim(p)) return;
     _logAction('resume', p);
@@ -392,9 +397,13 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   /// count that server knows nothing about, and 422s there — after the user has
   /// already shot everything.
   Future<void> _onCreateProject() async {
-    final mode = await showCaptureModeSheet(context);
-    if (mode == null || !mounted) return;
-    context.pushNamed(AppRouteNames.createProject, extra: mode);
+    // null means DISMISSED (scrim tap / back / drag) — navigate nowhere. It is
+    // never the default choice.
+    final choice = await showCaptureModeSheet(context);
+    if (choice == null || !mounted) return;
+    // The choice rides through as `extra`; the create screen branches on it and
+    // renders either the capture form or the upload form.
+    context.pushNamed(AppRouteNames.createProject, extra: choice);
   }
 
   /// Staff-only per-project Preview (My-projects surface). Pushed so hardware
@@ -625,12 +634,22 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
                 onPreview:
                     isStaff && _isExportable(project) ? _onPreview : null,
                 // Any owner can open their own generated models — _onModels
-                // routes to ModelViewerScreen for every user. Still requires a
-                // VIEWABLE model: the history has nothing to show otherwise, and
-                // a button that opens an empty screen is worse than no button.
-                // Failed-only projects therefore show no Models button (see
-                // ProjectListItem.modelCount).
-                onModels: project.hasViewableModels ? _onModels : null,
+                // routes to a history screen for every user.
+                //
+                // A CAPTURE project needs a VIEWABLE model first: its history
+                // has nothing to show otherwise, and a button opening an empty
+                // screen is worse than no button (a failed-only project shows
+                // none — see ProjectListItem.modelCount).
+                //
+                // An UPLOAD project shows it ALWAYS, because it is that card's
+                // standing entry point rather than a bonus: the card has no
+                // primary action of its own, and the empty history is not a
+                // dead end — it names the next step ("open Preview, pick 3–4
+                // photos, tap Create Model"), which is exactly where an
+                // uploaded set is turned into a model.
+                onModels: project.hasViewableModels || project.isUploadProject
+                    ? _onModels
+                    : null,
                 // Any owner can generate a model for their own capturable
                 // project. Requires a FINALIZED capture (without one the server
                 // always answers NOT_EXPORTABLE) AND no model yet: once this

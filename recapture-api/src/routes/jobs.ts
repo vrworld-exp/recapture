@@ -93,14 +93,22 @@ router.post(
         });
         return;
 
-      case 'SIZE_MISMATCH':
+      case 'SIZE_MISMATCH': {
+        // A null projectSize means the project has no object size AT ALL — it
+        // is an upload project, which never hosts a capture job. Saying
+        // "expected 'null'" would send the client hunting for a size to match.
+        const detail =
+          result.projectSize === null
+            ? 'this project does not use guided capture'
+            : `expected '${result.projectSize}'`;
         res.status(400).json({
           status: 'error',
           code: 'INVALID_REQUEST',
-          message: `objectSize does not match the project (expected '${result.projectSize}').`,
-          fields: { objectSize: `expected '${result.projectSize}'` },
+          message: `objectSize does not match the project (${detail}).`,
+          fields: { objectSize: detail },
         });
         return;
+      }
 
       case 'COUNT_INCONSISTENT':
         res.status(400).json({

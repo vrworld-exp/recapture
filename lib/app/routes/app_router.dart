@@ -20,6 +20,8 @@ import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
+import '../../presentation/screens/projects/capture_mode_sheet.dart';
+import '../../presentation/screens/projects/project_photos_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
@@ -61,6 +63,11 @@ abstract final class AppRoutes {
   static const otpVerify = '/auth/otp';
   static const projects = '/projects';
   static const createProject = '/projects/new';
+
+  /// The artist photo grid for one UPLOAD project. Carries the project id in
+  /// the path (never in `extra`), so a cold deep-link behaves exactly like an
+  /// in-app push and there is nothing to be missing.
+  static const projectPhotos = '/projects/:id/photos';
 
   /// The signed-in user's own account screen (avatar, name, masked contact,
   /// Sign out). Protected like every non-auth route.
@@ -105,6 +112,7 @@ abstract final class AppRouteNames {
   static const otpVerify = 'otpVerify';
   static const projects = 'projects';
   static const createProject = 'createProject';
+  static const projectPhotos = 'projectPhotos';
   static const profile = 'profile';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
@@ -197,7 +205,28 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.createProject,
         name: AppRouteNames.createProject,
-        builder: (_, __) => const FlowBackScope(child: CreateProjectScreen()),
+        // `extra` carries the sheet's ProjectCreationChoice. Absent (a cold
+        // deep-link) falls back to the screen's own capture default, so this
+        // route behaves exactly as it always has when nothing is passed.
+        builder: (_, state) => FlowBackScope(
+          child: CreateProjectScreen(
+            choice: state.extra is ProjectCreationChoice
+                ? state.extra! as ProjectCreationChoice
+                : const CaptureChoice(CaptureMode.full),
+          ),
+        ),
+      ),
+      // The artist photo grid: the uploaded set, hand-pick 3-4, Generate.
+      // Pushed like the Preview gallery, with FlowBackScope so a go()-replaced
+      // entry cannot exit the app either.
+      GoRoute(
+        path: AppRoutes.projectPhotos,
+        name: AppRouteNames.projectPhotos,
+        builder: (context, state) => FlowBackScope(
+          child: ProjectPhotosScreen(
+            projectId: state.pathParameters['id'] ?? '',
+          ),
+        ),
       ),
       // The account screen — a STANDALONE top-level destination, deliberately
       // not nested under /projects: the Projects app bar go()es here, so the
