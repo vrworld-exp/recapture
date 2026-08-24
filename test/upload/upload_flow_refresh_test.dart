@@ -16,6 +16,7 @@ import 'package:recapture/data/local/storage_providers.dart';
 import 'package:recapture/data/repositories/projects_repository.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/create_project_options.dart';
+import 'package:recapture/domain/entities/project_source.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
 import 'package:recapture/domain/upload/upload_failure.dart';
@@ -33,8 +34,10 @@ class _CountingProjectsRepository with FakeProjectModelDefaults implements Proje
   @override
   Future<Project> create({
     required String name,
-    required ObjectSize size,
-    required CaptureMode mode,
+    ObjectSize? size,
+    CaptureMode? mode,
+    String? category,
+    ProjectSource source = ProjectSource.capture,
   }) async =>
       Project(
         id: 'p1',

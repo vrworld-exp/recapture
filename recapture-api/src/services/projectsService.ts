@@ -5,6 +5,7 @@ import {
   type IProject,
   type ObjectSize,
   type CaptureMode,
+  type ProjectSource,
   type ProjectStatus,
 } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
@@ -40,6 +41,17 @@ export interface ProjectListItem {
    * deliberately hides.
    */
   modelCount: number;
+  /**
+   * Where this project's photos come from — `capture` (the guided flow) or
+   * `upload` (an artist's hand-picked set).
+   *
+   * The client branches on THIS, not on `status`, to decide what a card's
+   * primary action does: an upload project opens its photo grid, never
+   * pre-capture. Hand-synced with the Flutter `Project` entity, because the
+   * DTO is identical across GET /projects, POST /projects and that entity by
+   * contract (AGENTS.md).
+   */
+  source: ProjectSource;
   updatedAt: string;
   createdAt: string;
 }
@@ -99,12 +111,12 @@ export async function listProjects(
 
 // Client sends lowercase apiValues; the model stores UPPERCASE enums. Explicit
 // maps keep the mapping total and type-checked (no string casts).
-const SIZE_TO_MODEL: Record<CreateProjectInput['size'], ObjectSize> = {
+const SIZE_TO_MODEL: Record<NonNullable<CreateProjectInput['size']>, ObjectSize> = {
   small: 'SMALL',
   medium: 'MEDIUM',
   large: 'LARGE',
 };
-const MODE_TO_MODEL: Record<CreateProjectInput['mode'], CaptureMode> = {
+const MODE_TO_MODEL: Record<NonNullable<CreateProjectInput['mode']>, CaptureMode> = {
   guided: 'GUIDED',
   manual: 'MANUAL',
 };
@@ -119,11 +131,16 @@ export async function createProject(
   userId: string,
   input: CreateProjectInput
 ): Promise<ProjectListItem> {
+  // `size`/`mode` are conditionally required by createProjectSchema: present on
+  // a capture project, ABSENT on an upload one. They are spread in only when
+  // supplied — writing a placeholder MEDIUM/GUIDED on an upload project would
+  // be a lie that camera-distance guidance and the capture flow later act on.
   const project = await Project.create({
     userId: new Types.ObjectId(userId),
     name: input.name,
-    objectSize: SIZE_TO_MODEL[input.size],
-    mode: MODE_TO_MODEL[input.mode],
+    source: input.source ?? 'capture',
+    ...(input.size ? { objectSize: SIZE_TO_MODEL[input.size] } : {}),
+    ...(input.mode ? { mode: MODE_TO_MODEL[input.mode] } : {}),
     ...(input.category ? { category: input.category } : {}),
     // status defaults to 'DRAFT'; stats defaults via the schema.
   });
@@ -348,6 +365,9 @@ export function toProjectListItem(p: IProject, modelCount = 0): ProjectListItem 
       lastCaptureAt: p.stats?.lastCaptureAt ? p.stats.lastCaptureAt.toISOString() : null,
     },
     modelCount,
+    // Schema default backfills every document written before this field
+    // existed; the ?? is a second belt for lean/legacy read paths.
+    source: p.source ?? 'capture',
     updatedAt: p.updatedAt.toISOString(),
     createdAt: p.createdAt.toISOString(),
   };

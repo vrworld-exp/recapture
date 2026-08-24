@@ -76,7 +76,17 @@ export type OnDemandBlockReason =
   /** The project has no finalized capture to select photos from. */
   | 'NOT_EXPORTABLE'
   /** No such project (or soft-deleted). */
-  | 'PROJECT_NOT_FOUND';
+  | 'PROJECT_NOT_FOUND'
+  /**
+   * The project's photos were UPLOADED, not captured, so there is no capture
+   * manifest — and the selector reads blur and yaw out of exactly that.
+   * Server-side photo selection is physically impossible here, so this path
+   * refuses DELIBERATELY rather than falling through to NOT_EXPORTABLE (which
+   * would say "finish uploading", which the artist already did) or silently
+   * declining. The artist reaches generation by hand-picking 3–4 photos, the
+   * same door staff already use.
+   */
+  | 'AUTO_SELECTION_UNAVAILABLE';
 
 export type OnDemandResult =
   | {
@@ -176,12 +186,20 @@ export async function generateModelOnDemand(
     _id: new Types.ObjectId(projectId),
     deletedAt: null,
   })
-    .select('_id')
+    .select('_id source')
     .lean()
     .exec();
   if (!project) {
     recorder.record('RESOLVE_JOB', 'FAILED', 'project not found');
     return { outcome: 'BLOCKED', reason: 'PROJECT_NOT_FOUND', steps: recorder.steps };
+  }
+
+  // Checked BEFORE any spend path, any S3 read and any ProjectModel insert: an
+  // uploaded photo set has no capture manifest, so the selector has nothing to
+  // sort by. See AUTO_SELECTION_UNAVAILABLE.
+  if (project.source === 'upload') {
+    recorder.record('RESOLVE_JOB', 'FAILED', 'project photos were uploaded (no capture manifest)');
+    return { outcome: 'BLOCKED', reason: 'AUTO_SELECTION_UNAVAILABLE', steps: recorder.steps };
   }
 
   const job = await findExportableJob(projectId);
@@ -220,7 +238,12 @@ export async function generateModelOnDemand(
   // failure throws (getObjectText returns `absent` only on a true 404).
   let manifest: unknown;
   try {
-    const object = await getObjectText(upload.rawBucket, upload.manifestKey);
+    // No manifestKey at all means no manifest to select from — the same
+    // outcome as a key whose object is gone, and the selector already has a
+    // typed refusal for it.
+    const object = upload.manifestKey
+      ? await getObjectText(upload.rawBucket, upload.manifestKey)
+      : ({ outcome: 'absent' } as const);
     if (object.outcome === 'absent') {
       manifest = undefined;
       recorder.record('LOAD_MANIFEST', 'FAILED', 'capture manifest is not in S3');

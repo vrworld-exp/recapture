@@ -605,6 +605,20 @@ router.post(
         });
         return;
       }
+      if (result.reason === 'AUTO_SELECTION_UNAVAILABLE') {
+        // A deliberate refusal, not a confusing failure: the selector reads
+        // blur/yaw out of a capture manifest, and an uploaded photo set has
+        // none. Hand-picking (POST /admin/projects/:id/model) still works.
+        res.status(409).json({
+          status: 'error',
+          code: 'AUTO_SELECTION_UNAVAILABLE',
+          message:
+            "This project's photos were uploaded, so there is no capture manifest to " +
+            'select from. Pick 3–4 photos by hand instead.',
+          steps: result.steps,
+        });
+        return;
+      }
       res.status(409).json({
         status: 'error',
         code: result.reason,

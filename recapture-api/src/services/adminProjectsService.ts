@@ -10,7 +10,13 @@
 // the two lists can never drift in shape.
 import { Types, type FilterQuery } from 'mongoose';
 import { Project, type IProject, type ProjectStatus } from '@/models/Project';
-import { Job, CAPTURE_PROCESSING_JOB_TYPE, type IJob, type JobState } from '@/models/Job';
+import {
+  Job,
+  CAPTURE_PROCESSING_JOB_TYPE,
+  PHOTO_UPLOAD_JOB_TYPE,
+  type IJob,
+  type JobState,
+} from '@/models/Job';
 import {
   countSucceededModelsByProject,
   countSucceededModelsFor,
@@ -59,6 +65,17 @@ export const UPLOAD_FINALIZED_JOB_STATES: readonly JobState[] = [
   'FAILED',
   'CANCELED',
 ];
+
+/**
+ * The states a PHOTO_UPLOAD job's photo set is usable from: exactly UPLOADED.
+ *
+ * Deliberately its own list rather than a reuse of
+ * {@link UPLOAD_FINALIZED_JOB_STATES}: an upload job never enters QUEUED or
+ * anything after it (it is never processed), and CREATED/UPLOADING mean the
+ * transfer has not been verified yet — generating from one of those would hand
+ * Meshy a half-uploaded set.
+ */
+export const PHOTO_UPLOAD_SOURCE_JOB_STATES: readonly JobState[] = ['UPLOADED'];
 
 export interface AdminListProjectsResult {
   items: AdminProjectListItem[];
@@ -501,6 +518,42 @@ export async function findExportableJobById(
     projectId: new Types.ObjectId(projectId),
     jobType: { $in: [CAPTURE_PROCESSING_JOB_TYPE, null] },
     state: { $in: [...UPLOAD_FINALIZED_JOB_STATES] },
+  }).exec();
+}
+
+/**
+ * ONE named job that a model may be generated FROM, by id: either an
+ * exportable CAPTURE job (exactly {@link findExportableJobById}'s rule) or an
+ * UPLOADED photo-upload job.
+ *
+ * An explicit `$or` of two allowed (jobType, states) PAIRS — never a removed
+ * filter. AGENTS.md calls the jobType filter load-bearing and it stays that
+ * way: {@link findExportableJob} and {@link findExportableJobById} are
+ * UNTOUCHED, so export, the preview gallery and the photo soft-delete keep
+ * ignoring PHOTO_UPLOAD jobs entirely. Only the explicit-jobId branch of
+ * createMeshyModelRequest resolves through here.
+ *
+ * [projectId] is part of the query, not an assertion: a job id belonging to
+ * another project resolves to null, never to a cross-project generation.
+ */
+export async function findModelSourceJobById(
+  projectId: string,
+  jobId: Types.ObjectId | string
+): Promise<IJob | null> {
+  if (!Types.ObjectId.isValid(jobId)) return null;
+  return Job.findOne({
+    _id: new Types.ObjectId(jobId),
+    projectId: new Types.ObjectId(projectId),
+    $or: [
+      {
+        jobType: { $in: [CAPTURE_PROCESSING_JOB_TYPE, null] },
+        state: { $in: [...UPLOAD_FINALIZED_JOB_STATES] },
+      },
+      {
+        jobType: PHOTO_UPLOAD_JOB_TYPE,
+        state: { $in: [...PHOTO_UPLOAD_SOURCE_JOB_STATES] },
+      },
+    ],
   }).exec();
 }
 

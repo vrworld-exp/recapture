@@ -61,11 +61,14 @@ export async function runCaptureProcessing(
 ): Promise<Record<string, unknown>> {
   const upload = job.upload;
   const claimedBy = job.claimedBy;
-  if (!upload || !claimedBy) {
-    // Both are guaranteed by the processor's validation and the claim itself;
-    // reaching here is a programming error, not a job problem.
-    throw new Error('runCaptureProcessing requires a claimed job with an upload block');
+  // `manifestKey` is optional on UploadInfo only because a PHOTO_UPLOAD job has
+  // none — and such a job never queues, so it never reaches this pipeline.
+  if (!upload || !claimedBy || !upload.manifestKey) {
+    // All three are guaranteed by the processor's validation and the claim
+    // itself; reaching here is a programming error, not a job problem.
+    throw new Error('runCaptureProcessing requires a claimed job with a manifest-bearing upload block');
   }
+  const manifestKey = upload.manifestKey;
 
   const engine = getReconstructionEngine();
   const entryStage = resumeStageFor(job.stageProgress);
@@ -93,7 +96,7 @@ export async function runCaptureProcessing(
       projectId: job.projectId?.toString(),
       rawBucket: upload.rawBucket,
       rawPrefix: upload.rawPrefix,
-      manifestKey: upload.manifestKey,
+      manifestKey,
       manifest: bundle.manifest,
       filesVerified: bundle.filesVerified,
       priorOutputs,

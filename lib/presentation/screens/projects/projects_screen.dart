@@ -199,6 +199,17 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   void _onResume(Project p) {
     if (!_claim(p)) return;
     _logAction('resume', p);
+    if (p.isUploadProject) {
+      // An upload project has no rings and no capture plan, so pre-capture
+      // would walk the artist into a flow this project can never complete. Its
+      // primary action is the photo grid — where the set is reviewed and 3-4
+      // are picked for a generation.
+      context.pushNamed(
+        AppRouteNames.projectPhotos,
+        pathParameters: {'id': p.id},
+      );
+      return;
+    }
     // TODO(capture): pass p.id into the pre-capture/capture flow.
     context.goNamed(AppRouteNames.preCapture, extra: p.id);
   }
@@ -392,9 +403,13 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   /// count that server knows nothing about, and 422s there — after the user has
   /// already shot everything.
   Future<void> _onCreateProject() async {
-    final mode = await showCaptureModeSheet(context);
-    if (mode == null || !mounted) return;
-    context.pushNamed(AppRouteNames.createProject, extra: mode);
+    // null means DISMISSED (scrim tap / back / drag) — navigate nowhere. It is
+    // never the default choice.
+    final choice = await showCaptureModeSheet(context);
+    if (choice == null || !mounted) return;
+    // The choice rides through as `extra`; the create screen branches on it and
+    // renders either the capture form or the upload form.
+    context.pushNamed(AppRouteNames.createProject, extra: choice);
   }
 
   /// Staff-only per-project Preview (My-projects surface). Pushed so hardware

@@ -11,6 +11,7 @@ import 'package:recapture/data/local/storage_providers.dart';
 import 'package:recapture/data/repositories/projects_repository.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/create_project_options.dart';
+import 'package:recapture/domain/entities/project_source.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
 import 'repo_fake_defaults.dart';
@@ -55,8 +56,10 @@ class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRe
   @override
   Future<Project> create({
     required String name,
-    required ObjectSize size,
-    required CaptureMode mode,
+    ObjectSize? size,
+    CaptureMode? mode,
+    String? category,
+    ProjectSource source = ProjectSource.capture,
   }) async {
     createCalls++;
     if (failCreate) throw Exception('create failed');

@@ -1,5 +1,6 @@
 // src/routes/projects.ts
 import { Router } from 'express';
+import type { Types } from 'mongoose';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
 import {
@@ -19,11 +20,27 @@ import {
   getProject,
 } from '@/services/projectsService';
 import {
+  photoSessionSchema,
+  photoCommitSchema,
+  photoDeleteSchema,
+  photoGenerateSchema,
+} from '@/validation/projectPhotoSchemas';
+import {
+  createPhotoUploadSession,
+  commitPhotoUpload,
+  listProjectPhotos,
+  softDeleteProjectPhotos,
+  findGenerationSourceJob,
+} from '@/services/projectPhotosService';
+import { requireRole } from '@/middleware/requireRole';
+import {
+  createMeshyModelRequest,
   findProjectModelById,
   latestOwnerModelFor,
   listOwnerProjectModels,
   pendingOwnerGenerationFor,
   requestModelOptimization,
+  MAX_SELECTED_PHOTOS,
   MIN_SELECTED_PHOTOS,
   NOT_OPTIMIZABLE_CODES,
   NOT_OPTIMIZABLE_MESSAGES,
@@ -31,6 +48,7 @@ import {
 import {
   generateModelOnDemand,
   GenerationInfrastructureError,
+  type OnDemandBlockReason,
 } from '@/services/onDemandModelGenerationService';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
@@ -207,8 +225,11 @@ router.post(
     track(AnalyticsEvent.PROJECT_CREATED, {
       user_id_hash: hashIdentifier(userId),
       project_id: project.id,
-      object_size: parsed.data.size,
-      mode: parsed.data.mode,
+      // Null on an upload project: createProjectSchema refuses a size/mode on
+      // one, so there is nothing to report rather than a value to invent.
+      object_size: parsed.data.size ?? null,
+      mode: parsed.data.mode ?? null,
+      source: project.source,
       category: parsed.data.category ?? null,
     });
 
@@ -357,17 +378,27 @@ router.post(
   })
 );
 
+/** The blocked reasons this route maps (PROJECT_NOT_FOUND is handled above as
+ * its own 404, so it is deliberately absent from both tables). */
+type MappedOwnerBlockReason = Exclude<OnDemandBlockReason, 'PROJECT_NOT_FOUND'>;
+
 /** Owner-safe error codes for a blocked generation — never the internal reason. */
-const OWNER_BLOCK_CODES: Record<'DISABLED' | 'USER_CAP_REACHED' | 'NOT_EXPORTABLE', string> = {
+const OWNER_BLOCK_CODES: Record<MappedOwnerBlockReason, string> = {
   DISABLED: 'GENERATION_UNAVAILABLE',
   USER_CAP_REACHED: 'DAILY_LIMIT_REACHED',
   NOT_EXPORTABLE: 'NOT_READY',
+  AUTO_SELECTION_UNAVAILABLE: 'AUTO_SELECTION_UNAVAILABLE',
 };
 
-const OWNER_BLOCK_MESSAGES: Record<'DISABLED' | 'USER_CAP_REACHED' | 'NOT_EXPORTABLE', string> = {
+const OWNER_BLOCK_MESSAGES: Record<MappedOwnerBlockReason, string> = {
   DISABLED: '3D model creation is not available right now.',
   USER_CAP_REACHED: "You've reached today's limit for creating 3D models. Try again tomorrow.",
   NOT_EXPORTABLE: 'Finish uploading this capture before creating a 3D model.',
+  // Names no pipeline internal — not the selector, not the manifest, not a key
+  // layout, and not Meshy. It says what happened and what to do instead.
+  AUTO_SELECTION_UNAVAILABLE:
+    "This project's photos were uploaded, so photos must be chosen by hand. " +
+    'Select 3–4 photos and generate.',
 };
 
 /**
@@ -644,6 +675,423 @@ router.delete(
       status: 'success',
       id: result.id,
       deletedAt: result.deletedAt,
+    });
+  })
+);
+
+// ── Artist photo-upload projects ─────────────────────────────────────────────
+//
+// An artist uploads a hand-picked photo set instead of running a guided
+// capture. These live on /projects (not /admin) because the artist uploads into
+// their OWN project: ownership is proved by `getProject(userId, id)` inside the
+// service exactly as every other route in this router does, and missing /
+// not-owned / soft-deleted collapse into ONE identical 404.
+//
+// `requireRole('MODEL_ARTIST')` is applied PER-ROUTE, never `router.use(...)` —
+// the owner routes above must stay open to a plain USER. Privilege is inclusive
+// upward, so an ADMIN passes. The client's staff gate is UX only; this is the
+// security boundary.
+//
+// The BYTES do not move through here. `POST /jobs/:jobId/uploads/*` is
+// unchanged and carries the photo set over the identical presigned-multipart
+// transport, with identical resume, retry and progress behaviour.
+
+/**
+ * POST /projects/:id/photos/session — open one upload session.
+ *
+ * Costs nothing: it mints a PHOTO_UPLOAD job and assigns the object keys. The
+ * client sends only `{ contentType, size }` per file; every KEY is
+ * server-assigned, so a hostile filename never reaches S3.
+ */
+router.post(
+  '/:id/photos/session',
+  requireRole('MODEL_ARTIST'),
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = photoSessionSchema.safeParse(req.body);
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      const field = issue?.path.join('.') || 'body';
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { [field]: issue?.message ?? 'invalid value' },
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const idempotencyKey = req.get('Idempotency-Key');
+    const result = await createPhotoUploadSession({
+      userId,
+      projectId: params.data.id,
+      files: body.data.files,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      consumeRate: () =>
+        consumeRateWindow(
+          `photo-upload-session:${userId}`,
+          env.PROJECT_PHOTO_UPLOAD_MAX_PER_WINDOW,
+          env.PROJECT_PHOTO_UPLOAD_WINDOW_SECONDS
+        ),
+    });
+
+    switch (result.outcome) {
+      case 'PROJECT_NOT_FOUND':
+        res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+        return;
+      case 'NOT_AN_UPLOAD_PROJECT':
+        res.status(409).json({
+          status: 'error',
+          code: 'NOT_AN_UPLOAD_PROJECT',
+          message:
+            'This project was created for guided capture, so photos cannot be uploaded to it.',
+        });
+        return;
+      case 'RATE_LIMITED':
+        res.status(429).json({
+          status: 'error',
+          code: 'RATE_LIMITED',
+          message: 'Too many upload sessions. Please try again later.',
+          retryAfter: result.retryAfter,
+        });
+        return;
+    }
+
+    track(AnalyticsEvent.PHOTO_UPLOAD_SESSION_CREATED, {
+      user_id_hash: hashIdentifier(userId),
+      project_id: result.projectId,
+      file_count: result.files.length,
+    });
+
+    // 201 for a fresh session, 200 for an Idempotency-Key replay — the same
+    // distinction POST /jobs draws.
+    res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({
+      status: 'success',
+      jobId: result.jobId,
+      uploadPlan: result.uploadPlan,
+      files: result.files,
+    });
+  })
+);
+
+/**
+ * POST /projects/:id/photos/commit — verify what landed and close the session.
+ *
+ * Idempotent. Enforces PROJECT_PHOTO_MAX_BYTES from each object's real size
+ * (presigning cannot cap a body) and DELETES an over-cap object. Never queues
+ * the job — a PHOTO_UPLOAD job is not processed.
+ */
+router.post(
+  '/:id/photos/commit',
+  requireRole('MODEL_ARTIST'),
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = photoCommitSchema.safeParse(req.body);
+    if (!body.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: body.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const result = await commitPhotoUpload({
+      userId,
+      projectId: params.data.id,
+      jobId: body.data.jobId,
+    });
+
+    switch (result.outcome) {
+      // A job that isn't this project's is an identical 404 to a project that
+      // isn't the caller's — no existence leak either way.
+      case 'PROJECT_NOT_FOUND':
+      case 'JOB_NOT_FOUND':
+        res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+        return;
+      case 'PHOTO_TOO_LARGE':
+        res.status(413).json({
+          status: 'error',
+          code: 'PHOTO_TOO_LARGE',
+          message:
+            `${result.deleted} photo(s) were larger than the limit and were removed. ` +
+            'Please re-upload smaller versions.',
+        });
+        return;
+      case 'TOO_FEW_PHOTOS':
+        res.status(400).json({
+          status: 'error',
+          code: 'TOO_FEW_PHOTOS',
+          message: `Only ${result.found} photo(s) arrived — at least ${result.minimum} are needed.`,
+        });
+        return;
+    }
+
+    track(AnalyticsEvent.PHOTO_UPLOAD_COMMITTED, {
+      user_id_hash: hashIdentifier(userId),
+      project_id: result.projectId,
+      job_id: result.jobId,
+      photo_count: result.photoCount,
+      total_bytes: result.totalBytes,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      jobId: result.jobId,
+      photoCount: result.photoCount,
+      alreadyCommitted: result.alreadyCommitted,
+    });
+  })
+);
+
+/**
+ * GET /projects/:id/photos — the uploaded set, presigned for the grid.
+ *
+ * A presigned URL is a BEARER CREDENTIAL. It appears in this response body and
+ * NOWHERE else — never in a log, never in analytics (AGENTS.md).
+ */
+router.get(
+  '/:id/photos',
+  requireRole('MODEL_ARTIST'),
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const result = await listProjectPhotos({
+      userId: req.user!.userId,
+      projectId: params.data.id,
+    });
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NO_PHOTO_SET') {
+      // Not an error state: a project whose upload was never started simply has
+      // no photos yet, and the grid renders its empty state from this.
+      res.status(200).json({ status: 'success', jobId: null, items: [], urlsExpireAt: null });
+      return;
+    }
+
+    res.status(200).json({
+      status: 'success',
+      jobId: result.jobId,
+      items: result.items,
+      urlsExpireAt: result.urlsExpireAt,
+    });
+  })
+);
+
+/**
+ * DELETE /projects/:id/photos — soft-delete photos out of the set.
+ *
+ * Moves each into the job's `deleted/` park (the same namespace the admin photo
+ * delete uses) — never a hard delete. FAIL-CLOSED: one escaping key refuses the
+ * whole request and moves nothing.
+ */
+router.delete(
+  '/:id/photos',
+  requireRole('MODEL_ARTIST'),
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = photoDeleteSchema.safeParse(req.body);
+    if (!body.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: body.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const result = await softDeleteProjectPhotos({
+      userId: req.user!.userId,
+      projectId: params.data.id,
+      keys: body.data.keys,
+    });
+
+    switch (result.outcome) {
+      case 'PROJECT_NOT_FOUND':
+      case 'NO_PHOTO_SET':
+        res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+        return;
+      case 'INVALID_KEY':
+        // The offending key is never echoed — it is caller-controlled, and
+        // reflecting it would let an attacker probe the message.
+        res.status(400).json({
+          status: 'error',
+          code: 'INVALID_KEY',
+          message: "Each key must name a photo in this project's uploaded set.",
+        });
+        return;
+    }
+
+    res.status(200).json({
+      status: 'success',
+      jobId: result.jobId,
+      deleted: result.deleted,
+      missing: result.missing,
+    });
+  })
+);
+
+/**
+ * POST /projects/:id/photos/generate — the artist's hand-picked generation.
+ *
+ * THIS is the step that spends Meshy credits, so it keeps every guard the staff
+ * surface has: the shared `meshy-create:{userId}` rate window, the
+ * `Idempotency-Key` replay guard, and the unique-index race authority inside
+ * the service. The source job is resolved SERVER-SIDE (the project's newest
+ * UPLOADED photo-upload job) and is never taken from the body.
+ *
+ * The result union maps to exactly the status codes the staff route already
+ * maps — read from it, not invented here.
+ */
+router.post(
+  '/:id/photos/generate',
+  requireRole('MODEL_ARTIST'),
+  asyncHandler(async (req, res) => {
+    const params = projectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+    const body = photoGenerateSchema.safeParse(req.body);
+    if (!body.success) {
+      const issue = body.error.issues[0];
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: issue?.message ?? 'Invalid request',
+        fields: { keys: `must be ${MIN_SELECTED_PHOTOS}-${MAX_SELECTED_PHOTOS} distinct keys` },
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+
+    // Ownership first, so a foreign project is a 404 before any rate window is
+    // consumed on the caller's behalf.
+    const project = await getProject(userId, params.data.id);
+    if (!project) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+
+    const sourceJob = await findGenerationSourceJob(params.data.id);
+    if (!sourceJob) {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'Finish uploading this project’s photos before creating a 3D model.',
+      });
+      return;
+    }
+
+    // The SAME window the staff Create-Model route consumes — one ceiling on
+    // "generations this user can start", however they start them.
+    const rate = await consumeRateWindow(
+      `meshy-create:${userId}`,
+      env.MESHY_CREATE_MAX_PER_WINDOW,
+      env.MESHY_CREATE_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many model generation requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const idempotencyKey = req.get('Idempotency-Key');
+    const result = await createMeshyModelRequest({
+      projectId: params.data.id,
+      keys: body.data.keys,
+      actor: { userId, role: req.user!.role ?? 'MODEL_ARTIST' },
+      jobId: sourceJob._id as Types.ObjectId,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+
+    switch (result.outcome) {
+      case 'PROJECT_NOT_FOUND':
+        res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+        return;
+      case 'NOT_EXPORTABLE':
+        res.status(409).json({
+          status: 'error',
+          code: 'NOT_EXPORTABLE',
+          message: 'This project has no finished photo upload to generate a model from.',
+        });
+        return;
+      case 'INVALID_COUNT':
+        res.status(400).json({
+          status: 'error',
+          code: 'INVALID_REQUEST',
+          message: `Select between ${MIN_SELECTED_PHOTOS} and ${MAX_SELECTED_PHOTOS} distinct photos.`,
+          fields: { keys: `must be ${MIN_SELECTED_PHOTOS}-${MAX_SELECTED_PHOTOS} distinct keys` },
+        });
+        return;
+      case 'INVALID_KEY':
+        res.status(400).json({
+          status: 'error',
+          code: 'INVALID_REQUEST',
+          message: "Each key must live under the job's file set.",
+          fields: { keys: "must be a photo key from this project's uploaded set" },
+        });
+        return;
+    }
+
+    track(AnalyticsEvent.PHOTO_UPLOAD_GENERATION_REQUESTED, {
+      user_id_hash: hashIdentifier(userId),
+      project_id: params.data.id,
+      job_id: sourceJob.id as string,
+      selected_count: result.model.selectedKeys.length,
+    });
+
+    // A replay is not a new creation — 200 distinguishes it from the 201 that
+    // actually enqueued a generation, exactly as the staff route does.
+    res.status(result.outcome === 'REPLAYED' ? 200 : 201).json({
+      status: 'success',
+      modelId: result.model.id as string,
     });
   })
 );
