@@ -9,9 +9,9 @@ async function ping(): Promise<HealthResponse> {
         // console.log(backendUrl)
 
 
-        if (!backendUrl.startsWith('http://')) {
-            console.log('Backend health check URL is not http://, skipping ping:', backendUrl);
-            return { ok: false, message: 'Backend health check URL is not http://, skipping ping' } as HealthResponse;
+        if (!backendUrl.startsWith('https://')) {
+            console.log('Backend health check URL is not https://, skipping ping:', backendUrl);
+            return { ok: false, message: 'Backend health check URL is not https://, skipping ping' } as HealthResponse;
         }
 
         const res: AxiosResponse<HealthResponse> = await axios.get(
@@ -36,7 +36,8 @@ async function ping(): Promise<HealthResponse> {
 export async function axiosBackendMakeAlive(): Promise<void> {
     try {
 
-        const min = 1000 * 60 * 10;  // 10 mins
+        // const min = 1000 * 60 * 10;  // 10 mins
+        const min = 1000 * 60 * 2;  // 2 mins
         // const health = await ping();
         await setInterval(ping, min); // ping every 10 seconds
         // console.log('✅ Backend health check passed');
