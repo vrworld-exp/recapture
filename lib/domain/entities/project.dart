@@ -53,28 +53,25 @@ class Project {
 
   /// What the card's PRIMARY action should be — status AND source together.
   ///
-  /// An upload project resolves WITHOUT consulting the status table at all,
-  /// because every word in it is a capture word and none of them are true here:
-  /// the photos are already on S3, so there is no session to "Resume", nothing
-  /// is "Processing…" (no worker ever claims a photo-upload job, so that
-  /// spinner would never stop), and there is no failed transfer to "Retry".
-  /// A finished model is the only real destination, so that is the only action
-  /// it can ever offer — and until one exists the card carries no primary
-  /// action at all, letting Preview / Models / Generate 3D model be the whole
-  /// row, exactly as they are on a capture project.
+  /// An upload project has NO primary action, on any status. Preview and Models
+  /// are the whole row — the same two buttons a captured project settles on
+  /// once its model is built.
   ///
-  /// Resolving the two sources separately (rather than falling through for
-  /// "the statuses that happen to agree") is deliberate: the fall-through is
-  /// what would let a DRAFT upload send an artist into pre-capture — a ring
-  /// flow this project has no plan for and can never complete.
-  ProjectCardAction get cardAction {
-    if (isUploadProject) {
-      return hasViewableModels || status == ProjectStatus.completed
-          ? ProjectCardAction.view
-          : ProjectCardAction.none;
-    }
-    return status.cardAction;
-  }
+  /// It resolves WITHOUT consulting the status table at all, because every word
+  /// in that table is a capture word and none of them are true here: the photos
+  /// are already on S3, so there is no session to "Resume", nothing is
+  /// "Processing…" (no worker ever claims a photo-upload job, so that spinner
+  /// would never stop), and there is no failed transfer to "Retry". Falling
+  /// through for "the statuses that happen to agree" is what would let a DRAFT
+  /// upload send an artist into pre-capture — a ring flow this project has no
+  /// plan for and can never complete.
+  ///
+  /// "View" is left out too, though it would have worked: it opens the newest
+  /// finished model, which is a strict subset of what Models opens, and a third
+  /// labelled button on a phone-width row ellipsizes all three down to nothing.
+  /// One way in beats two, and Models is the one that shows the whole history.
+  ProjectCardAction get cardAction =>
+      isUploadProject ? ProjectCardAction.none : status.cardAction;
 
   /// True for a project created offline that is still waiting in the offline
   /// outbox to be flushed to the server. Such a row carries a temporary local

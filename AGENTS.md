@@ -287,21 +287,24 @@ do not remove it).
   new project appears in the list like any other — it does **not** continue to
   the photo grid. Generating a model is a separate decision the artist makes
   later, from the project's card.
-  On the hub, an upload project's card carries **no upload-only button** — it is
-  the card a capture project gets: pill, photo count, Preview, Models, "Generate
-  3D model", ⋮. The promotion above makes it exportable, so the existing
-  status-driven gating turns those on by itself, and "like a normal captured
-  project" is the requirement.
-  `Project.cardAction` resolves an upload project **without consulting
-  `ProjectStatus.cardAction` at all** — not by falling through for the statuses
-  that happen to agree. Every word in that table is a capture word, and the
-  fall-through is what would let `DRAFT` offer "Resume" (opening pre-capture: a
-  ring flow the project has no plan for and can never complete) or `PROCESSING`
-  — which every committed upload lands in — render a "Processing…" spinner that
-  never stops, because no worker ever claims a `PHOTO_UPLOAD` job. A finished
-  model is the only real destination, so `view` (a model exists, or `COMPLETED`)
-  and `none` are the only two answers it can give; `ProjectCardAction` has no
-  upload-specific member.
+  On the hub, an upload project's card is **Preview + Models**, plus "Generate
+  3D model" while nothing is built yet — the same row a captured project settles
+  on, with pill, photo count and ⋮ shared. The promotion above makes it
+  exportable, so the existing status-driven gating turns those on by itself, and
+  "like a normal captured project" is the requirement.
+  `Project.cardAction` returns **`none` for an upload project on every status**,
+  resolved without consulting `ProjectStatus.cardAction` at all — not by falling
+  through for the statuses that happen to agree. Every word in that table is a
+  capture word, and the fall-through is what would let `DRAFT` offer "Resume"
+  (opening pre-capture: a ring flow the project has no plan for and can never
+  complete) or `PROCESSING` — which every committed upload lands in — render a
+  "Processing…" spinner that never stops, because no worker ever claims a
+  `PHOTO_UPLOAD` job. `ProjectCardAction` has no upload-specific member.
+  **"View" is deliberately absent even once a model exists**, though it would
+  have worked: it opens the NEWEST finished model, a strict subset of what
+  Models opens, and a third labelled button in the card's `Expanded` row
+  ellipsizes all three down to unreadable stubs on a phone. Two buttons, one way
+  in, and the one that shows the whole history.
   **Models is shown on an upload card even with nothing in it** — the one
   gating difference from a capture card, which requires `modelCount > 0`. With
   no primary action, Models is that card's standing entry point, and its empty
