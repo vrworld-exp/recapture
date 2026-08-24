@@ -1,3 +1,4 @@
+✅✅✅✅/2
 # ReCapture Client — Batch 05 · F9 + F10 · Analytics and Feedback Layer
 
 > **Status: ⬜ todo.** F9 depends on **backend B7**. F10 depends on **F1**, and gives full value only
