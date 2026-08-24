@@ -2,7 +2,7 @@
 //
 // Orchestrates an artist's photo-set upload end to end:
 //
-//   1. POST /projects                     (source: upload, name, category) → id
+//   1. POST /projects                     (source: upload, name)           → id
 //   2. POST /projects/:id/photos/session  ({files:[{contentType,size}]})   → jobId + keys
 //   3. build an UploadSessionSpec         (picked file  x  server key, BY INDEX)
 //   4. ResilientUploadRunner over ChunkedUploadManager
@@ -142,12 +142,15 @@ class PhotoSetUploadFlow {
   /// [UploadProgressSource] is a STREAM contract — the caller subscribes to the
   /// engine's existing feed instead of a second progress shape being invented
   /// for this feature.
+  /// [onCommitting] fires when every part is on S3 and step 5 begins, so the
+  /// progress screen can say "finishing up" instead of showing a full bar and
+  /// an idle-looking pause while the commit round-trips.
   Future<PhotoSetUploadResult> run({
     required String name,
     required List<PickedProjectPhoto> photos,
-    String? category,
     Project? existingProject,
     void Function(UploadProgressSource progress)? onEngineReady,
+    void Function()? onCommitting,
   }) async {
     if (!_isOnline()) {
       return const PhotoSetUploadResult(
@@ -167,7 +170,6 @@ class PhotoSetUploadFlow {
       try {
         project = await _projects.create(
           name: name,
-          category: category,
           source: ProjectSource.upload,
         );
       } catch (error) {
@@ -237,6 +239,7 @@ class PhotoSetUploadFlow {
 
     // ── 5. Commit. This is what makes the set real: the server verifies each
     // object's size against its own ceiling and flips the job to UPLOADED.
+    onCommitting?.call();
     try {
       final count = await _photos.commit(
         projectId: project.id,

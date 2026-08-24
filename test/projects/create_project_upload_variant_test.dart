@@ -8,6 +8,9 @@
 //     are capture concepts, and a placeholder MEDIUM/GUIDED would be a lie
 //     later reads act on), and its CTA reads "Upload …";
 //   • a CaptureChoice renders exactly what it always did.
+//
+// CATEGORY is pinned ABSENT on both variants: it was dropped from the upload
+// form, and the field returning would be a silent regression here.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +31,7 @@ class _StubPicker implements ProjectPhotoPicker {
         accepted: List.generate(
           count,
           (i) => PickedProjectPhoto(
+            name: 'photo_$i.jpg',
             path: '/photo_$i.jpg',
             size: 1000,
             contentType: 'image/jpeg',
@@ -68,15 +72,25 @@ void main() {
   });
 
   group('upload variant', () {
-    testWidgets('hides OBJECT SIZE and CAPTURE MODE, shows CATEGORY + PHOTOS',
+    testWidgets('hides OBJECT SIZE, CAPTURE MODE and CATEGORY; shows PHOTOS',
         (tester) async {
       await _pump(tester, const UploadChoice());
 
       expect(find.text('OBJECT SIZE'), findsNothing);
       expect(find.text('CAPTURE MODE'), findsNothing);
       expect(find.text('PROJECT NAME'), findsOneWidget);
-      expect(find.text('CATEGORY'), findsOneWidget);
       expect(find.text('PHOTOS'), findsOneWidget);
+    });
+
+    testWidgets('CATEGORY is gone — no label, and NAME is the only text field',
+        (tester) async {
+      await _pump(tester, const UploadChoice());
+
+      expect(find.text('CATEGORY'), findsNothing);
+      expect(find.text('Category'), findsNothing);
+      // One field on the form, and it is the project name. A second TextField
+      // here would mean the category input came back under another label.
+      expect(find.byType(TextField), findsOneWidget);
     });
 
     testWidgets('the CTA reads Upload, not Start/Create Capture', (tester) async {

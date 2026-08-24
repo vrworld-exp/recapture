@@ -51,6 +51,25 @@ class Project {
   /// Convenience for the many `source == ProjectSource.upload` branches.
   bool get isUploadProject => source.isUpload;
 
+  /// What the card's PRIMARY action should be — status AND source together.
+  ///
+  /// `DRAFT` is the one status that means two different things. On a capture
+  /// project it is an unfinished session, so "Resume" walks back into the
+  /// capture flow. On an UPLOAD project there is nothing to resume: the photos
+  /// are already on S3 and the project is complete as an upload. What is left
+  /// is choosing which photos a model gets built from, so the action says that
+  /// instead of borrowing capture's word for it.
+  ///
+  /// Every other status is shared, and deliberately so: an upload project that
+  /// is PROCESSING or COMPLETED is the same thing a capture project is, and it
+  /// gets the same "Processing…" / "View" treatment.
+  ProjectCardAction get cardAction {
+    if (isUploadProject && status == ProjectStatus.draft) {
+      return ProjectCardAction.selectPhotos;
+    }
+    return status.cardAction;
+  }
+
   /// True for a project created offline that is still waiting in the offline
   /// outbox to be flushed to the server. Such a row carries a temporary local
   /// [id] (never the server id) and is shown optimistically until reconciled.

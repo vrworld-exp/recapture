@@ -154,7 +154,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     Analytics.logEvent('projects_list_viewed', {
       'project_count': projects.length,
       'has_failed_projects':
-          projects.any((p) => p.status.cardAction == ProjectCardAction.retry),
+          projects.any((p) => p.cardAction == ProjectCardAction.retry),
       'device_type': _deviceType,
     });
   }
@@ -198,7 +198,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
 
   void _onResume(Project p) {
     if (!_claim(p)) return;
-    _logAction('resume', p);
+    // The upload card's button says "Select photos", so the event says the
+    // same — a 'resume' here would misreport what the artist tapped.
+    _logAction(p.isUploadProject ? 'select_photos' : 'resume', p);
     if (p.isUploadProject) {
       // An upload project has no rings and no capture plan, so pre-capture
       // would walk the artist into a flow this project can never complete. Its

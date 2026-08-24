@@ -25,6 +25,7 @@ import '../../widgets/app_card.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/offline_retry_modal.dart';
 import 'capture_mode_sheet.dart';
+import 'photo_upload_progress_screen.dart';
 
 /// Create Project form, in one of TWO variants picked by the sheet that opened
 /// it (see [ProjectCreationChoice]).
@@ -34,14 +35,17 @@ import 'capture_mode_sheet.dart';
 /// goes through [projectsProvider] so the new project lands in the shared list
 /// state (it appears on return to the Projects Hub without a refetch).
 ///
-/// UPLOAD: name, category, and a PHOTOS section. OBJECT SIZE and CAPTURE MODE
-/// are HIDDEN — they are capture concepts (object size drives camera-distance
-/// guidance an uploaded set never receives; capture mode drives a flow that
-/// never runs), and writing a placeholder MEDIUM/GUIDED would be a lie that
-/// later reads act on. The server refuses either field on an upload project for
-/// the same reason. The CTA reads "Upload N photos" and runs
-/// [PhotoSetUploadFlow] — which creates the project itself, ONLINE ONLY (see
-/// [ProjectPhotosNotifier.upload]).
+/// UPLOAD: name and a PHOTOS section. OBJECT SIZE and CAPTURE MODE are HIDDEN —
+/// they are capture concepts (object size drives camera-distance guidance an
+/// uploaded set never receives; capture mode drives a flow that never runs),
+/// and writing a placeholder MEDIUM/GUIDED would be a lie that later reads act
+/// on. The server refuses either field on an upload project for the same
+/// reason. The CTA reads "Upload N photos" and PUSHES
+/// [PhotoUploadProgressScreen], which is where the transfer actually runs.
+///
+/// This form does NOT await the upload. It used to, behind a spinner on its own
+/// CTA — minutes of nothing to look at for a 48-photo set. The push happens
+/// immediately and the wait gets a screen of its own, with a row per photo.
 ///
 /// Form input is local; creation happens only on an explicit CTA tap.
 class CreateProjectScreen extends ConsumerStatefulWidget {
@@ -62,8 +66,6 @@ class CreateProjectScreen extends ConsumerStatefulWidget {
 
 class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
   final TextEditingController _nameController = TextEditingController();
-
-  final TextEditingController _categoryController = TextEditingController();
 
   ObjectSize? _selectedSize;
   CaptureMode? _selectedMode;
@@ -92,7 +94,6 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
   @override
   void dispose() {
     _nameController.dispose();
-    _categoryController.dispose();
     super.dispose();
   }
 
@@ -106,6 +107,10 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
       return;
     }
     if (_isUpload) {
+      setState(() {
+        _creating = true;
+        _nameError = null;
+      });
       await _submitUpload(name);
       return;
     }
@@ -204,7 +209,8 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
     }
   }
 
-  /// The UPLOAD submit path.
+  /// The UPLOAD submit path: hand off to [PhotoUploadProgressScreen] and let
+  /// the transfer be that screen's whole job.
   ///
   /// Deliberately does NOT run the three capture-context writes the capture
   /// branch does — `captureModeProvider.persistFor`, `saveObjectSize`, and the
@@ -216,50 +222,32 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
   /// The project itself is created INSIDE the flow (online-only, straight to
   /// the repository — never through the offline outbox, which would hand back a
   /// temporary local id the photo session cannot use).
+  ///
+  /// A PUSH, not a `go()` replacement: [projectPhotosProvider] is autoDispose
+  /// and holds the picked set, so this form has to stay mounted underneath as
+  /// its listener for the whole transfer. It is also what makes "Back to the
+  /// photo list" work after a failure — the picked set is still right here.
   Future<void> _submitUpload(String name) async {
-    setState(() {
-      _creating = true;
-      _nameError = null;
-    });
-
-    final category = _categoryController.text.trim();
     final photoCount = ref.read(projectPhotosProvider).picked.length;
-    final project = await ref.read(projectPhotosProvider.notifier).upload(
-          name: name,
-          category: category.isEmpty ? null : category,
-        );
-
-    if (!mounted) return;
-
     Analytics.logEvent('create_project_submitted', {
-      'result': project != null ? 'success' : 'failed',
+      // The transfer's own outcome belongs to the progress screen; this event
+      // records that the artist committed to it, and with how many photos.
+      'result': 'started',
       'source': 'upload',
       'photo_count': photoCount,
       'name_length': name.length,
       'device_type': _deviceType,
     });
 
-    if (project == null) {
-      // The notifier holds the mapped, owner-safe sentence; the form keeps
-      // every field so a retry costs nothing.
-      final message = ref.read(projectPhotosProvider).message;
-      setState(() => _creating = false);
-      if (message != null) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-      }
-      return;
-    }
-
-    // The new project is not in the shared list state (the flow bypassed
-    // ProjectsNotifier), so refresh it — otherwise the Hub would not show the
-    // project the artist just made until the next pull-to-refresh.
-    unawaited(ref.read(projectsProvider.notifier).refresh().catchError((_) {}));
-
-    // Replacement, not a push: back must not return to this finished form.
-    context.goNamed(
-      AppRouteNames.projectPhotos,
-      pathParameters: {'id': project.id},
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PhotoUploadProgressScreen(projectName: name),
+      ),
     );
+    // Reached only when the artist came BACK — a failure they chose not to
+    // retry, or a stopped transfer. Success leaves via goNamed(projects) and
+    // never returns here. The form is intact, so another attempt costs nothing.
+    if (mounted) setState(() => _creating = false);
   }
 
   // ── Build ────────────────────────────────────────────────────────────────────
@@ -310,20 +298,6 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
                       }),
                     ),
                     if (_isUpload) ...[
-                      // CATEGORY describes the PROJECT rather than the capture,
-                      // so it belongs on this form. It stays off the capture
-                      // variant, which has never had it.
-                      const SizedBox(height: AppSpacing.xxl),
-                      const _SectionLabel('CATEGORY'),
-                      const SizedBox(height: AppSpacing.sm),
-                      AppTextField(
-                        label: 'Category',
-                        hint: 'e.g. Sculpture',
-                        controller: _categoryController,
-                        enabled: !_creating,
-                        maxLength: 50,
-                        textInputAction: TextInputAction.done,
-                      ),
                       const SizedBox(height: AppSpacing.xxl),
                       const _SectionLabel('PHOTOS'),
                       const SizedBox(height: AppSpacing.md),

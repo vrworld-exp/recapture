@@ -8,11 +8,27 @@
 //
 // The machine:
 //
-//   idle → picking → creating → uploading(progress) → committing → ready
+//   idle → picking → creating → uploading(progress) → committing → completed
 //                                    ↘ failed(reason) ↗
 //
+// `completed` is TERMINAL for one upload run: every photo is on S3 and the
+// project is real. It is deliberately NOT `ready` — the artist is not sent to
+// the grid when an upload finishes (see PhotoUploadProgressScreen), so the
+// screen that owns the run needs a state that means "this transfer is done"
+// without also claiming a grid has been loaded.
+//
 // `ready` is where the grid lives: it holds the uploaded set, the artist's
-// 3–4 selection, and the Generate action.
+// 3–4 selection, and the Generate action. It is reached by [refreshPhotos],
+// which the photo screen calls when the artist opens the project later.
+//
+// ── PER-PHOTO STATUS ────────────────────────────────────────────────────────
+// [ProjectPhotosState.statusForPhoto] resolves one photo's live status from the
+// engine's AGGREGATE `filesUploaded` count. That derivation is sound ONLY
+// because [ChunkedUploadManager.start] walks `spec.files` STRICTLY
+// SEQUENTIALLY, in order, incrementing the count as each file finalizes — so
+// index < count is done, index == count is the one in flight, and the rest are
+// queued. Pinned by a test; if files ever upload concurrently, that test fails
+// rather than this screen quietly lying about which photo is moving.
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -35,10 +51,16 @@ enum PhotoUploadPhase {
   creating,
   uploading,
   committing,
+
+  /// Terminal for ONE upload run: every photo committed, project created.
+  completed,
   ready,
   generating,
   failed,
 }
+
+/// One photo's live transfer status, as the progress screen renders it.
+enum PhotoTransferStatus { queued, uploading, uploaded, failed }
 
 @immutable
 class ProjectPhotosState {
@@ -52,6 +74,7 @@ class ProjectPhotosState {
     this.jobId,
     this.uploadedBytes = 0,
     this.totalBytes = 0,
+    this.uploadedFiles = 0,
     this.message,
     this.failure,
     this.generatedModelId,
@@ -76,6 +99,11 @@ class ProjectPhotosState {
 
   final int uploadedBytes;
   final int totalBytes;
+
+  /// Photos the engine has FINALIZED, straight off its progress feed. Because
+  /// files upload in order this doubles as a cursor: `picked[uploadedFiles]` is
+  /// the photo currently moving. See the file header.
+  final int uploadedFiles;
 
   /// One owner-safe sentence for the current phase. Never a code.
   final String? message;
@@ -105,6 +133,46 @@ class ProjectPhotosState {
   double get progress =>
       totalBytes <= 0 ? 0 : (uploadedBytes / totalBytes).clamp(0.0, 1.0);
 
+  /// True once an upload run has finished successfully.
+  bool get isUploadComplete => phase == PhotoUploadPhase.completed;
+
+  /// One picked photo's live transfer status.
+  ///
+  /// Derived from [uploadedFiles], which is only a valid per-photo cursor
+  /// because the engine uploads files sequentially in order — see the file
+  /// header. An out-of-range index is [PhotoTransferStatus.queued] rather than
+  /// a throw: this drives a list builder, and a range error there would take
+  /// down the screen mid-upload.
+  PhotoTransferStatus statusForPhoto(int index) {
+    if (index < 0 || index >= picked.length) return PhotoTransferStatus.queued;
+    // Commit succeeded, so every photo is on S3 regardless of what the last
+    // progress frame said.
+    if (phase == PhotoUploadPhase.completed ||
+        phase == PhotoUploadPhase.committing) {
+      return PhotoTransferStatus.uploaded;
+    }
+    if (index < uploadedFiles) return PhotoTransferStatus.uploaded;
+    if (index > uploadedFiles) return PhotoTransferStatus.queued;
+    // index == uploadedFiles — the photo the engine is on.
+    return switch (phase) {
+      PhotoUploadPhase.uploading => PhotoTransferStatus.uploading,
+      PhotoUploadPhase.failed => PhotoTransferStatus.failed,
+      _ => PhotoTransferStatus.queued,
+    };
+  }
+
+  /// Bytes confirmed for the photo currently in flight, so its own row shows a
+  /// real percentage rather than an indeterminate spinner. Clamped to the
+  /// photo's size — the engine's byte count is monotonic but the subtraction
+  /// crosses two frames, so a transient over-report must not render >100%.
+  int get activePhotoBytesUploaded {
+    if (uploadedFiles < 0 || uploadedFiles >= picked.length) return 0;
+    final done = picked
+        .take(uploadedFiles)
+        .fold<int>(0, (sum, p) => sum + p.size);
+    return (uploadedBytes - done).clamp(0, picked[uploadedFiles].size);
+  }
+
   ProjectPhotosState copyWith({
     PhotoUploadPhase? phase,
     List<PickedProjectPhoto>? picked,
@@ -115,6 +183,7 @@ class ProjectPhotosState {
     String? jobId,
     int? uploadedBytes,
     int? totalBytes,
+    int? uploadedFiles,
     String? message,
     PhotoUploadFailure? failure,
     String? generatedModelId,
@@ -130,6 +199,7 @@ class ProjectPhotosState {
       jobId: jobId ?? this.jobId,
       uploadedBytes: uploadedBytes ?? this.uploadedBytes,
       totalBytes: totalBytes ?? this.totalBytes,
+      uploadedFiles: uploadedFiles ?? this.uploadedFiles,
       message: clearMessage ? null : (message ?? this.message),
       failure: clearMessage ? null : (failure ?? this.failure),
       generatedModelId: generatedModelId ?? this.generatedModelId,
@@ -182,13 +252,14 @@ class ProjectPhotosNotifier extends StateNotifier<ProjectPhotosState> {
   /// server id. On failure the project may STILL exist (a crash between create
   /// and commit leaves a DRAFT project with no photos, by design) — it is on
   /// [ProjectPhotosState.project] either way.
-  Future<Project?> upload({required String name, String? category}) async {
+  Future<Project?> upload({required String name}) async {
     if (state.isBusy || state.picked.length < kProjectPhotoMinCount) return null;
 
     state = state.copyWith(
       phase: PhotoUploadPhase.creating,
       totalBytes: state.picked.fold<int>(0, (sum, p) => sum + p.size),
       uploadedBytes: 0,
+      uploadedFiles: 0,
       clearMessage: true,
     );
 
@@ -204,21 +275,38 @@ class ProjectPhotosNotifier extends StateNotifier<ProjectPhotosState> {
     try {
       final result = await flow.run(
         name: name,
-        category: category,
         photos: state.picked,
         existingProject: state.project,
         onEngineReady: (source) {
           progressSub = source.watch().listen(_onProgress);
         },
+        // Every part is on S3; the commit is the last round trip. Surfaced so
+        // the screen shows "finishing up" rather than a full bar that appears
+        // to have stalled.
+        onCommitting: () {
+          if (!mounted) return;
+          state = state.copyWith(
+            phase: PhotoUploadPhase.committing,
+            uploadedFiles: state.picked.length,
+            uploadedBytes: state.totalBytes,
+          );
+        },
       );
 
       if (result.isSuccess) {
+        // TERMINAL, and deliberately NOT a refreshPhotos() call. The artist is
+        // not routed to the grid when an upload finishes, so fetching a set of
+        // presigned thumbnails nobody is about to render would be a round trip
+        // spent on nothing — and a hiccup in that fetch would flip a SUCCEEDED
+        // upload to `failed`. The photo screen loads the grid itself, with
+        // fresh URLs, whenever the artist opens the project.
         state = state.copyWith(
-          phase: PhotoUploadPhase.committing,
+          phase: PhotoUploadPhase.completed,
           project: result.project,
           jobId: result.jobId,
+          uploadedFiles: state.picked.length,
+          uploadedBytes: state.totalBytes,
         );
-        await refreshPhotos(result.project!.id);
         return result.project;
       }
 
@@ -240,11 +328,19 @@ class ProjectPhotosNotifier extends StateNotifier<ProjectPhotosState> {
 
   void _onProgress(UploadProgress snapshot) {
     if (!mounted) return;
+    // A late frame must not drag a finished run back into `uploading` — the
+    // engine's stream replays its last snapshot to new subscribers, and commit
+    // resolves after the final emission.
+    if (state.phase == PhotoUploadPhase.completed ||
+        state.phase == PhotoUploadPhase.committing) {
+      return;
+    }
     state = state.copyWith(
       phase: PhotoUploadPhase.uploading,
       uploadedBytes: snapshot.bytesUploaded,
       totalBytes:
           snapshot.totalBytes > 0 ? snapshot.totalBytes : state.totalBytes,
+      uploadedFiles: snapshot.filesUploaded,
     );
   }
 

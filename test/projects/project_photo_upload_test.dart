@@ -6,9 +6,13 @@
 //   • BytesPartByteSource range reads;
 //   • Project.fromMap / toMap round-tripping `source`;
 //   • the UploadSessionSpec key↔file pairing, including the fatal mismatch;
-//   • the ProjectPhotosNotifier state machine, failure branches included.
+//   • the ProjectPhotosNotifier state machine, failure branches included;
+//   • the PER-PHOTO status the upload-progress screen renders, derived from the
+//     engine's aggregate feed (the engine's own sequential-file contract is
+//     pinned separately, in test/upload/chunked_upload_manager_test.dart).
 //
 // Hermetic: no network, no platform channel, no filesystem.
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +32,7 @@ import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/create_project_options.dart';
 import 'package:recapture/domain/entities/project_source.dart';
 import 'package:recapture/domain/entities/project_status.dart';
+import 'package:recapture/domain/entities/upload_progress.dart';
 import 'package:recapture/utils/image_content_type.dart';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -453,6 +458,191 @@ void main() {
           {'uploads/photo_0002.jpg'});
     });
   });
+
+  // ── Per-photo status (what the upload-progress screen renders) ─────────────
+  group('per-photo transfer status', () {
+    test('walks queued to uploading to uploaded, one photo at a time', () async {
+      final engine = _ProgressingEngine([100, 200, 300]);
+      final container = _containerWith(
+        picker: _StubPicker([
+          _photo('/a.jpg', 100),
+          _photo('/b.jpg', 200),
+          _photo('/c.jpg', 300),
+        ]),
+        repo: _StubPhotosRepo(),
+        engine: engine,
+      );
+      addTearDown(container.dispose);
+
+      final notifier = container.read(projectPhotosProvider.notifier);
+      await notifier.pickPhotos();
+
+      // Before a byte moves, everything is waiting.
+      final start = container.read(projectPhotosProvider);
+      expect(
+        [for (var i = 0; i < 3; i++) start.statusForPhoto(i)],
+        List.filled(3, PhotoTransferStatus.queued),
+      );
+
+      // Every mid-transfer frame, as the screen would have seen it.
+      final frames = <List<PhotoTransferStatus>>[];
+      engine.onFrame = () {
+        final s = container.read(projectPhotosProvider);
+        frames.add([for (var i = 0; i < 3; i++) s.statusForPhoto(i)]);
+      };
+
+      await notifier.upload(name: 'Set');
+
+      for (final row in frames) {
+        // Exactly one photo is ever in flight.
+        expect(
+          row.where((s) => s == PhotoTransferStatus.uploading).length,
+          lessThanOrEqualTo(1),
+          reason: 'two photos claimed to be in flight at once: \$row',
+        );
+        // And it is always the FIRST unfinished one — never a photo sitting
+        // behind a queued one, which is what a concurrent engine would show.
+        final firstUnfinished =
+            row.indexWhere((s) => s != PhotoTransferStatus.uploaded);
+        // -1 means the whole set is done — nothing left to order.
+        if (firstUnfinished < 0) continue;
+        for (var i = 0; i < row.length; i++) {
+          if (i < firstUnfinished) {
+            expect(row[i], PhotoTransferStatus.uploaded, reason: 'row: \$row');
+          } else if (i > firstUnfinished) {
+            expect(row[i], PhotoTransferStatus.queued, reason: 'row: \$row');
+          }
+        }
+      }
+
+      // The mid-file frames are what prove `uploading` is reachable at all.
+      expect(
+        frames.map((r) => r[0]).toList(),
+        containsAllInOrder([
+          PhotoTransferStatus.uploading,
+          PhotoTransferStatus.uploaded,
+        ]),
+      );
+      expect(frames.any((r) => r[1] == PhotoTransferStatus.uploading), isTrue);
+      expect(frames.any((r) => r[2] == PhotoTransferStatus.uploading), isTrue);
+
+      // Committed: every photo reads uploaded, whatever the last frame said.
+      final done = container.read(projectPhotosProvider);
+      expect(done.phase, PhotoUploadPhase.completed);
+      expect(
+        [for (var i = 0; i < 3; i++) done.statusForPhoto(i)],
+        List.filled(3, PhotoTransferStatus.uploaded),
+      );
+    });
+
+    test('the in-flight photo reports its OWN bytes, not the running total',
+        () async {
+      final engine = _ProgressingEngine([100, 200, 300]);
+      final container = _containerWith(
+        picker: _StubPicker([
+          _photo('/a.jpg', 100),
+          _photo('/b.jpg', 200),
+          _photo('/c.jpg', 300),
+        ]),
+        repo: _StubPhotosRepo(),
+        engine: engine,
+      );
+      addTearDown(container.dispose);
+
+      final notifier = container.read(projectPhotosProvider.notifier);
+      await notifier.pickPhotos();
+
+      // (bytes for the photo in flight, that photo's size) per frame.
+      final own = <({int bytes, int size})>[];
+      engine.onFrame = () {
+        final s = container.read(projectPhotosProvider);
+        if (s.uploadedFiles < s.picked.length) {
+          own.add((
+            bytes: s.activePhotoBytesUploaded,
+            size: s.picked[s.uploadedFiles].size,
+          ));
+        }
+      };
+      await notifier.upload(name: 'Set');
+
+      // Photo 2's mid frame sits at 200/600 for the SET but 100/200 for itself
+      // — subtracting the finished photos is the whole point.
+      expect(own.map((f) => f.bytes), contains(100));
+      // And a row can never render past 100%: every reading stays inside the
+      // photo it belongs to.
+      expect(own.every((f) => f.bytes >= 0 && f.bytes <= f.size), isTrue);
+    });
+
+    test('a failure marks the photo that was in flight, not the whole set',
+        () async {
+      final container = _containerWith(
+        picker: _StubPicker([
+          _photo('/a.jpg', 10),
+          _photo('/b.jpg', 20),
+          _photo('/c.jpg', 30),
+        ]),
+        repo: _StubPhotosRepo(
+          sessionError: const PhotoUploadException(
+            PhotoUploadFailure.offline,
+            'You are offline.',
+          ),
+        ),
+      );
+      addTearDown(container.dispose);
+
+      final notifier = container.read(projectPhotosProvider.notifier);
+      await notifier.pickPhotos();
+      await notifier.upload(name: 'Set');
+
+      final state = container.read(projectPhotosProvider);
+      expect(state.phase, PhotoUploadPhase.failed);
+      // Nothing had finalized, so the FIRST photo carries the failure and the
+      // rest stay queued — no blanket red over a set that never moved.
+      expect(state.statusForPhoto(0), PhotoTransferStatus.failed);
+      expect(state.statusForPhoto(1), PhotoTransferStatus.queued);
+      expect(state.statusForPhoto(2), PhotoTransferStatus.queued);
+    });
+
+    test('an out-of-range index is queued, never a range error', () {
+      const empty = ProjectPhotosState();
+      expect(empty.statusForPhoto(0), PhotoTransferStatus.queued);
+      expect(empty.statusForPhoto(-1), PhotoTransferStatus.queued);
+      expect(empty.activePhotoBytesUploaded, 0);
+    });
+  });
+
+  // ── Where a finished upload leaves the state ──────────────────────────────
+  group('upload completion', () {
+    test('lands on completed WITHOUT loading the grid', () async {
+      final repo = _StubPhotosRepo();
+      final container = _containerWith(
+        picker: _StubPicker([
+          _photo('/a.jpg', 10),
+          _photo('/b.jpg', 20),
+          _photo('/c.jpg', 30),
+        ]),
+        repo: repo,
+      );
+      addTearDown(container.dispose);
+
+      final notifier = container.read(projectPhotosProvider.notifier);
+      await notifier.pickPhotos();
+      final project = await notifier.upload(name: 'Set');
+
+      expect(project, isNotNull);
+      final state = container.read(projectPhotosProvider);
+      // `completed`, not `ready`: the artist is not routed to the grid, so a
+      // set of presigned thumbnails nobody renders would be a round trip spent
+      // on nothing — and a hiccup fetching them would flip a SUCCEEDED upload
+      // to failed.
+      expect(state.phase, PhotoUploadPhase.completed);
+      expect(state.isUploadComplete, isTrue);
+      expect(repo.listCalls, 0);
+      // The bar reads full on the success screen.
+      expect(state.uploadedFiles, 3);
+      expect(state.progress, 1.0);
+    });
+  });
 }
 
 // ── Doubles ──────────────────────────────────────────────────────────────────
@@ -464,6 +654,7 @@ ProviderContainer _containerWith({
   required ProjectPhotoPicker picker,
   required _StubPhotosRepo repo,
   bool online = true,
+  PhotoSetUploadEngine? engine,
 }) {
   final projects = _StubProjectsRepo();
   late final ProviderContainer container;
@@ -477,11 +668,17 @@ ProviderContainer _containerWith({
           projects: projects,
           photos: repo,
           isOnline: () => online,
-          engineFor: (jobId, bytes) => _FakeEngine(),
+          engineFor: (jobId, bytes) => engine ?? _FakeEngine(),
         ),
       ),
     ],
   );
+  // projectPhotosProvider is autoDispose, so without a listener it is collected
+  // the moment a test awaits — which an upload does, repeatedly. In the app the
+  // Create form stays mounted under the progress screen and holds exactly this
+  // subscription; the container has to do the same or it tests a torn-down
+  // notifier.
+  container.listen(projectPhotosProvider, (_, __) {});
   return container;
 }
 
@@ -505,6 +702,68 @@ class _FakeEngine implements PhotoSetUploadEngine {
 
   @override
   void cancel() {}
+}
+
+/// Reports progress the way the real engine does — file by file, in spec order,
+/// counting a file only once it FINALIZES — so the per-photo derivation is
+/// exercised against the shape the engine actually emits.
+class _ProgressingEngine implements PhotoSetUploadEngine {
+  _ProgressingEngine(this.sizes);
+
+  final List<int> sizes;
+  final _controller = StreamController<UploadProgress>.broadcast();
+
+  /// Fires after each frame has been delivered, so a test can observe what the
+  /// screen would have rendered MID-transfer rather than only the end state.
+  void Function()? onFrame;
+
+  @override
+  UploadProgressSource get progress => _StreamSource(_controller.stream);
+
+  @override
+  Future<ResilientUploadOutcome> run(UploadSessionSpec spec) async {
+    final total = sizes.fold<int>(0, (a, b) => a + b);
+    var bytes = 0;
+    for (var i = 0; i < sizes.length; i++) {
+      final half = sizes[i] ~/ 2;
+      // Half of file i, then the rest: the mid-file frame is what makes
+      // "index == filesUploaded is the one in flight" observable at all.
+      for (final (part, finalized) in [(half, false), (sizes[i] - half, true)]) {
+        bytes += part;
+        _controller.add(UploadProgress(
+          status: UploadStatus.inProgress,
+          bytesUploaded: bytes,
+          totalBytes: total,
+          filesUploaded: finalized ? i + 1 : i,
+          totalFiles: sizes.length,
+        ));
+        await _drain();
+        onFrame?.call();
+      }
+    }
+    return const ResilientUploadOutcome(
+      status: ResilientUploadStatus.succeeded,
+      attemptsUsed: 1,
+    );
+  }
+
+  @override
+  void cancel() {}
+}
+
+class _StreamSource implements UploadProgressSource {
+  const _StreamSource(this._stream);
+  final Stream<UploadProgress> _stream;
+
+  @override
+  Stream<UploadProgress> watch() => _stream;
+}
+
+/// Lets the notifier's progress subscription deliver before the next frame.
+Future<void> _drain() async {
+  for (var i = 0; i < 3; i++) {
+    await Future<void>.delayed(Duration.zero);
+  }
 }
 
 /// Only `create` matters here; every other member would be a compile-time
@@ -569,6 +828,7 @@ class _FakeBackend implements ProjectPhotoPickerBackend {
 }
 
 PickedProjectPhoto _photo(String path, int size) => PickedProjectPhoto(
+      name: path.split('/').last,
       path: path,
       size: size,
       contentType: path.endsWith('.png') ? kContentTypePng : kContentTypeJpeg,
@@ -635,11 +895,18 @@ class _StubPhotosRepo implements ProjectPhotosRepository {
     return sessionSizes.length;
   }
 
+  /// Counted so a test can assert the grid is NOT fetched by a finished
+  /// upload — the round trip that was deliberately removed.
+  int listCalls = 0;
+
   @override
-  Future<List<ProjectPhoto>> listPhotos(String projectId) async => [
-        for (final key in photoKeys)
-          ProjectPhoto(key: key, url: 'https://s3/$key?sig=x', size: 1),
-      ];
+  Future<List<ProjectPhoto>> listPhotos(String projectId) async {
+    listCalls++;
+    return [
+      for (final key in photoKeys)
+        ProjectPhoto(key: key, url: 'https://s3/$key?sig=x', size: 1),
+    ];
+  }
 
   @override
   Future<void> deletePhotos({

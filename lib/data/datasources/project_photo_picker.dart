@@ -51,6 +51,7 @@ const int kProjectPhotoMaxBytes = 15 * 1024 * 1024;
 @immutable
 class PickedProjectPhoto {
   const PickedProjectPhoto({
+    required this.name,
     required this.size,
     required this.contentType,
     this.path,
@@ -59,6 +60,11 @@ class PickedProjectPhoto {
           (path == null) != (bytes == null),
           'a picked photo carries exactly one of path or bytes',
         );
+
+  /// The file's display name, for the upload-progress list. DISPLAY only — it
+  /// never reaches a key (the server assigns those), never a log, and never the
+  /// wire. Same treatment as [RejectedProjectPhoto.name].
+  final String name;
 
   /// Device-absolute path — NATIVE only. Null on web.
   final String? path;
@@ -199,6 +205,7 @@ class ImagePickerProjectPhotoSource implements ProjectPhotoPicker {
     }
 
     return _Accepted(PickedProjectPhoto(
+      name: file.name,
       size: size,
       contentType: contentType,
       path: kIsWeb ? null : file.path,

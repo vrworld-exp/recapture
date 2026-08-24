@@ -26,6 +26,12 @@ class ProjectCard extends StatelessWidget {
   });
 
   final Project project;
+
+  /// The card's primary "continue this project" action. It backs BOTH the
+  /// capture card's "Resume" and the upload card's "Select photos" — one
+  /// callback because it means one thing to the screen ("open where this
+  /// project left off"), and the screen already routes the two sources to
+  /// their own destinations.
   final ValueChanged<Project> onResume;
   final ValueChanged<Project> onView;
   final ValueChanged<Project> onRetry;
@@ -134,7 +140,9 @@ class ProjectCard extends StatelessWidget {
     // model is done and the Models button is the real state. Suppress it so the
     // card doesn't spin forever. Uploading is untouched — that's a live upload,
     // not a finished model.
-    final rawAction = project.status.cardAction;
+    // Project.cardAction, not status.cardAction: a DRAFT upload project has
+    // nothing to resume, and the status alone cannot tell the two apart.
+    final rawAction = project.cardAction;
     final action =
         rawAction == ProjectCardAction.processing && project.hasViewableModels
             ? ProjectCardAction.none
@@ -215,6 +223,16 @@ class ProjectCard extends StatelessWidget {
       case ProjectCardAction.resume:
         return AppButton(
           label: 'Resume',
+          isFullWidth: false,
+          isLoading: isActionInFlight,
+          onPressed: () => onResume(project),
+        );
+      case ProjectCardAction.selectPhotos:
+        // Same callback as Resume — the screen routes an upload project to its
+        // photo grid — but never the same WORD: the photos are already in, so
+        // "Resume" would promise an unfinished job that does not exist.
+        return AppButton(
+          label: 'Select photos',
           isFullWidth: false,
           isLoading: isActionInFlight,
           onPressed: () => onResume(project),

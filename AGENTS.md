@@ -261,6 +261,32 @@ do not remove it).
   are capture concepts (object size drives camera-distance guidance an uploaded
   set never receives; mode drives a flow that never runs), and a placeholder
   `MEDIUM`/`GUIDED` would be a lie later reads act on.
+- **On the client, an upload is its own screen and it ENDS at the Projects
+  hub.** The Create form (upload variant) collects a NAME and the photo set and
+  nothing else — no category field, and no object size / capture mode (see
+  above). Its CTA **pushes** `PhotoUploadProgressScreen`, which starts the run
+  itself and shows a row per photo: queued / uploading / uploaded / failed. When
+  it finishes it refreshes `projectsProvider` and goes to `/projects`, so the
+  new project appears in the list like any other — it does **not** continue to
+  the photo grid. Generating a model is a separate decision the artist makes
+  later, from the project's card.
+  On the hub, that project's card action is **"Select photos", not "Resume"**.
+  `DRAFT` is the one status that means two different things: an unfinished
+  capture session, or a finished upload with no model yet. `Project.cardAction`
+  (NOT `ProjectStatus.cardAction`, which cannot see the source) resolves the
+  pair; every other status stays shared, and so does the rest of the card —
+  pill, photo count, Models, ⋮. There is deliberately no card-level "Generate
+  3D model" for an upload project: that button is the server's AUTO-selection
+  path, which refuses on `source === 'upload'` (see below). Hand-picking in the
+  grid is the only way in, which is exactly where "Select photos" goes.
+  Two constraints hold the upload screen together: the push (not a `go()` replacement) is
+  what keeps the autoDispose `projectPhotosProvider` — which holds the picked
+  set — alive under the progress screen; and the per-photo status is DERIVED
+  from the engine's aggregate `filesUploaded` count, which is a valid cursor
+  ONLY because `ChunkedUploadManager` uploads files strictly sequentially in
+  spec order. That coupling is pinned by a test in
+  `test/upload/chunked_upload_manager_test.dart` — make files concurrent and it
+  fails there rather than the screen quietly naming the wrong photo.
 - **Server-side photo AUTO-selection is UNAVAILABLE on an upload project, and
   refuses deliberately.** `autoPhotoSelectionService` reads blur and yaw out of
   the capture manifest; an uploaded set has none, so there is nothing to sort
