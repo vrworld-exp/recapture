@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/data/repositories/projects_repository.dart';
 import 'package:recapture/domain/entities/create_project_options.dart';
+import 'package:recapture/domain/entities/project_source.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_model.dart';
 import 'package:recapture/presentation/screens/projects/model_building_screen.dart';
@@ -37,8 +38,10 @@ class _FakeRepo with FakeProjectModelDefaults implements ProjectsRepository {
   @override
   Future<Project> create({
     required String name,
-    required ObjectSize size,
-    required CaptureMode mode,
+    ObjectSize? size,
+    CaptureMode? mode,
+    String? category,
+    ProjectSource source = ProjectSource.capture,
   }) async =>
       throw UnimplementedError('not used here');
 

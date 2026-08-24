@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/create_project_options.dart';
 import '../../domain/entities/project.dart';
+import '../../domain/entities/project_source.dart';
 import '../../domain/entities/project_model.dart';
 import '../remote/api_client.dart';
 
@@ -21,10 +22,18 @@ abstract interface class ProjectsRepository {
 
   /// Creates a project and returns the persisted entity (initial status
   /// `draft`). Throws on network failure.
+  ///
+  /// [size] and [mode] are CONDITIONAL, mirroring the backend's
+  /// `createProjectSchema`: a capture project requires both; an UPLOAD project
+  /// (`source: ProjectSource.upload`) must send NEITHER — the server rejects a
+  /// size or a mode on one with a 400 rather than ignoring it, because they are
+  /// capture concepts an uploaded photo set has no answer for.
   Future<Project> create({
     required String name,
-    required ObjectSize size,
-    required CaptureMode mode,
+    ObjectSize? size,
+    CaptureMode? mode,
+    String? category,
+    ProjectSource source = ProjectSource.capture,
   });
 
   /// Renames a project. Backend returns success only. Throws on network failure.
@@ -181,12 +190,24 @@ class RemoteProjectsRepository implements ProjectsRepository {
   @override
   Future<Project> create({
     required String name,
-    required ObjectSize size,
-    required CaptureMode mode,
+    ObjectSize? size,
+    CaptureMode? mode,
+    String? category,
+    ProjectSource source = ProjectSource.capture,
   }) async {
     final res = await _dio.post<Map<String, dynamic>>(
       '/projects',
-      data: {'name': name, 'size': size.apiValue, 'mode': mode.apiValue},
+      data: {
+        'name': name,
+        // Omitted, never null: the body schema is `.strict()` and an explicit
+        // null is not the same thing as an absent field to it.
+        if (size != null) 'size': size.apiValue,
+        if (mode != null) 'mode': mode.apiValue,
+        if (category != null && category.isNotEmpty) 'category': category,
+        // Sent only when it is not the default, so every existing caller's
+        // request body is byte-for-byte what it was before this field existed.
+        if (source != ProjectSource.capture) 'source': source.apiValue,
+      },
     );
     final project = res.data?['project'];
     if (project is! Map<String, dynamic>) {

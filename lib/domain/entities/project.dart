@@ -1,4 +1,5 @@
 // lib/domain/entities/project.dart
+import 'project_source.dart';
 import 'project_status.dart';
 
 /// Maximum length of a project name. Keep in sync with the backend limit to
@@ -16,6 +17,7 @@ class Project {
     this.thumbnailUrl,
     this.totalPhotos = 0,
     this.modelCount = 0,
+    this.source = ProjectSource.capture,
     this.isPending = false,
   });
 
@@ -37,6 +39,39 @@ class Project {
 
   /// Whether the staff Models entry point has anything to show.
   bool get hasViewableModels => modelCount > 0;
+
+  /// Where this project's photos came from — `source` on the API DTO.
+  ///
+  /// Drives what the card's PRIMARY action opens: an upload project goes to its
+  /// photo grid, never into pre-capture (which would run a ring flow the
+  /// project has no plan for). Defaults to [ProjectSource.capture], so a row
+  /// from an older API or an older cache behaves exactly as it always did.
+  final ProjectSource source;
+
+  /// Convenience for the many `source == ProjectSource.upload` branches.
+  bool get isUploadProject => source.isUpload;
+
+  /// What the card's PRIMARY action should be — status AND source together.
+  ///
+  /// An upload project has NO primary action, on any status. Preview and Models
+  /// are the whole row — the same two buttons a captured project settles on
+  /// once its model is built.
+  ///
+  /// It resolves WITHOUT consulting the status table at all, because every word
+  /// in that table is a capture word and none of them are true here: the photos
+  /// are already on S3, so there is no session to "Resume", nothing is
+  /// "Processing…" (no worker ever claims a photo-upload job, so that spinner
+  /// would never stop), and there is no failed transfer to "Retry". Falling
+  /// through for "the statuses that happen to agree" is what would let a DRAFT
+  /// upload send an artist into pre-capture — a ring flow this project has no
+  /// plan for and can never complete.
+  ///
+  /// "View" is left out too, though it would have worked: it opens the newest
+  /// finished model, which is a strict subset of what Models opens, and a third
+  /// labelled button on a phone-width row ellipsizes all three down to nothing.
+  /// One way in beats two, and Models is the one that shows the whole history.
+  ProjectCardAction get cardAction =>
+      isUploadProject ? ProjectCardAction.none : status.cardAction;
 
   /// True for a project created offline that is still waiting in the offline
   /// outbox to be flushed to the server. Such a row carries a temporary local
@@ -61,6 +96,8 @@ class Project {
       // Absent on a row cached before this field existed → 0 (button hidden)
       // rather than a crash; the next fetch fills it in.
       modelCount: rawModels is num && rawModels >= 0 ? rawModels.toInt() : 0,
+      // Absent (older API, older cache) → capture, never a crash.
+      source: projectSourceFromApi(map['source'] as String?),
       isPending: map['isPending'] == true,
     );
   }
@@ -78,6 +115,11 @@ class Project {
         // Must round-trip: a cached row read back without it would drop to 0 and
         // hide the Models button until the next successful fetch.
         'modelCount': modelCount,
+        // Same rule, sharper consequence: a cached upload project read back
+        // without this would default to capture and offer a CAPTURE action —
+        // sending the artist into a ring flow for a project that has none —
+        // until the next successful fetch.
+        'source': source.apiValue,
         'isPending': isPending,
       };
 
@@ -96,6 +138,7 @@ class Project {
     DateTime? updatedAt,
     int? totalPhotos,
     int? modelCount,
+    ProjectSource? source,
     bool? isPending,
   }) {
     return Project(
@@ -106,6 +149,7 @@ class Project {
       updatedAt: updatedAt ?? this.updatedAt,
       totalPhotos: totalPhotos ?? this.totalPhotos,
       modelCount: modelCount ?? this.modelCount,
+      source: source ?? this.source,
       isPending: isPending ?? this.isPending,
     );
   }

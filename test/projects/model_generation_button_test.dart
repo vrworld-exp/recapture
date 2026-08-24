@@ -19,6 +19,7 @@ import 'package:recapture/application/projects/owner_generation_request_notifier
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/data/repositories/projects_repository.dart';
 import 'package:recapture/domain/entities/create_project_options.dart';
+import 'package:recapture/domain/entities/project_source.dart';
 import 'package:recapture/domain/entities/generation_trace.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'package:recapture/domain/entities/project.dart';
@@ -116,8 +117,10 @@ class _StubProjectsRepo with FakeProjectModelDefaults implements ProjectsReposit
   @override
   Future<Project> create({
     required String name,
-    required ObjectSize size,
-    required CaptureMode mode,
+    ObjectSize? size,
+    CaptureMode? mode,
+    String? category,
+    ProjectSource source = ProjectSource.capture,
   }) async =>
       throw UnimplementedError();
   @override
