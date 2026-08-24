@@ -10,7 +10,13 @@
 // the two lists can never drift in shape.
 import { Types, type FilterQuery } from 'mongoose';
 import { Project, type IProject, type ProjectStatus } from '@/models/Project';
-import { Job, CAPTURE_PROCESSING_JOB_TYPE, type IJob, type JobState } from '@/models/Job';
+import {
+  Job,
+  CAPTURE_PROCESSING_JOB_TYPE,
+  PHOTO_UPLOAD_JOB_TYPE,
+  type IJob,
+  type JobState,
+} from '@/models/Job';
 import {
   countSucceededModelsByProject,
   countSucceededModelsFor,
@@ -59,6 +65,17 @@ export const UPLOAD_FINALIZED_JOB_STATES: readonly JobState[] = [
   'FAILED',
   'CANCELED',
 ];
+
+/**
+ * The states a PHOTO_UPLOAD job's photo set is usable from: exactly UPLOADED.
+ *
+ * Deliberately its own list rather than a reuse of
+ * {@link UPLOAD_FINALIZED_JOB_STATES}: an upload job never enters QUEUED or
+ * anything after it (it is never processed), and CREATED/UPLOADING mean the
+ * transfer has not been verified yet — generating from one of those would hand
+ * Meshy a half-uploaded set.
+ */
+export const PHOTO_UPLOAD_SOURCE_JOB_STATES: readonly JobState[] = ['UPLOADED'];
 
 export interface AdminListProjectsResult {
   items: AdminProjectListItem[];
@@ -455,7 +472,7 @@ export async function adminDeleteProject(
 }
 
 /**
- * The project's most recent CAPTURE job whose upload passed the finalize gate.
+ * The Mongo match for a CAPTURE job whose upload passed the finalize gate.
  *
  * The jobType filter is load-bearing, not defensive: a project also owns
  * MESHY_MODEL_GENERATION jobs (staff "Create Model"), which are newer than the
@@ -466,27 +483,70 @@ export async function adminDeleteProject(
  * null-equality this codebase already relies on for `deletedAt`), so jobs
  * written before jobType existed still resolve.
  */
+const CAPTURE_JOB_MATCH = {
+  jobType: { $in: [CAPTURE_PROCESSING_JOB_TYPE, null] },
+  state: { $in: [...UPLOAD_FINALIZED_JOB_STATES] },
+} as const;
+
+/**
+ * The Mongo match for an artist's VERIFIED photo set — a PHOTO_UPLOAD job that
+ * reached UPLOADED, i.e. one whose objects `commitPhotoUpload` counted in S3.
+ *
+ * CREATED/UPLOADING are excluded on purpose: an unverified set is no more a
+ * usable source than a half-finalized capture is.
+ */
+const PHOTO_UPLOAD_JOB_MATCH = {
+  jobType: PHOTO_UPLOAD_JOB_TYPE,
+  state: { $in: [...PHOTO_UPLOAD_SOURCE_JOB_STATES] },
+} as const;
+
+/**
+ * The project's newest job that a model can be built from and whose objects a
+ * person may look at: a finalized CAPTURE job, or — when the project has none —
+ * an artist's UPLOADED photo set.
+ *
+ * ── WHY CAPTURE IS TRIED FIRST, AS ITS OWN QUERY ───────────────────────────
+ * Not a single widened `$or`. A project with BOTH kinds of job must still
+ * resolve to its CAPTURE job, and a photo-upload job created afterwards would
+ * win a shared `createdAt: -1` sort — silently exporting the wrong set. Two
+ * ordered queries make the precedence explicit and cost a second round trip
+ * only on an upload project, which by construction has no capture job.
+ *
+ * ── WHY THE PHOTO-UPLOAD FALLBACK EXISTS AT ALL ────────────────────────────
+ * An artist's finished upload is a first-class project, not a private draft:
+ * `commitPhotoUpload` promotes it to PROCESSING, and from there it must behave
+ * like any other live project on every surface that resolves through here —
+ * the export manifest, the staff preview gallery, the photo soft-delete, the
+ * admin detail view, and `createMeshyModelRequest`'s "newest job" branch.
+ * Withholding those would leave the Live list showing a project whose every
+ * button refuses.
+ */
 export async function findExportableJob(projectId: string): Promise<IJob | null> {
-  return Job.findOne({
-    projectId: new Types.ObjectId(projectId),
-    jobType: { $in: [CAPTURE_PROCESSING_JOB_TYPE, null] },
-    state: { $in: [...UPLOAD_FINALIZED_JOB_STATES] },
-  })
+  const projectFilter = { projectId: new Types.ObjectId(projectId) };
+  const capture = await Job.findOne({ ...projectFilter, ...CAPTURE_JOB_MATCH })
+    .sort({ createdAt: -1 })
+    .exec();
+  if (capture) return capture;
+  return Job.findOne({ ...projectFilter, ...PHOTO_UPLOAD_JOB_MATCH })
     .sort({ createdAt: -1 })
     .exec();
 }
 
 /**
- * ONE named capture job, subject to the same exportability rules as
- * {@link findExportableJob} — same jobType filter, same finalized-state list —
- * but pinned to an explicit id instead of "the project's newest".
+ * ONE named job, subject to the same rules as {@link findExportableJob} — a
+ * finalized CAPTURE job or an UPLOADED photo set — but pinned to an explicit id
+ * instead of "the project's newest".
  *
  * This exists for the AUTOMATIC generation path, which is acting on one
- * specific job (the one whose manifest it just selected photos from) and must
- * not re-resolve to whatever is newest. A user who recaptures while the first
- * capture is still processing would otherwise have job A's photo keys presigned
- * under job B's prefix — every URL 404s, or worse, Meshy is handed a different
- * capture's photos and returns a plausible model of the wrong object.
+ * specific job (the one whose photos it just selected) and must not re-resolve
+ * to whatever is newest. A user who recaptures while the first capture is still
+ * processing would otherwise have job A's photo keys presigned under job B's
+ * prefix — every URL 404s, or worse, Meshy is handed a different capture's
+ * photos and returns a plausible model of the wrong object.
+ *
+ * An `$or` of two explicit (jobType, states) PAIRS — never a removed filter.
+ * Precedence is irrelevant here (an id names exactly one document), which is
+ * why this can be one query where {@link findExportableJob} needs two.
  *
  * [projectId] is part of the query, not an assertion: a job id belonging to
  * another project must resolve to null, never to a cross-project export.
@@ -499,9 +559,25 @@ export async function findExportableJobById(
   return Job.findOne({
     _id: new Types.ObjectId(jobId),
     projectId: new Types.ObjectId(projectId),
-    jobType: { $in: [CAPTURE_PROCESSING_JOB_TYPE, null] },
-    state: { $in: [...UPLOAD_FINALIZED_JOB_STATES] },
+    $or: [{ ...CAPTURE_JOB_MATCH }, { ...PHOTO_UPLOAD_JOB_MATCH }],
   }).exec();
+}
+
+/**
+ * The job a generation may be built FROM, by id.
+ *
+ * A pure alias for {@link findExportableJobById}, kept as its own name because
+ * the generation call site means something different by it: "the set these keys
+ * came from", not "the set staff are previewing". The two rules were separate
+ * while photo-upload jobs were invisible to the export surfaces; now that a
+ * committed upload is a first-class project they are the same rule, and ONE
+ * implementation is what stops them drifting back apart.
+ */
+export async function findModelSourceJobById(
+  projectId: string,
+  jobId: Types.ObjectId | string
+): Promise<IJob | null> {
+  return findExportableJobById(projectId, jobId);
 }
 
 function toAdminItem(p: IProject, modelCount = 0): AdminProjectListItem {

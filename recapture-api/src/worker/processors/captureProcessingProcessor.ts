@@ -41,10 +41,20 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
       'Job has no upload block — the bundle location is unknown.'
     );
   }
+  const manifestKey = upload.manifestKey;
+  if (!manifestKey) {
+    // Same family: `UploadInfo.manifestKey` is optional only because a
+    // PHOTO_UPLOAD job has none — and a PHOTO_UPLOAD job never queues, so it
+    // never reaches a processor. A CAPTURE job without one is malformed.
+    throw new NonRetryableJobError(
+      'MANIFEST_MISSING',
+      'Job has no manifest key — the bundle location is unknown.'
+    );
+  }
 
   // ── Validate 1: the manifest object still exists. getObjectText returns
   // `absent` only on a true 404; transient S3 failures rethrow → retry path.
-  const manifestObject = await getObjectText(upload.rawBucket, upload.manifestKey);
+  const manifestObject = await getObjectText(upload.rawBucket, manifestKey);
   if (manifestObject.outcome === 'absent') {
     throw new NonRetryableJobError(
       'MANIFEST_MISSING',

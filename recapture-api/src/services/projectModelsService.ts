@@ -24,7 +24,7 @@ import type {
 import type { UserRole } from '@/models/User';
 import {
   findExportableJob,
-  findExportableJobById,
+  findModelSourceJobById,
   isContainedRelativeKey,
   MODEL_INPUT_KEY_PREFIX,
 } from '@/services/adminProjectsService';
@@ -501,8 +501,13 @@ export async function createMeshyModelRequest(
 
   // An explicit jobId pins the generation to the caller's OWN job; without one
   // the newest exportable job is resolved, unchanged, for the staff path.
+  // Only the EXPLICIT-jobId branch was widened, to
+  // findModelSourceJobById — which matches an exportable CAPTURE job OR an
+  // UPLOADED photo-upload job. The no-jobId branch is untouched, so the staff
+  // "newest exportable capture" rule is exactly what it always was and export /
+  // preview / soft-delete keep ignoring PHOTO_UPLOAD jobs entirely.
   const job = input.jobId
-    ? await findExportableJobById(projectId, input.jobId)
+    ? await findModelSourceJobById(projectId, input.jobId)
     : await findExportableJob(projectId);
   if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
 

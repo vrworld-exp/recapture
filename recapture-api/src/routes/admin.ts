@@ -600,7 +600,7 @@ router.post(
         res.status(422).json({
           status: 'error',
           code: 'NOT_EXPORTABLE',
-          message: 'This project has no finalized capture to generate a model from.',
+          message: 'This project has no finalized capture or photo set to generate a model from.',
           steps: result.steps,
         });
         return;
