@@ -284,7 +284,15 @@ class _PhotoRow extends StatelessWidget {
 
     return Row(
       children: [
-        SizedBox(width: 28, child: _StatusIcon(status: status)),
+        // Center, not a bare `SizedBox(width: 28, child: …)`: that passes a
+        // TIGHT 28px width down, and `SizedBox.tighten` cannot shrink below a
+        // tight parent — so the spinner's own 16x16 box came out 28x16 and it
+        // painted as an ellipse. Center relays LOOSE constraints, letting the
+        // child take exactly the square it asks for inside the 28px column.
+        SizedBox(
+          width: 28,
+          child: Center(child: _StatusIcon(status: status)),
+        ),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

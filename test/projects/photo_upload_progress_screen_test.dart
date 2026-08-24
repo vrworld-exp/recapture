@@ -95,6 +95,32 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets("the in-flight row's spinner is a CIRCLE, not an ellipse",
+      (tester) async {
+    // Regression: the status column was a bare `SizedBox(width: 28, child: …)`,
+    // which passes a TIGHT 28px width down. `SizedBox` cannot shrink below a
+    // tight parent constraint, so the spinner's own 16x16 box resolved to 28x16
+    // and painted as a flat oval. Nothing in the analyzer or the other tests
+    // sees that — only its rendered SIZE does.
+    final engine = _SteppingEngine([100, 200, 300]);
+    await _pump(tester, engine: engine);
+
+    engine.emit(bytesUploaded: 50, filesUploaded: 0);
+    await tester.pump();
+    await tester.pump();
+
+    // The row spinner is the only CircularProgressIndicator on the screen (the
+    // header's bar is a LinearProgressIndicator).
+    final spinner = find.byType(CircularProgressIndicator);
+    expect(spinner, findsOneWidget);
+    final size = tester.getSize(spinner);
+    expect(size.width, size.height, reason: 'a spinner must be square');
+    expect(size.width, 16);
+
+    engine.finish();
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('a finished upload offers Done — never the 3D model step',
       (tester) async {
     await _pump(tester, engine: _InstantEngine());
