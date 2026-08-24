@@ -35,6 +35,7 @@ import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/presentation/screens/catalog/catalog_preview_screen.dart';
 import 'package:recapture/presentation/widgets/catalog/preview_product_card.dart';
+import 'catalog_repo_analytics_defaults.dart';
 import 'catalog_repo_publish_defaults.dart';
 
 import 'catalog_entities_test.dart' as golden;
@@ -64,7 +65,9 @@ class _StubAuth extends AuthNotifier {
 }
 
 /// A catalog repository the preview tests drive directly.
-class FakePreviewCatalogRepo with CatalogRepoPublishDefaults implements CatalogRepository {
+class FakePreviewCatalogRepo
+    with CatalogRepoPublishDefaults, CatalogRepoAnalyticsDefaults
+    implements CatalogRepository {
   FakePreviewCatalogRepo({
     Catalog? catalog,
     this.categories = const <CatalogCategory>[],

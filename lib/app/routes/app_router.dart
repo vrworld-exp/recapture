@@ -24,6 +24,7 @@ import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
+import '../../presentation/screens/catalog/catalog_analytics_screen.dart';
 import '../../presentation/screens/catalog/business_profile_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/catalog/category_manager_screen.dart';
@@ -285,11 +286,9 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       // back → /projects (flowBackRouteFor) when there is nothing to pop.
       //
       // Registered below: the shell, the business profile, the preview, publish,
-      // the QR, the category manager, add-product, the product editor and the
-      // model swap. `/catalog/analytics` is the one constant still without a
-      // screen (feature 66, its own task) — until it has one, that location
-      // falls through to errorBuilder, which is the honest outcome; a
-      // placeholder route would look like a broken feature.
+      // the QR, the analytics dashboard, the category manager, add-product, the
+      // product editor and the model swap. Every `/catalog/*` constant now has
+      // a screen behind it.
       GoRoute(
         path: AppRoutes.catalog,
         name: AppRouteNames.catalog,
@@ -336,6 +335,20 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.catalogQr,
         name: AppRouteNames.catalogQr,
         builder: (_, __) => const FlowBackScope(child: CatalogQrScreen()),
+      ),
+      // The analytics dashboard (feature 66). STATIC, declared before the
+      // product routes for the same reason the QR is.
+      //
+      // Reachable BEFORE the first publish, unlike the QR — and that is not an
+      // inconsistency. There is no QR to show before publishing, so an entry
+      // point to an explanation would be a broken feature; there IS an
+      // analytics destination, its empty state is the instruction "publish
+      // first, then the numbers appear here", and a business looking for its
+      // visitor numbers should find that sentence rather than a missing button.
+      GoRoute(
+        path: AppRoutes.catalogAnalytics,
+        name: AppRouteNames.catalogAnalytics,
+        builder: (_, __) => const FlowBackScope(child: CatalogAnalyticsScreen()),
       ),
       // The category manager. STATIC, and declared before the product routes
       // for the same reason `products/new` is: a literal segment must never be

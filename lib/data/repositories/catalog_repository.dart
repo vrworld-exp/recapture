@@ -10,6 +10,7 @@ import '../../domain/catalog/publish_request_result.dart';
 import '../../domain/catalog/publish_status.dart';
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
+import '../../domain/entities/catalog_analytics.dart';
 import '../../domain/entities/catalog_category.dart';
 import '../../domain/entities/catalog_json.dart';
 import '../remote/api_client.dart';
@@ -168,7 +169,63 @@ abstract interface class CatalogRepository {
     CatalogQrFormat format = CatalogQrFormat.png,
     int? size,
   });
+
+  // ── Analytics (features 61-66) ────────────────────────────────────────────
+  //
+  // Three reads on the same seam as the rest of the catalog, because they are
+  // the same resource under the same auth and the same failure translation —
+  // an `AnalyticsRepository` would duplicate [mapCatalogErrors] and give the
+  // dashboard a second place to learn what CATALOG_NOT_FOUND means.
+  //
+  // ⚠ NONE OF THESE IS A COLLECTION POINT. ReCapture does not emit
+  // customer-facing events; Mirage's public page does, and has for months.
+  // These are reads of history that already exists, which is why the dashboard
+  // is useful on the day it ships.
+  //
+  // THE RANGE TRAVELS AS QUERY PARAMETERS. The aggregation happens server-side
+  // (and is cached there per resolved range), so a new window is a new request
+  // — never a filter over something already fetched. `visitors` in particular
+  // is a DISTINCT count and cannot be re-derived client-side by adding days.
+  //
+  // All three answer `ANALYTICS_UNAVAILABLE` (HTTP 503) when Mirage is asleep,
+  // rate-limiting us or refusing our credential. That is a DEGRADATION, not a
+  // failure of anything the user did — the screen renders a soft empty state
+  // with a retry off the mapped code, and nothing has been lost.
+
+  /// The headline counters for the window, plus the preceding window of equal
+  /// length for the deltas (`previousKpis`, which may be null).
+  ///
+  /// [from] and [to] are `YYYY-MM-DD` UTC days. Omit both to take the server's
+  /// default window; the response always carries the range it actually used,
+  /// which is what the screen must title itself from.
+  Future<AnalyticsSummary> fetchAnalyticsSummary({String? from, String? to});
+
+  /// One row per UTC day, already gap-filled and ordered by Mirage. The client
+  /// neither re-sorts nor re-fills — see [AnalyticsTimeseries.points].
+  Future<AnalyticsTimeseries> fetchAnalyticsTimeseries({
+    String? from,
+    String? to,
+  });
+
+  /// The most-viewed products, each labelled 3D / image-only / unknown, plus
+  /// the per-type totals behind the split (feature 65).
+  ///
+  /// A row whose product was deleted locally comes back as `UNKNOWN` with its
+  /// Mirage id and its views intact — dropping it would make the totals
+  /// disagree with the public page's own.
+  Future<TopProducts> fetchAnalyticsTopProducts({
+    String? from,
+    String? to,
+    int? limit,
+  });
 }
+
+/// How many top-product rows the dashboard asks for.
+///
+/// Enough to scroll, short of the backend's cap of 100: this is a "what is
+/// working" list, not an export, and a café with twelve products has already
+/// seen everything by row twenty.
+const int kTopProductsLimit = 20;
 
 /// The two formats the QR endpoint renders. PNG for the screen and for sharing,
 /// PDF for printing at a size a sticker press can use.
@@ -539,6 +596,64 @@ class RemoteCatalogRepository implements CatalogRepository {
       throw CatalogFailure.fromDio(_withDecodedBody(error));
     }
   }
+
+  // ── Analytics ─────────────────────────────────────────────────────────────
+  //
+  // Plain JSON GETs — no bytes-mode special case, so `mapCatalogErrors` alone
+  // carries the 503 ANALYTICS_UNAVAILABLE envelope through to the screen with
+  // its code intact, which is the whole thing the degraded state is drawn
+  // from.
+
+  @override
+  Future<AnalyticsSummary> fetchAnalyticsSummary({String? from, String? to}) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/catalog/analytics/summary',
+          queryParameters: _rangeQuery(from: from, to: to),
+        );
+        return AnalyticsSummary.fromMap(res.data);
+      });
+
+  @override
+  Future<AnalyticsTimeseries> fetchAnalyticsTimeseries({
+    String? from,
+    String? to,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/catalog/analytics/timeseries',
+          queryParameters: _rangeQuery(from: from, to: to),
+        );
+        return AnalyticsTimeseries.fromMap(res.data);
+      });
+
+  @override
+  Future<TopProducts> fetchAnalyticsTopProducts({
+    String? from,
+    String? to,
+    int? limit,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/catalog/analytics/top-products',
+          queryParameters: {
+            ..._rangeQuery(from: from, to: to),
+            if (limit != null) 'limit': limit,
+          },
+        );
+        return TopProducts.fromMap(res.data);
+      });
+
+  /// The `from` / `to` pair, with absent bounds left OUT of the query.
+  ///
+  /// Absent, not null: the analytics schemas are `.strict()` and a `from=null`
+  /// on the wire is a 400 INVALID_REQUEST, which would turn "show me the
+  /// default window" into a hard error on the one screen whose whole job is to
+  /// degrade gracefully.
+  static Map<String, dynamic> _rangeQuery({String? from, String? to}) => {
+        if (from != null && from.isNotEmpty) 'from': from,
+        if (to != null && to.isNotEmpty) 'to': to,
+      };
 
   /// Re-reads a bytes-mode error response as the house JSON envelope.
   ///

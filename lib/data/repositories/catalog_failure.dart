@@ -28,6 +28,12 @@ abstract final class CatalogErrorCodes {
   static const idSetMismatch = 'ID_SET_MISMATCH';
 
   static const invalidRequest = 'INVALID_REQUEST';
+
+  /// Mirage could not be reached for a report. A DEGRADATION, not a failure:
+  /// nothing the user did is wrong, nothing has been lost, and only the report
+  /// is missing — the dashboard branches on this to render a soft empty state
+  /// with a retry rather than an error.
+  static const analyticsUnavailable = 'ANALYTICS_UNAVAILABLE';
 }
 
 /// A `/catalog` request that failed, translated out of Dio at the repository
@@ -58,6 +64,8 @@ class CatalogFailure implements Exception {
   final bool isOffline;
 
   bool get isNoCatalog => code == CatalogErrorCodes.noCatalog;
+  bool get isAnalyticsUnavailable =>
+      code == CatalogErrorCodes.analyticsUnavailable;
   bool get isNotFound => code == CatalogErrorCodes.notFound;
   bool get isDuplicateName => code == CatalogErrorCodes.duplicateName;
 

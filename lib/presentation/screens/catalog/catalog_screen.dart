@@ -127,6 +127,16 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   /// the link and the code alive and a business may still need to reprint one.
   void _openQr() => context.pushNamed(AppRouteNames.catalogQr);
 
+  /// Opens the analytics dashboard (feature 66).
+  ///
+  /// Offered UNCONDITIONALLY, unlike the QR above. The two differ in what is
+  /// behind them before the first publish: there is no code to show, but there
+  /// IS an analytics destination, and its empty state is the instruction
+  /// "publish first, then the numbers appear here". A business hunting for its
+  /// visitor numbers should land on that sentence rather than on a button that
+  /// is not there.
+  void _openAnalytics() => context.pushNamed(AppRouteNames.catalogAnalytics);
+
   /// Opens the category manager. Categories are not decoration: Mirage's
   /// create-item requires a real category id, so this is where a catalog becomes
   /// publishable. The grid's chips and the editor's picker read the same list,
@@ -199,6 +209,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                   onOpenPreview: _openPreview,
                   onOpenPublish: _openPublish,
                   onOpenQr: _openQr,
+                  onOpenAnalytics: _openAnalytics,
                   onSelect: () =>
                       ref.read(bulkSelectionProvider.notifier).enter(),
                 ),
@@ -241,6 +252,7 @@ class _CatalogBody extends ConsumerWidget {
     required this.onOpenPreview,
     required this.onOpenPublish,
     required this.onOpenQr,
+    required this.onOpenAnalytics,
     required this.onSelect,
   });
 
@@ -252,6 +264,7 @@ class _CatalogBody extends ConsumerWidget {
   final VoidCallback onOpenPreview;
   final VoidCallback onOpenPublish;
   final VoidCallback onOpenQr;
+  final VoidCallback onOpenAnalytics;
 
   /// Enters selection mode. Always offered, not only on web: a button is the
   /// discoverable half of a feature whose other entry point is a long-press
@@ -293,6 +306,7 @@ class _CatalogBody extends ConsumerWidget {
                       onOpenPreview: onOpenPreview,
                       onOpenPublish: onOpenPublish,
                       onOpenQr: onOpenQr,
+                      onOpenAnalytics: onOpenAnalytics,
                     ),
                   ),
                   const SliverToBoxAdapter(
@@ -367,6 +381,7 @@ class _CatalogHeaderCard extends StatelessWidget {
     required this.onOpenPreview,
     required this.onOpenPublish,
     required this.onOpenQr,
+    required this.onOpenAnalytics,
   });
 
   final Catalog catalog;
@@ -374,6 +389,7 @@ class _CatalogHeaderCard extends StatelessWidget {
   final VoidCallback onOpenPreview;
   final VoidCallback onOpenPublish;
   final VoidCallback onOpenQr;
+  final VoidCallback onOpenAnalytics;
 
   @override
   Widget build(BuildContext context) {
@@ -478,6 +494,17 @@ class _CatalogHeaderCard extends StatelessWidget {
                   isFullWidth: false,
                   onPressed: onOpenQr,
                 ),
+              // Unconditional, unlike the QR above: before the first publish
+              // there is no code to show, but there IS an analytics
+              // destination whose empty state says "publish first". See
+              // `_CatalogShellState._openAnalytics`.
+              AppButton.secondary(
+                key: const ValueKey('catalog_analytics_cta'),
+                label: 'Analytics',
+                icon: Icons.insights_outlined,
+                isFullWidth: false,
+                onPressed: onOpenAnalytics,
+              ),
             ],
           ),
         ],

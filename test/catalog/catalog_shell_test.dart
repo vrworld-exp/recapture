@@ -23,6 +23,7 @@ import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/presentation/screens/catalog/catalog_screen.dart';
+import 'catalog_repo_analytics_defaults.dart';
 import 'catalog_repo_publish_defaults.dart';
 
 import 'catalog_entities_test.dart' as golden;
@@ -36,7 +37,9 @@ class _StubAuth extends AuthNotifier {
 }
 
 /// A repository whose catalog is whatever the test says it is.
-class _FakeCatalogRepo with CatalogRepoPublishDefaults implements CatalogRepository {
+class _FakeCatalogRepo
+    with CatalogRepoPublishDefaults, CatalogRepoAnalyticsDefaults
+    implements CatalogRepository {
   _FakeCatalogRepo(this._fetch, {this.onCreate});
 
   final Future<Catalog?> Function() _fetch;
