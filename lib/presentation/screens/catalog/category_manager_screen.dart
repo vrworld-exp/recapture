@@ -114,8 +114,8 @@ class _CategoryManagerScreenState extends ConsumerState<CategoryManagerScreen> {
             icon: Icons.cloud_off_outlined,
             title: "We couldn't load your categories",
             body: error is CatalogFailure
-                ? error.message
-                : 'Something went wrong. Please try again.',
+                ? CatalogFeedback.failureText(error)
+                : CatalogFeedback.textForCode(null),
             actionLabel: 'Try again',
             onAction: () =>
                 ref.read(catalogCategoriesProvider.notifier).refresh(),
@@ -252,11 +252,61 @@ class _CategoryList extends ConsumerWidget {
     int oldIndex,
     int newIndex,
   ) async {
+    // Captured while the context is certainly mounted. An undo fires seconds
+    // later and this screen is a pushed route the user can leave in that time —
+    // a container survives it, a ref does not.
     final messenger = CatalogFeedback.of(context);
+    final container = ProviderScope.containerOf(context, listen: false);
+    final name = container
+        .read(catalogCategoriesProvider)
+        .valueOrNull
+        ?.categories
+        .elementAtOrNull(oldIndex)
+        ?.name;
+    await _writeOrder(messenger, container, oldIndex, newIndex, name: name);
+  }
+
+  /// One drag, written to the server, confirmed, and offered back.
+  ///
+  /// [undoable] is false for the undo's OWN write, so pressing undo twice does
+  /// not become a way to walk the list back and forth forever.
+  static Future<void> _writeOrder(
+    ScaffoldMessengerState messenger,
+    ProviderContainer container,
+    int oldIndex,
+    int newIndex, {
+    String? name,
+    bool undoable = true,
+  }) async {
     try {
-      await ref
+      final landed = await container
           .read(catalogCategoriesProvider.notifier)
           .reorder(oldIndex, newIndex);
+      // Nothing moved — a drag that ended where it started. Confirming it would
+      // be a message about an event that did not happen.
+      if (landed == null) return;
+
+      final subject = name == null ? 'Category order saved.' : '$name moved.';
+      if (!undoable) {
+        CatalogFeedback.confirm(messenger, subject);
+        return;
+      }
+      CatalogFeedback.undoable(
+        messenger,
+        '$subject Customers see the new order after you publish.',
+        // The REAL inverse: the row is dragged back from where it LANDED to
+        // where it came from, and that write goes to the server like any other.
+        // `oldIndex + 1` when moving down is the ReorderableListView
+        // convention — the target is counted before the row is lifted out.
+        onUndo: () => _writeOrder(
+          messenger,
+          container,
+          landed,
+          oldIndex > landed ? oldIndex + 1 : oldIndex,
+          name: name,
+          undoable: false,
+        ),
+      );
     } on CatalogFailure catch (failure) {
       // The list has already snapped back and re-read itself. Say why, or the
       // row looks as though it refused the drag for no reason.
@@ -314,10 +364,10 @@ class _CreateCategoryFieldState extends ConsumerState<_CreateCategoryField> {
       CatalogFeedback.confirm(messenger, '${created.name} added.');
     } on CatalogFailure catch (failure) {
       // A duplicate name is the SERVER's verdict — it owns uniqueness within the
-      // catalog — so its sentence lands beside the field the user typed in
-      // rather than in a toast they have to remember.
+      // catalog — so the sentence for its code lands beside the field the user
+      // typed in rather than in a toast they have to remember.
       if (!mounted) return;
-      setState(() => _error = failure.message);
+      setState(() => _error = CatalogFeedback.failureText(failure));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -544,7 +594,7 @@ class _RenameFieldState extends ConsumerState<_RenameField> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error = failure.message;
+        _error = CatalogFeedback.failureText(failure);
       });
     }
   }
@@ -992,7 +1042,7 @@ class _CategoryProductsPane extends ConsumerWidget {
       return CatalogMessage(
         icon: Icons.cloud_off_outlined,
         title: "We couldn't load these products",
-        body: state.error!.message,
+        body: CatalogFeedback.failureText(state.error!),
         actionLabel: 'Try again',
         onAction: notifier.load,
       );

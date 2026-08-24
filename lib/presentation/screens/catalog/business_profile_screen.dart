@@ -121,8 +121,8 @@ class BusinessProfileScreen extends ConsumerWidget {
           icon: Icons.cloud_off_outlined,
           title: "We couldn't load your profile",
           body: error is CatalogFailure
-              ? error.message
-              : 'Something went wrong. Please try again.',
+              ? CatalogFeedback.failureText(error)
+              : CatalogFeedback.textForCode(null),
           actionLabel: 'Try again',
           onAction: () => ref.invalidate(businessProfileProvider),
         ),
@@ -689,9 +689,10 @@ class _SaveError extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
-                // The backend's own owner-safe sentence — never Mirage's prose,
-                // never an HTTP status.
-                failure.message,
+                // OUR sentence for the code, from the one table — never the
+                // server's own message, never Mirage's prose, never an HTTP
+                // status. Same words the toasts use.
+                CatalogFeedback.failureText(failure),
                 style: Theme.of(context)
                     .textTheme
                     .bodySmall

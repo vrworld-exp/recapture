@@ -22,6 +22,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../data/repositories/catalog_failure.dart';
+import '../../../domain/catalog/catalog_error_copy.dart';
 
 /// How long an undo stays on offer.
 ///
@@ -81,9 +82,14 @@ abstract final class CatalogFeedback {
   ///
   /// [subject] names the object and the attempt ("Chair 02 could not be
   /// archived") — a bare "Something went wrong" leaves the user unsure WHICH of
-  /// the things they just did failed. [failure]'s own message is the backend's
-  /// owner-safe sentence; it never carries Mirage's prose or an HTTP status, so
-  /// it is safe to show verbatim.
+  /// the things they just did failed.
+  ///
+  /// ⚠ THE SENTENCE COMES FROM THE CODE, NEVER FROM [CatalogFailure.message].
+  /// The backend's own message is owner-safe, but reading it here would leave
+  /// exactly one path by which text nobody on this side wrote could reach a
+  /// user — a proxy's error page, a stub, a server one deploy ahead. Mapping
+  /// the code instead makes that structurally impossible, and buys copy that
+  /// can name the object and say what to do next. See [catalogErrorCopy].
   static void failure(
     ScaffoldMessengerState messenger,
     CatalogFailure failure, {
@@ -93,12 +99,26 @@ abstract final class CatalogFeedback {
   }) =>
       _show(
         messenger,
-        message: '$subject. ${failure.message}',
+        message: failureText(failure, subject: subject),
         duration: kCatalogToastDuration,
         action: onRetry == null
             ? null
             : SnackBarAction(label: retryLabel, onPressed: onRetry),
       );
+
+  /// The same mapped sentence, for a surface that shows its failure INLINE
+  /// rather than as a toast — the editor's error banner, the add-product form.
+  ///
+  /// One function for both so the two never diverge: a message worth writing
+  /// for a snackbar is the message the banner should carry.
+  static String failureText(CatalogFailure failure, {String? subject}) =>
+      catalogErrorSentence(failure.code, subject: subject);
+
+  /// The mapped sentence for a bare [code], where the caller holds a code
+  /// rather than a [CatalogFailure] — a notifier's stored error, a publish
+  /// row's status.
+  static String textForCode(String? code, {String? subject}) =>
+      catalogErrorSentence(code, subject: subject);
 
   static void _show(
     ScaffoldMessengerState messenger, {
@@ -109,7 +129,14 @@ abstract final class CatalogFeedback {
     // The newest message wins. `ScaffoldMessenger` queues by default, which for
     // two rapid actions means the second confirmation appears four seconds
     // after the thing it is confirming — by then it reads as a report about
-    // something else. Replacing keeps the toast about what just happened.
+    // something else, and three quick archives leave a pile the user reads none
+    // of. Replacing keeps the toast about what just happened.
+    //
+    // The cost is a pending UNDO being retired early. Accepted, because undo is
+    // never the only way back: an archived product is restorable from the
+    // Archived filter for as long as it exists, and the one action with no way
+    // back — permanent delete — is gated by a typed confirmation instead of a
+    // snackbar.
     messenger.hideCurrentSnackBar();
 
     final width = MediaQuery.maybeSizeOf(messenger.context)?.width ?? 0;
@@ -119,9 +146,26 @@ abstract final class CatalogFeedback {
       SnackBar(
         // Wraps rather than truncates: a failure sentence that ends in an
         // ellipsis has thrown away the half that says what to do.
-        content: Text(message),
+        //
+        // `liveRegion` is what makes the toast reach a screen reader at all. A
+        // snackbar is painted into the overlay and takes no focus, so without
+        // it the announcement never happens: on the web build this becomes an
+        // `aria-live` region, on Android/iOS a TalkBack/VoiceOver
+        // announcement. A confirmation nobody hears is the same as no
+        // confirmation, which is the whole failure mode this file exists for.
+        content: Semantics(
+          liveRegion: true,
+          container: true,
+          child: Text(message),
+        ),
         duration: duration,
         action: action,
+        // A keyboard-reachable way out, and the reason it is not a `Dismissible`
+        // swipe alone: swiping is the ONLY built-in dismissal, and there is no
+        // swipe on a desktop browser. The close button is a real
+        // `IconButton` in the traversal order, so Tab reaches it and Enter or
+        // Space dismisses — which is also how the undo action is reached.
+        showCloseIcon: true,
         // `width` and `margin` are mutually exclusive on a SnackBar, which is
         // why the narrow case passes neither and takes the theme's default.
         width: pinned ? kCatalogToastWidth : null,

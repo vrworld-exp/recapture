@@ -22,6 +22,7 @@ import '../../../domain/entities/product_type.dart';
 import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_card.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 
 /// Opens one product's overflow menu, anchored at the card's own context.
 typedef ProductMenuCallback = void Function(
@@ -131,7 +132,7 @@ class ProductGridSection extends ConsumerWidget {
             child: CatalogMessage(
               icon: Icons.cloud_off_outlined,
               title: "We couldn't load your products",
-              body: state.error!.message,
+              body: CatalogFeedback.failureText(state.error!),
               actionLabel: 'Try again',
               onAction: notifier.retry,
               fillsViewport: false,
@@ -608,21 +609,19 @@ Future<void> _move(
   required int from,
   required int to,
 }) async {
-  final messenger = ScaffoldMessenger.of(context);
+  final messenger = CatalogFeedback.of(context);
   try {
     await ref
         .read(catalogProductsProvider.notifier)
         .reorder(from, to > from ? to + 1 : to);
   } on CatalogFailure catch (failure) {
     // The grid has already snapped back — say why, or the card looks as though
-    // it refused the drag for no reason. The server's own owner-safe sentence
-    // (ID_SET_MISMATCH asks for a reload) plus what we did about it.
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text(
-          '${failure.message} Your products are back in their previous order.',
-        ),
-      ),
+    // it refused the drag for no reason. One subject naming what failed, then
+    // the mapped sentence for the code (ID_SET_MISMATCH asks for a refresh).
+    CatalogFeedback.failure(
+      messenger,
+      failure,
+      subject: 'Your products are back in their previous order',
     );
   }
 }
@@ -780,7 +779,7 @@ class _GridFooter extends ConsumerWidget {
         child: Column(
           children: [
             Text(
-              state.appendError!.message,
+              CatalogFeedback.failureText(state.appendError!),
               textAlign: TextAlign.center,
               style: Theme.of(context)
                   .textTheme

@@ -295,8 +295,8 @@ class _BulkResultSheet extends StatelessWidget {
                     ),
                     title: Text(item.name, style: theme.textTheme.bodyMedium),
                     subtitle: Text(
-                      // The backend's own owner-safe sentence.
-                      item.failure.message,
+                      // OUR sentence for the code, from the one table.
+                      CatalogFeedback.failureText(item.failure),
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: AppColors.textSecondary),
                     ),

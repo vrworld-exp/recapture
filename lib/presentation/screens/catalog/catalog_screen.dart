@@ -17,6 +17,7 @@ import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_actions.dart';
@@ -54,9 +55,9 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     final created = await showCreateCatalogDialog(context);
     if (created == null || !mounted) return; // cancelled
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-          content: Text('${created.name} is ready. Add your first product.')),
+    CatalogFeedback.confirm(
+      CatalogFeedback.of(context),
+      '${created.name} is ready. Add your first product.',
     );
   }
 
@@ -182,8 +183,8 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
             icon: Icons.cloud_off_outlined,
             title: "We couldn't load your catalog",
             body: error is CatalogFailure
-                ? error.message
-                : 'Something went wrong. Please try again.',
+                ? CatalogFeedback.failureText(error)
+                : CatalogFeedback.textForCode(null),
             actionLabel: 'Try again',
             onAction: () => ref.invalidate(catalogProvider),
           ),

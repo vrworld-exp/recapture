@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/catalog_link_service.dart';
+import 'catalog_feedback.dart';
 
 class PublishLinkActions extends ConsumerWidget {
   const PublishLinkActions({super.key, required this.url});
@@ -35,21 +36,18 @@ class PublishLinkActions extends ConsumerWidget {
     Future<void> Function() action,
     String confirmation,
   ) async {
-    final messenger = ScaffoldMessenger.of(context);
+    final messenger = CatalogFeedback.of(context);
     try {
       await action();
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(confirmation)));
+      CatalogFeedback.confirm(messenger, confirmation);
     } catch (_) {
       // Mapped copy only. A clipboard refusal or a dismissed share sheet
-      // arrives as a platform exception whose text is not for a user.
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(
-          content: Text("That didn't work — you can select the link above and "
-              'copy it by hand.'),
-        ));
+      // arrives as a platform exception whose text is not for a user — and it
+      // carries no envelope code either, so this is one sentence written here.
+      CatalogFeedback.confirm(
+        messenger,
+        "That didn't work — you can select the link above and copy it by hand.",
+      );
     }
   }
 

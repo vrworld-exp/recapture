@@ -122,15 +122,21 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
   /// unconditional, and it is followed by a re-read because the most likely
   /// cause of a mismatch is another device having reordered first. Last write
   /// wins, but only after this one has seen what it is writing over.
-  Future<void> reorder(int oldIndex, int newIndex) async {
+  ///
+  /// Returns the index the row LANDED on, or null when nothing moved (an
+  /// out-of-range drag, or one that ended where it started). The caller needs
+  /// that number for the inverse: an undo has to drag the row back from where
+  /// it actually is, and this method — not the gesture — owns the conversion
+  /// from the `ReorderableListView` convention to a real index.
+  Future<int?> reorder(int oldIndex, int newIndex) async {
     final previous = _list;
     final categories = previous.categories;
-    if (oldIndex < 0 || oldIndex >= categories.length) return;
+    if (oldIndex < 0 || oldIndex >= categories.length) return null;
 
     var target = newIndex > oldIndex ? newIndex - 1 : newIndex;
     if (target < 0) target = 0;
     if (target >= categories.length) target = categories.length - 1;
-    if (target == oldIndex) return;
+    if (target == oldIndex) return null;
 
     final reordered = [...categories];
     reordered.insert(target, reordered.removeAt(oldIndex));
@@ -147,6 +153,7 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
 
     try {
       await _repo.reorderCategories([for (final c in optimistic) c.id]);
+      return target;
     } on CatalogFailure {
       state = AsyncData(previous);
       unawaited(refresh());

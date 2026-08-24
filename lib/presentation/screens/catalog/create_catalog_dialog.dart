@@ -9,6 +9,7 @@ import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 
 /// Hand-synced with the create schema in
 /// `recapture-api/src/validation/catalogSchemas.ts` (there is no shared package —
@@ -96,11 +97,12 @@ class _CreateCatalogDialogState extends ConsumerState<CreateCatalogDialog> {
       if (!mounted) return;
       setState(() {
         _submitting = false;
-        // CatalogFailure carries the backend's own owner-safe copy (including
-        // the offline sentence); anything else gets one plain fallback.
+        // Mapped from the CODE, from the one catalog table — the offline
+        // sentinel included. Anything that is not a CatalogFailure has no code
+        // and falls through to the same generic sentence.
         _failureMessage = error is CatalogFailure
-            ? error.message
-            : 'Something went wrong. Please try again.';
+            ? CatalogFeedback.failureText(error)
+            : CatalogFeedback.textForCode(null);
       });
     }
   }

@@ -14,6 +14,7 @@ import '../../../domain/entities/product_type.dart';
 import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/model_picker_field.dart';
 import '../projects/model_viewer_screen.dart';
 
@@ -179,18 +180,21 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
       );
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${product.name} was added to your catalog.')),
+      CatalogFeedback.confirm(
+        CatalogFeedback.of(context),
+        '${product.name} was added to your catalog.',
       );
       navigateBack(context);
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        // CatalogFailure carries the backend's own owner-safe copy (including
-        // the offline sentence); anything else gets one plain fallback.
+        // Mapped from the CODE, never from the server's own sentence — the one
+        // table, so this banner reads the way the toasts do. Anything that is
+        // not a CatalogFailure has no code at all and gets the same generic
+        // fallback an unknown code would.
         _failureMessage = error is CatalogFailure
-            ? error.message
-            : 'Something went wrong. Please try again.';
+            ? CatalogFeedback.failureText(error)
+            : CatalogFeedback.textForCode(null);
       });
     }
   }

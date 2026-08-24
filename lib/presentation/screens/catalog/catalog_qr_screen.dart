@@ -30,6 +30,7 @@ import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_repository.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/publish_link_actions.dart';
 
@@ -45,14 +46,21 @@ class CatalogQrScreen extends ConsumerWidget {
     final catalog = ref.watch(catalogProvider).valueOrNull;
 
     ref.listen<CatalogQrState>(catalogQrProvider, (previous, next) {
-      final message = next.failure?.message ?? next.notice;
-      if (message == null ||
-          message == (previous?.failure?.message ?? previous?.notice)) {
-        return;
+      final failure = next.failure;
+      final changed = failure?.code != previous?.failure?.code ||
+          next.notice != previous?.notice;
+      if (!changed) return;
+
+      final messenger = CatalogFeedback.of(context);
+      if (failure != null) {
+        CatalogFeedback.failure(
+          messenger,
+          failure,
+          subject: 'Your QR code could not be saved',
+        );
+      } else if (next.notice != null) {
+        CatalogFeedback.confirm(messenger, next.notice!);
       }
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(message)));
     });
 
     return Scaffold(

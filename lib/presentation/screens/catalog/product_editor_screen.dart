@@ -304,18 +304,18 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
 
       ref.read(productEditorDirtyProvider.notifier).state = false;
       setUnsavedChangesWarning(false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '${updated.name} saved. Customers see this after you publish.',
-          ),
-        ),
+      CatalogFeedback.confirm(
+        CatalogFeedback.of(context),
+        '${updated.name} saved. Customers see this after you publish.',
       );
       // The form is rebuilt from the server's product by the ValueKey on the
       // parent, so the fields re-seed and nothing is left marked dirty.
     } on CatalogFailure catch (failure) {
       if (!mounted) return;
-      setState(() => _failureMessage = failure.message);
+      setState(() => _failureMessage = CatalogFeedback.failureText(
+            failure,
+            subject: '${widget.product.name} could not be saved',
+          ));
     }
   }
 
@@ -332,9 +332,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       );
       if (!mounted) return;
       setState(() => _imageCommitPending = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Photo replaced.')),
-      );
+      CatalogFeedback.confirm(CatalogFeedback.of(context), 'Photo replaced.');
     } on ProductImagePickException catch (error) {
       if (!mounted) return;
       setState(() => _failureMessage = error.message);
@@ -344,7 +342,10 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
         // The bytes may already be in the bucket. If they are, the retry is a
         // commit and the user is not asked to send 5 MiB twice.
         _imageCommitPending = _notifier.uncommittedImageKey != null;
-        _failureMessage = failure.message;
+        _failureMessage = CatalogFeedback.failureText(
+          failure,
+          subject: 'That photo could not be saved',
+        );
       });
     }
   }
@@ -357,7 +358,10 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       setState(() => _imageCommitPending = false);
     } on CatalogFailure catch (failure) {
       if (!mounted) return;
-      setState(() => _failureMessage = failure.message);
+      setState(() => _failureMessage = CatalogFeedback.failureText(
+            failure,
+            subject: 'That photo could not be saved',
+          ));
     }
   }
 
@@ -381,8 +385,9 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       final copy = await _notifier.duplicate();
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Duplicated as "${copy.name}".')),
+      CatalogFeedback.confirm(
+        CatalogFeedback.of(context),
+        'Duplicated as "${copy.name}".',
       );
       // Straight to the copy: a duplicate the user cannot see is a duplicate
       // they press again. pushReplacement, so back still lands on the grid
@@ -396,7 +401,10 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       );
     } on CatalogFailure catch (failure) {
       if (!mounted) return;
-      setState(() => _failureMessage = failure.message);
+      setState(() => _failureMessage = CatalogFeedback.failureText(
+            failure,
+            subject: '${widget.product.name} could not be duplicated',
+          ));
     }
   }
 

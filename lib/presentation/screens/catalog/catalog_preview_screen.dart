@@ -30,6 +30,7 @@ import '../../../domain/catalog/publish_gate.dart';
 import '../../../domain/entities/business_profile.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/preview_product_card.dart';
 
@@ -126,8 +127,8 @@ class _CatalogPreviewScreenState extends ConsumerState<CatalogPreviewScreen> {
             icon: Icons.visibility_off_outlined,
             title: "We couldn't build your preview",
             body: error is CatalogFailure
-                ? error.message
-                : 'Something went wrong. Please try again.',
+                ? CatalogFeedback.failureText(error)
+                : CatalogFeedback.textForCode(null),
             actionLabel: 'Try again',
             onAction: () => ref.invalidate(catalogPreviewProvider),
           ),

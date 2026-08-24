@@ -19,10 +19,17 @@
 // The wording mirrors the backend's table on purpose: improving one should
 // improve the other, and the two are hand-synced (AGENTS.md §0.1).
 //
-// ⚠ F10 (the feedback layer) OWNS THIS TABLE once it lands. It arrives here
-// because the publish screen is the first surface that needs it and shipping
-// publish without owner-safe copy is not an option. F10 should extend this
-// file, not start a second one.
+// ⚠ F10 (the feedback layer) NOW OWNS THIS TABLE. Its entry point is
+// `catalog_error_copy.dart`: one lookup — [catalogErrorCopy] — over two tables
+// split by ORIGIN. These are a publish run's PER-ITEM codes, read out of stored
+// rows; that file holds the HTTP ENVELOPE codes, which can arrive at any call
+// site. The type is shared ([CatalogErrorCopy] is an alias of [SyncErrorCopy]),
+// so the two cannot drift into different shapes, and one enumerating test
+// (`test/catalog/feedback_test.dart`) covers both against the backend's own
+// sources.
+//
+// Add a PUBLISH_* per-item code here; add anything the API can return in an
+// envelope there.
 
 /// One failure, as the user reads it: what happened, and what to do next.
 class SyncErrorCopy {
@@ -38,7 +45,11 @@ class SyncErrorCopy {
 }
 
 /// The generic fallback, for a code this build does not know.
-const SyncErrorCopy _unknown = SyncErrorCopy(
+///
+/// Public so F10's enumerating test can tell a MAPPED code from one that fell
+/// through to this — an unmapped publish code must fail CI, not quietly read as
+/// "did not succeed".
+const SyncErrorCopy kUnknownSyncErrorCopy = SyncErrorCopy(
   'Publishing this item did not succeed. Try again, or edit it and publish '
       'again.',
   null,
@@ -123,9 +134,10 @@ const Map<String, SyncErrorCopy> _copy = {
 /// OUR sentence for a publish-failure [code].
 ///
 /// Total by construction: an unrecognised code — an older build's, one added
-/// after this release, or a corrupted value — degrades to [_unknown] rather
-/// than showing the raw code to someone who has no use for it.
+/// after this release, or a corrupted value — degrades to
+/// [kUnknownSyncErrorCopy] rather than showing the raw code to someone who has
+/// no use for it.
 SyncErrorCopy syncErrorCopy(String? code) {
-  if (code == null || code.isEmpty) return _unknown;
-  return _copy[code] ?? _unknown;
+  if (code == null || code.isEmpty) return kUnknownSyncErrorCopy;
+  return _copy[code] ?? kUnknownSyncErrorCopy;
 }

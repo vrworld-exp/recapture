@@ -36,6 +36,7 @@ import '../../../domain/catalog/publish_status.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/app_status_pill.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/publish_link_actions.dart';
@@ -135,13 +136,71 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
     // A notice or a failure is a RESULT, and a result the user does not see is
     // the same as no result at all.
     ref.listen<PublishScreenState>(publishProvider, (previous, next) {
-      final message = next.actionFailure?.message ?? next.notice;
-      if (message == null || message == (previous?.actionFailure?.message ?? previous?.notice)) {
+      // Compared on the CODE, not on the rendered sentence: two different codes
+      // can map to the same words, and the second one is still news.
+      final failure = next.actionFailure;
+      final changed = failure?.code != previous?.actionFailure?.code ||
+          next.notice != previous?.notice;
+      if (!changed) return;
+
+      final messenger = CatalogFeedback.of(context);
+      if (failure != null) {
+        CatalogFeedback.failure(
+          messenger,
+          failure,
+          subject: 'Your catalog could not be published',
+        );
+      } else if (next.notice != null) {
+        // A notice is OURS — written here, in this build, for a non-failure
+        // outcome the user still has to be told about.
+        CatalogFeedback.confirm(messenger, next.notice!);
+      }
+    });
+
+    // Started and finished, said out loud (features 68, 69).
+    //
+    // The progress card on this screen already SHOWS both, so why a toast: a
+    // run outlives the screen. "Publishing started" is the sentence that tells
+    // the user they may leave, and "finished" is the one they get if they came
+    // back and the card has already settled into its resting state. Both fire
+    // only on a transition this screen actually WATCHED — a screen opened onto
+    // a run already in flight announces nothing, because nothing happened while
+    // anyone was looking.
+    ref.listen<PublishScreenState>(publishProvider, (previous, next) {
+      final before = previous?.status.valueOrNull;
+      final after = next.status.valueOrNull;
+      if (before == null || after == null) return;
+
+      final wasRunning = before.isPublishing;
+      final isRunning = after.isPublishing;
+      if (wasRunning == isRunning) return;
+
+      final messenger = CatalogFeedback.of(context);
+      if (isRunning) {
+        CatalogFeedback.confirm(
+          messenger,
+          after.run?.mode.isUnpublish ?? false
+              ? 'Taking your catalog offline. This keeps going if you leave.'
+              : 'Publishing started. This keeps going if you leave this screen.',
+        );
         return;
       }
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(message)));
+
+      // Finished. WHICH ending it was, not just that it ended — "done" over a
+      // run that failed half its products is the message that stops someone
+      // ever looking at the list below.
+      final counts = before.run?.counts ?? after.run?.counts;
+      final failed = counts?.failed ?? 0;
+      CatalogFeedback.confirm(
+        messenger,
+        switch ((after.isLive, failed)) {
+          (_, > 0) =>
+            '$failed of ${counts?.total ?? failed} could not be published. '
+                'Retry them below.',
+          (true, _) => 'Your catalog is live.',
+          (false, _) => 'Your catalog is offline.',
+        },
+      );
     });
 
     return Scaffold(
@@ -166,8 +225,8 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
             icon: Icons.cloud_off_outlined,
             title: "We couldn't check your catalog",
             body: error is CatalogFailure
-                ? error.message
-                : 'Something went wrong. Please try again.',
+                ? CatalogFeedback.failureText(error)
+                : CatalogFeedback.textForCode(null),
             actionLabel: 'Try again',
             onAction: () => ref.read(publishProvider.notifier).reload(),
           ),

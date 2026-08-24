@@ -36,6 +36,7 @@ import '../../../domain/entities/product_type.dart';
 import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/model_picker_field.dart';
 import '../projects/model_viewer_screen.dart';
 
@@ -77,12 +78,13 @@ class ChangeProductModelScreen extends ConsumerWidget {
         child: async.when(
           loading: () => const AppLoadingIndicator(),
           // The backend makes "no such product" and "not yours" identical on
-          // purpose, so this is one state with the server's own sentence — no
-          // local translation table, and never a code.
+          // purpose, so this is ONE state — NOT_FOUND — and the client must not
+          // try to tell the two apart either. Its sentence comes from the same
+          // table every other catalog failure uses.
           error: (error, __) => _ChangeModelError(
             message: error is CatalogFailure
-                ? error.message
-                : 'Something went wrong. Please try again.',
+                ? CatalogFeedback.failureText(error)
+                : CatalogFeedback.textForCode(null),
             onRetry: () => ref.invalidate(productDetailProvider(productId)),
           ),
           data: (product) => _ChangeModelForm(
@@ -174,24 +176,22 @@ class _ChangeModelFormState extends ConsumerState<_ChangeModelForm> {
       } catch (_) {/* the next pull-to-refresh reconciles it */}
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            '${updated.name} now uses the model you picked. '
-            'Customers will see this after you publish.',
-          ),
-        ),
+      CatalogFeedback.confirm(
+        CatalogFeedback.of(context),
+        '${updated.name} now uses the model you picked. '
+        'Customers will see this after you publish.',
       );
       navigateBack(context);
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _saving = false;
-        // MODEL_NOT_FOUND and MODEL_NOT_READY both already carry owner-safe
-        // copy from the backend. Anything else gets one plain fallback.
+        // MODEL_NOT_FOUND and MODEL_NOT_READY are both mapped in the one code
+        // table; anything that is not a CatalogFailure has no code and falls
+        // through to the same generic sentence an unknown code would get.
         _failureMessage = error is CatalogFailure
-            ? error.message
-            : 'Something went wrong. Please try again.';
+            ? CatalogFeedback.failureText(error)
+            : CatalogFeedback.textForCode(null);
       });
     }
   }
