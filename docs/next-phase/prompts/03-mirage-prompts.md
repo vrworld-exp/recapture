@@ -1,21 +1,39 @@
 # Mirage Prompts — M1 … M5
 
-> **Status: ❌ none run — this file is the only next-phase work left.** ReCapture is finished on
-> both sides (B1–B7, F1–F12); every Mirage gap below is still open. Suggested order
-> **M1 → M5 → M2 → M3 → M4**: M1 is the highest-value fix (every asset still crosses the wire
-> twice), M5 is what makes the phase-2 fields visible to customers, and M2–M4 are reliability
-> and V2. These prompts do **not** run from `phase2/ReCapture/` — see the target repos below.
+> **Status: ✅ M1–M5 all implemented, in the suggested order (M1 → M5 → M2 → M3 → M4).**
+> ReCapture was already finished on both sides (B1–B7, F1–F12); the Mirage gaps below are now
+> closed too. These prompts do **not** run from `phase2/ReCapture/` — see the target repos below.
+>
+> | | Change | Verification |
+> |---|---|---|
+> | **M1** | `assetFromUrl.js` + URL twins on all six asset handlers | 11/11 offline guards; real HTTPS streaming; full route path with stubbed S3 |
+> | **M5** | tags / availability / featured / order / business links / unpublished state | browser-verified at a 430px viewport against a mock backend; `build` + `lint` clean |
+> | **M2** | `Idempotency-Key` on the nine admin write routes | 24/24 offline, incl. a genuine in-flight race |
+> | **M3** | `POST /catalog-batch` | 17/17 offline, incl. a 40-operation batch; 413/400 envelopes checked live |
+> | **M4** | `/analytics/me/*` client scope | 18/18 offline, asserting on which restaurant each aggregation actually matched |
+>
+> **The one gap, everywhere: no `live` run.** Each prompt's verification script has a `live`
+> mode, written and documented but never executed — the machine this was built on has no
+> MongoDB (no `mongod`, Docker daemon down) and no S3 credentials. Point them at a dev
+> environment to close the remaining criteria. The other outstanding item is M5's iOS AR Quick
+> Look check, which only a real iPhone can settle.
+>
+> Scripts live in `mirage-be-phase-2-recap/scripts/` with a README covering every decision;
+> run them with `node scripts/<name>.js logic` (or `guards` for M1).
 
 Target repos:
-- **Backend:** `phase2/mirage-be-phase-2-recap/` — the phase-2 working fork. Its `src/` is currently
-  byte-identical to `phase2/mirage-be/` (only `.env`, `README.md` and `src/CONSTANT.js` differ), so
-  every change here must be portable back to `mirage-be` without conflict. State in the PR which
-  repo you changed.
+- **Backend:** `phase2/mirage-be-phase-2-recap/` — the phase-2 working fork, and the repo M1–M4
+  were implemented in. Its `src/` was byte-identical to `phase2/mirage-be/` before that work
+  (only `.env`, `README.md` and `src/CONSTANT.js` differed); **it no longer is.** Everything
+  added is additive and ports back cleanly, with one thing to watch: `src/CONSTANT.js` differs
+  between the forks, so the four `ASSET_URL_*` getters appended there have to be appended to
+  `mirage-be`'s copy too.
 - **Frontend:** `phase2/mirage-fe/` (M5 only).
 
 ## Read this before any Mirage prompt
 
-The phase-2 Mirage work is **already substantially done**. Verified in the tree today:
+The phase-2 Mirage work listed here was **already done before M1–M5 were run**, and the M1–M5
+changes were built on top of it without touching any of it. Verified in the tree:
 
 | Capability | State |
 |---|---|
@@ -29,7 +47,8 @@ The phase-2 Mirage work is **already substantially done**. Verified in the tree 
 | Unpublished restaurant hidden from the public read | done (`itemController.js:490-491`) |
 | Real `delete-category` with a non-empty guard and `?force=true` | done (`adminController.js:1708+`) |
 
-**Do not re-implement any of the above.** The prompts below cover only what is still missing.
+**Do not re-implement any of the above.** The prompts below covered what was still missing;
+all five have since been implemented — see the status table at the top of this file.
 
 House style of this repo, which every prompt must respect:
 - **CommonJS JavaScript**, no TypeScript, no build step, no test runner configured.
