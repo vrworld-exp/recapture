@@ -432,7 +432,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.text('A category with that name already exists in your catalog.'),
+        find.textContaining('already uses this name'),
         findsOneWidget,
       );
     });

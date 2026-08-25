@@ -89,7 +89,19 @@ String? flowBackRouteFor(String location) {
 void navigateBack(BuildContext context) {
   final router = GoRouter.maybeOf(context);
   if (router == null) {
-    Navigator.maybePop(context);
+    // `pop`, NOT `maybePop`. This function is the "we have DECIDED to go back"
+    // action — every caller reaches it after its guard has already said yes.
+    // `maybePop` re-asks the route's `PopScope`, and the screens that call this
+    // are exactly the ones whose `PopScope(canPop: false)` calls it BACK from
+    // `onPopInvoked`: the editor's exit guard, FlowBackScope below. That is an
+    // unbounded loop, not a fallback — it hangs the isolate with no stack
+    // overflow to point at it.
+    //
+    // Only reachable outside a GoRouter (plain-MaterialApp widget tests); the
+    // router branch below never had the problem because `router.pop()` does not
+    // consult PopScope either.
+    final navigator = Navigator.maybeOf(context);
+    if (navigator != null && navigator.canPop()) navigator.pop();
     return;
   }
   if (router.canPop()) {

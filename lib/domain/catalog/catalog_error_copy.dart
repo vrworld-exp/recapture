@@ -81,6 +81,18 @@ const Map<String, CatalogErrorCopy> _copy = {
     'Another item in this catalog already uses this name.',
     'Rename it, then save again.',
   ),
+  // Not a backend code — the CLIENT raises this one when the platform delivery
+  // fails: a share sheet the user dismissed on a phone, a browser that refused
+  // the download. There is no envelope behind it and no way to tell those two
+  // apart from here, so the copy has to cover both without guessing which.
+  //
+  // The last clause matters more than it looks: the QR is still on screen, and
+  // photographing it is a real way out that a café owner will not think of
+  // while reading an error.
+  'QR_SAVE_FAILED': CatalogErrorCopy(
+    'The download was cancelled or blocked.',
+    'Try again, or photograph the code on screen.',
+  ),
   'ID_SET_MISMATCH': CatalogErrorCopy(
     'This list changed somewhere else while you were reordering it.',
     'Refresh, then drag again.',

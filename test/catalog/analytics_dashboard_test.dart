@@ -20,6 +20,8 @@
 //
 // Hermetic: the repository and the clock are both faked, so no test here reads
 // the wall clock or the network.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,6 +29,7 @@ import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_analytics_notifier.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
+import 'package:recapture/domain/catalog/analytics_range.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_analytics.dart';
@@ -189,6 +192,13 @@ class FakeAnalyticsRepository
   /// Set to fail the next analytics read.
   CatalogFailure? failure;
 
+  /// Held open to keep a read IN FLIGHT, so a test can have two windows racing.
+  ///
+  /// Captured at call entry, not awaited from the field: clearing it between
+  /// two requests is how a test makes the FIRST one slow and the second one
+  /// fast, which is the only ordering that exercises the stale-answer guard.
+  Completer<void>? gate;
+
   List<AnalyticsCall> callsFor(String report) =>
       calls.where((call) => call.report == report).toList();
 
@@ -200,9 +210,18 @@ class FakeAnalyticsRepository
     String? from,
     String? to,
   }) async {
+    // Payload AND failure are snapshotted at call entry, before the gate.
+    // Reading the fields after the await would hand a held-open request
+    // whatever the test set for the NEXT one — which silently turns a
+    // stale-answer race into two identical answers, and a guard test that
+    // passes with the guard deleted.
+    final held = gate;
+    final payload = summary;
+    final failed = failure;
     calls.add(AnalyticsCall('summary', from, to));
-    if (failure != null) throw failure!;
-    return AnalyticsSummary.fromMap(summary);
+    if (held != null) await held.future;
+    if (failed != null) throw failed;
+    return AnalyticsSummary.fromMap(payload);
   }
 
   @override
@@ -210,9 +229,13 @@ class FakeAnalyticsRepository
     String? from,
     String? to,
   }) async {
+    final held = gate;
+    final payload = timeseries;
+    final failed = failure;
     calls.add(AnalyticsCall('timeseries', from, to));
-    if (failure != null) throw failure!;
-    return AnalyticsTimeseries.fromMap(timeseries);
+    if (held != null) await held.future;
+    if (failed != null) throw failed;
+    return AnalyticsTimeseries.fromMap(payload);
   }
 
   @override
@@ -221,9 +244,13 @@ class FakeAnalyticsRepository
     String? to,
     int? limit,
   }) async {
+    final held = gate;
+    final payload = topProducts;
+    final failed = failure;
     calls.add(AnalyticsCall('top-products', from, to, limit));
-    if (failure != null) throw failure!;
-    return TopProducts.fromMap(topProducts);
+    if (held != null) await held.future;
+    if (failed != null) throw failed;
+    return TopProducts.fromMap(payload);
   }
 
   @override
@@ -570,5 +597,113 @@ void main() {
 
     expect(find.byKey(const ValueKey('analytics_chart_empty')), findsOneWidget);
     expect(find.byType(AnalyticsChart), findsNothing);
+  });
+
+  // ── Stale answers ─────────────────────────────────────────────────────────
+  //
+  // The notifier sequences its loads with a request id. Without that guard, a
+  // range switched twice in quick succession leaves two reads in flight and
+  // whichever the network happens to finish LAST wins — so the tiles settle on
+  // a window the user is no longer looking at, under a chip that says
+  // otherwise. It is invisible on a fast connection and permanent on a slow
+  // one, which is the worst combination to find in the field.
+
+  group('a slow answer never paints over a newer one', () {
+    // Plain `test`, not `testWidgets`: there is no widget here, and
+    // `testWidgets` runs the body inside a fake-async zone where the
+    // notifier's own `scheduleMicrotask(load)` never fires without a pump —
+    // the future would simply never complete.
+    test('the superseded window is discarded, not rendered', () async {
+      final repo = FakeAnalyticsRepository();
+      final container = ProviderContainer(
+        overrides: [
+          catalogRepositoryProvider.overrideWithValue(repo),
+          analyticsClockProvider.overrideWithValue(() => _now),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      // The provider is AUTO-DISPOSE: without a live listener it is thrown
+      // away the instant `read` returns, and the next read rebuilds it back at
+      // the default 30-day window — so the race under test would never happen.
+      container.listen(catalogAnalyticsProvider, (_, __) {});
+      final notifier = container.read(catalogAnalyticsProvider.notifier);
+      await notifier.load();
+
+      // The 7-day read is made SLOW and left in flight.
+      final slow = Completer<void>();
+      repo
+        ..gate = slow
+        ..summary = summaryPayload(pageViews: 7, from: '2026-08-17', days: 7);
+      final sevenDay = notifier.selectPreset(AnalyticsRangePreset.last7);
+
+      // The 90-day read is made FAST and allowed to finish first.
+      repo
+        ..gate = null
+        ..summary = summaryPayload(pageViews: 90, from: '2026-05-26', days: 90);
+      await notifier.selectPreset(AnalyticsRangePreset.last90);
+
+      expect(container.read(catalogAnalyticsProvider).range.preset,
+          AnalyticsRangePreset.last90);
+
+      // Now the superseded 7-day answer lands. It must be dropped on the floor.
+      slow.complete();
+      await sevenDay;
+      await Future<void>.delayed(Duration.zero);
+
+      final state = container.read(catalogAnalyticsProvider);
+      expect(state.range.preset, AnalyticsRangePreset.last90,
+          reason: 'the chip the user is looking at');
+      expect(
+        state.report.value?.summary.kpis.pageViews,
+        90,
+        reason: 'the tiles must describe the window the range control shows — '
+            'a late 7-day answer overwriting them is the exact bug the '
+            'request-id guard exists to prevent',
+      );
+    });
+
+    test('a superseded FAILURE does not replace a good newer answer', () async {
+      // The same race with the slow read failing. An error state is just as
+      // damaging out of order: the dashboard would show a retry prompt over a
+      // window that had in fact loaded fine.
+      final repo = FakeAnalyticsRepository();
+      final container = ProviderContainer(
+        overrides: [
+          catalogRepositoryProvider.overrideWithValue(repo),
+          analyticsClockProvider.overrideWithValue(() => _now),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      // The provider is AUTO-DISPOSE: without a live listener it is thrown
+      // away the instant `read` returns, and the next read rebuilds it back at
+      // the default 30-day window — so the race under test would never happen.
+      container.listen(catalogAnalyticsProvider, (_, __) {});
+      final notifier = container.read(catalogAnalyticsProvider.notifier);
+      await notifier.load();
+
+      final slow = Completer<void>();
+      repo
+        ..gate = slow
+        ..failure = const CatalogFailure(code: 'INTERNAL_ERROR', message: 'x');
+      final doomed = notifier.selectPreset(AnalyticsRangePreset.last7);
+
+      repo
+        ..gate = null
+        ..failure = null
+        ..summary = summaryPayload(pageViews: 90);
+      await notifier.selectPreset(AnalyticsRangePreset.last90);
+
+      slow.complete();
+      await doomed;
+      await Future<void>.delayed(Duration.zero);
+
+      final state = container.read(catalogAnalyticsProvider);
+      expect(state.report.hasError, isFalse,
+          reason: 'the newer window loaded fine; a stale failure must not '
+              'put a retry prompt over it');
+      expect(state.report.value?.summary.kpis.pageViews, 90);
+    });
   });
 }

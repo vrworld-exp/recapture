@@ -68,6 +68,12 @@ const Map<String, String> _alwaysRequired = {
   'OFFLINE': 'CatalogFailure.fromDio, transport failure',
   'UNKNOWN': 'CatalogFailure.fromDio, non-envelope body',
   'MALFORMED_RESPONSE': 'a 2xx whose payload is missing',
+  // Raised by the CLIENT, not the API: the platform delivery failed (a
+  // dismissed share sheet, a browser that refused the download). It reaches the
+  // user through the same table, so it is required here for the same reason —
+  // it went unmapped until a QR test noticed, which is exactly the gap this
+  // list exists to close.
+  'QR_SAVE_FAILED': 'catalog_qr_notifier, platform delivery failed',
 };
 
 String _readApi(String relative) {

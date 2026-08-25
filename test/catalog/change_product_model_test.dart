@@ -296,7 +296,15 @@ void main() {
     await tester.tap(_save);
     await tester.pumpAndSettle();
 
-    expect(find.text('That 3D model is not finished yet.'), findsOneWidget);
+    // OUR copy for the code, not the server's sentence (F10). The message the
+    // fake failure carries is deliberately different from this, so a
+    // regression that started passing upstream prose through would fail here.
+    expect(find.textContaining('still being built'), findsOneWidget);
+    expect(
+      find.text('That 3D model is not finished yet.'),
+      findsNothing,
+      reason: 'that is the SERVER sentence; the client maps the code instead',
+    );
     expect(find.textContaining('MODEL_NOT_READY'), findsNothing);
     // Still on the screen, still holding the pick, so Save can be tried again.
     expect(tester.widget<ElevatedButton>(_save).onPressed, isNotNull);
@@ -320,7 +328,9 @@ void main() {
       ),
     );
 
-    expect(find.text('We could not find that product.'), findsOneWidget);
+    // Mapped from NOT_FOUND, not echoed from the envelope.
+    expect(find.textContaining('no longer in your catalog'), findsOneWidget);
+    expect(find.text('We could not find that product.'), findsNothing);
     expect(find.text('Retry'), findsOneWidget);
   });
 }

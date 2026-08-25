@@ -121,7 +121,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('qr_save_png')));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining("couldn't save the QR code"), findsOneWidget);
+    // QR_SAVE_FAILED is a CLIENT sentinel — there is no envelope behind a
+    // dismissed share sheet — and it reaches the user through the same mapped
+    // table as every backend code. It was missing from that table until this
+    // assertion was written.
+    expect(find.textContaining('cancelled or blocked'), findsOneWidget);
+    expect(find.textContaining('photograph the code'), findsOneWidget);
     // The code is still on screen — a failed save must not take away a QR the
     // user can photograph off the display.
     expect(find.byKey(const ValueKey('qr_image')), findsOneWidget);

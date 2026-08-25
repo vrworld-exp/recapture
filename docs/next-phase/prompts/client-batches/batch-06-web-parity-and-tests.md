@@ -1,3 +1,4 @@
+✅✅✅✅✅
 # ReCapture Client — Batch 06 · F11 + F12 · Web Parity and Test Hardening
 
 > **Status: ⬜ todo.** Both prompts audit everything before them — run this batch **last**, after

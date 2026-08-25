@@ -27,6 +27,8 @@ import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
 import 'package:recapture/domain/entities/product_sync_status.dart';
 import 'package:recapture/domain/entities/product_type.dart';
+import 'package:go_router/go_router.dart';
+import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/presentation/screens/catalog/product_editor_screen.dart';
 
 import 'catalog_entities_test.dart' as golden;
@@ -60,8 +62,10 @@ class EditorRepository implements CatalogProductsRepository {
   CatalogFailure? uploadFailure;
   CatalogFailure? commitFailure;
 
+  final Map<String, CatalogProduct> _byId = {};
+
   @override
-  Future<CatalogProduct> get(String id) async => _product;
+  Future<CatalogProduct> get(String id) async => _byId[id] ?? _product;
 
   @override
   Future<CatalogProduct> update(
@@ -124,11 +128,17 @@ class EditorRepository implements CatalogProductsRepository {
   @override
   Future<CatalogProduct> duplicate(String id, {String? name}) async {
     duplicates++;
-    return CatalogProduct.fromMap(
+    final copy = CatalogProduct.fromMap(
       golden.productGolden()
         ..['id'] = 'copy-1'
         ..['name'] = '${_product.name} (copy)',
     );
+    // Served by `get` afterwards, because the editor navigates STRAIGHT to the
+    // copy and the destination re-fetches by id. A fake that kept returning the
+    // original would make the screen show the wrong product and the test would
+    // pass only because both share a prefix.
+    _byId[copy.id] = copy;
+    return copy;
   }
 
   @override
@@ -207,6 +217,64 @@ class _StubAuth extends AuthNotifier {
   AuthState build() => const AuthRestoring();
 }
 
+/// The editor inside a REAL GoRouter, for the one flow that navigates by name.
+///
+/// `_duplicate` finishes with `context.pushReplacementNamed(productDetail)`,
+/// which throws "No GoRouter found in context" under a plain MaterialApp. The
+/// rest of the file does not need a router (`navigateBack` degrades to
+/// Navigator), so only this flow pays for one.
+///
+/// The destination is the SAME screen at a different id, which is what the real
+/// route does — that is how the copy's name gets on screen and how a
+/// duplicate-then-duplicate-again would be caught.
+Widget routedHarness(EditorRepository repo) {
+  final router = GoRouter(
+    initialLocation: '/catalog/products/p1',
+    routes: [
+      GoRoute(
+        path: '/catalog',
+        builder: (_, __) => const Scaffold(body: Center(child: Text('grid'))),
+      ),
+      GoRoute(
+        path: AppRoutes.productDetail,
+        name: AppRouteNames.productDetail,
+        builder: (_, state) => Center(
+          child: SizedBox(
+            width: 500,
+            height: 900,
+            child: ProductEditorScreen(
+              productId: state.pathParameters['productId']!,
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+
+  return ProviderScope(
+    overrides: [
+      authProvider.overrideWith(_StubAuth.new),
+      catalogProductsRepositoryProvider.overrideWithValue(repo),
+      catalogRepositoryProvider.overrideWithValue(FakeCatalogRepository()),
+    ],
+    child: MaterialApp.router(routerConfig: router),
+  );
+}
+
+/// Scrolls [finder] into view, then taps it.
+///
+/// The editor is a TALL SCROLLING FORM and its actions sit at the bottom of it.
+/// On a test surface they start off-screen, and `tap` on an off-screen widget
+/// does not fail — it prints a warning and MISSES. The assertion that follows
+/// then fails claiming the patch body was wrong, when in truth the button was
+/// never pressed. Scrolling first is what makes those assertions about the
+/// thing they name.
+Future<void> tapAfterScroll(WidgetTester tester, Finder finder) async {
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
+}
+
 Widget harness(
   EditorRepository repo, {
   double width = 500,
@@ -223,23 +291,52 @@ Widget harness(
           productImagePickerProvider.overrideWithValue(picker),
       ],
       child: MaterialApp(
-        home: Center(
-          child: SizedBox(
-            width: width,
-            height: 900,
-            child: const ProductEditorScreen(productId: 'p1'),
-          ),
-        ),
+        // PUSHED, not `home`. The exit guard's whole job is to pop this screen,
+        // and popping the only route leaves an empty navigator that never
+        // settles — `pumpAndSettle` then spins until the suite's timeout and
+        // every later test in the file reports "did not complete". Giving the
+        // editor a route to go back to is also what the real app does: it is
+        // always pushed from the grid, never the root.
+        //
+        // `initialRoute` with a path builds the stack ['/', '/editor'], so the
+        // screen is already pushed on the first pump and no call site has to
+        // drive the navigation itself.
+        initialRoute: '/editor',
+        routes: {
+          '/': (_) => const Scaffold(body: Center(child: Text('grid'))),
+          '/editor': (_) => Center(
+                child: SizedBox(
+                  width: width,
+                  height: 900,
+                  child: const ProductEditorScreen(productId: 'p1'),
+                ),
+              ),
+        },
       ),
     );
+
+/// Pumps an editor harness on a surface big enough to HIT the thing being
+/// tapped.
+///
+/// The default test view is 800x600 and the editor's own box is 900 tall, so
+/// "Save changes" lands around y=948 — off-screen. `tap()` warns and misses
+/// rather than failing, which is worse than an error: the assertion that
+/// follows then fails for a reason that has nothing to do with what it is
+/// testing.
+Future<void> pumpEditor(WidgetTester tester, Widget widget) async {
+  tester.view.physicalSize = const Size(1000, 1800);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(widget);
+  await tester.pumpAndSettle();
+}
 
 void main() {
   testWidgets('loads the product and seeds every field', (tester) async {
     final repo = EditorRepository(
       product('p1', name: 'Walnut Chair', price: 4999.5),
     );
-    await tester.pumpWidget(harness(repo));
-    await tester.pumpAndSettle();
+    await pumpEditor(tester, harness(repo));
 
     expect(find.text('Walnut Chair'), findsOneWidget);
     expect(find.text('4999.5'), findsOneWidget);
@@ -251,15 +348,14 @@ void main() {
   group('the patch body', () {
     testWidgets('carries only what changed', (tester) async {
       final repo = EditorRepository(product('p1', name: 'Walnut Chair'));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Walnut Chair'),
         'Oak Chair',
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Save changes'));
+      await tapAfterScroll(tester, find.text('Save changes'));
       await tester.pumpAndSettle();
 
       final call = repo.updates.single;
@@ -275,12 +371,11 @@ void main() {
 
     testWidgets('an emptied price is sent as an explicit null', (tester) async {
       final repo = EditorRepository(product('p1', price: 250));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       await tester.enterText(find.widgetWithText(TextFormField, '250'), '');
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Save changes'));
+      await tapAfterScroll(tester, find.text('Save changes'));
       await tester.pumpAndSettle();
 
       // Absent would mean "unchanged" and the price would survive; null is what
@@ -293,8 +388,7 @@ void main() {
     testWidgets('the price field explains that empty is not free',
         (tester) async {
       final repo = EditorRepository(product('p1', price: null));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       expect(find.textContaining('No price set'), findsOneWidget);
       expect(find.textContaining('rather than "Free"'), findsOneWidget);
@@ -304,15 +398,14 @@ void main() {
   group('validation happens before the round trip', () {
     testWidgets('an emptied name is rejected locally', (tester) async {
       final repo = EditorRepository(product('p1', name: 'Walnut Chair'));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Walnut Chair'),
         '',
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Save changes'));
+      await tapAfterScroll(tester, find.text('Save changes'));
       await tester.pumpAndSettle();
 
       expect(find.text('Give this product a name.'), findsOneWidget);
@@ -323,8 +416,7 @@ void main() {
       final many = [for (var i = 0; i < kMaxProductTags; i++) 'tag$i'];
       final base = product('p1');
       final repo = EditorRepository(base.copyWith(tags: many));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       expect(find.textContaining('$kMaxProductTags of $kMaxProductTags used'),
           findsOneWidget);
@@ -339,8 +431,7 @@ void main() {
     testWidgets('a tag is lower-cased and de-duplicated as the server would',
         (tester) async {
       final repo = EditorRepository(product('p1'));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Add a tag'),
@@ -351,7 +442,7 @@ void main() {
 
       expect(find.text('bestseller'), findsOneWidget);
 
-      await tester.tap(find.text('Save changes'));
+      await tapAfterScroll(tester, find.text('Save changes'));
       await tester.pumpAndSettle();
 
       expect(repo.updates.single['tags'], ['chair', 'wood', 'bestseller']);
@@ -361,8 +452,7 @@ void main() {
   group('the exit guard', () {
     testWidgets('asks before discarding typed work', (tester) async {
       final repo = EditorRepository(product('p1', name: 'Walnut Chair'));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Walnut Chair'),
@@ -382,8 +472,7 @@ void main() {
 
     testWidgets('leaves without asking when nothing changed', (tester) async {
       final repo = EditorRepository(product('p1'));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       await tester.tap(find.byTooltip('Back'));
       await tester.pumpAndSettle();
@@ -395,8 +484,7 @@ void main() {
       // go_router's onExit — the BROWSER back button — has no access to the
       // screen's State, so the flag has to live somewhere the router can read.
       final repo = EditorRepository(product('p1', name: 'Walnut Chair'));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       final container = ProviderScope.containerOf(
         tester.element(find.byType(ProductEditorScreen)),
@@ -423,10 +511,9 @@ void main() {
       final picker = FakePicker(
         image: PickedProductImage(bytes: bytes, contentType: 'image/jpeg'),
       );
-      await tester.pumpWidget(harness(repo, picker: picker));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo, picker: picker));
 
-      await tester.tap(find.text('Replace photo'));
+      await tapAfterScroll(tester, find.text('Replace photo'));
       await tester.pumpAndSettle();
 
       expect(repo.uploads, ['image/jpeg']);
@@ -444,10 +531,9 @@ void main() {
       final picker = FakePicker(
         image: PickedProductImage(bytes: bytes, contentType: 'image/jpeg'),
       );
-      await tester.pumpWidget(harness(repo, picker: picker));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo, picker: picker));
 
-      await tester.tap(find.text('Replace photo'));
+      await tapAfterScroll(tester, find.text('Replace photo'));
       await tester.pumpAndSettle();
 
       expect(repo.uploads.length, 1);
@@ -455,7 +541,7 @@ void main() {
       expect(find.textContaining('Nothing needs re-uploading'), findsOneWidget);
 
       repo.commitFailure = null;
-      await tester.tap(find.text('Finish attaching photo'));
+      await tapAfterScroll(tester, find.text('Finish attaching photo'));
       await tester.pumpAndSettle();
 
       // The bytes went over the wire ONCE.
@@ -467,8 +553,7 @@ void main() {
     testWidgets('a 3D product is offered a model swap, not a photo',
         (tester) async {
       final repo = EditorRepository(product('p1'));
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       expect(find.text('Change 3D model'), findsOneWidget);
       expect(find.text('Replace photo'), findsNothing);
@@ -479,8 +564,7 @@ void main() {
       final repo = EditorRepository(
         product('p1', type: ProductType.imageOnly),
       );
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       expect(find.text('Use a 3D model instead'), findsOneWidget);
       // Feature 17: the conversion changes what a customer sees, and it says so
@@ -498,8 +582,7 @@ void main() {
       final repo = EditorRepository(
         product('p1', sync: ProductSyncStatus.synced),
       );
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       expect(find.textContaining('This product is live'), findsOneWidget);
       expect(find.textContaining('next publish'), findsWidgets);
@@ -510,8 +593,7 @@ void main() {
       final repo = EditorRepository(
         product('p1', sync: ProductSyncStatus.never),
       );
-      await tester.pumpWidget(harness(repo));
-      await tester.pumpAndSettle();
+      await pumpEditor(tester, harness(repo));
 
       expect(find.textContaining('never been published'), findsOneWidget);
       expect(find.textContaining('This product is live'), findsNothing);
@@ -522,9 +604,13 @@ void main() {
       final repo = EditorRepository(
         product('p1', sync: ProductSyncStatus.pending),
       );
+      // Sized like pumpEditor, but pumped by hand: a pending product's pill
+      // carries the pulsing dot, which repeats forever, so this one uses
+      // `pump` and must NOT call pumpAndSettle.
+      tester.view.physicalSize = const Size(1000, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
       await tester.pumpWidget(harness(repo));
-      // pump, NOT pumpAndSettle: a pending product's pill carries the pulsing
-      // dot, which repeats forever and would never let the tree settle.
       await tester.pump();
       await tester.pump();
 
@@ -534,37 +620,50 @@ void main() {
 
   testWidgets('duplicate is server-side and one press', (tester) async {
     final repo = EditorRepository(product('p1', name: 'Walnut Chair'));
-    await tester.pumpWidget(harness(repo));
-    await tester.pumpAndSettle();
+    await pumpEditor(tester, routedHarness(repo));
 
-    await tester.tap(find.text('Duplicate product'));
+    await tapAfterScroll(tester, find.text('Duplicate product'));
     await tester.pumpAndSettle();
 
     expect(repo.duplicates, 1);
     expect(find.textContaining('Walnut Chair (copy)'), findsWidgets);
   });
 
-  testWidgets('a failed save keeps the form and shows the server sentence',
+  // Was "shows the server sentence" when this file was written. F10 changed the
+  // answer: the editor now renders OUR mapped copy for the code and the
+  // server's own prose never reaches the screen. The assertion below is
+  // therefore inverted from the original on purpose — the raw sentence being
+  // absent is the guarantee, and a test still demanding it would be pinning the
+  // exact hole F10 closed.
+  testWidgets('a failed save keeps the form and maps the code to our copy',
       (tester) async {
     final repo = EditorRepository(product('p1', name: 'Walnut Chair'))
       ..updateFailure = const CatalogFailure(
         code: 'DUPLICATE_NAME',
         message: 'You already have a product with that name.',
       );
-    await tester.pumpWidget(harness(repo));
-    await tester.pumpAndSettle();
+    await pumpEditor(tester, harness(repo));
 
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Walnut Chair'),
       'Oak Chair',
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Save changes'));
+    await tapAfterScroll(tester, find.text('Save changes'));
     await tester.pumpAndSettle();
 
+    // Our sentence for DUPLICATE_NAME, naming the next action.
     expect(
-      find.text('You already have a product with that name.'),
+      find.textContaining('already uses this name'),
       findsOneWidget,
+    );
+    // And the server's own prose is nowhere on screen.
+    expect(
+      find.textContaining('You already have a product with that name.'),
+      findsNothing,
+      reason: 'the backend message is owner-safe but it is still the SERVER\'s '
+          'sentence — F10 maps the code instead so no upstream text can reach '
+          'the UI',
     );
     // What the user typed is still there — a failed save must never blank it.
     expect(find.text('Oak Chair'), findsOneWidget);
@@ -576,14 +675,12 @@ void main() {
     addTearDown(tester.view.reset);
 
     final repo = EditorRepository(product('p1'));
-    await tester.pumpWidget(harness(repo, width: 1200));
-    await tester.pumpAndSettle();
+    await pumpEditor(tester, harness(repo, width: 1200));
     expect(find.byType(Row), findsWidgets);
 
     // The layout decision is the CONSTRAINTS' — the same widget tree at a
     // narrow width must be a single column, with no platform check anywhere.
-    await tester.pumpWidget(harness(repo, width: 500));
-    await tester.pumpAndSettle();
+    await pumpEditor(tester, harness(repo, width: 500));
     expect(tester.takeException(), isNull);
   });
 }
