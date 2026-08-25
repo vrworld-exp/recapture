@@ -25,13 +25,15 @@ added to, or dropped. The original stays in place as the combined reference.
 | Batch | Prompts | Subject | Depends on | Priority | Status |
 |---|---|---|---|---|---|
 | [01](batch-01-product-grid-and-editor.md) | F1 · F2 | Product grid · Product editor | — | Critical · High | ✅ complete |
-| [02](batch-02-archive-and-categories.md) | F3 · F4 | Archive/restore/delete · Category manager | F1 | High · High | ⬜ todo |
-| [03](batch-03-bulk-and-business-profile.md) | F5 · F6 | Bulk selection · Business profile | F1, F3, F4 | Low(V2) · High | ⬜ todo |
-| [04](batch-04-preview-and-publish.md) | F7 · F8 | Catalog preview · Publish + QR | F1 · backend B4, B5 | Medium · **Critical** | ⬜ todo |
-| [05](batch-05-analytics-and-feedback.md) | F9 · F10 | Analytics dashboard · Feedback layer | F1, F2, F8 · backend B7 | Low(V2) · High | ⬜ todo |
-| [06](batch-06-web-parity-and-tests.md) | F11 · F12 | Web parity pass · Test hardening | F1–F10 | **Critical** · High | ⬜ todo |
+| [02](batch-02-archive-and-categories.md) | F3 · F4 | Archive/restore/delete · Category manager | F1 | High · High | ✅ complete |
+| [03](batch-03-bulk-and-business-profile.md) | F5 · F6 | Bulk selection · Business profile | F1, F3, F4 | Low(V2) · High | ✅ complete |
+| [04](batch-04-preview-and-publish.md) | F7 · F8 | Catalog preview · Publish + QR | F1 · backend B4, B5 | Medium · **Critical** | ✅ complete |
+| [05](batch-05-analytics-and-feedback.md) | F9 · F10 | Analytics dashboard · Feedback layer | F1, F2, F8 · backend B7 | Low(V2) · High | ✅ complete |
+| [06](batch-06-web-parity-and-tests.md) | F11 · F12 | Web parity pass · Test hardening | F1–F10 | **Critical** · High | ✅ complete |
 
-**Current position: batch 01 is done. Start at [batch 02](batch-02-archive-and-categories.md).**
+**Current position: all six batches are done** (F1–F12 landed, `f8ac0de`). Nothing in this
+folder is left to run — the remaining next-phase work is `../03-mirage-prompts.md` (M1–M5),
+which runs in `phase2/mirage-be-phase-2-recap/` and `phase2/mirage-fe/`, not here.
 
 ---
 

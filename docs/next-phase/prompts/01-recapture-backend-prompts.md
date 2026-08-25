@@ -1,6 +1,8 @@
-✅✅✅✅✅✅✅✅✅✅✅
-
 # ReCapture Backend Prompts — B1 … B7
+
+> **Status: ✅ all seven complete.** B1–B7 have landed in `recapture-api/`, each with its own
+> suite under `tests/`. This file is kept as the reference for what was asked for, not as work
+> to do. See `README.md` for the prompt-to-file map.
 
 Repo root for every prompt in this file: `phase2/ReCapture/` (work happens in `recapture-api/`).
 `ReCapture/AGENTS.md` is the tie-breaker over anything written here.

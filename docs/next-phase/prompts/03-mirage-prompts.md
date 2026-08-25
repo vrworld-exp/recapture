@@ -1,5 +1,11 @@
 # Mirage Prompts — M1 … M5
 
+> **Status: ❌ none run — this file is the only next-phase work left.** ReCapture is finished on
+> both sides (B1–B7, F1–F12); every Mirage gap below is still open. Suggested order
+> **M1 → M5 → M2 → M3 → M4**: M1 is the highest-value fix (every asset still crosses the wire
+> twice), M5 is what makes the phase-2 fields visible to customers, and M2–M4 are reliability
+> and V2. These prompts do **not** run from `phase2/ReCapture/` — see the target repos below.
+
 Target repos:
 - **Backend:** `phase2/mirage-be-phase-2-recap/` — the phase-2 working fork. Its `src/` is currently
   byte-identical to `phase2/mirage-be/` (only `.env`, `README.md` and `src/CONSTANT.js` differ), so

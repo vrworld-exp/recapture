@@ -1,9 +1,7 @@
-✅✅✅✅✅
 # ReCapture Client — Batch 04 · F7 + F8 · Catalog Preview and Publish + QR
 
-> **Status: ⬜ todo.** F7 depends on **F1**. F8 depends on **backend B4 and B5** — do not start F8
-> until `POST /catalog/publish`, `GET /catalog/publish/status`, `POST /catalog/publish/retry`,
-> `POST /catalog/unpublish` and `GET /catalog/qr` are live.
+> **Status: ✅ complete.** F7 and F8 have landed, on top of B4 and B5. This file is kept as the
+> reference for what was asked for, not as work to do.
 
 **Batch scope:** the moment the catalog stops being a draft. This is the batch the whole phase
 exists for.
@@ -110,11 +108,11 @@ the rules that bite it, but these apply to all of them:
 | Batch | Prompts | Subject | Depends on | Status |
 |---|---|---|---|---|
 | [01](batch-01-product-grid-and-editor.md) | F1 · F2 | Product grid · Product editor | — | ✅ complete |
-| [02](batch-02-archive-and-categories.md) | F3 · F4 | Archive/restore/delete · Category manager | F1 | ⬜ todo |
-| [03](batch-03-bulk-and-business-profile.md) | F5 · F6 | Bulk selection · Business profile | F1, F3, F4 | ⬜ todo |
-| [04](batch-04-preview-and-publish.md) | F7 · F8 | Catalog preview · Publish + QR | F1 · backend B4, B5 | ⬜ todo |
-| [05](batch-05-analytics-and-feedback.md) | F9 · F10 | Analytics dashboard · Feedback layer | F1, F2, F8 · backend B7 | ⬜ todo |
-| [06](batch-06-web-parity-and-tests.md) | F11 · F12 | Web parity pass · Test hardening | F1–F10 | ⬜ todo |
+| [02](batch-02-archive-and-categories.md) | F3 · F4 | Archive/restore/delete · Category manager | F1 | ✅ complete |
+| [03](batch-03-bulk-and-business-profile.md) | F5 · F6 | Bulk selection · Business profile | F1, F3, F4 | ✅ complete |
+| [04](batch-04-preview-and-publish.md) | F7 · F8 | Catalog preview · Publish + QR | F1 · backend B4, B5 | ✅ complete |
+| [05](batch-05-analytics-and-feedback.md) | F9 · F10 | Analytics dashboard · Feedback layer | F1, F2, F8 · backend B7 | ✅ complete |
+| [06](batch-06-web-parity-and-tests.md) | F11 · F12 | Web parity pass · Test hardening | F1–F10 | ✅ complete |
 
 Full pack context: `../README.md` · original combined file: `../02-recapture-client-prompts.md`
 (this batch is a verbatim extract of it — the prompt text is unchanged).

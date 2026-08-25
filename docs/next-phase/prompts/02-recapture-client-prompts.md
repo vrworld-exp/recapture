@@ -1,5 +1,8 @@
-from f1  to f2 Completed you have to work from f2 onword.
 # ReCapture Flutter Client Prompts — F1 … F12
+
+> **Status: ✅ all twelve complete.** F1–F12 have landed (batch 06 as `f8ac0de`); `test/catalog/`
+> is green and `flutter analyze` is clean on the catalog surface. This file is kept as the
+> reference for what was asked for, not as work to do.
 
 Repo root for every prompt in this file: `phase2/ReCapture/` (work happens in `lib/` and `test/`).
 `ReCapture/AGENTS.md` is the tie-breaker over anything written here.

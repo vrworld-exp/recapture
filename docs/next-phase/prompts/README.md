@@ -13,11 +13,18 @@ Source of truth for the analysis behind these prompts:
 
 Files in this pack:
 
-| File | Prompts | Target repo |
-|---|---|---|
-| `01-recapture-backend-prompts.md` | B1–B7 | `phase2/ReCapture/recapture-api/` (Node/TS) |
-| `02-recapture-client-prompts.md` | F1–F12 | `phase2/ReCapture/lib/` (Flutter — app **and** web) |
-| `03-mirage-prompts.md` | M1–M5 | `phase2/mirage-be-phase-2-recap/` + `phase2/mirage-fe/` |
+| File | Prompts | Target repo | Status |
+|---|---|---|---|
+| `01-recapture-backend-prompts.md` | B1–B7 | `phase2/ReCapture/recapture-api/` (Node/TS) | ✅ all run |
+| `02-recapture-client-prompts.md` | F1–F12 | `phase2/ReCapture/lib/` (Flutter — app **and** web) | ✅ all run |
+| `03-mirage-prompts.md` | M1–M5 | `phase2/mirage-be-phase-2-recap/` + `phase2/mirage-fe/` | ❌ **none run — the only work left** |
+
+> **Where the phase stands.** ReCapture is finished on both sides — B1–B7 and F1–F12 are merged
+> (batch 06 landed as `f8ac0de`). The remaining next-phase work is **entirely in Mirage**, and it
+> does **not** run from `phase2/ReCapture/`: open M1–M4 at `phase2/mirage-be-phase-2-recap/` and M5
+> at `phase2/mirage-fe/`. Suggested order **M1 → M5 → M2 → M3 → M4** — M1 is the highest-value fix
+> (every asset currently crosses the wire twice) and M5 is what makes the phase-2 fields visible to
+> customers; M2–M4 are reliability and V2.
 
 > `02-recapture-client-prompts.md` is also available **split into six self-contained two-prompt
 > batches** in [`client-batches/`](client-batches/README.md) — F1+F2, F3+F4, F5+F6, F7+F8, F9+F10,
@@ -42,11 +49,20 @@ Files in this pack:
 | Mirage provisioning + branding sync + name-collision suggestion | `src/services/catalogProvisioningService.ts` |
 | Tests | `tests/catalog-*.test.ts`, `tests/mirage-error-classification.test.ts` |
 
-### ReCapture backend — REMAINING → prompts B1–B7
+### ReCapture backend — B1–B7 ✅ ALL DONE
 
-Publish job type + planner + processor · category sync · product sync + reconciliation ·
-asset streaming · publish/unpublish endpoints + state machine + gates · per-product sync status +
-retry · QR render (PNG/PDF) · activity log · analytics proxy.
+| Prompt | Landed as |
+|---|---|
+| B1 publish job type + planner + processor | `src/services/catalog/{publishPlanner,publishSnapshot,publishRunState}.ts`, `src/worker/processors/mirageCatalogPublishProcessor.ts` |
+| B2 category + product sync, reconciliation | `src/services/catalog/{categorySync,productSync,publishExecutors}.ts` |
+| B3 asset sync | `src/services/catalog/{assetPreflight,assetSync,assetUploader}.ts` |
+| B4 publish/unpublish endpoints, state machine, gates, status, retry | `src/services/catalogPublishService.ts` |
+| B5 QR render (PNG/PDF) | `src/services/catalogQrService.ts` |
+| B6 activity log | `src/services/catalogActivityService.ts` |
+| B7 analytics proxy | `src/services/catalogAnalyticsService.ts`, `src/validation/analyticsSchemas.ts` |
+
+Each has its own suite: `tests/catalog-publish-{planner,processor,api,status,idempotency}.test.ts`,
+`catalog-{category,product,asset}-sync.test.ts`, `catalog-{qr,unpublish,activity-log,analytics-proxy}.test.ts`.
 
 ### ReCapture Flutter — ALREADY BUILT
 
@@ -59,14 +75,20 @@ Entities (`lib/domain/entities/catalog*.dart`, `product_*.dart`), repositories
 screens `catalog_screen.dart` (shell + header), `add_product_screen.dart`,
 `change_product_model_screen.dart`, `create_catalog_dialog.dart`.
 
-**Only `/catalog` and the add-product / change-model routes are registered** — the other route
-constants exist but have no screen yet (`app_router.dart:282-286`).
+**Every `/catalog/*` route constant now has a registered screen** — F1–F12 closed that gap.
 
-### ReCapture Flutter — REMAINING → prompts F1–F12
+### ReCapture Flutter — F1–F12 ✅ ALL DONE
 
-Product grid/filter/search · product editor · archive UI · category manager · bulk mode ·
-business profile screen · catalog preview · publish + QR screens · analytics dashboard ·
-toasts and error/success states · **web parity pass** · test hardening.
+| Batch | Prompts | Landed as |
+|---|---|---|
+| 01 | F1 grid/filter/search · F2 product editor | `product_grid_section.dart`, `product_editor_screen.dart` |
+| 02 | F3 archive UI · F4 category manager | `typed_confirm_dialog.dart`, `category_manager_screen.dart` |
+| 03 | F5 bulk mode · F6 business profile | `bulk_selection_bar.dart`, `business_profile_screen.dart` |
+| 04 | F7 catalog preview · F8 publish + QR | `catalog_preview_screen.dart`, `publish_screen.dart`, `catalog_qr_screen.dart` |
+| 05 | F9 analytics dashboard · F10 feedback layer | `catalog_analytics_screen.dart`, `catalog_feedback.dart` |
+| 06 | F11 web parity · F12 test hardening | `../web-capability-matrix.md`, `test/catalog/web_parity_test.dart`, Makefile `verify` |
+
+`test/catalog/` is green (342 tests) and `flutter analyze` is clean on the catalog surface.
 
 ### Mirage — ALREADY BUILT (phase-2 work already merged into `mirage-be`)
 
@@ -95,21 +117,23 @@ toasts and error/success states · **web parity pass** · test hardening.
 
 ## Recommended build order
 
+The B and F tracks are complete. What is left of this diagram is the Mirage column — which was
+originally sequenced *first* (M1 unblocks B3) but ended up last, so B3 ships the bytes-twice path
+until M1 lands.
+
 ```
-M1 ──────────────┐   (unblocks B3: URL passthrough removes the double byte transfer)
-                 ▼
-B1 → B2 → B3 → B4 → B5 → B6 → B7
+✅ B1 → B2 → B3 → B4 → B5 → B6 → B7          (done)
+✅ F1 → … → F12                              (done)
 
-F1 → F2 → F3 → F4 → F5 → F6 → F7 → F8 → F9 → F10 → F11 → F12
-                                    ▲
-                          B4 and B5 must land before F8
-
-M2 → M3   (reliability + speed, after the first pilot publish)
-M4 → M5   (analytics scope + public rendering)
+❌ M1        URL passthrough — run first; retro-unblocks B3's double byte transfer
+❌ M5        public page renders the phase-2 fields
+❌ M2 → M3   reliability + speed, after the first pilot publish
+❌ M4        client-scoped analytics — optional, B7's proxy already covers the need
 ```
 
-MVP cut per `05-mvp-v1.1-v2-bucketing.md`: **B1–B5, F1, F8, F10, F11, F12, M1**.
-Fast-follow (V1.1): **F2, F3, F4, F6, F7, M2**. Later (V2): **B6, B7, F5, F9, M3, M4, M5**.
+MVP cut per `05-mvp-v1.1-v2-bucketing.md` was **B1–B5, F1, F8, F10, F11, F12, M1**; fast-follow
+(V1.1) **F2, F3, F4, F6, F7, M2**; later (V2) **B6, B7, F5, F9, M3, M4, M5**. In the event the whole
+B and F side shipped, V2 included — so **M1 is the only unbuilt MVP item.**
 
 ---
 
