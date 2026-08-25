@@ -245,7 +245,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
   bool get _priceChanged => _parsedPrice() != widget.product.price;
   bool get _categoryChanged => _categoryId != widget.product.categoryId;
   bool get _tagsChanged =>
-      _tags.join(' ') != widget.product.tags.join(' ');
+      _tags.join('\u0000') != widget.product.tags.join('\u0000');
   bool get _availabilityChanged => _availability != widget.product.availability;
   bool get _featuredChanged => _featured != widget.product.featured;
 
