@@ -1,0 +1,220 @@
+// src/models/types/assetManifest.types.ts
+//
+// THE ASSET MANIFEST CONTRACT — the single source of truth shared by three
+// consumers: this API, the Flutter app, and the Mirage Menu web viewer.
+//
+// It lives here (beside the other wire vocabularies) rather than inside
+// src/modules/asset-pipeline/ ON PURPOSE: the pipeline is one PRODUCER of this
+// shape, but the shape outlives it. A client reads a manifest that may have
+// been written by an older pipeline version, so the contract must not be
+// owned by the code that happens to emit it today.
+//
+// The same JSON is written to S3 as `manifest.json` AND persisted on the
+// ProjectModel record, so the viewer can render standalone from a CDN URL while
+// the app gets it inline with the model list (no second round trip).
+
+/**
+ * Bumped whenever the optimization RECIPE changes in a way that would produce
+ * different bytes for the same input — a new texture budget, a new transform,
+ * a different meshopt level.
+ *
+ * This is the directory name under the model prefix (`v1/`, `v2/`, …), which
+ * is what makes re-running an improved recipe safe: a new version writes a NEW
+ * prefix and can never overwrite the variant a client already cached under the
+ * old one (everything is served `immutable`). Never reuse a version number for
+ * a changed recipe.
+ *
+ * v2 (2026-08-04): generation moved to a high-fidelity budget (200k triangles,
+ * 4k source textures) and the pipeline gained a `simplify` stage plus a 2048
+ * baseColor budget. Same input, very different bytes — hence a new prefix.
+ *
+ * v3 (2026-08-06): the DELIVERY budget was raised — the generation preset was
+ * already maxed at v2, so the only thing still costing visible quality was how
+ * hard this pipeline cut afterwards. 35k → 60k triangles, normal maps 512 →
+ * 1024, baseColor quality 82 → 90 (still 2048: 4096 is 64 MB decoded in a
+ * WebView, which is the heap that broke before). Gates moved with the targets —
+ * 50k → 80k triangles, 4 → 8 MB — because a target above its gate fails
+ * validation, and a failed optimization serves the raw original, which is the
+ * worst of both worlds.
+ */
+export const ASSET_PIPELINE_VERSION = 3;
+
+/**
+ * Which rendition of a model a URL points at.
+ *   original — Meshy's untouched GLB, exactly as re-hosted. Kept forever: it is
+ *              the ONLY way to re-run an improved recipe later, and it is the
+ *              admin's visual reference for judging the optimized one.
+ *   web      — the optimized variant: WebP textures + EXT_meshopt_compression.
+ *
+ * `variants` is an ARRAY rather than named fields so a future rendition (KTX2,
+ * a compat/JPEG build, USDZ) is an additive change no client has to be
+ * redeployed for. Clients must ignore ids they do not recognise.
+ */
+export const ASSET_VARIANT_IDS = ['original', 'web'] as const;
+export type AssetVariantId = (typeof ASSET_VARIANT_IDS)[number];
+
+/** One downloadable rendition, with the numbers needed to justify choosing it. */
+export interface AssetVariant {
+  id: AssetVariantId;
+  /** CloudFront URL — always ours, never Meshy's (theirs expire). */
+  url: string;
+  /** S3 key under BUCKET_ARTIFACTS, for server-side re-reads. */
+  key: string;
+  bytes: number;
+  triangles: number;
+  textureCount: number;
+  /** Largest single texture, in bytes — usually the real page-weight driver. */
+  largestTextureBytes: number;
+  /** Whether geometry carries EXT_meshopt_compression (needs a decoder). */
+  meshoptCompressed: boolean;
+}
+
+/**
+ * Real-world size, in METRES, measured from the world-space bounding box.
+ *
+ * Measured, not declared: Meshy's `auto_size` is asked to return real scale,
+ * and this is how we find out whether it actually did. A dish that reports
+ * 4 m is an auto_size failure, and the client needs to know before it drops
+ * the model into an AR scene at that size.
+ */
+export interface AssetPhysicalSize {
+  widthMeters: number;
+  heightMeters: number;
+  depthMeters: number;
+  /** Longest of the three — the single number worth alerting on. */
+  longestDimMeters: number;
+}
+
+/** Before/after, so an admin can judge the trade without opening a 3D tool. */
+export interface AssetReduction {
+  bytesBefore: number;
+  bytesAfter: number;
+  /** bytesAfter / bytesBefore, 0–1. 0.18 = "18% of the original". */
+  ratio: number;
+  trianglesBefore: number;
+  trianglesAfter: number;
+}
+
+/** What the pipeline produced for one model. Written to S3 AND to Mongo. */
+export interface AssetManifest {
+  modelId: string;
+  pipelineVersion: number;
+  /** ISO-8601. */
+  generatedAt: string;
+  variants: AssetVariant[];
+  /**
+   * Meshy's own render, re-hosted — a transparent PNG because the generation
+   * preset sets `alpha_thumbnail`. We never render our own poster.
+   */
+  posterUrl?: string;
+  physicalSize: AssetPhysicalSize;
+  reduction: AssetReduction;
+}
+
+// ── The persisted record sub-document ────────────────────────────────────────
+
+/**
+ * Optimization lifecycle, deliberately SEPARATE from the model's own status.
+ * A model whose optimization failed is still a SUCCEEDED model with a usable
+ * original — that separation is the whole reason optimization runs as its own
+ * job (a pipeline bug must never retract a generation the user already paid
+ * for and can already see).
+ *
+ *   SKIPPED — nothing to gain; the original is already within budget.
+ */
+export const ASSET_OPTIMIZATION_STATUSES = [
+  'QUEUED',
+  'PROCESSING',
+  'SUCCEEDED',
+  'FAILED',
+  'SKIPPED',
+] as const;
+export type AssetOptimizationStatus = (typeof ASSET_OPTIMIZATION_STATUSES)[number];
+
+/** Terminal failure detail, mirroring ModelError's shape. */
+export interface AssetOptimizationError {
+  code: string;
+  message: string;
+}
+
+/**
+ * The `optimized` sub-doc on a ProjectModel.
+ *
+ * ── SERVING POLICY (changed with pipeline v2) ────────────────────────────────
+ * `activeVariant` used to default to 'original' and move only when an admin
+ * flipped it. That was the right default while generation produced a servable
+ * GLB. It no longer does: Meshy is asked for ~200k triangles and 4k textures so
+ * thin geometry survives, and that original is on the wrong side of the
+ * WebView's heap/WebGL-context limit — the failure an owner sees as "We
+ * couldn't load this model" (see MESHY_TARGET_POLYCOUNT in config/env.ts).
+ *
+ * So a validated pipeline run now AUTO-PROMOTES to 'web'. "Passed the gates" is
+ * still not the same claim as "looks right", which is why the admin action
+ * survives unchanged and is now RECORDED: `variantPinnedByAdmin` marks a human's
+ * deliberate choice, and no later pipeline run may override it in either
+ * direction. Auto-promotion is the default, never an overrule.
+ *
+ * 'original' remains the fallback everywhere it is ambiguous — a skipped run, a
+ * failed run, a manifest with no 'web' entry. An un-optimized heavy model that
+ * struggles beats a broken one that cannot resolve.
+ */
+export interface OptimizedAsset {
+  status: AssetOptimizationStatus;
+  pipelineVersion: number;
+  manifest?: AssetManifest;
+  error?: AssetOptimizationError;
+  /**
+   * Which variant clients should render. Set to 'web' automatically when a run
+   * validates, 'original' otherwise — unless `variantPinnedByAdmin` is set.
+   */
+  activeVariant: AssetVariantId;
+  /**
+   * True once a human chose a variant through the admin endpoint. Set by
+   * `setActiveModelVariant`, read only by the optimization processor, and never
+   * cleared by it: an admin who deliberately reverted to 'original' must not be
+   * silently re-promoted by the next re-run, which is the whole reason a plain
+   * `activeVariant === 'web'` check is not enough (it cannot tell a deliberate
+   * 'original' from the default one).
+   */
+  variantPinnedByAdmin?: boolean;
+  /** Key of the audit report (inspection + plan + metrics) under the version prefix. */
+  reportKey?: string;
+}
+
+/**
+ * Whether an optimization run is still expected to change which bytes this
+ * model serves — the window between a generation finishing and the
+ * ASSET_OPTIMIZATION job reaching a terminal status.
+ *
+ * This exists because a SUCCEEDED model is NOT yet a finished model: the
+ * generation and the optimization are two jobs, and for the minute or so
+ * between them `resolveActiveModelUrl` still returns the untouched original.
+ * Every surface that stops watching on `status === 'SUCCEEDED'` therefore
+ * hands out the heavy original and never corrects itself.
+ *
+ * ABSENT reads as NOT pending, deliberately: a record generated before the
+ * pipeline existed has no `optimized` block and nothing will ever write one, so
+ * treating absence as "pending" would leave those models waiting forever.
+ * `meshyModelProcessor` stamps QUEUED at enqueue time precisely so that absence
+ * and "queued" are distinguishable.
+ */
+export function isOptimizationPending(optimized: OptimizedAsset | undefined): boolean {
+  return optimized?.status === 'QUEUED' || optimized?.status === 'PROCESSING';
+}
+
+/**
+ * Resolves the URL a client should actually load, honouring the admin's choice
+ * and falling back safely. Exported so the API, and any future consumer, agree
+ * on the fallback rather than each re-deriving it.
+ *
+ * Fails SOFT to the original in every ambiguous case: an un-optimized,
+ * heavier-but-correct model beats a broken one.
+ */
+export function resolveActiveModelUrl(
+  optimized: OptimizedAsset | undefined,
+  originalUrl: string
+): string {
+  if (!optimized || optimized.activeVariant === 'original') return originalUrl;
+  const variant = optimized.manifest?.variants.find((v) => v.id === optimized.activeVariant);
+  return variant?.url ?? originalUrl;
+}

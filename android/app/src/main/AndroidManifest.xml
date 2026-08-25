@@ -11,6 +11,28 @@
     <!-- Camera — required for AR/camera features -->
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- ───────────── MEDIA / STORAGE (the "Photos" permission gate) ─────────────
+         The app reads/picks captured images & video from the gallery. Saving to
+         the gallery via MediaStore needs no permission on API 29+, so only READ
+         access is requested at runtime. See PermissionMapper.kt for the
+         API-level → concrete-permission mapping the native channel enforces. -->
+
+    <!-- API 33+ : granular media read (request only the types the app uses). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- API ≤32 : legacy read, superseded by granular media on 33+. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- API ≤28 : legacy write. A no-op under scoped storage on 29+, so it is
+         gated and never requested at runtime above API 28. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!-- NOTE: ACTIVITY_RECOGNITION is intentionally NOT declared. The "Motion"
+         gate uses raw IMU sensors (accelerometer / gyroscope / rotation-vector),
+         which require no Android permission. -->
+
+
     <!-- Audio recording — required for video/AR recording features -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -19,6 +41,15 @@
 
     <!-- Needed to start foreground service on Android 14+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+
+    <!-- API 34+ : the upload runs as a `dataSync` foreground service so it survives
+         backgrounding; the type-specific permission is required to start it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- API 33+ : posting the upload notification needs this runtime permission. If
+         denied, the foreground service still runs (the system suppresses the
+         notification's display) — see UploadForegroundService. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Network state — optional but recommended for connectivity checks -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -50,7 +81,7 @@
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="false"
         android:hardwareAccelerated="true"
-        android:usesCleartextTraffic="false">
+        android:networkSecurityConfig="@xml/network_security_config">
 
         <!-- Main Activity -->
         <activity
@@ -84,6 +115,14 @@
 
         </activity>
 
+        <!-- Background-upload foreground service. `dataSync` FGS type (required on
+             API 34+, and matched at startForeground). Not exported — started only
+             from within the app via the upload_service MethodChannel. -->
+        <service
+            android:name=".upload.UploadForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
         <!-- Flutter background isolate bridge — required for Firebase -->
         <meta-data
             android:name="flutterEmbedding"
@@ -96,6 +135,18 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT" />
             <data android:mimeType="text/plain" />
+        </intent>
+
+        <!-- Google Scene Viewer AR (model_viewer_plus): the 3D model viewer's
+             "View in your space" launches an ACTION_VIEW intent into the Google
+             app. Android 11+ package-visibility rules require declaring the
+             target here or the intent silently fails to resolve. Scene Viewer
+             itself handles ARCore capability/install — no AR SDK is bundled. -->
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <package android:name="com.google.ar.core" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
         </intent>
     </queries>
 

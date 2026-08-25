@@ -1,0 +1,7 @@
+# fastlane/Pluginfile
+# Fastlane plugin declarations for ReCapture.
+# Plugins listed here are NOT installed until `bundle exec fastlane install_plugins` is run.
+
+# Firebase App Distribution — optional future plugin for internal beta distribution.
+# Activate when Firebase App Distribution is set up (post-MVP).
+# gem "fastlane-plugin-firebase_app_distribution"

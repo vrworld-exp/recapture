@@ -1,0 +1,13 @@
+# fastlane/Appfile
+# App identity for ReCapture.
+# These values are used by Fastlane actions (supply, deliver, match) to identify
+# the correct app on Play Console and App Store Connect.
+
+# Android
+json_key_file("fastlane/secrets/play-store-service-account.json") # gitignored
+package_name("com.mayasabhaxr.recapture")
+
+# iOS (stub — uncomment when Apple Developer Account is ready)
+# apple_id("REPLACE_WITH_APPLE_ID_EMAIL")
+# app_identifier("com.mayasabhaxr.recapture")
+# team_id("REPLACE_WITH_APPLE_TEAM_ID")

@@ -1,0 +1,31 @@
+# Local dev datastore for the recapture-api backend.
+#
+# This service uses MongoDB only — rate limiting is DB-backed, so there is NO
+# Redis here (see AGENTS.md §0.4). Spin up with one command:
+#
+#   docker compose up -d
+#
+# Then point the backend at it in recapture-api/.env:
+#   MONGODB_URI=mongodb://localhost:27017/recapture
+#
+# Data persists in the named volume `recapture-mongo-data` across restarts.
+# Tear down (keep data):   docker compose down
+# Tear down (wipe data):   docker compose down -v
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: recapture-mongo
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    volumes:
+      - recapture-mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  recapture-mongo-data:

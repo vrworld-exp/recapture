@@ -1,0 +1,95 @@
+# .github/ISSUE_TEMPLATE/feature_request.yml
+name: Feature Request
+description: Suggest a new feature or improvement for ReCapture
+title: "[FEATURE] "
+labels: ["enhancement", "needs-discussion"]
+assignees:
+  - vrworld-exp
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for new feature ideas or improvements. Be specific —
+        "make it better" is not actionable. "Add blur score display in review grid" is.
+
+  - type: dropdown
+    id: product
+    attributes:
+      label: Product area
+      options:
+        - App launch / auth
+        - Project management
+        - Guided capture workflow
+        - Upload pipeline
+        - Backend processing
+        - Model viewer
+        - AR preview
+        - Admin dashboard
+        - Analytics / reporting
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Target phase
+      description: Which development phase does this belong to?
+      options:
+        - P0 — Project Setup
+        - P1 — Auth + Projects
+        - P2 — Permissions
+        - P3 — Native Camera
+        - P4 — Level A Capture
+        - P5 — Levels B & C
+        - P6 — Upload Pipeline
+        - P7 — Backend Processing
+        - P8 — Model Preview + AR
+        - P9 — Quality Feedback
+        - P10 — Hardening + Launch
+        - Post-launch
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem this solves
+      description: What user problem or business need does this address?
+      placeholder: "Users currently have to... which causes..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the feature concretely. What does the user see/do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What other approaches did you consider? Why is this one better?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority estimate
+      options:
+        - Critical (blocking launch or pilot)
+        - High (significant user impact)
+        - Medium (nice to have for v1)
+        - Low (post-launch backlog)
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, competitor examples, user feedback quotes, etc.

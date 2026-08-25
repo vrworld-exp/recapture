@@ -1,0 +1,41 @@
+# .github/CODEOWNERS
+#
+# Auto-assigns reviewers when files in these paths are changed in a PR.
+# Rules are evaluated bottom-to-top — last matching rule wins.
+# GitHub usernames must start with @.
+# Org team syntax: @vrworld-exp/team-name (if GitHub Teams are configured)
+#
+# TODO: Replace @vrworld-exp with the actual founder GitHub username.
+#       Verify at: https://github.com/orgs/vrworld-exp/people
+#
+# Reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ── Default — everything not matched below ────────────────────────────────────
+# The founder reviews all PRs by default until the team grows.
+*                                   @vrworld-exp
+
+# ── Flutter application code ──────────────────────────────────────────────────
+/lib/                               @vrworld-exp
+/test/                              @vrworld-exp
+
+# ── Android native module ─────────────────────────────────────────────────────
+# Assign to whoever owns the Android/Kotlin native capture module (P3).
+# Update this username when the native engineer joins.
+/android/                           @vrworld-exp
+
+# ── iOS native module ─────────────────────────────────────────────────────────
+# Assign to whoever owns the iOS/Swift native capture module (P3).
+/ios/                               @vrworld-exp
+
+# ── CI/CD and GitHub configuration ───────────────────────────────────────────
+# Highest trust — changes to CI affect all builds.
+/.github/                           @vrworld-exp
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
+# pubspec.yaml changes affect all team members' environments.
+/pubspec.yaml                       @vrworld-exp
+/pubspec.lock                       @vrworld-exp
+
+# ── Environment and build config ──────────────────────────────────────────────
+/Makefile                           @vrworld-exp
+/.env.example                       @vrworld-exp

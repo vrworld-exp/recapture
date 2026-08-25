@@ -1,0 +1,671 @@
+
+
+
+
+
+<<<<<<<<<<<<<<<<<<<<<------------------- [[[[[[[[[[[[[[[[[[[ AWS ]]]]]]]]]]]]]]]]]]] ------------------------------->>>>>>>>
+
+
+Generate a coding prompt for this task: Set up S3 buckets: msxr-raw-captures + msxr-model-artifacts — Phase: Project Setup & Foundation, Track: Backend Scaffold
+
+Jun 12
+Applying scope judgment before writing.
+
+This task has the same "Atlas-shaped" problem as the MongoDB cluster task.
+
+Creating S3 buckets, configuring IAM policies, setting up bucket policies, and configuring CloudFront distributions are AWS Console / IAM operations — not code an agent writes and runs. The actual bucket creation, IAM user/role setup, and CloudFront distribution configuration happen in the AWS web console (or via aws CLI with admin credentials a coding agent shouldn't have).
+
+However, unlike the Atlas task, there's a substantial codeable piece here that's genuinely new and not yet covered:
+
+The recapture-api scaffold has src/config/s3.ts with the S3Client singleton and bucket name constants — but zero actual S3 operations exist yet. No presigned URL generation, no upload/download helper functions, no bucket policy/CORS configuration as Infrastructure-as-Code, and no verification script.
+
+
+
+Given the PRD's heavy reliance on presigned multipart uploads (P6) and CloudFront-only artifact delivery (constraint repeated throughout), the most valuable codeable output here is:
+
+A Terraform/CloudFormation-lite approach is overkill for MVP — but a setup script using AWS SDK that creates the buckets, applies the correct bucket policies (private, CORS for presigned uploads), and lifecycle rules — run once by the founder with their AWS credentials — IS agent-codeable and removes most manual console clicking.
+S3 service module (src/services/s3.service.ts) — presigned URL generation, object existence checks, lifecycle helpers — genuinely new code that P6/P7 depend on directly.
+Two options:
+
+Option A — Manual AWS Console checklist (like Atlas) + defer the S3 service module to when P6 (Upload Pipeline) actually needs it. Keeps this task minimal.
+
+Option B — Generate a combined prompt now: an AWS setup script (scripts/setup-aws-buckets.ts, run once manually with admin credentials) that creates both buckets + bucket policies + CORS + lifecycle rules via AWS SDK, plus the s3.service.ts module with presigned URL helpers that P6 will import directly. This front-loads useful P6 work into P0 while the agent is already in S3 context.
+
+My recommendation: Option B. The setup script removes console clicking (genuinely useful), and the service module is foundational enough that having it ready before P6 starts is worth it — P6's prompt can then focus purely on upload orchestration logic, not S3 client basics.
+
+Which do you prefer — A or B?
+
+a
+
+Jun 12
+Here's the AWS Console checklist for both buckets — should take about 10 minutes.
+
+AWS S3 Setup Checklist (manual — 10 minutes)
+1. Create the two buckets
+Go to S3 Console → Create bucket
+
+Bucket 1 — msxr-raw-captures   ✅
+
+Region: ap-south-1 (Mumbai) — matches Render region: singapore reasonably well; pick whichever is closer to your primary user base and keep both buckets + Render in the same region to avoid cross-region transfer costs
+Block all public access: ON (keep default — never make this public)
+Bucket Versioning: Off (not needed for raw captures)
+Default encryption: SSE-S3 (default, fine)
+Bucket 2 — msxr-model-artifacts    ✅
+
+Same region as above
+Block all public access: ON (CloudFront will access via Origin Access Control, not public ACLs)
+Versioning: Off
+Default encryption: SSE-S3 (default)
+2. Configure CORS on msxr-raw-captures
+This bucket needs CORS so the mobile app can upload directly via presigned URLs.
+Go to bucket → Permissions → Cross-origin resource sharing (CORS) → paste:
+
+json
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedOrigins": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+}
+]
+Tighten AllowedOrigins later if the mobile app ever runs uploads from a known web domain — for native mobile apps "*" is standard since there's no browser origin to restrict.   ✅
+
+3. Configure lifecycle rule on msxr-raw-captures
+Go to bucket → Management → Create lifecycle rule:
+
+Rule name: expire-raw-captures
+Scope: entire bucket
+Action: Expire current versions of objects
+Days after object creation: 90 (matches PRD: "retain 30–90 days")   ✅
+
+
+4. Create IAM user for the backend API
+Go to IAM Console → Users → Create user
+
+Name: recapture-api-service
+No console access — programmatic access only
+Attach policy: create a custom inline policy (don't use AWS-managed AmazonS3FullAccess):
+json
+{ 
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::msxr-raw-captures",
+        "arn:aws:s3:::msxr-raw-captures/*",
+        "arn:aws:s3:::msxr-model-artifacts",
+        "arn:aws:s3:::msxr-model-artifacts/*"
+      ]
+    }
+  ]
+}
+Create an access key (Access key ID + Secret access key) — save both to the team password manager immediately. This key is never shown again.   ✅
+
+
+5. Set up CloudFront for msxr-model-artifacts
+This is the only way artifacts are served to clients — never raw S3 URLs (enforced throughout the backend prompts).
+
+Go to CloudFront Console → Create distribution:
+
+Origin domain: select msxr-model-artifacts.s3.ap-south-1.amazonaws.com
+
+Origin access: Origin access control settings (recommended) → Create new OAC
+
+After creating the distribution, CloudFront will show a bucket policy to copy — go back to msxr-model-artifacts → Permissions → Bucket policy → paste it (this grants CloudFront-only read access, keeping the bucket private)  ✅
+
+
+Viewer protocol policy: Redirect HTTP to HTTPS
+
+Cache policy: CachingOptimized (default — fine for immutable model artifacts)
+
+Once deployed (takes ~5–15 min to propagate), copy the distribution domain, e.g.:  ✅
+
+
+https://d1a2b3c4d5e6f7.cloudfront.net
+6. Fill in .env
+dotenv
+AWS_REGION=ap-south-1
+AWS_ACCESS_KEY_ID=<from step 4>
+AWS_SECRET_ACCESS_KEY=<from step 4>
+S3_BUCKET_RAW=msxr-raw-captures
+S3_BUCKET_ARTIFACTS=msxr-model-artifacts
+CLOUDFRONT_BASE_URL=https://d1a2b3c4d5e6f7.cloudfront.net
+
+
+7. Verify
+Run npm run dev in recapture-api — the Zod env validation from the scaffold will fail loudly if any of these are missing or malformed. If it boots clean, the env contract is satisfied. Actual upload/read verification happens once P6's s3.service.ts exists — that's the natural point to write a quick putObject/getObject smoke test against both buckets.
+
+That's S3 + CloudFront live. Two genuinely uncovered Backend Scaffold tasks remain: "Deploy stub API to Render (health check endpoint only)" and "Implement JWT middleware + token refresh logic" (the refresh endpoint specifically — middleware stub already exists). Which one next?
+
+Generate a coding prompt for this task: Implement environment variable structure (DB URL, S3, JWT secret) — Phase: Project Setup & Foundation, Track: Backend Scaffold
+
+Jun 13
+This task is already fully covered.
+
+
+Checking the env validation section already delivered in the backend scaffold prompt
+Checking the env validation section already delivered in the backend scaffold prompt
+Confirmed. Step 3 of PROMPT_P0_Backend_Scaffold_Init.md implements src/config/env.ts — the complete Zod-validated typed env loader covering exactly the three categories named in this task:
+
+DB URL → MONGODB_URI (validated, required, min length 1)
+S3 → AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET_RAW, S3_BUCKET_ARTIFACTS, CLOUDFRONT_BASE_URL (all validated)
+JWT secret → JWT_SECRET (min 32 chars enforced), JWT_EXPIRES_IN
+Plus .env.example with all of these documented, and the acceptance criteria covers the failure mode (missing var → process exits with code 1, descriptive field-level error).
+
+Re-generating this prompt would produce a near-identical duplicate — same file, same schema, same acceptance criteria.
+
+Looking at the remaining Backend Scaffold tasks from the original phase plan, two genuinely uncovered items remain:
+
+"Deploy stub API to Render (health check endpoint only)" — Render deployment is part-manual (connecting the repo, setting env vars in Render dashboard) but there's real codeable work: confirming render.yaml is correct (it exists from the scaffold), a deployment verification checklist, and possibly a render-build.sh if any build quirks exist.
+"Implement JWT middleware + token refresh logic" — the requireAuth middleware exists, but the actual /auth/refresh endpoint, refresh token generation/storage, and rotation logic do not exist yet. This is substantial new work.
+Which of these two would you like next — or is there a different task you'd like to tackle?
+
+for both provide me details, i'll do that manually
+
+Jun 13
+Here's the manual guide for both — Render deployment and JWT refresh token strategy.
+
+1. Deploy stub API to Render
+Prerequisites
+recapture-api pushed to GitHub (private repo is fine — Render supports it)
+render.yaml already exists from the scaffold task
+Steps
+A. Connect Render to GitHub
+
+Go to dashboard.render.com → sign up/login (GitHub OAuth is easiest)
+New → Web Service
+Connect your GitHub account if not already connected → authorize access to the recapture-api repo
+Select the repo
+B. Render auto-detects render.yaml
+Since render.yaml exists at the repo root, Render will read it and pre-fill most settings. Verify:
+
+Name: recapture-api
+Region: Singapore (as set in render.yaml)
+Branch: main (or dev if you want a staging service — see note below)
+Build Command: npm install && npm run build
+Start Command: node dist/index.js
+Plan: Starter (free tier works for now, sleeps after 15 min inactivity — fine for dev/testing)
+C. Set environment variables
+render.yaml references several secrets via sync: false — these must be entered manually in the Render dashboard (Environment tab):
+
+Variable	Value source
+MONGODB_URI	Atlas connection string (from Atlas setup)
+JWT_SECRET	Generate a new 32+ char random string — different from local dev
+AWS_ACCESS_KEY_ID	From IAM user recapture-api-service
+AWS_SECRET_ACCESS_KEY	Same
+CLOUDFRONT_BASE_URL	Your CloudFront distribution domain
+Variables already set via render.yaml (value: fields) don't need re-entry: NODE_ENV=production, PORT=3000, AWS_REGION=ap-south-1, S3_BUCKET_RAW, S3_BUCKET_ARTIFACTS, JWT_EXPIRES_IN.
+
+Generate a fresh JWT_SECRET for production — don't reuse your local .env value:
+
+bash
+openssl rand -base64 48
+D. Deploy
+
+Click Create Web Service — Render will run the build command, then start command
+First build takes 2–5 minutes (npm install + tsc compile)
+Watch the logs — you should see:
+  ✅ MongoDB connected
+  🚀 recapture-api running on port 3000 [production]
+E. Verify
+Render gives you a URL like https://recapture-api.onrender.com. Test:
+
+bash
+curl https://recapture-api.onrender.com/health
+# Expected: {"status":"ok","db":"connected","timestamp":"...","env":"production"}
+F. Note on free tier sleep
+Render free/starter web services spin down after 15 minutes of no traffic and take ~30-60 seconds to wake on the next request. This is fine for dev/staging. For the production app the team ships to pilot restaurants, consider upgrading to a paid plan ($7/mo Starter+) closer to launch — sleeping mid-upload would break the photogrammetry pipeline.
+
+G. Optional — staging environment
+If you want a separate staging URL (matching .env.staging's recapture-api-staging.onrender.com), repeat steps A–E as a second Render service, pointing to the dev branch instead of main, with its own MongoDB database (recapture-staging instead of recapture) and its own JWT_SECRET. Keeps staging data isolated from production.
+
+2. JWT Middleware + Token Refresh Logic
+The requireAuth middleware (verifies access tokens) already exists from the scaffold. What's missing is the refresh flow — short-lived access tokens + long-lived refresh tokens, with rotation.
+
+Strategy
+Two-token model:
+
+Access token — short-lived (15 min), sent in Authorization: Bearer header, used for all API calls. Stateless — verified via JWT_SECRET signature only, no DB lookup.
+Refresh token — long-lived (30 days), stored in MongoDB (hashed), used only to mint new access tokens via POST /auth/refresh. Stateful — DB lookup required, can be revoked.
+This matches the PRD's acceptance criteria: "Token expiry & refresh supported."
+
+New MongoDB collection: refreshTokens
+typescript
+interface IRefreshToken {
+  _id: ObjectId;
+  userId: ObjectId;
+  tokenHash: string;        // SHA-256 hash of the raw refresh token — never store raw
+  expiresAt: Date;           // 30 days from issue
+  revokedAt?: Date;          // set on logout or rotation
+  deviceInfo?: string;       // optional — "iPhone15,2 / iOS 17.2" for session management
+  createdAt: Date;
+}
+// Indexes:
+//   { tokenHash: 1 } unique
+//   { userId: 1, revokedAt: 1 }
+//   TTL index on expiresAt (auto-delete expired tokens)
+Token issuance flow (on OTP verify, POST /auth/verify-otp)
+Verify OTP
+Generate access token: jwt.sign({ userId, authUid }, JWT_SECRET, { expiresIn: '15m' })
+Generate refresh token: random 64-byte hex string (crypto.randomBytes(64).toString('hex'))
+Hash the refresh token (crypto.createHash('sha256').update(token).digest('hex')) and store the hash in refreshTokens with 30-day expiresAt
+Return both tokens to the app: { accessToken, refreshToken, expiresIn: 900 }
+Refresh flow (POST /auth/refresh)
+App sends { refreshToken } in request body (not as a header — refresh tokens are opaque, not JWTs)
+Hash the incoming token, look up refreshTokens by tokenHash
+Checks: token exists, not revoked, not expired
+Rotate: revoke the old refresh token (revokedAt: now), issue a brand new refresh token + new access token
+Return new pair: { accessToken, refreshToken, expiresIn: 900 }
+Why rotation matters: if a refresh token is ever stolen, it can only be used once before the legitimate client's next refresh attempt fails (because the token was already rotated) — alerting you to compromise. This is the OWASP-recommended pattern for mobile refresh tokens.
+
+Logout flow (POST /auth/logout)
+App sends { refreshToken }
+Hash it, find the record, set revokedAt: now
+Access token remains valid until its 15-min expiry (stateless — can't be revoked early without a blocklist, which is usually not worth the complexity for a 15-min window)
+Edge cases to design for
+Expired refresh token → 401, app must route user back to AuthScreen (re-login via OTP)
+Revoked/reused refresh token → 401 + optionally revoke all refresh tokens for that userId (defense against token theft — "revoke all sessions on suspicious reuse")
+Clock skew → JWT exp claims have a small leeway (jwt.verify(token, secret, { clockTolerance: 10 })) to handle minor client/server time drift
+Multiple devices → a user can have multiple active refresh tokens simultaneously (one per device) — don't revoke other devices' tokens on a normal refresh, only on explicit logout or theft detection
+Mobile app side (Flutter)
+AuthNotifier (from the P1 Flutter prompts, not yet generated) stores both tokens in Hive (boxSession). Dio interceptor: on 401 response, call /auth/refresh with the stored refresh token, update both tokens, retry the original request. If refresh also fails → clear session, route to AuthScreen.
+
+
+When you're ready to turn this into a coding prompt — likely as part of P1 (Auth + Projects), since /auth/verify-otp, /auth/refresh, and /auth/logout are all P1 endpoints — just say so and I'll generate it with the full route handlers, the RefreshToken Mongoose model, and the rotation logic written out.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Uplaod Btn response ----------------------------------------------------->>>>>>>>>>>>>>>>>
+
+
+
+
+✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅✅
+
+
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (401ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (613ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (588ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (390ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (430ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (368ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (575ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (877ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (399ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/initiate → 201 (362ms)
+POST /jobs/6a5118f8119fa27578c7c989/uploads/complete → 200 (547ms)
+[analytics] job_queued {"user_id_hash":"731a23325b2d7a1027377b659adf075e","job_id":"6a5118f8119fa27578c7c989","flow_variant":"with_bottom","files_verified":37}
+POST /jobs/6a5118f8119fa27578c7c989/finalize → 200 (985ms)
+
+
+
+
+
+
+// // // Also cretae data based on user login, i have seen there is no data created based on logIn. so make in Action. ✅
+
+
+
+
+
+
+A loading ui for auth screen ✅
+
+
+
+Back navigation is not working properly when user using phone keys to back from one screen to another screen so fix it ✅✅✅✅
+
+
+
+
+
+
+
+
+
+
+
+
+
+// // // // Err while sending node mailer msg ✅✅✅
+
+Plese try again, There is problem in sending otp. Error : Error: Invalid login: 535-5.7.8 Username and Password not accepted. For more information, go to 535 5.7.8 https://support.google.com/mail/?p=BadCredentials d2e1a72fcca58-84a4f7dadcfsm1680461b3a.48 - gsmtp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// // // Next prompt for single project preview ------------------------------------------------>>>>>>>>>>>>>>>>>>>>>>
+
+
+# Task: Add a staff-only "Preview" gallery per project (view / download / delete photos)
+
+## Goal
+Admin and 3D-artist accounts get a "Preview" button on each project. Tapping it
+opens a new page that shows ALL of that project's captured photos in a grid,
+with a per-photo Download action and a per-photo Delete action, so staff can
+curate the set before/instead of a bulk export.
+
+## Where this lives (do NOT touch non-staff surfaces)
+- The button goes on the STAFF "Live projects" tab card: `_LiveProjectCard` in
+  `lib/presentation/screens/projects/live_projects_view.dart`, next to the
+  existing "Export" button. That whole tab is already gated by
+  `isStaffProvider` (MODEL_ARTIST/ADMIN via /auth/me), so Preview is staff-only
+  automatically. Do NOT add it to `lib/presentation/widgets/project_card.dart`
+  (the shared My-projects card used by every user) — leaving that untouched is
+  how we guarantee no non-staff regression.
+- If Preview is ALSO wanted on My-projects for staff, add it via an OPTIONAL,
+  nullable `onPreview` callback on ProjectCard rendered only when non-null, and
+  have ProjectsScreen pass it only when `ref.watch(isStaffProvider)` is true.
+  Default: Live tab only (simpler, zero blast radius). [DECIDE if My tab too.]
+
+## Reuse what already exists — do not duplicate
+- Photo source of truth: `GET /admin/projects/:id/export`
+  (`recapture-api/src/services/adminProjectsService.ts` → `buildProjectExport`).
+  Response `export.files[]` = `{ key, url (presigned GET, bearer credential),
+  size }` plus `fileCount`, `expectedFileCount`, `generatedAt`, `expiresAt`.
+- Client fetch: `LiveProjectsRepository.export(projectId)` already returns this
+  map and translates errors into `LiveProjectsException`
+  (forbidden / notExportable / rateLimited / network / server). Reuse it.
+- Use each `files[i].url` as BOTH the `Image.network` thumbnail source AND the
+  download URL. Fetch the manifest ONCE per Preview open and hold it in the
+  screen's provider — the export endpoint is RATE-LIMITED
+  (ADMIN_EXPORT_MAX_PER_WINDOW, default 10/user/hour) and URLs expire in ~1h
+  (ADMIN_EXPORT_URL_TTL_SECONDS). Never request a fresh manifest per thumbnail.
+
+## Client work
+1. Route: add `previewGallery` to `AppRoutes`/`AppRouteNames` in
+   `lib/app/routes/app_router.dart`, e.g. path `/admin/projects/:id/preview`,
+   with a GoRoute that reads the project id from the path param. Because it's a
+   go()-replaced flow screen, wrap it in `FlowBackScope` OR give it its own
+   AppBar back arrow calling `navigateBack(context)` — match the existing
+   back-navigation pattern in `lib/app/routes/flow_back.dart` so hardware back
+   doesn't exit the app. Add a `flowBackRouteFor` mapping
+   previewGallery → projects.
+2. State: a `previewGalleryProvider` (family by projectId) that loads the
+   manifest via `LiveProjectsRepository.export`, exposing an
+   `AsyncValue<PreviewManifest>` (a small typed model: files list +
+   expiresAt + fileCount/expectedFileCount). Parse the raw map into typed
+   `PreviewPhoto { key, url, size }` in the repo or a mapper — do not leak
+   `Map<String,dynamic>` into the widget.
+3. Screen: `PreviewGalleryScreen` — `GridView` of thumbnails from
+   `photo.url`, each with graceful error/loader placeholders (reuse the
+   `_ThumbnailPlaceholder` pattern). Tap a photo → full-screen viewer with
+   Download + Delete. Show a header with fileCount and a subtle "links expire
+   at HH:MM" note (reuse the expiry formatting already in `_export`). Loading /
+   empty / error states mapped-copy-only, same as `_showFailure` in
+   live_projects_view.dart (never render a raw code or URL).
+4. Button: on `_LiveProjectCard`, add a secondary "Preview" button
+   (icon e.g. Icons.photo_library_outlined) shown for the same `_exportable`
+   statuses as Export, navigating to the preview route with the project id.
+   Keep Export exactly as-is.
+5. Download (mobile semantics — DECIDE and state which):
+   - Simplest, no new plugin: fetch bytes from `photo.url` → write to a temp
+     file (path_provider) → hand to the share sheet (share_plus, already a dep)
+     so the user saves it to Photos/Files/Drive. This mirrors the existing
+     export-share pattern and adds no permissions.
+   - Or add a gallery-save plugin (e.g. image_gallery_saver) for a true
+     "save to camera roll" — requires new platform permissions/plugin. Only if
+     product requires it. Default: share-sheet download.
+   Per-photo download in flight → per-key spinner guard (a Set<String> like
+   `_exportInFlight`).
+
+## Backend work — the NEW, destructive piece (design carefully)
+There is currently NO way to delete a single captured object. You must add:
+1. An S3 delete primitive in `recapture-api/src/services/s3ObjectStore.ts`
+   (e.g. `deleteObject(bucket, key)` and/or `deleteObjects` for a batch) — this
+   module today only lists/presigns/reads.
+2. A mutating admin endpoint, e.g.
+   `DELETE /admin/projects/:id/photos` with body `{ keys: string[] }` (keys are
+   RELATIVE-to-rawPrefix, exactly as the export manifest emits them). It must:
+   - run `requireAuth → requireRole(...)` like the rest of `src/routes/admin.ts`;
+   - resolve the project's exportable job + `rawPrefix` the SAME way
+     `buildProjectExport` does;
+   - REBUILD the absolute key as `rawPrefix + relativeKey` and enforce KEY
+     CONTAINMENT (reject any key that escapes the job's prefix — mirror the
+     upload-urls containment/410 rule) so a caller can't delete arbitrary S3
+     objects;
+   - delete only the matched objects; return which keys were deleted vs missing;
+   - emit an analytics event with HASHED ids only (never the key/url), following
+     the existing `hashIdentifier` pattern; never log the presigned URL or key.
+   - Add a Zod schema in `src/validation/adminSchemas.ts` for params + body.
+3. [DECIDE — surface this to the product owner, don't silently pick]:
+   a. WHO may delete — ADMIN only, or MODEL_ARTIST too? Deleting a user's raw
+      capture is destructive and irreversible. Recommend `requireRole('ADMIN')`
+      on the delete route even though browse/export is MODEL_ARTIST+.
+   b. HARD delete vs soft/quarantine. Hard-deleting a raw object after finalize
+      makes `fileCount < expectedFileCount` and can break a later re-run /
+      reprocess of that job. Recommend either (i) blocking delete once a job has
+      progressed past QUEUED, or (ii) moving the object to a `deleted/` prefix
+      instead of destroying it. At minimum, document the consequence.
+   c. Whether deleting should also decrement any stored photo count / mark the
+      job so exports reflect the new truth.
+
+## After a delete (client)
+Remove the photo from the in-memory manifest list locally and update the count —
+do NOT immediately re-fetch the manifest (that spends a rate-limit token and
+re-presigns everything). Offer manual refresh (pull-to-refresh) if the user
+wants a fresh set. Show a confirm dialog before deleting (reuse the app's
+platform-adaptive delete-confirmation modal pattern if one exists), and a
+mapped-copy snackbar on success/failure.
+
+## Non-regression guardrails (the "don't affect other features" bar)
+- No signature change to shared `ProjectCard` unless the optional-callback path
+  above is chosen; even then it must be nullable with a default of null.
+- Do not modify the export endpoint, the export share flow, or the My-projects
+  list. Preview is additive.
+- Presigned URLs stay out of logs/analytics/exceptions everywhere (existing rule).
+- The delete route is a NEW path; the existing `/admin` read routes are unchanged.
+
+## Tests
+Backend (Vitest + supertest, mongodb-memory-server — existing stack):
+- Delete endpoint: 200 deletes only the targeted keys; key OUTSIDE the job
+  prefix → rejected (containment); non-staff/no-role → 403; unknown project →
+  404; wrong role per decision (a) → 403.
+Client (widget + unit):
+- PreviewGalleryScreen renders N thumbnails from a fake manifest; shows mapped
+  copy on `notExportable`/`network`/`forbidden`; delete removes the tile locally
+  and does not re-request the manifest; download invokes the share/save seam
+  (inject a fake, like `ShareLauncher`) exactly once per photo.
+- Preview button appears on `_LiveProjectCard` for exportable statuses and
+  routes with the correct project id.
+
+## Verification
+- `flutter test` and (backend) `npm test` fully green.
+- Run the app as a staff account (isStaffProvider true): Live tab → Preview →
+  grid loads, download saves a file, delete removes a photo after confirm.
+- Confirm a NON-staff account sees no Preview button and the My-projects card is
+  byte-for-byte unchanged.
+- Confirm hardware back from the Preview page returns to Projects, not the OS
+  home screen.
+
+
+
+
+
+
+
+
+
+
+///////////// New problems ------------->>>
+
+
+1. Add ar btn that used to show model in ar view, user able to see model in ar view.✅
+
+2. While getting 3d model on screen there is not loading animation that tell wait we arr preparing your model. ✅
+
+3. While creating we jsut getting we are creating he model, how ever i want the the loang animation or ui acc. to the process happing while creating model. So plz update this so Admin able to see that what is going on in backend. ✅
+
+4. Provide some btn on view model page to export the model into their system, This feature should avilable only for Admins and Artist. ✅
+
+5. Fix the btn of create model, in the create model screen it is not matching the theme.✅/2
+
+6. Admin able to delete the live projects too, Because if not good capture we'll delete that, Here we can ask to admin for hard delete and soft delete thing. ✅
+
+7. Crop img then, send to generate the 3d is not working fine. But direction get changed so no need work more on this. ✅/2
+
+
+8. model_render_view.dart :- line number 124 , we are controlling the size of model. ✅
+
+
+
+9. Also replace the logo of profile from projects page with actual avatar url, so ui look more enhanced, if avatar url present on db then only. ✅
+
+
+
+
+
+/////////////////   Fixing the CORS err //////////////////
+
+
+
+Work it in this order — each step tells you whether to stop or continue.
+
+Step 1 — Find out which layer is broken
+
+URL="https://d3ap77f0m6kfrr.cloudfront.net/dev/6a7ac3e07de0998c78415630/6a7c0663bc00b057d61f8b57/6a7c07a5bc00b057d61f8b9c/models/6a7c8b7522983b58ce018892/model.glb"
+
+# A) through CloudFront
+curl -sI -H "Origin: http://localhost:57634" "$URL"
+
+# B) straight from S3 (swap in your real bucket + region)
+curl -sI -H "Origin: http://localhost:57634" \
+  "https://YOUR-BUCKET.s3.YOUR-REGION.amazonaws.com/dev/6a7ac.../model.glb"
+Two header lines decide everything: access-control-allow-origin and x-cache.
+
+B has ACAO?	A has ACAO?	Culprit
+No	No	S3 CORS rule (Step 2)
+Yes	No, x-cache: Hit	Stale CloudFront cache (Step 3)
+Yes	No, x-cache: Miss	CloudFront not forwarding Origin (Step 4)
+Yes	Yes	Cache key / range requests (Step 5)
+Step 2 — S3 bucket CORS
+Console → your bucket → Permissions → Cross-origin resource sharing. Check that your dev origin is matched exactly, port included:
+
+
+[{
+  "AllowedOrigins": ["http://localhost:*", "https://your-prod-domain.com"],
+  "AllowedMethods": ["GET", "HEAD"],
+  "AllowedHeaders": ["*"],
+  "ExposeHeaders": ["ETag", "Content-Length", "Content-Range", "Accept-Ranges"],
+  "MaxAgeSeconds": 3000
+}]
+Gotchas: "http://localhost" ≠ http://localhost:57634. A trailing slash breaks the match. HEAD missing breaks model-viewer.
+
+Step 3 — CloudFront invalidation
+Distribution → Invalidations → Create → /*. Mandatory after any CORS or policy change — old cached objects keep their old (headerless) response otherwise. Takes ~1–3 min; re-run curl A after.
+
+Step 4 — CloudFront behavior policies
+Distribution → Behaviors → edit the one matching /dev/* (or Default (*)):
+
+Origin request policy → Managed-CORS-S3Origin ← this is the one people miss
+Cache policy → Managed-CachingOptimized
+Allowed HTTP methods → GET, HEAD, OPTIONS (OPTIONS matters if anything preflights)
+Response headers policy → optionally Managed-CORS-with-preflight-and-SecurityHeadersPolicy as a belt-and-braces fallback that stamps ACAO at the edge regardless of S3
+Then invalidate again (Step 3).
+
+Step 5 — If headers look right but it still fails
+Check the 206 Partial Content response too, not just the 200. GLBs get range-requested, and the 206 needs ACAO as well:
+
+curl -sI -H "Origin: http://localhost:57634" -H "Range: bytes=0-1023" "$URL"
+Confirm the browser isn't holding its own cached copy — DevTools → Network → Disable cache, or hard-reload.
+If you added a Response Headers Policy and S3 emits ACAO, you can get a duplicate Access-Control-Allow-Origin header, which browsers also reject. Pick one source, not both.
+Most likely outcome given your symptoms (200 OK + ERR_FAILED): Step 4 then Step 3. The object is cached from a request that never carried an Origin header.
+
+If you tell me where the CloudFront/S3 config lives in this repo — Terraform, CDK, SAM, or all clicked in the console — I can check the actual definition instead of you walking the console.
+
+
+
+
+
+
+///////////////  After changing AWS things ----------------------------->>>>>>>>>>>>>>>
+
+
+
+
+Done. Acceptance: npm run type-check clean, npm run lint clean, npm test → 673 passed, 7 failed — all 7 failures are in admin-model-variants.test.ts and are pre-existing (I verified them by stashing my changes: identical 7 failures on a clean tree; they're about a missing variant field on the models DTO, unrelated to keys).
+
+1. Before/after, real example
+
+Project "Brass Vase" (665f…54321), owner 665f…45678, job 665f…def12, prod:
+
+before  prod/665f1c2b8a9d3e0012345678/665f1c2b8a9d3e0087654321/665f1c2b8a9d3e00abcdef12/images/EYE/eye_0001.jpg
+after   prod/brass-vase_665f1c2b8a9d3e0087654321/665f1c2b8a9d3e00abcdef12/images/EYE/eye_0001.jpg
+
+Edge case — project named "🗿🗿" (slug empty ⇒ bare id, never a leading _):
+
+after   prod/665f1c2b8a9d3e0087654321/665f1c2b8a9d3e00abcdef12/capture_manifest.json
+
+The end-to-end assertion in jobs-create.test.ts drives the real POST /jobs and pins dev/brass-vase_${projectId}/${jobId}/.
+
+2. Files changed
+
+Production code (3 functional, 3 comment-only)
+- src/utils/s3Keys.ts — new exported projectNameSlug(); new private projectSegment(); JobKeyScope.userId → projectName (raw); buildJobKeyPrefix emits the new root; ParsedImageKey now standalone with projectSlug + projectId; parseImageKey rewritten for 6 segments with last-underscore split; header docblock rewritten.
+- src/services/jobsService.ts — the one production call site: keyScope now { projectName: project.name, projectId, jobId } (uses the project doc already read at ~L176 — no new query); header comment.
+- src/models/types/job.types.ts — rawPrefix doc comment + a note that it is written once and never rebuilt.
+- src/utils/avatarKeys.ts, src/worker/engine/reconstructionEngine.ts — comment-only; both quoted the old capture format. No avatar code touched.
+
+Docs
+- AGENTS.md — new §S3 key scheme (capture jobs) under Conventions (format, {env} firewall, slug-is-a-label rule, no {userId}, last-underscore parse, both-buckets-identical, build-once/persist rule, client never builds keys); the avatar bullet's "7-segment" → "6-segment" plus the note that the two spaces diverge on {userId} on purpose.
+- recapture-api/docs/meshy-integration.md, .../meshy-integration-implementation-prompt.md — key-format strings. README.md has no key references; the Flutter recapture/{projectId}/{jobId}/… paths are local device storage, not S3.
+
+Tests — all 12 listed files, plus two the prompt didn't list: auto-model-generation.test.ts (2 buildJobKeyPrefix call sites) and jobs-create.test.ts (hardcoded the old prefix inline at L98). New coverage in s3-keys.test.ts: slugifier (spaces, NFKD + both é forms, emoji-only, leading digits, / and \, 100-char maxlength, underscores, determinism ×5), {env}-is-first-segment on every builder, round-trip incl. a slug-less key, the last-underscore split with a_b_c__d, and old-7-segment → clean ok:false. admin-delete-project.test.ts now records (bucket, prefix) pairs and asserts both buckets are swept under the identical prefix, which equals the job's persisted rawPrefix.
+
+3. No path rebuilds a prefix for an already-created job — confirmed
+
+buildJobKeyPrefix / buildManifestKey have exactly one production call site: jobsService.ts:213/234, inside createJob, before the Job.create. Every other consumer reads job.upload.rawPrefix / job.upload.manifestKey: captureProcessingProcessor, captureProcessingPipeline, meshyModelProcessor, modelOptimizationProcessor, projectModelsService (presign/photo-bytes), onDemandModelGenerationService, jobsService finalize + export, and adminProjectsService (soft-delete move, export manifest, hard-delete sweep). Old jobs keep pointing at their own objects; no migration.
+
+Non-goals verified: meshyModelProcessor.ts:51 and modelOptimizationProcessor.ts:65 both build ${rawPrefix}models/${modelId}/ — derived, unchanged. avatarKeys.ts keeps {userId}, its own SEGMENT_RE and parser. No Flutter code changed — upload_flow.dart composes ${keyPrefix}${rel} from the server-supplied plan and asserts containment; it never builds a key.
+
+4. Things that contradict the prompt
+
+1. Segment count: the prompt says 5, it's 6. {env}/{slug}_{projectId}/{jobId}/images/{LEVEL}/{filename}.jpg — the prompt's own format string has six /-separated parts (7 minus {userId}). Implemented as 6; the failure message reads "must have exactly 6 segments".
+2. Slug edge-stripping had to cover _, not just -. Underscore must survive slugification (your last-underscore test case requires it), so a name like _foo would produce _foo_<id> and throw S3KeyError on requireSegment. I strip leading/trailing [-_], a superset of the stated rule that preserves its stated reason (SEGMENT_RE needs an alphanumeric first char). Also: . does not survive slugification (collapses to -), since a leading dot is how .. starts.
+3. ParsedImageKey can no longer extend JobKeyScope. The scope now carries the raw projectName, which is not recoverable from a key (slugification is one-way). It is a standalone interface with projectSlug + projectId. Round-trip therefore means parseImageKey(buildImageKey(x)).projectSlug === projectNameSlug(x.projectName), which is what the test asserts.
+4. Two more test files needed updating beyond the listed twelve (auto-model-generation.test.ts, jobs-create.test.ts).
+5. admin-model-variants.test.ts is broken on dev already — 7 of 8 tests fail before my change. Worth a separate look; I left it alone.
+
+✻ Cogitated for 15m 30s
+
+──────────────────────────────────────────────────────────────────>>>>>>>>>>>>>>>>
+
+
+
+
+
+
+
+

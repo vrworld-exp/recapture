@@ -1,0 +1,197 @@
+# fastlane/Fastfile
+# ReCapture — Fastlane lane definitions
+#
+# ANDROID LANES (functional):
+#   bundle exec fastlane android build_release   → build release AAB only
+#   bundle exec fastlane android internal        → build + upload to Play Internal Track
+#
+# iOS LANES (stubbed — see STUB sections for activation checklist):
+#   bundle exec fastlane ios build               → build IPA (stub)
+#   bundle exec fastlane ios testflight          → build + upload to TestFlight (stub)
+#
+# Always run via Makefile targets or `bundle exec fastlane` directly.
+# Never call `fastlane` without `bundle exec`.
+
+default_platform(:android)
+
+# ── Before all lanes ──────────────────────────────────────────────────────────
+# Validate required environment / files before any lane runs.
+before_all do |lane, options|
+  # Ensure we are running from the project root
+  unless File.exist?("pubspec.yaml")
+    UI.user_error!("Fastfile must be run from the recapture project root (where pubspec.yaml lives)")
+  end
+end
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ANDROID PLATFORM
+# ══════════════════════════════════════════════════════════════════════════════
+platform :android do
+
+  # ── Lane: build_release ───────────────────────────────────────────────────
+  # Builds a signed release AAB (Android App Bundle).
+  # Does NOT upload to Play Store — use `internal` lane for upload.
+  #
+  # Prerequisites:
+  #   - android/key.properties must exist with real signing credentials
+  #   - KEYSTORE_FILE env var must point to the .jks file path
+  #
+  # Usage:
+  #   bundle exec fastlane android build_release
+  #   make deploy.android.build
+  desc "Build a signed release Android App Bundle (AAB)"
+  lane :build_release do
+    # Validate signing prerequisites
+    unless File.exist?("android/key.properties")
+      UI.user_error!(
+        "android/key.properties not found.\n" \
+        "Copy android/key.properties from the team password manager and fill in real values.\n" \
+        "See: android/key.properties (gitignored stub exists with REPLACE_WITH_ placeholders)"
+      )
+    end
+
+    if File.read("android/key.properties").include?("REPLACE_WITH_")
+      UI.user_error!(
+        "android/key.properties still contains placeholder values.\n" \
+        "Fill in real signing credentials before running a release build."
+      )
+    end
+
+    # Increment build number from pubspec.yaml versionCode
+    # flutter_build_number reads pubspec.yaml and passes it to flutter build
+    build_number = get_flutter_version_code
+
+    UI.message("Building Android AAB — version #{get_flutter_version_name} (#{build_number})")
+
+    # Build the release AAB
+    sh("flutter build appbundle --release --dart-define=ENV=prod", error_callback: ->(result) {
+      UI.user_error!("flutter build appbundle failed:\n#{result}")
+    })
+
+    UI.success("✅ Release AAB built: build/app/outputs/bundle/release/app-release.aab")
+  end
+
+  # ── Lane: internal ────────────────────────────────────────────────────────
+  # Builds a signed release AAB and uploads it to Play Store Internal Testing track.
+  #
+  # Prerequisites:
+  #   1. Play Store service account JSON at fastlane/secrets/play-store-service-account.json
+  #      (gitignored — obtain from Google Play Console → Setup → API access)
+  #   2. android/key.properties with real signing credentials
+  #   3. App must exist on Play Console (at least one manual upload done first)
+  #
+  # Usage:
+  #   bundle exec fastlane android internal
+  #   make deploy.android.internal
+  desc "Build and upload to Play Store Internal Testing track"
+  lane :internal do
+    service_account_path = "fastlane/secrets/play-store-service-account.json"
+
+    unless File.exist?(service_account_path)
+      UI.user_error!(
+        "Play Store service account JSON not found at #{service_account_path}\n\n" \
+        "To set up:\n" \
+        "  1. Go to Google Play Console → Setup → API access\n" \
+        "  2. Create a service account with 'Release manager' role\n" \
+        "  3. Download the JSON key file\n" \
+        "  4. Save to fastlane/secrets/play-store-service-account.json (gitignored)\n" \
+        "  5. Re-run this lane"
+      )
+    end
+
+    # Build the AAB first
+    build_release
+
+    # Upload to Internal Testing track
+    upload_to_play_store(
+      track:                   "internal",
+      aab:                     "build/app/outputs/bundle/release/app-release.aab",
+      json_key:                service_account_path,
+      package_name:            "com.mayasabhaxr.recapture",
+      release_status:          "draft",   # 'draft' — requires manual promotion in Play Console
+      skip_upload_apk:         true,      # we upload AAB, not APK
+      skip_upload_metadata:    true,      # don't overwrite store listing
+      skip_upload_changelogs:  true,      # no changelog update on internal track
+      skip_upload_images:      true,      # don't touch screenshots
+      skip_upload_screenshots: true,
+    )
+
+    UI.success("✅ Uploaded to Play Internal Testing track — review at play.google.com/console")
+  end
+
+end # platform :android
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# iOS PLATFORM — STUB
+#
+# ACTIVATION CHECKLIST (complete all before removing STUB comments):
+#
+#   [ ] Apple Developer Account enrolled and paid ($99/year)
+#         → https://developer.apple.com/programs/enroll/
+#   [ ] App ID registered in App Store Connect as "com.mayasabhaxr.recapture"
+#         → App Store Connect → Apps → New App
+#   [ ] `match` certificates repository created (private GitHub repo)
+#         → Create: github.com/mayasabhaxr/recapture-certificates (private)
+#         → Run: bundle exec fastlane match init
+#   [ ] Distribution certificate + provisioning profile generated via match
+#         → Run: bundle exec fastlane match appstore
+#   [ ] MATCH_PASSWORD secret added to GitHub Actions secrets
+#   [ ] APPLE_API_KEY_ID, APPLE_API_ISSUER_ID, APPLE_API_KEY_CONTENT secrets added
+#         → Create API key in App Store Connect → Users → Integrations → Keys
+#   [ ] macOS runner available (GitHub Actions or self-hosted)
+#
+# Once all items are checked, remove the `UI.user_error!` stub calls and
+# uncomment the real lane bodies below each STUB block.
+# ══════════════════════════════════════════════════════════════════════════════
+platform :ios do
+
+  # ── Lane: build ───────────────────────────────────────────────────────────
+  desc "Build iOS IPA for distribution (STUB — activate when Apple account ready)"
+  lane :build do
+    # STUB START ──────────────────────────────────────────────────────────────
+    UI.user_error!(
+      "iOS build lane is not yet activated.\n\n" \
+      "Complete the activation checklist in fastlane/Fastfile under 'iOS PLATFORM — STUB'\n" \
+      "before running this lane."
+    )
+    # STUB END ────────────────────────────────────────────────────────────────
+
+    # REAL IMPLEMENTATION (uncomment after activation checklist complete):
+    # setup_ci if is_ci
+    # match(type: "appstore", readonly: is_ci)
+    # sh("flutter build ipa --release --dart-define=ENV=prod")
+    # UI.success("✅ IPA built: build/ios/ipa/recapture.ipa")
+  end
+
+  # ── Lane: testflight ──────────────────────────────────────────────────────
+  desc "Build and upload to TestFlight (STUB — activate when Apple account ready)"
+  lane :testflight do
+    # STUB START ──────────────────────────────────────────────────────────────
+    UI.user_error!(
+      "TestFlight lane is not yet activated.\n\n" \
+      "Complete the activation checklist in fastlane/Fastfile under 'iOS PLATFORM — STUB'\n" \
+      "before running this lane."
+    )
+    # STUB END ────────────────────────────────────────────────────────────────
+
+    # REAL IMPLEMENTATION (uncomment after activation checklist complete):
+    # setup_ci if is_ci
+    # match(type: "appstore", readonly: is_ci)
+    # sh("flutter build ipa --release --dart-define=ENV=prod")
+    # upload_to_testflight(
+    #   ipa:                               "build/ios/ipa/recapture.ipa",
+    #   skip_waiting_for_build_processing: true,
+    #   notify_external_testers:           false,
+    # )
+    # UI.success("✅ Uploaded to TestFlight — review at appstoreconnect.apple.com")
+  end
+
+end # platform :ios
+
+
+# ── Error handler ─────────────────────────────────────────────────────────────
+error do |lane, exception, options|
+  UI.error("❌ Lane '#{lane}' failed: #{exception.message}")
+  UI.error("Check the output above for details.")
+end
