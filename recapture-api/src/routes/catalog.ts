@@ -60,6 +60,7 @@ import {
   commitBrandingImage,
   createBrandingImageSlot,
   createCatalog,
+  deleteCatalog,
   getBusinessProfile,
   getCatalog,
   storeBrandingImageBytes,
@@ -315,6 +316,71 @@ router.patch(
     });
 
     res.status(200).json({ status: 'success', catalog: result.catalog });
+  })
+);
+
+/**
+ * DELETE /catalog — delete the catalog and everything in it, so the caller can
+ * create a new one from scratch.
+ *
+ * A HARD delete, not the soft-delete used elsewhere: the unique index on
+ * `Catalog.userId` carries no `deletedAt` predicate, so a soft-deleted row would
+ * keep the owner's one slot and `POST /catalog` would replay it instead of
+ * making a new catalog. See `deleteCatalog` for the full reasoning.
+ *
+ * NO REQUEST BODY and no query flag guarding it. The confirmation belongs in the
+ * client — a typed catalog name, which the app enforces — because a `?confirm=1`
+ * a caller can simply add is not a safeguard, it is a formality.
+ *
+ * The public page goes with it: Mirage's `delete-restaurant` is called first and
+ * a refusal aborts the whole thing, leaving the local rows intact. That is the
+ * opposite trade from `POST /catalog/unpublish`, which deliberately KEEPS the
+ * restaurant so a printed QR survives — here the user is giving the URL up on
+ * purpose, and an orphaned restaurant would be re-adopted by name on the next
+ * publish and re-serve the products they just deleted.
+ */
+router.delete(
+  '/',
+  asyncHandler(async (req, res) => {
+    const userId = req.user!.userId;
+
+    // Read BEFORE the delete: the id is an analytics prop and it stops existing
+    // half a line later.
+    const catalogId = await catalogIdFor(userId);
+
+    const result = await deleteCatalog(userId);
+
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+
+    if (result.outcome === 'PUBLISH_IN_PROGRESS') {
+      return publishInProgress(res, result.runId);
+    }
+
+    if (result.outcome === 'MIRAGE_FAILED') {
+      // 502, not 500: ReCapture is fine, the downstream refused. Nothing was
+      // deleted, so the client's own message can honestly say "try again".
+      return fail(
+        res,
+        502,
+        'MIRAGE_UNAVAILABLE',
+        "We couldn't take your public page down, so nothing was deleted. Please try again."
+      );
+    }
+
+    track(AnalyticsEvent.CATALOG_DELETED, {
+      user_id_hash: hashIdentifier(userId),
+      catalog_id: catalogId,
+      deleted_product_count: result.deletedProducts,
+      deleted_category_count: result.deletedCategories,
+      was_published: result.wasPublished,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      deletedProductCount: result.deletedProducts,
+      deletedCategoryCount: result.deletedCategories,
+      wasPublished: result.wasPublished,
+    });
   })
 );
 

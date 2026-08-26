@@ -67,6 +67,19 @@ abstract interface class CatalogRepository {
     BusinessContact? contact,
   });
 
+  /// Deletes the catalog and everything under it, so the user can build a new
+  /// one from scratch.
+  ///
+  /// ⚠ NOT the inverse of [CatalogRepository.publish] — that is `unpublish`,
+  /// which keeps the restaurant, the URL and every printed QR alive. This gives
+  /// all three up: the public page is torn down with the catalog, and the next
+  /// catalog gets a NEW link. Anything already printed stops resolving.
+  ///
+  /// Refuses with `PUBLISH_IN_PROGRESS` while a run holds the catalog, and with
+  /// `MIRAGE_UNAVAILABLE` when the public page could not be taken down — in
+  /// which case NOTHING was deleted and retrying is the fix.
+  Future<CatalogDeletionSummary> delete();
+
   /// Mints a presigned slot to upload the logo or cover image into (feature 2).
   Future<ProductImageSlot> createBrandingSlot({
     required BrandingSlot slot,
@@ -227,6 +240,26 @@ abstract interface class CatalogRepository {
 /// seen everything by row twenty.
 const int kTopProductsLimit = 20;
 
+/// What a catalog delete took with it.
+///
+/// The counts are for the confirmation copy: "deleted, along with 12 products"
+/// is the difference between a user believing the action worked and a user
+/// pulling to refresh to check.
+class CatalogDeletionSummary {
+  const CatalogDeletionSummary({
+    required this.deletedProducts,
+    required this.deletedCategories,
+    required this.wasPublished,
+  });
+
+  final int deletedProducts;
+  final int deletedCategories;
+
+  /// True when a live public page was taken down with it — which is the half
+  /// worth saying out loud, because it is the irreversible one.
+  final bool wasPublished;
+}
+
 /// The two formats the QR endpoint renders. PNG for the screen and for sharing,
 /// PDF for printing at a size a sticker press can use.
 enum CatalogQrFormat { png, pdf }
@@ -316,6 +349,24 @@ class RemoteCatalogRepository implements CatalogRepository {
         );
         return _catalogFrom(res.data);
       });
+
+  @override
+  Future<CatalogDeletionSummary> delete() => mapCatalogErrors(() async {
+        final res = await _dio.delete<Map<String, dynamic>>('/catalog');
+        final body = res.data;
+
+        // Counts are cosmetic, so a body missing them is NOT a malformed
+        // response: the delete happened, and refusing to acknowledge it would
+        // send the user back to a catalog that is already gone.
+        return CatalogDeletionSummary(
+          deletedProducts: _count(body?['deletedProductCount']),
+          deletedCategories: _count(body?['deletedCategoryCount']),
+          wasPublished: body?['wasPublished'] == true,
+        );
+      });
+
+  static int _count(Object? value) =>
+      value is num && value >= 0 ? value.toInt() : 0;
 
   @override
   Future<ProductImageSlot> createBrandingSlot({

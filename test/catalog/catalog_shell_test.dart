@@ -40,14 +40,18 @@ class _StubAuth extends AuthNotifier {
 class _FakeCatalogRepo
     with CatalogRepoPublishDefaults, CatalogRepoAnalyticsDefaults
     implements CatalogRepository {
-  _FakeCatalogRepo(this._fetch, {this.onCreate});
+  _FakeCatalogRepo(this._fetch, {this.onCreate, this.onDelete});
 
   final Future<Catalog?> Function() _fetch;
 
   /// Lets a test fail the create. Null → the default success.
   final Future<Catalog> Function()? onCreate;
 
+  /// Lets a test fail the delete. Null → the default success.
+  final Future<CatalogDeletionSummary> Function()? onDelete;
+
   int fetchCalls = 0;
+  int deleteCalls = 0;
 
   /// What the last create was called with, so a test can assert that a blank
   /// optional field went out ABSENT rather than as an empty string.
@@ -77,6 +81,17 @@ class _FakeCatalogRepo
     BusinessContact? contact,
   }) async =>
       Catalog.fromMap(golden.catalogGolden());
+
+  @override
+  Future<CatalogDeletionSummary> delete() async {
+    deleteCalls++;
+    if (onDelete != null) return onDelete!();
+    return const CatalogDeletionSummary(
+      deletedProducts: 12,
+      deletedCategories: 4,
+      wasPublished: true,
+    );
+  }
 
   @override
   Future<ProductImageSlot> createBrandingSlot({
@@ -205,6 +220,136 @@ void main() {
     // The server's own owner-safe sentence, not an exception toString.
     expect(find.textContaining("You're offline"), findsOneWidget);
     expect(find.text('Try again'), findsOneWidget);
+  });
+
+  group('delete flow', () {
+    /// The dialog's destructive button.
+    final deleteButton = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.widgetWithText(ElevatedButton, 'Delete catalog'),
+    );
+
+    Future<void> openMenu(WidgetTester tester, _FakeCatalogRepo repo) async {
+      await tester.pumpWidget(_app(repo));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.more_vert));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> openDialog(WidgetTester tester, _FakeCatalogRepo repo) async {
+      await openMenu(tester, repo);
+      await tester.tap(find.text('Delete catalog').last);
+      await tester.pumpAndSettle();
+    }
+
+    _FakeCatalogRepo publishedRepo({
+      Future<CatalogDeletionSummary> Function()? onDelete,
+    }) {
+      // The delete puts the notifier back to null, and the shell re-reads its
+      // own state rather than re-fetching — so this closure answering the
+      // catalog every time is exactly right, and a create prompt appearing
+      // afterwards proves the state moved rather than the fetch changing.
+      return _FakeCatalogRepo(
+        () async => Catalog.fromMap(golden.catalogGolden()..['status'] = 'PUBLISHED'),
+        onDelete: onDelete,
+      );
+    }
+
+    testWidgets('is behind the overflow menu, not out on the header',
+        (tester) async {
+      await tester.pumpWidget(_app(publishedRepo()));
+      await tester.pumpAndSettle();
+
+      // Irreversible, and it gives up the public URL. A red button next to
+      // Preview is how it gets pressed by accident.
+      expect(find.text('Delete catalog'), findsNothing);
+      expect(find.byIcon(Icons.more_vert), findsOneWidget);
+    });
+
+    testWidgets('the confirm button stays disabled until the name is typed',
+        (tester) async {
+      await openDialog(tester, publishedRepo());
+
+      expect(
+        tester.widget<ElevatedButton>(deleteButton).onPressed,
+        isNull,
+        reason: 'a destructive action must not be one tap away',
+      );
+
+      await tester.enterText(find.byType(TextFormField).last, 'Cafe Mocha');
+      await tester.pumpAndSettle();
+
+      expect(tester.widget<ElevatedButton>(deleteButton).onPressed, isNotNull);
+    });
+
+    testWidgets('names what is about to be destroyed', (tester) async {
+      await openDialog(tester, publishedRepo());
+
+      // Scoped to the dialog: the header card behind it also reads
+      // "12 products · 4 categories", so an unscoped finder matches twice and
+      // would pass even if the dialog said nothing at all.
+      Finder inDialog(String text) => find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.textContaining(text),
+          );
+
+      // The counts are what make a user pause if they should, and the QR
+      // sentence is the difference between this and Take offline.
+      expect(inDialog('12 products'), findsOneWidget);
+      expect(inDialog('4 categories'), findsOneWidget);
+      expect(inDialog('printed codes will stop working'), findsOneWidget);
+    });
+
+    testWidgets('deleting returns the shell to the create prompt',
+        (tester) async {
+      final repo = publishedRepo();
+      await openDialog(tester, repo);
+
+      await tester.enterText(find.byType(TextFormField).last, 'Cafe Mocha');
+      await tester.pumpAndSettle();
+      await tester.tap(deleteButton);
+      await tester.pumpAndSettle();
+
+      expect(repo.deleteCalls, 1);
+      // The whole point of the feature: one tap from starting over, with no
+      // stale header card left behind.
+      expect(find.text('No catalog yet'), findsOneWidget);
+      expect(find.text('Cafe Mocha'), findsNothing);
+    });
+
+    testWidgets('a failed delete keeps the catalog and says why',
+        (tester) async {
+      final repo = publishedRepo(
+        onDelete: () async => throw const CatalogFailure(
+          code: 'MIRAGE_UNAVAILABLE',
+          message: 'server prose that must never be rendered',
+        ),
+      );
+      await openDialog(tester, repo);
+
+      await tester.enterText(find.byType(TextFormField).last, 'Cafe Mocha');
+      await tester.pumpAndSettle();
+      await tester.tap(deleteButton);
+      await tester.pumpAndSettle();
+
+      // Backend aborts before touching anything, so the reassurance is true.
+      expect(find.textContaining('nothing was deleted'), findsOneWidget);
+      // Mapped from the CODE — the server's own sentence never reaches a user.
+      expect(find.textContaining('server prose'), findsNothing);
+      // Still on the dialog, so the retry is where the user already is.
+      expect(find.byType(AlertDialog), findsOneWidget);
+    });
+
+    testWidgets('cancelling deletes nothing', (tester) async {
+      final repo = publishedRepo();
+      await openDialog(tester, repo);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(repo.deleteCalls, 0);
+      expect(find.text('Cafe Mocha'), findsOneWidget);
+    });
   });
 
   group('create flow', () {

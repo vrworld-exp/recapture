@@ -337,12 +337,26 @@ do not remove it).
   matches `publishedSnapshot.assetIdentities` is not re-uploaded.
   `MIRAGE_ASSET_TRANSFER_MODE` defaults to `bytes`; `url` needs Mirage prompt M1
   and publishes assetless products until then.
-- **Never `delete-restaurant`.** Unpublish removes the ITEMS and flips
-  `restaurant.isPublished`. `mirageRestaurantId`, `publicUrl` and
-  `publicUrlScheme` are written ONCE and frozen — a printed QR resolves through
-  them, and `assertMappingImmutable` THROWS on an attempt to rewrite. The QR is
-  rendered server-side from the STORED `publicUrl` verbatim; `catalogQrService`
-  does not import `MIRAGE_PUBLIC_BASE_URL`, and it should stay that way.
+- **Never `delete-restaurant` from a publish path — `DELETE /catalog` is the ONE
+  exception.** Unpublish removes the ITEMS and flips `restaurant.isPublished`.
+  `mirageRestaurantId`, `publicUrl` and `publicUrlScheme` are written ONCE and
+  frozen — a printed QR resolves through them, and `assertMappingImmutable`
+  THROWS on an attempt to rewrite. The QR is rendered server-side from the STORED
+  `publicUrl` verbatim; `catalogQrService` does not import
+  `MIRAGE_PUBLIC_BASE_URL`, and it should stay that way.
+
+  The exception exists because "delete my catalog and start over" cannot be
+  honoured any other way, and it is the one action where giving up the URL is the
+  user's stated intent rather than a side effect. Leaving the restaurant behind
+  would be actively worse than deleting it: the old page keeps serving the old
+  products at the old link, and provisioning ADOPTS a name-matching restaurant
+  (§7.5), so the user's "fresh" catalog would silently re-adopt it on its first
+  publish and inherit everything they just deleted. `DELETE /catalog` therefore
+  calls `deleteRestaurant` FIRST and aborts the whole delete if Mirage refuses,
+  which keeps "the mapping is never orphaned" true. Guarded by
+  `tests/catalog-delete.test.ts`, which is the deliberate opposite of
+  `tests/catalog-unpublish.test.ts` — read both before changing either. No other
+  caller may reach for it.
 - **Gates run BEFORE Mirage, and they all run.** Every reason a catalog cannot
   publish is a ReCapture-side fact, so `POST /catalog/publish` returns EVERY
   failing gate in one 422 (the client shows a checklist) and an empty catalog is

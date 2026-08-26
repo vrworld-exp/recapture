@@ -22,6 +22,7 @@ import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_actions.dart';
 import 'create_catalog_dialog.dart';
+import 'delete_catalog_dialog.dart';
 import 'product_grid_section.dart';
 
 /// The catalog shell — the storefront authoring surface's home.
@@ -58,6 +59,33 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     CatalogFeedback.confirm(
       CatalogFeedback.of(context),
       '${created.name} is ready. Add your first product.',
+    );
+  }
+
+  /// Deletes the whole catalog, after the typed-name confirmation.
+  ///
+  /// Nothing is refreshed and nothing is navigated afterwards: the notifier puts
+  /// state back to `AsyncData(null)` — the same value as "never had one" — so
+  /// this screen rebuilds into [_NoCatalogYet] on its own, and the user is left
+  /// exactly one tap from creating the replacement. That is the whole point of
+  /// the feature, so sending them back to Projects would be the wrong ending.
+  ///
+  /// Failures never reach here: the dialog keeps them where the user can retry.
+  Future<void> _deleteCatalog(Catalog catalog) async {
+    // Captured BEFORE the await — a catalog action outlives the widget that
+    // started it, and this dialog is on screen for as long as a Mirage teardown
+    // takes. See CatalogFeedback.of.
+    final messenger = CatalogFeedback.of(context);
+
+    final summary = await showDeleteCatalogDialog(context, catalog);
+    if (summary == null) return; // cancelled
+
+    CatalogFeedback.confirm(
+      messenger,
+      summary.wasPublished
+          ? '${catalog.name} and its public page were deleted. '
+              'Create a new catalog to start over.'
+          : '${catalog.name} was deleted. Create a new catalog to start over.',
     );
   }
 
@@ -203,6 +231,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
               : _CatalogBody(
                   catalog: catalog,
                   onAddProduct: _addProduct,
+                  onDeleteCatalog: () => _deleteCatalog(catalog),
                   onOpenProduct: _openProduct,
                   onOpenCategories: _openCategories,
                   onOpenBusinessProfile: _openBusinessProfile,
@@ -246,6 +275,7 @@ class _CatalogBody extends ConsumerWidget {
   const _CatalogBody({
     required this.catalog,
     required this.onAddProduct,
+    required this.onDeleteCatalog,
     required this.onOpenProduct,
     required this.onOpenCategories,
     required this.onOpenBusinessProfile,
@@ -258,6 +288,7 @@ class _CatalogBody extends ConsumerWidget {
 
   final Catalog catalog;
   final VoidCallback onAddProduct;
+  final VoidCallback onDeleteCatalog;
   final ValueChanged<CatalogProduct> onOpenProduct;
   final VoidCallback onOpenCategories;
   final VoidCallback onOpenBusinessProfile;
@@ -302,6 +333,7 @@ class _CatalogBody extends ConsumerWidget {
                   SliverToBoxAdapter(
                     child: _CatalogHeaderCard(
                       catalog: catalog,
+                      onDeleteCatalog: onDeleteCatalog,
                       onOpenBusinessProfile: onOpenBusinessProfile,
                       onOpenPreview: onOpenPreview,
                       onOpenPublish: onOpenPublish,
@@ -377,6 +409,7 @@ class _CatalogBody extends ConsumerWidget {
 class _CatalogHeaderCard extends StatelessWidget {
   const _CatalogHeaderCard({
     required this.catalog,
+    required this.onDeleteCatalog,
     required this.onOpenBusinessProfile,
     required this.onOpenPreview,
     required this.onOpenPublish,
@@ -385,6 +418,7 @@ class _CatalogHeaderCard extends StatelessWidget {
   });
 
   final Catalog catalog;
+  final VoidCallback onDeleteCatalog;
   final VoidCallback onOpenBusinessProfile;
   final VoidCallback onOpenPreview;
   final VoidCallback onOpenPublish;
@@ -418,6 +452,47 @@ class _CatalogHeaderCard extends StatelessWidget {
                   color: AppColors.textSecondary,
                 ),
                 onPressed: onOpenBusinessProfile,
+              ),
+              // Behind a menu, not out on the header next to Publish and
+              // Preview. Deleting the catalog is the one action on this screen
+              // that cannot be undone and that gives up the public URL — it
+              // needs to be FINDABLE, which is why it is here on the catalog
+              // itself rather than buried in app settings, but a red button
+              // sitting a thumb's width from Preview is how it gets pressed by
+              // accident. The typed-name confirmation is the second gate.
+              PopupMenuButton<_CatalogMenuAction>(
+                tooltip: 'More',
+                color: AppColors.surface1,
+                icon: const Icon(
+                  Icons.more_vert,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                onSelected: (action) => switch (action) {
+                  _CatalogMenuAction.delete => onDeleteCatalog(),
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: _CatalogMenuAction.delete,
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.delete_outline,
+                          size: 18,
+                          color: AppColors.error,
+                        ),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Delete catalog',
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodyMedium
+                              ?.copyWith(color: AppColors.error),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -512,6 +587,11 @@ class _CatalogHeaderCard extends StatelessWidget {
     );
   }
 }
+
+/// The header's overflow menu. An enum with one entry rather than a bare
+/// callback because this menu is where the next catalog-level action lands, and
+/// a `switch` over it is a compile error the day one is added without a branch.
+enum _CatalogMenuAction { delete }
 
 class _Chip extends StatelessWidget {
   const _Chip({required this.label, required this.color});

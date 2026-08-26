@@ -381,9 +381,12 @@ class PublishNotifier extends AutoDisposeNotifier<PublishScreenState> {
 
   /// The key for the attempt about to be made — a fresh one, unless a previous
   /// attempt failed without a definitive answer and left one behind.
+  ///
+  /// The bound is written out rather than shifted: on web an int is a JS
+  /// number, `1 << 32` wraps to 0, and nextInt(0) throws on the first press.
   String _keyForAttempt() =>
       _idempotencyKey ??= 'pub-${DateTime.now().microsecondsSinceEpoch}-'
-          '${Random().nextInt(1 << 32).toRadixString(16)}';
+          '${Random().nextInt(0xFFFFFFFF).toRadixString(16).padLeft(8, '0')}';
 
   /// Best-effort: this screen has just learned something the catalog shell's
   /// header shows too. A failed refresh must never look like a failed publish.

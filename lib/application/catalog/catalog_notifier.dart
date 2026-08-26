@@ -8,6 +8,9 @@ import '../../domain/entities/auth_state.dart';
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../auth/auth_notifier.dart';
+import 'bulk_selection_notifier.dart';
+import 'catalog_categories_notifier.dart';
+import 'catalog_products_notifier.dart';
 
 /// Owns the caller's catalog — the single source of truth every catalog surface
 /// reads from. State is an `AsyncValue<Catalog?>`:
@@ -87,6 +90,34 @@ class CatalogNotifier extends AsyncNotifier<Catalog?> {
     );
     state = AsyncData(updated);
     return updated;
+  }
+
+  /// Deletes the catalog and everything in it, returning the user to the
+  /// first-run state so they can create a new one.
+  ///
+  /// State goes to `AsyncData(null)` — the SAME value as "never had one" — which
+  /// is what makes the catalog shell rebuild into its create prompt with no
+  /// special case for "just deleted".
+  ///
+  /// The sibling notifiers are INVALIDATED rather than left alone: they hold
+  /// products and categories of a catalog that no longer exists, and a stale
+  /// grid behind the create prompt is how a user ends up believing the delete
+  /// only half worked. Bulk selection is cleared for the same reason — a
+  /// selection of deleted ids would arm actions against rows that are gone.
+  ///
+  /// Throws [CatalogFailure] on failure, with state LEFT ALONE: the backend
+  /// aborts its delete before touching anything when the public page cannot be
+  /// taken down, so the catalog on screen is still the truth.
+  Future<CatalogDeletionSummary> delete() async {
+    final summary = await _repo.delete();
+
+    state = const AsyncData<Catalog?>(null);
+
+    ref.read(bulkSelectionProvider.notifier).exit();
+    ref.invalidate(catalogProductsProvider);
+    ref.invalidate(catalogCategoriesProvider);
+
+    return summary;
   }
 }
 

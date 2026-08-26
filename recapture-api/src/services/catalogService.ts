@@ -14,6 +14,9 @@ import { Types } from 'mongoose';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
+import { CatalogPublishRun } from '@/models/CatalogPublishRun';
+import { getMirageClient, MirageError, MirageErrorCode } from '@/services/mirage';
+import { hasActiveRun } from '@/services/catalog/publishRunState';
 import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
 import { presignObjectPutUrl, putObjectBytes } from '@/services/s3ObjectStore';
@@ -487,6 +490,121 @@ export async function commitBrandingImage(
   await sweepSupersededImages(input.key, previousKey);
 
   return { outcome: 'COMMITTED', profile: toBusinessProfileDto(updated) };
+}
+
+
+// ── Delete (start over) ─────────────────────────────────────────────────────
+
+/**
+ * Outcome of a catalog delete.
+ *
+ * `MIRAGE_FAILED` is its own outcome rather than a thrown error because the
+ * caller has to say something specific: the local rows are still there, nothing
+ * was lost, and retrying is the fix.
+ */
+export type DeleteCatalogResult =
+  | { outcome: 'NOT_FOUND' }
+  /** A publish run holds the catalog. Deleting under it would race the worker. */
+  | { outcome: 'PUBLISH_IN_PROGRESS'; runId: string }
+  /** Mirage would not let go of the restaurant. NOTHING was deleted. */
+  | { outcome: 'MIRAGE_FAILED'; code: string }
+  | {
+      outcome: 'DELETED';
+      deletedProducts: number;
+      deletedCategories: number;
+      /** True when a live Mirage restaurant was torn down with it. */
+      wasPublished: boolean;
+    };
+
+/**
+ * Deletes the caller's catalog and everything under it, so they can create a
+ * new one from scratch.
+ *
+ * ⚠ THIS IS A HARD DELETE, and deliberately not the house soft-delete.
+ * The unique index on `Catalog.userId` has no `deletedAt` predicate, so a
+ * soft-deleted catalog KEEPS its owner's one slot — and `createCatalog` resolves
+ * the resulting E11000 by replaying the existing row. A soft delete here would
+ * therefore hand the user back the catalog they just deleted the moment they
+ * tried to make a new one, which is the exact opposite of what this endpoint is
+ * for. Anything that reintroduces a soft delete has to make that index partial
+ * on `deletedAt: null` in the same change.
+ *
+ * ORDER MATTERS. Mirage is torn down FIRST, and a refusal aborts the whole
+ * operation with the local rows untouched:
+ *
+ *   • Mirage's `delete-restaurant` cascades its own categories and items, so one
+ *     call empties the public side.
+ *   • If we dropped the local rows first and Mirage then refused, the mapping
+ *     (`mirageRestaurantId`) would be gone and the orphaned restaurant would be
+ *     unreachable from here forever — while still serving the old products at
+ *     the old URL.
+ *   • Worse, provisioning ADOPTS a Mirage restaurant whose name matches
+ *     (§7.5). A leftover restaurant means the user's "fresh" catalog would
+ *     silently adopt it on its first publish and inherit every product they
+ *     just deleted. "Fresh start" has to be true on the public page too.
+ *
+ * A restaurant Mirage has already lost (`MIRAGE_NOT_FOUND`) is treated as
+ * success — the end state is the one we were asking for.
+ *
+ * NOT cleaned up: S3 objects (logo, cover, product images and models). They are
+ * content-addressed under the catalog id and nothing else can reach them, so
+ * they are dead weight rather than a correctness problem; a bucket lifecycle
+ * sweep is the right tool, not a request-path loop over an unbounded key set.
+ */
+export async function deleteCatalog(userId: string): Promise<DeleteCatalogResult> {
+  const catalog = await findOwnedCatalog(userId);
+  if (!catalog) return { outcome: 'NOT_FOUND' };
+
+  const catalogId = catalog._id as Types.ObjectId;
+
+  // A run in flight is mid-way through writing this catalog into Mirage. Let it
+  // finish or fail on its own terms rather than deleting the rows underneath it.
+  const active = await hasActiveRun(catalogId);
+  if (active.active && active.runId) {
+    return { outcome: 'PUBLISH_IN_PROGRESS', runId: active.runId };
+  }
+
+  const restaurantId = catalog.mirageRestaurantId;
+
+  if (restaurantId) {
+    try {
+      await getMirageClient().deleteRestaurant(restaurantId);
+    } catch (err) {
+      if (!(err instanceof MirageError)) throw err;
+
+      // Already gone is the state we wanted. Anything else aborts with the
+      // local rows intact, so the user can retry rather than being left with
+      // half a catalog and a live public page.
+      if (err.code !== MirageErrorCode.NOT_FOUND) {
+        console.warn(
+          `[catalog] delete aborted: Mirage refused delete-restaurant (${err.code})`
+        );
+        return { outcome: 'MIRAGE_FAILED', code: err.code };
+      }
+    }
+  }
+
+  // Children first: a crash between these leaves orphan rows whose catalog is
+  // gone, and orphan children are invisible (every read is scoped by catalogId)
+  // where an orphan CATALOG would still be served as the user's own.
+  const [products, categories] = await Promise.all([
+    CatalogProduct.deleteMany({ catalogId }).exec(),
+    CatalogCategory.deleteMany({ catalogId }).exec(),
+  ]);
+
+  // Publish history goes too. It is per-catalog and references a catalogId that
+  // is about to stop existing; its counts are not destructured because nothing
+  // reports them.
+  await CatalogPublishRun.deleteMany({ catalogId }).exec();
+
+  await Catalog.deleteOne({ _id: catalogId }).exec();
+
+  return {
+    outcome: 'DELETED',
+    deletedProducts: products.deletedCount ?? 0,
+    deletedCategories: categories.deletedCount ?? 0,
+    wasPublished: Boolean(restaurantId),
+  };
 }
 
 /**

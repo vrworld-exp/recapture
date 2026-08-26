@@ -31,6 +31,7 @@ import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/presentation/screens/catalog/business_profile_screen.dart';
 import 'catalog_repo_analytics_defaults.dart';
+import 'catalog_repo_delete_defaults.dart';
 import 'catalog_repo_publish_defaults.dart';
 
 import 'catalog_entities_test.dart' as golden;
@@ -90,7 +91,10 @@ class BrandingUploadCall {
 
 /// A catalog repository that serves the branding half of the flow.
 class FakeBrandingRepository
-    with CatalogRepoPublishDefaults, CatalogRepoAnalyticsDefaults
+    with
+        CatalogRepoPublishDefaults,
+        CatalogRepoAnalyticsDefaults,
+        CatalogRepoDeleteDefaults
     implements CatalogRepository {
   FakeBrandingRepository(this.profileRepo);
 

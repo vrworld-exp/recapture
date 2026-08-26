@@ -34,14 +34,20 @@ async function ping(): Promise<HealthResponse> {
 
 
 export async function axiosBackendMakeAlive(): Promise<void> {
-    try {
+    const min = 1000 * 60 * 10;  // 10 mins
 
-        const min = 1000 * 60 * 10;  // 10 mins
-        // const health = await ping();
-        await setInterval(ping, min); // ping every 10 seconds
-        // console.log('✅ Backend health check passed');
-    } catch (err) {
-        console.error('❌ Backend health check failed:', err);
-    }
+    // The callback MUST NOT be `ping` itself. `ping` rejects on a failed health
+    // check, and a rejected promise from a timer callback has nobody to catch
+    // it — under Node's default that unhandled rejection kills the API process
+    // ten minutes after boot, for a keep-alive ping that nothing depends on.
+    // Swallow it here: a missed ping is worth a log line, never an outage.
+    const timer = setInterval(() => {
+        void ping().catch((err: unknown) => {
+            console.error('❌ Backend health check failed:', err);
+        });
+    }, min);
 
+    // Do not hold the event loop open for a best-effort ping — the API's own
+    // listener is what should decide when the process may exit.
+    timer.unref();
 }

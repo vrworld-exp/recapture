@@ -80,6 +80,7 @@ export const AnalyticsEvent = {
   // ── Catalog authoring (the Mirage publish feature) ────────────────────────
   CATALOG_CREATED: 'catalog_created',
   CATALOG_UPDATED: 'catalog_updated',
+  CATALOG_DELETED: 'catalog_deleted',
   CATALOG_CATEGORY_CREATED: 'catalog_category_created',
   CATALOG_CATEGORY_DELETED: 'catalog_category_deleted',
   CATALOG_PRODUCTS_LISTED: 'catalog_products_listed',
@@ -557,6 +558,25 @@ const catalogUpdatedProps = z
   })
   .strict();
 
+/**
+ * The user deleted their whole catalog to start over (feature: delete catalog).
+ *
+ * Worth its own event because it is the one authoring action that is not an
+ * edit: it gives up the public URL, and a business doing it is telling us the
+ * catalog was not recoverable by editing. The counts say how much work was
+ * discarded — no names, so nothing of the owner's content travels.
+ */
+const catalogDeletedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    deleted_product_count: z.number().int().nonnegative(),
+    deleted_category_count: z.number().int().nonnegative(),
+    /** True when a live Mirage restaurant was torn down with it. */
+    was_published: z.boolean(),
+  })
+  .strict();
+
 const catalogCategoryCreatedProps = z
   .object({
     user_id_hash: z.string().min(1),
@@ -763,6 +783,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.MODEL_OPTIMIZE_COMPLETED]: modelOptimizeCompletedProps,
   [AnalyticsEvent.CATALOG_CREATED]: catalogCreatedProps,
   [AnalyticsEvent.CATALOG_UPDATED]: catalogUpdatedProps,
+  [AnalyticsEvent.CATALOG_DELETED]: catalogDeletedProps,
   [AnalyticsEvent.CATALOG_CATEGORY_CREATED]: catalogCategoryCreatedProps,
   [AnalyticsEvent.CATALOG_CATEGORY_DELETED]: catalogCategoryDeletedProps,
   [AnalyticsEvent.CATALOG_PRODUCTS_LISTED]: catalogProductsListedProps,

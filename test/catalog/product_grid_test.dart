@@ -33,6 +33,7 @@ import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/presentation/screens/catalog/product_grid_section.dart';
 import 'package:recapture/presentation/widgets/catalog/product_card.dart';
 import 'catalog_repo_analytics_defaults.dart';
+import 'catalog_repo_delete_defaults.dart';
 import 'catalog_repo_publish_defaults.dart';
 
 import 'catalog_entities_test.dart' as golden;
@@ -204,7 +205,10 @@ class FakeProductsRepository implements CatalogProductsRepository {
 
 /// A catalog repository that serves only the category list these tests need.
 class FakeCatalogRepository
-    with CatalogRepoPublishDefaults, CatalogRepoAnalyticsDefaults
+    with
+        CatalogRepoPublishDefaults,
+        CatalogRepoAnalyticsDefaults,
+        CatalogRepoDeleteDefaults
     implements CatalogRepository {
   FakeCatalogRepository({this.categories = const <CatalogCategory>[]});
 

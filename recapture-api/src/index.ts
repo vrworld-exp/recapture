@@ -8,7 +8,44 @@ import { log, toError } from '@/worker/workerLog';
 import { runWorkerRuntime } from '@/worker/workerRuntime';
 import { axiosBackendMakeAlive } from './utils/axiosBackendMakeAlive';
 
+/**
+ * Keep the process alive when something escapes a request handler.
+ *
+ * Node 20 defaults to `--unhandled-rejections=throw`, so ONE floating promise
+ * anywhere — a fire-and-forget refresh, an async timer callback, a `.then`
+ * with no `.catch` — terminates the whole process and takes every in-flight
+ * request with it. Express already contains everything thrown INSIDE a handler
+ * (utils/asyncHandler.ts routes it to the error middleware); these two guards
+ * cover only what escapes that path.
+ *
+ * `uncaughtException` is the deliberate part: the textbook advice is to exit,
+ * on the grounds that the process may be in an unknown state. A single-service
+ * deployment answers that differently — handlers are already isolated, durable
+ * work lives in Mongo behind the job queue, and a degraded server that keeps
+ * serving beats a hard outage. Anything logged here is a BUG to fix at its
+ * source, not a condition to run in.
+ *
+ * Installed before connectDB so the very first tick is covered.
+ */
+function installProcessGuards(): void {
+  process.on('unhandledRejection', (reason: unknown) => {
+    const err = toError(reason);
+    log('error', 'Unhandled promise rejection — API still serving', {
+      error: err.message,
+      stack: err.stack,
+    });
+  });
+
+  process.on('uncaughtException', (err: Error) => {
+    log('error', 'Uncaught exception — API still serving', {
+      error: err.message,
+      stack: err.stack,
+    });
+  });
+}
+
 async function main(): Promise<void> {
+  installProcessGuards();
   await connectDB();
   await axiosBackendMakeAlive();      // // This fn keep alive our remote backend server.
   const app = createApp();

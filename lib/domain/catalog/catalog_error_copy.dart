@@ -139,6 +139,14 @@ const Map<String, CatalogErrorCopy> _copy = {
     'A publish is already running for this catalog.',
     'Open publish to watch it finish.',
   ),
+  // DELETE /catalog only. The delete is aborted BEFORE anything local is
+  // touched when the public page cannot be taken down, so the reassurance is
+  // literally true and retrying really is the whole fix.
+  'MIRAGE_UNAVAILABLE': CatalogErrorCopy(
+    'Your public page could not be taken down, so nothing was deleted. Your '
+        'catalog is exactly as it was.',
+    'Try again shortly.',
+  ),
 
   // ── Analytics ─────────────────────────────────────────────────────────────
   'ANALYTICS_UNAVAILABLE': CatalogErrorCopy(

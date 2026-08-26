@@ -20,6 +20,7 @@ import 'package:recapture/domain/entities/catalog_category.dart';
 
 import 'catalog_entities_test.dart' as golden;
 import 'catalog_repo_analytics_defaults.dart';
+import 'catalog_repo_delete_defaults.dart';
 
 /// A publish status payload, in EXACTLY the shape `getPublishStatus` emits.
 ///
@@ -104,7 +105,7 @@ Map<String, dynamic> gatePayload({
 
 /// A catalog repository whose publish surface the test drives.
 class FakePublishRepository
-    with CatalogRepoAnalyticsDefaults
+    with CatalogRepoAnalyticsDefaults, CatalogRepoDeleteDefaults
     implements CatalogRepository {
   FakePublishRepository({
     Map<String, dynamic>? status,
