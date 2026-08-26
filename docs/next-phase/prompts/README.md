@@ -17,14 +17,21 @@ Files in this pack:
 |---|---|---|---|
 | `01-recapture-backend-prompts.md` | B1–B7 | `phase2/ReCapture/recapture-api/` (Node/TS) | ✅ all run |
 | `02-recapture-client-prompts.md` | F1–F12 | `phase2/ReCapture/lib/` (Flutter — app **and** web) | ✅ all run |
-| `03-mirage-prompts.md` | M1–M5 | `phase2/mirage-be-phase-2-recap/` + `phase2/mirage-fe/` | ❌ **none run — the only work left** |
+| `03-mirage-prompts.md` | M1–M5 | `phase2/mirage-be-phase-2-recap/` + `phase2/mirage-fe/` | ✅ all run — **not yet ported to `mirage-be`** |
 
-> **Where the phase stands.** ReCapture is finished on both sides — B1–B7 and F1–F12 are merged
-> (batch 06 landed as `f8ac0de`). The remaining next-phase work is **entirely in Mirage**, and it
-> does **not** run from `phase2/ReCapture/`: open M1–M4 at `phase2/mirage-be-phase-2-recap/` and M5
-> at `phase2/mirage-fe/`. Suggested order **M1 → M5 → M2 → M3 → M4** — M1 is the highest-value fix
-> (every asset currently crosses the wire twice) and M5 is what makes the phase-2 fields visible to
-> customers; M2–M4 are reliability and V2.
+> **Where the phase stands — every prompt in this pack has been run.** ReCapture landed on both
+> sides (B1–B7, F1–F12; batch 06 as `f8ac0de`) and Mirage M1–M5 landed after it, in the suggested
+> order M1 → M5 → M2 → M3 → M4 (`mirage-be-phase-2-recap@ce445ff`, `mirage-fe@3ea2730`). The
+> phase is **code-complete**. What remains is not implementation:
+>
+> 1. **No `live` verification run, on any M-prompt.** The offline suites are green — re-run on
+>    2026-08-26, **70/70 passing** (M1 guards 11, M2 24, M3 17, M4 18). Every script also has a
+>    `live` mode that has never been executed: the build machine has no local MongoDB (`mongod`
+>    absent, Docker daemon down). A live run needs a booted Mirage server and writes throwaway
+>    products to whatever database and S3 bucket it points at, so it must be aimed at a dev
+>    environment deliberately. `03-mirage-prompts.md` carries the per-prompt live invocations.
+> 2. **M5's iOS AR Quick Look check** needs a physical iPhone; nothing else can settle it.
+> 3. **M1–M4 are not in `mirage-be` yet** — see the port-back note below.
 
 > `02-recapture-client-prompts.md` is also available **split into six self-contained two-prompt
 > batches** in [`client-batches/`](client-batches/README.md) — F1+F2, F3+F4, F5+F6, F7+F8, F9+F10,
@@ -90,7 +97,15 @@ screens `catalog_screen.dart` (shell + header), `add_product_screen.dart`,
 
 `test/catalog/` is green (342 tests) and `flutter analyze` is clean on the catalog surface.
 
-### Mirage — ALREADY BUILT (phase-2 work already merged into `mirage-be`)
+### Mirage — pre-M1 phase-2 work (built; `mirage-be` has it only on `feature/recap-phase-2`)
+
+> **Port-back status, verified 2026-08-26.** This work is **not** on `mirage-be`'s `production`
+> branch — that branch (`f96f7bd`) has no `sortPosition`, `availability`, `socialLinks` or
+> `isPublished`. It lives on `mirage-be`'s `feature/recap-phase-2` branch (`0f7f56c`), which is
+> **byte-identical to this fork's base commit `295ca2b` across all of `src/` except
+> `src/CONSTANT.js`.** That makes the M1–M5 port-back a clean cherry-pick of `ce445ff` onto
+> `feature/recap-phase-2`, plus appending the four `ASSET_URL_*` getters to that branch's
+> `CONSTANT.js`. It has not been done.
 
 | Gap listed in `06-open-questions.md` | Status today |
 |---|---|
@@ -103,37 +118,36 @@ screens `catalog_screen.dart` (shell + header), `add_product_screen.dart`,
 | Q-C8 no website/socials/address | **DONE** — `website`, `socialLinks`, `address` on `restaurantModel` |
 | Q1 / feature 39 unpublish | **DONE** — `restaurant.isPublished` + a public read gate (`itemController.js:490-491`) |
 
-### Mirage — REMAINING → prompts M1–M5
+### Mirage — M1–M5 ✅ ALL DONE
 
-| Gap | Prompt |
-|---|---|
-| Q-C1 no URL passthrough — asset upload is **bytes only**, so every GLB/USDZ/image crosses the wire twice | **M1** (highest value) |
-| Q-C9a no idempotency — a retried create returns `400 "already exist"` with no id to recover | **M2** |
-| Q-C9b no batch writes — publishing N products is N multipart round trips | **M3** |
-| Q-C10 analytics reads are admin-scoped only | **M4** |
-| `mirage-fe` does not render tags / availability / featured / `sortPosition` / website / socials / address / unpublished state (`model.iosSrc` **is** already wired — `src/api/menu.ts:93`, `ArModel.tsx:53`) | **M5** |
+| Gap (now closed) | Prompt | Landed as | Offline checks |
+|---|---|---|---|
+| Q-C1 no URL passthrough — every GLB/USDZ/image crossed the wire twice | **M1** | `src/helper/assetFromUrl.js` + URL twins (`imageUrl`, `objectUrl`, `objectIosUrl`, `iconUrl`) on all six asset handlers | 11/11 |
+| Q-C9a no idempotency — a retried create returned `400 "already exist"` with no id to recover | **M2** | `src/Middlewares/idempotency.js`, `src/Models/idempotencyKeyModel.js`, opt-in `Idempotency-Key` on the nine admin writes | 24/24 |
+| Q-C9b no batch writes — publishing N products was N multipart round trips | **M3** | `src/Controllers/catalogBatchController.js`, `POST /catalog-batch` | 17/17 |
+| Q-C10 analytics reads were admin-scoped only | **M4** | `src/Middlewares/analyticsScope.js`, `/analytics/me/*` | 18/18 |
+| `mirage-fe` did not render tags / availability / featured / `sortPosition` / website / socials / address / unpublished state | **M5** | `src/api/menu.ts`, `src/features/menu/availability.ts`, `src/features/menu/BusinessLinks.tsx` (`model.iosSrc` was already wired) | browser-verified |
+
+Verification scripts live in `mirage-be-phase-2-recap/scripts/` (`node scripts/<name>.js logic`,
+or `guards` for M1) with a README covering every decision. **No `live` mode has been run.**
 
 ---
 
-## Recommended build order
+## Build order — all three tracks complete
 
-The B and F tracks are complete. What is left of this diagram is the Mirage column — which was
-originally sequenced *first* (M1 unblocks B3) but ended up last, so B3 ships the bytes-twice path
-until M1 lands.
+The Mirage column was originally sequenced *first* (M1 unblocks B3) but ended up last, so B3 shipped
+the bytes-twice path until M1 landed. It has landed, so B3 can now be pointed at the URL path.
 
 ```
 ✅ B1 → B2 → B3 → B4 → B5 → B6 → B7          (done)
 ✅ F1 → … → F12                              (done)
-
-❌ M1        URL passthrough — run first; retro-unblocks B3's double byte transfer
-❌ M5        public page renders the phase-2 fields
-❌ M2 → M3   reliability + speed, after the first pilot publish
-❌ M4        client-scoped analytics — optional, B7's proxy already covers the need
+✅ M1 → M5 → M2 → M3 → M4                    (done — offline-verified only)
 ```
 
 MVP cut per `05-mvp-v1.1-v2-bucketing.md` was **B1–B5, F1, F8, F10, F11, F12, M1**; fast-follow
-(V1.1) **F2, F3, F4, F6, F7, M2**; later (V2) **B6, B7, F5, F9, M3, M4, M5**. In the event the whole
-B and F side shipped, V2 included — so **M1 is the only unbuilt MVP item.**
+(V1.1) **F2, F3, F4, F6, F7, M2**; later (V2) **B6, B7, F5, F9, M3, M4, M5**. All three buckets
+shipped, so **nothing in the brief is unbuilt.** The open items are the `live` verification runs,
+M5's on-device iOS check, and the `mirage-be` port-back — none of them new code.
 
 ---
 

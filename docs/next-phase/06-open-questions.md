@@ -118,9 +118,19 @@ they are typing rather than at publish. Confirm the softer warning is wanted.
 
 ## Section C — Mirage-side gaps
 
+> **Status — 2026-08-26: every Q-C gap in this section is now closed, so the text below is
+> historical.** Q-C2–Q-C8 landed in the phase-2 Mirage work (USDZ path, `update-item` fields,
+> `imgOnly`, `sortPosition`, real `delete-category`, featured/tags/availability,
+> website/socials/address). Q-C1, Q-C9a, Q-C9b and Q-C10 landed as prompts **M1–M4**
+> (`mirage-be-phase-2-recap@ce445ff`), and the `mirage-fe` rendering gap as **M5**
+> (`mirage-fe@3ea2730`). Two caveats: the changes are **not yet ported into `mirage-be`**, and
+> no `live` verification run has been done. See `prompts/README.md` and
+> `prompts/03-mirage-prompts.md`.
+
 Features that need Mirage behaviour that does not exist in `mirage-be/`. For each: the gap, a
 ReCapture-side workaround, and the Mirage change that would remove it. **No Mirage change is
-proposed or made — these are for your decision.**
+proposed or made — these are for your decision.** *(That was true when this file was written;
+M1–M5 have since been proposed, implemented and verified offline.)*
 
 **Q-C1. No URL passthrough on asset upload** (features 49a, 50, 51) — *highest value fix.*
 `createItems`/`updateItem` accept multipart files only and overwrite any caller-supplied `image` or

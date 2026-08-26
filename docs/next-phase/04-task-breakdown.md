@@ -10,6 +10,13 @@ adapter/sync layer inside the backend · `CROSS` spans sides.
 Bucketing (MVP / V1.1 / V2) is in `05-mvp-v1.1-v2-bucketing.md`; every task below appears there
 exactly once.
 
+> **Status — 2026-08-26: all 42 tasks are implemented.** They shipped through the prompt pack
+> (`prompts/`: B1–B7 backend, F1–F12 Flutter, M1–M5 Mirage) rather than one task per session, so
+> the checkboxes across these next-phase docs were never ticked — **they are not a progress
+> signal.** `prompts/README.md` is the current state of the phase, including the three things
+> still open: no `live` verification run on any M-prompt, M5's on-device iOS AR Quick Look check,
+> and the M1–M5 port-back into `mirage-be`.
+
 ---
 
 ## Phase 1 — Foundations

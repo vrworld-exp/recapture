@@ -12,6 +12,8 @@
 > | **M3** | `POST /catalog-batch` | 17/17 offline, incl. a 40-operation batch; 413/400 envelopes checked live |
 > | **M4** | `/analytics/me/*` client scope | 18/18 offline, asserting on which restaurant each aggregation actually matched |
 >
+> **Offline suites re-run 2026-08-26 — 70/70 green** (M1 guards 11, M2 24, M3 17, M4 18).
+>
 > **The one gap, everywhere: no `live` run.** Each prompt's verification script has a `live`
 > mode, written and documented but never executed — the machine this was built on has no
 > MongoDB (no `mongod`, Docker daemon down) and no S3 credentials. Point them at a dev
@@ -23,11 +25,15 @@
 
 Target repos:
 - **Backend:** `phase2/mirage-be-phase-2-recap/` — the phase-2 working fork, and the repo M1–M4
-  were implemented in. Its `src/` was byte-identical to `phase2/mirage-be/` before that work
-  (only `.env`, `README.md` and `src/CONSTANT.js` differed); **it no longer is.** Everything
-  added is additive and ports back cleanly, with one thing to watch: `src/CONSTANT.js` differs
-  between the forks, so the four `ASSET_URL_*` getters appended there have to be appended to
-  `mirage-be`'s copy too.
+  were implemented in. **The port-back has not been done.** Re-verified 2026-08-26, with the
+  branch detail that matters: the fork's base commit `295ca2b` is byte-identical to
+  `mirage-be`'s **`feature/recap-phase-2`** branch (`0f7f56c`) across all of `src/` **except
+  `src/CONSTANT.js`** — so that branch, not `production`, is the port-back target.
+  `mirage-be:production` (`f96f7bd`) does not even carry the *pre-M1* phase-2 work: no
+  `sortPosition`, `availability`, `socialLinks` or `isPublished`. Everything M1–M5 added is
+  additive and sits in the single commit `ce445ff`, so the port is a clean cherry-pick onto
+  `feature/recap-phase-2` plus one manual step: `src/CONSTANT.js` differs between the forks, so
+  the four `ASSET_URL_*` getters appended there have to be appended to that branch's copy too.
 - **Frontend:** `phase2/mirage-fe/` (M5 only).
 
 ## Read this before any Mirage prompt
