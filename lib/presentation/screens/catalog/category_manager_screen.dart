@@ -745,13 +745,19 @@ class _UncategorizedRow extends StatelessWidget {
 class _NoCategoriesYet extends StatelessWidget {
   const _NoCategoriesYet();
 
+  // `fillsViewport` stays true (the default): this block sits in an `Expanded`,
+  // which hands it a TIGHT height, and the block is a 96px circle plus four
+  // stacked text runs. On a short viewport — or any viewport at a large text
+  // scale — its natural height is bigger than the slot, and an unscrollable
+  // Column in a tight slot is an overflow, not a smaller layout. Filling the
+  // viewport wraps it in the scroll view that makes the overflow impossible,
+  // and still centres it whenever there is room.
   @override
   Widget build(BuildContext context) => const CatalogMessage(
         icon: Icons.category_outlined,
         title: 'No categories yet',
         body: 'Group your products so customers can find them. Every product '
             'needs a category before it can go live.',
-        fillsViewport: false,
       );
 }
 
@@ -832,20 +838,31 @@ Future<void> showDeleteCategoryDialog(
   }
 }
 
-/// Moves every product out of [from] and into [to], in chunks.
+/// Moves every product out of [from] and into [to].
 ///
 /// Archived products included — they are still in the category, and leaving
 /// them behind would put them in Uncategorized instead of where the user said.
+///
+/// The drain lives in the notifier rather than here because it must not be
+/// bounded by what a pane can display: selecting the loaded products and moving
+/// the selection would strand everything past [kCategoryProductsMax] for the
+/// delete to sweep into Uncategorized.
+///
+/// The provider is pinned for the duration. It is `autoDispose`, and this runs
+/// from the row menu on a narrow layout where no pane is watching it — a
+/// `read` alone leaves the notifier collectable part-way through its own drain.
 Future<int> _moveEveryProduct(
-  ProviderContainer container,
-  {required String from,
-  required String? to}) async {
-  final notifier = container.read(categoryProductsProvider(from).notifier);
-  // The pane may not have loaded (this can run from the row menu on a narrow
-  // layout, where nothing opened it), so read it explicitly first.
-  await notifier.load();
-  notifier.selectAll();
-  return notifier.moveSelectedTo(to);
+  ProviderContainer container, {
+  required String from,
+  required String? to,
+}) async {
+  final provider = categoryProductsProvider(from);
+  final pin = container.listen<CategoryProductsState>(provider, (_, __) {});
+  try {
+    return await container.read(provider.notifier).moveAllTo(to);
+  } finally {
+    pin.close();
+  }
 }
 
 /// Where a deleted category's products land.
@@ -1048,6 +1065,8 @@ class _CategoryProductsPane extends ConsumerWidget {
       );
     }
     if (state.isEmpty) {
+      // Fills the viewport for the same reason [_NoCategoriesYet] does: this is
+      // the whole pane, not a block inside something that already scrolls.
       return CatalogMessage(
         icon: Icons.inventory_2_outlined,
         title: 'Nothing in here yet',
@@ -1056,7 +1075,6 @@ class _CategoryProductsPane extends ConsumerWidget {
                 'publish.'
             : 'Move products into this category from another one, or set it on '
                 'the product itself.',
-        fillsViewport: false,
       );
     }
 

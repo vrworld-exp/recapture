@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_categories_notifier.dart';
+import 'package:recapture/application/catalog/category_products_notifier.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
@@ -178,6 +179,8 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
 
   final List<BulkCall> bulkCalls = [];
 
+  /// Pages the way the server does, so a drain that re-reads the first page
+  /// sees the category actually shrinking rather than the same rows forever.
   @override
   Future<CatalogProductPage> list({
     int limit = 20,
@@ -187,8 +190,15 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
     ProductAvailability? availability,
     String? query,
     bool includeArchived = false,
-  }) async =>
-      CatalogProductPage(items: byCategory[categoryId] ?? const []);
+  }) async {
+    final all = byCategory[categoryId] ?? const <CatalogProduct>[];
+    final start = cursor == null ? 0 : int.parse(cursor);
+    final end = (start + limit).clamp(0, all.length);
+    return CatalogProductPage(
+      items: all.sublist(start.clamp(0, all.length), end),
+      nextCursor: end < all.length ? '$end' : null,
+    );
+  }
 
   @override
   Future<int> bulk({
@@ -197,7 +207,28 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
     Object? categoryId,
   }) async {
     bulkCalls.add(BulkCall(action, ids, categoryId));
-    return ids.length;
+    if (action != BulkProductAction.setCategory) return ids.length;
+
+    // Model the server: the products LEAVE the category they were in. A fake
+    // that records the call without moving anything makes a drain look like it
+    // never finishes, which is exactly the bug this fake is used to test.
+    final destination = categoryId == null ? 'none' : categoryId as String;
+    final moved = <CatalogProduct>[];
+    final next = <String, List<CatalogProduct>>{};
+    byCategory.forEach((key, products) {
+      final kept = <CatalogProduct>[];
+      for (final product in products) {
+        (ids.contains(product.id) ? moved : kept).add(product);
+      }
+      next[key] = kept;
+    });
+    next.update(
+      destination,
+      (existing) => [...existing, ...moved],
+      ifAbsent: () => moved,
+    );
+    byCategory = next;
+    return moved.length;
   }
 
   // ── Not used by these tests ───────────────────────────────────────────────
@@ -321,6 +352,7 @@ Future<void> pressAlt(WidgetTester tester, LogicalKeyboardKey key) async {
 }
 
 void main() {
+  layoutTests();
   group('reorder (feature 25)', () {
     test('moves optimistically and sends the FULL ordered id list', () async {
       final repo = FakeCategoriesRepository([
@@ -566,6 +598,53 @@ void main() {
       expect(repo.deletes, ['a']);
       expect(find.textContaining('moved to Tables'), findsOneWidget);
     });
+
+    testWidgets('reassignment drains a category past the loadable ceiling',
+        (tester) async {
+      // The regression this exists for: the reassignment used to select the
+      // LOADED products and move the selection, so a category holding more than
+      // kCategoryProductsMax handed its remainder to the delete endpoint — and
+      // the delete knows one destination, Uncategorized. The user picked
+      // Tables, most of the products went somewhere else, and the toast
+      // reported the truncated number as a success.
+      const total = kCategoryProductsMax + 1;
+      final repo = FakeCategoriesRepository([
+        category('a', name: 'Chairs', position: 0, productCount: total),
+        category('b', name: 'Tables', position: 1),
+      ]);
+      final products = FakeCategoryProductsRepository({
+        'a': [for (var i = 0; i < total; i++) grid.product('p$i')],
+      });
+      await tester.pumpWidget(harness(repo, products: products));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Category options').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Tables').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Move and delete'));
+      await tester.pumpAndSettle();
+
+      // Every product reached the chosen destination...
+      expect(products.byCategory['b'], hasLength(total));
+      // ...nothing was left for the delete to sweep into Uncategorized...
+      expect(products.byCategory['a'], isEmpty);
+      expect(products.byCategory['none'] ?? const [], isEmpty);
+      // ...every write named Tables, and only then did the category go.
+      expect(
+        products.bulkCalls.every((call) =>
+            call.action == BulkProductAction.setCategory &&
+            call.categoryId == 'b'),
+        isTrue,
+      );
+      expect(repo.deletes, ['a']);
+      // The count reported is the count that moved, not the count it could see.
+      expect(find.textContaining('$total products moved to Tables'),
+          findsOneWidget);
+    });
   });
 
   group('the Uncategorized bucket (feature 26)', () {
@@ -650,4 +729,82 @@ void main() {
       findsOneWidget,
     );
   });
+}
+
+/// The screen at a REAL viewport, unwrapped.
+///
+/// [harness] centres the screen inside a `SizedBox`, which is a bounded box of
+/// the test's choosing. That is the wrong shape for asking whether the layout
+/// fits a device: it has to be the whole surface, at the size and text scale
+/// the device actually hands it.
+Widget deviceHarness(
+  FakeCategoriesRepository categories, {
+  FakeCategoryProductsRepository? products,
+  double textScale = 1.0,
+}) =>
+    ProviderScope(
+      overrides: [
+        authProvider.overrideWith(_StubAuth.new),
+        catalogRepositoryProvider.overrideWithValue(categories),
+        catalogProductsRepositoryProvider.overrideWithValue(
+          products ?? FakeCategoryProductsRepository({}),
+        ),
+      ],
+      child: MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(textScale)),
+          child: const CategoryManagerScreen(),
+        ),
+      ),
+    );
+
+/// Layout regressions, at the sizes and text scales a phone really uses.
+///
+/// The bug this locks down: the empty state is a 96px circle over four stacked
+/// text runs, and it sat in an `Expanded` — a TIGHT height — with
+/// `fillsViewport: false`, which is the mode for a block that is already inside
+/// something scrollable. In a tight slot it could not scroll and could not
+/// shrink, so opening the manager with no categories yet overflowed the column
+/// and threw. Every assertion here is about the FIRST thing the user sees on a
+/// screen they have not populated yet.
+void layoutTests() {
+  for (final size in const [
+    Size(320, 640), // the smallest phone still worth supporting
+    Size(360, 800), // the common Android
+    Size(1280, 800), // master/detail
+  ]) {
+    for (final scale in const [1.0, 1.3]) {
+      for (final empty in const [true, false]) {
+        testWidgets(
+            'lays out at ${size.width.toInt()}x${size.height.toInt()}, '
+            '${scale}x text, empty=$empty', (tester) async {
+          final errors = <String>[];
+          final prior = FlutterError.onError;
+          FlutterError.onError = (details) =>
+              errors.add(details.exceptionAsString());
+          addTearDown(() => FlutterError.onError = prior);
+
+          tester.view.physicalSize = size;
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.reset);
+
+          await tester.pumpWidget(deviceHarness(
+            FakeCategoriesRepository(empty
+                ? []
+                : [
+                    category('a', name: 'Chairs', position: 0, productCount: 2),
+                    category('b', name: 'Tables', position: 1),
+                  ]),
+            textScale: scale,
+          ));
+          await tester.pumpAndSettle();
+
+          expect(errors, isEmpty, reason: errors.join(' | '));
+          // The create field is the point of the empty screen: with no
+          // categories there must still be a way to make one.
+          expect(find.text('New category'), findsOneWidget);
+        });
+      }
+    }
+  }
 }

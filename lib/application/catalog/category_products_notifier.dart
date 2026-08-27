@@ -26,6 +26,15 @@ const int kCategoryProductsPageSize = 100;
 /// bug this exists to prevent.
 const int kCategoryProductsMax = 1000;
 
+/// The most passes [CategoryProductsNotifier.moveAllTo] will make while
+/// draining a category.
+///
+/// A stop, not a budget: at [kCategoryProductsPageSize] a pass this clears far
+/// more than [kCategoryProductsMax] ever lets the pane show, so a real drain
+/// never reaches it. It exists so a server that keeps returning rows the bulk
+/// call reports as moved cannot spin the loop forever.
+const int kCategoryDrainMaxPasses = 200;
+
 /// One category's products, plus what the user has selected of them.
 @immutable
 class CategoryProductsState {
@@ -190,6 +199,71 @@ class CategoryProductsNotifier
           ids: chunk,
           categoryId: categoryId,
         );
+      }
+    } finally {
+      if (!_disposed) {
+        state = state.copyWith(isMoving: false, selectedIds: const <String>{});
+        await load();
+        _refreshSurroundings();
+      }
+    }
+    return moved;
+  }
+
+  /// Moves EVERY product out of this category and into [categoryId]
+  /// (null = Uncategorized), returning how many moved.
+  ///
+  /// Deliberately NOT `selectAll` + [moveSelectedTo]. That pair can only move
+  /// what the pane LOADED, and [load] stops at [kCategoryProductsMax]. Draining
+  /// a category bigger than that by selection would move the first slice to the
+  /// chosen destination and leave the rest for the delete endpoint to sweep
+  /// into Uncategorized — the opposite of what the user picked, reported back
+  /// as a success. So this drains from the repository instead: the ceiling that
+  /// bounds a READABLE pane must not bound a move.
+  ///
+  /// Each pass re-reads the FIRST page rather than following a cursor. The set
+  /// is shrinking underneath the paging, and a cursor into a list that is
+  /// having rows removed from it steps straight over whatever slid past it.
+  ///
+  /// Throws [CatalogFailure]. A partial drain is possible — the passes that
+  /// landed stay landed — so the re-read happens on the failure path too and
+  /// the caller can report what actually moved.
+  Future<int> moveAllTo(String? categoryId) async {
+    if (categoryId == arg) return 0;
+
+    // Captured BEFORE the loop. This drain outlives the pane on a narrow
+    // layout — it runs from the row menu, where nothing is watching this
+    // provider — and `ref.read` on a disposed notifier throws.
+    final repo = _repo;
+    final filter = arg ?? kUncategorizedFilterId;
+
+    state = state.copyWith(isMoving: true);
+    var moved = 0;
+    try {
+      for (var pass = 0; pass < kCategoryDrainMaxPasses; pass++) {
+        final page = await repo.list(
+          limit: kCategoryProductsPageSize,
+          categoryId: filter,
+          // Archived products are still IN the category. Leaving them behind
+          // would hand them to the delete, and the delete knows exactly one
+          // destination — Uncategorized — which is the bug this method exists
+          // to close.
+          includeArchived: true,
+        );
+        if (page.items.isEmpty) break;
+
+        // One page fits one bulk call: kCategoryProductsPageSize (100) is under
+        // the server's kBulkProductIdLimit (200), so there is no second chunk
+        // to get half-written.
+        final justMoved = await repo.bulk(
+          action: BulkProductAction.setCategory,
+          ids: [for (final product in page.items) product.id],
+          categoryId: categoryId,
+        );
+        // A non-empty page that moved nothing is a drain making no progress.
+        // Stop, rather than re-read the same page until the cap.
+        if (justMoved == 0) break;
+        moved += justMoved;
       }
     } finally {
       if (!_disposed) {
