@@ -23,6 +23,20 @@ const RETRY_MAX_DELAY_MS = 1_800_000;
 export const PROCESSING_FAILED_CODE = 'PROCESSING_FAILED';
 
 /**
+ * Turns the caller's list of processable jobTypes into a query clause.
+ *
+ * `null` is added when DEFAULT_JOB_TYPE is processable because a pre-worker
+ * document has no `jobType` field at all, and `jobTypeOf` reads that absence as
+ * the default — `$in` with a null member matches both missing and null, so the
+ * filter agrees with the fallback instead of quietly stranding those rows.
+ */
+function jobTypeClause(jobTypes: readonly string[]): { $in: (string | null)[] } {
+  const eligible: (string | null)[] = [...jobTypes];
+  if (jobTypes.includes(DEFAULT_JOB_TYPE)) eligible.push(null);
+  return { $in: eligible };
+}
+
+/**
  * Atomically claims the next available job for `workerId`. Eligible work, in
  * one query:
  *   1. QUEUED jobs whose retry window (nextRetryAt) is open — null matches
@@ -31,18 +45,34 @@ export const PROCESSING_FAILED_CODE = 'PROCESSING_FAILED';
  *      `claimTimeoutMs` — crash recovery: a kill -9/OOM'd worker's job is
  *      re-claimed here on a later poll, by any instance.
  *
+ * …and, when `jobTypes` is given, only types THIS BUILD can actually process.
+ *
+ * THAT FILTER IS A CORRECTNESS PROPERTY, NOT AN OPTIMISATION. The Job
+ * collection is the queue, so every deployment pointed at one database shares
+ * it — a laptop running the feature branch and a Render service running `live`
+ * poll the same rows. Without the filter the older build wins the race often
+ * enough to matter, finds no processor, and fails the job TERMINALLY
+ * (worker.ts's UNSUPPORTED_JOB_TYPE path): a job the newer build was perfectly
+ * able to run is dead before that build ever sees it, and anything waiting on
+ * it — a CatalogPublishRun and its catalog lock, say — waits forever. With the
+ * filter the stale worker simply never matches the row, and it sits QUEUED
+ * until a build that knows the type claims it.
+ *
  * Ordering: priority (desc), then oldest retry window, then FIFO — the exact
- * shape of the {state, priority, nextRetryAt, createdAt} index on Job.
+ * shape of the {state, priority, nextRetryAt, createdAt} index on Job. The
+ * jobType filter rides along as a sibling AND on the same index prefix.
  */
 export async function claimNextJob(
   workerId: string,
-  claimTimeoutMs: number
+  claimTimeoutMs: number,
+  jobTypes?: readonly string[]
 ): Promise<WorkerJob | null> {
   const now = new Date();
   const staleThreshold = new Date(now.getTime() - claimTimeoutMs);
 
   return Job.findOneAndUpdate(
     {
+      ...(jobTypes ? { jobType: jobTypeClause(jobTypes) } : {}),
       $or: [
         {
           state: 'QUEUED',

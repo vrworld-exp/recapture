@@ -164,4 +164,10 @@ export interface WorkerConfig {
    * tripping the test runner's own handlers).
    */
   stopSignal?: AbortSignal;
+  /**
+   * Which jobTypes this instance may claim. Defaults to the registry's
+   * contents, which is what every real deployment wants — override only to
+   * exercise a mismatch between what is claimed and what can be processed.
+   */
+  jobTypes?: readonly string[];
 }

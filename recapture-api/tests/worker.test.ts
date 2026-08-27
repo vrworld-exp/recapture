@@ -193,10 +193,33 @@ describe('worker: stale-claim recovery', () => {
 });
 
 describe('worker: unregistered jobType', () => {
-  it('fails terminally (no retry) with a stable error code', async () => {
+  // The queue is SHARED: another deployment against the same database may be
+  // the one that knows this type. Leaving the row untouched is what lets that
+  // build claim it; failing it here would kill work this worker was merely too
+  // old to do. See claimNextJob's `jobTypes` parameter.
+  it('leaves a type it cannot process QUEUED for a build that can', async () => {
     const job = await makeJob({ jobType: 'NO_SUCH_TYPE', maxAttempts: 3 });
+    const other = await makeJob({ jobType: 'TEST_OK' });
 
     await withWorker({}, async () => {
+      // The registered job draining is the proof the loop ran at all — without
+      // it, "still QUEUED" would also pass on a worker that never polled.
+      await waitFor(inState(other._id as Types.ObjectId, 'COMPLETED'), 'registered job COMPLETED');
+    });
+
+    const untouched = await Job.findById(job._id).lean();
+    expect(untouched?.state).toBe('QUEUED');
+    expect(untouched?.attempts).toBe(0);
+    expect(untouched?.claimedBy).toBeNull();
+    expect(untouched?.error).toBeFalsy();
+  });
+
+  it('still fails terminally if the claim is somehow held without a processor', async () => {
+    const job = await makeJob({ jobType: 'NO_SUCH_TYPE', maxAttempts: 3 });
+
+    // Bypass the type filter the way only a registry change under a live claim
+    // could, so the defence-in-depth branch in processJob is exercised.
+    await withWorker({ jobTypes: ['NO_SUCH_TYPE'] }, async () => {
       await waitFor(inState(job._id as Types.ObjectId, 'FAILED'), 'unknown-type job FAILED');
     });
 
