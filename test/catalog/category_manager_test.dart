@@ -1071,8 +1071,11 @@ void layoutTests() {
             '${scale}x text, empty=$empty', (tester) async {
           final errors = <String>[];
           final prior = FlutterError.onError;
-          FlutterError.onError = (details) =>
-              errors.add(details.exceptionAsString());
+          FlutterError.onError = (details) {
+            // ignore: avoid_print
+            print('CAPTURED>>> ${details.exceptionAsString()}');
+            errors.add(details.exceptionAsString());
+          };
           addTearDown(() => FlutterError.onError = prior);
 
           tester.view.physicalSize = size;

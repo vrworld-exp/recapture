@@ -48,9 +48,10 @@ class ProductCard extends StatelessWidget {
   /// than no menu button.
   final VoidCallback? onMore;
 
-  /// Drag affordance for wide layouts, where there is no long-press idiom. Null
-  /// on phone, where the whole card is the drag target, and null whenever
-  /// reordering is not meaningful (any filtered view).
+  /// The reorder affordance, and the drag source itself. Rendered at every
+  /// width — on a phone long-press already means "select", so the handle is the
+  /// only gesture left. Null whenever reordering is not meaningful (any
+  /// filtered view, or while bulk selection is active).
   final Widget? dragHandle;
 
   /// Selection mode (bulk actions). Null means selection is not active — the

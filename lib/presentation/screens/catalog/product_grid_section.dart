@@ -43,12 +43,15 @@ int productGridColumns(double width) {
   return 5;
 }
 
-/// Whether this width gets an explicit drag handle instead of long-press-drag.
+/// Whether this width draws the handle at a touch-sized hit target.
 ///
-/// Long-press to drag is the phone idiom and it does work with a mouse, but on a
-/// desktop-width layout it is undiscoverable — nothing on screen says the cards
-/// can move. Above phone width the handle is drawn and IS the drag target.
-bool productGridUsesDragHandle(double width) => width >= 600;
+/// The handle itself is drawn at EVERY width and is always the drag target.
+/// Long-press-to-drag used to be the phone path, but on a phone long-press is
+/// already how the grid enters bulk selection — the two gestures collided, so
+/// on the narrow layout the cards could not be reordered at all and nothing on
+/// screen said they were meant to be. One visible affordance, every width;
+/// below phone width it is padded out to a finger-sized box.
+bool productGridTouchHandle(double width) => width < 600;
 
 /// Roughly the height of a card's text block (name up to two lines, then the
 /// price row) on top of its square image. Used to derive the grid's aspect
@@ -465,7 +468,7 @@ class _ProductGrid extends ConsumerWidget {
         final width = constraints.crossAxisExtent;
         final columns = productGridColumns(width);
         final cellWidth = (width - AppSpacing.md * (columns - 1)) / columns;
-        final handles = productGridUsesDragHandle(width);
+        final touchHandle = productGridTouchHandle(width);
 
         return SliverGrid(
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -508,26 +511,22 @@ class _ProductGrid extends ConsumerWidget {
                       // long-press routes to, and long-press is how a phone
                       // enters selection mode in the first place.
                       onSelectedChanged: (_) => _onSelectToggle(ref, product),
-                      dragHandle:
-                          state.canReorder && handles && !selection.isActive
-                              ? _DragHandle(index: index)
-                              : null,
+                      // Drawn at every width now: it is the ONLY way to
+                      // start a reorder, so hiding it on a phone left that
+                      // layout with no reorder at all.
+                      dragHandle: state.canReorder && !selection.isActive
+                          ? _DragHandle(index: index, touch: touchHandle)
+                          : null,
                     );
 
-                    // Reordering is suspended while selecting: a long-press is
-                    // spoken for, and a drag that moved a card the user meant to
-                    // tick is not a reorder anyone asked for.
+                    // The card is the DROP target at every width; the handle
+                    // inside it is the drag source, so a drag across the body of
+                    // a card stays a scroll/select gesture rather than an
+                    // accidental reorder. Reordering is suspended while
+                    // selecting: a drag that moved a card the user meant to tick
+                    // is not a reorder anyone asked for.
                     return state.canReorder && !selection.isActive
-                        ? _ReorderableCell(
-                            index: index,
-                            // On a phone the whole card is the drag target
-                            // (long-press); on a wide layout only the handle
-                            // is, so a mouse drag across a card stays a
-                            // scroll/select gesture rather than an accidental
-                            // reorder.
-                            draggableWhole: !handles,
-                            child: card,
-                          )
+                        ? _ReorderableCell(index: index, child: card)
                         : card;
                   },
                 ),
@@ -555,14 +554,9 @@ class _ProductGrid extends ConsumerWidget {
 /// directly. Both touch drag and mouse drag come from the same widget, which is
 /// what makes the web build's reorder work without a second code path.
 class _ReorderableCell extends ConsumerWidget {
-  const _ReorderableCell({
-    required this.index,
-    required this.draggableWhole,
-    required this.child,
-  });
+  const _ReorderableCell({required this.index, required this.child});
 
   final int index;
-  final bool draggableWhole;
   final Widget child;
 
   @override
@@ -573,7 +567,7 @@ class _ReorderableCell extends ConsumerWidget {
           _move(context, ref, from: details.data, to: index),
       builder: (context, candidate, __) {
         final highlighted = candidate.isNotEmpty;
-        final cell = AnimatedContainer(
+        return AnimatedContainer(
           duration: const Duration(milliseconds: 120),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.sm),
@@ -583,15 +577,6 @@ class _ReorderableCell extends ConsumerWidget {
             ),
           ),
           child: child,
-        );
-
-        if (!draggableWhole) return cell;
-
-        return LongPressDraggable<int>(
-          data: index,
-          feedback: _DragFeedback(child: child),
-          childWhenDragging: Opacity(opacity: 0.3, child: cell),
-          child: cell,
         );
       },
     );
@@ -626,29 +611,51 @@ Future<void> _move(
   }
 }
 
-/// The handle shown on wide layouts. It is the drag target, not a decoration.
+/// The reorder handle. It is the drag source, not a decoration.
+///
+/// `Draggable` (immediate drag, no long-press) is deliberate: it is the same
+/// recogniser `ReorderableDragStartListener` uses, so it wins the arena against
+/// the surrounding scroll view on touch and against a mouse drag on the web —
+/// one implementation for both.
 class _DragHandle extends StatelessWidget {
-  const _DragHandle({required this.index});
+  const _DragHandle({required this.index, required this.touch});
 
   final int index;
 
+  /// Narrow layout: pad the icon out to a finger-sized box. An 18px icon is a
+  /// fine mouse target and an unhittable touch one.
+  final bool touch;
+
   @override
   Widget build(BuildContext context) {
+    final icon = Icon(
+      Icons.drag_indicator,
+      size: touch ? 20 : 18,
+      color: AppColors.textMuted,
+    );
+
     return Draggable<int>(
       data: index,
       feedback: const _DragHandleFeedback(),
-      child: const MouseRegion(
+      child: MouseRegion(
         cursor: SystemMouseCursors.grab,
         child: Tooltip(
           message: 'Drag to reorder',
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: AppSpacing.xs),
-            child: Icon(
-              Icons.drag_indicator,
-              size: 18,
-              color: AppColors.textMuted,
-            ),
-          ),
+          child: touch
+              // Matches the overflow button beside it, so the two icons in the
+              // title row are the same weight rather than one large and one
+              // incidental.
+              ? SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: Center(child: icon),
+                )
+              : Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.xs,
+                  ),
+                  child: icon,
+                ),
         ),
       ),
     );
@@ -662,23 +669,6 @@ class _DragHandleFeedback extends StatelessWidget {
   Widget build(BuildContext context) => const Material(
         color: Colors.transparent,
         child: Icon(Icons.drag_indicator, size: 22, color: AppColors.mirageRed),
-      );
-}
-
-/// The card under the finger/cursor mid-drag. Bounded, because a feedback widget
-/// is laid out UNCONSTRAINED — an unbounded card here is an immediate assertion.
-class _DragFeedback extends StatelessWidget {
-  const _DragFeedback({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Material(
-        color: Colors.transparent,
-        child: Opacity(
-          opacity: 0.9,
-          child: SizedBox(width: 160, height: 220, child: child),
-        ),
       );
 }
 
