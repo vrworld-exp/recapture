@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_categories_notifier.dart';
 import 'package:recapture/application/catalog/category_products_notifier.dart';
@@ -45,6 +46,25 @@ CatalogCategory category(
         ..['name'] = name
         ..['position'] = position
         ..['productCount'] = productCount,
+    );
+
+/// A product that knows which category it is in.
+///
+/// [grid.product] leaves the golden's own `categoryId` on every row, which is
+/// fine for a list the server already filtered — but the add-products picker
+/// filters LOCALLY, so its fixtures have to carry the truth the filter reads.
+CatalogProduct productIn(
+  String id,
+  String? categoryId, {
+  String? name,
+  bool archived = false,
+}) =>
+    CatalogProduct.fromMap(
+      golden.productGolden()
+        ..['id'] = id
+        ..['name'] = name ?? 'Product $id'
+        ..['categoryId'] = categoryId
+        ..['isArchived'] = archived,
     );
 
 /// One recorded bulk call.
@@ -179,6 +199,9 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
 
   final List<BulkCall> bulkCalls = [];
 
+  /// What the next [bulk] throws, if anything.
+  CatalogFailure? bulkFailure;
+
   /// Pages the way the server does, so a drain that re-reads the first page
   /// sees the category actually shrinking rather than the same rows forever.
   @override
@@ -191,7 +214,12 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
     String? query,
     bool includeArchived = false,
   }) async {
-    final all = byCategory[categoryId] ?? const <CatalogProduct>[];
+    // A null [categoryId] is "no category filter at all" — a third thing,
+    // distinct from a real id and from `'none'`, and the one the add-products
+    // picker asks for. It sees the whole catalog.
+    final all = categoryId == null
+        ? [for (final products in byCategory.values) ...products]
+        : byCategory[categoryId] ?? const <CatalogProduct>[];
     final start = cursor == null ? 0 : int.parse(cursor);
     final end = (start + limit).clamp(0, all.length);
     return CatalogProductPage(
@@ -207,6 +235,8 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
     Object? categoryId,
   }) async {
     bulkCalls.add(BulkCall(action, ids, categoryId));
+    final failure = bulkFailure;
+    if (failure != null) throw failure;
     if (action != BulkProductAction.setCategory) return ids.length;
 
     // Model the server: the products LEAVE the category they were in. A fake
@@ -313,6 +343,7 @@ Widget harness(
   FakeCategoryProductsRepository? products,
   double width = 500,
   double height = 900,
+  ThemeData? theme,
 }) =>
     ProviderScope(
       overrides: [
@@ -323,6 +354,7 @@ Widget harness(
         ),
       ],
       child: MaterialApp(
+        theme: theme,
         home: Center(
           child: SizedBox(
             width: width,
@@ -714,6 +746,265 @@ void main() {
       expect(products.bulkCalls.single.ids, ['p1']);
       expect(products.bulkCalls.single.categoryId, 'b');
     });
+  });
+
+  group('adding products to a category (feature 26)', () {
+    // What this group is really guarding: that a category the user has just
+    // CREATED is not a dead end. It lands empty, and the only advice the pane
+    // used to offer was to go and do it somewhere else.
+
+    testWidgets('an empty category offers the picker, and it leaves out what '
+        'is already in it', (tester) async {
+      final repo = FakeCategoriesRepository([
+        category('a', name: 'Chairs', position: 0),
+        category('b', name: 'Tables', position: 1),
+      ]);
+      final products = FakeCategoryProductsRepository({
+        'a': [productIn('p0', 'a', name: 'Walnut stool')],
+        'b': [productIn('p1', 'b', name: 'Oak table')],
+        'none': [productIn('p2', null, name: 'Loose lamp')],
+      });
+      // Wide enough for master/detail, so the pane is beside the list.
+      await tester.pumpWidget(harness(repo, products: products, width: 1000));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Chairs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add products'));
+      await tester.pumpAndSettle();
+
+      // Scoped to the sheet: the pane underneath is still showing what IS in
+      // Chairs, which is the other half of what is being checked here.
+      Finder inSheet(Finder finder) =>
+          find.descendant(of: find.byType(BottomSheet), matching: finder);
+
+      // Everything that is NOT already in Chairs...
+      expect(inSheet(find.text('Oak table')), findsOneWidget);
+      expect(inSheet(find.text('Loose lamp')), findsOneWidget);
+      expect(inSheet(find.text('Walnut stool')), findsNothing);
+      // ...each saying where it would be coming FROM, because a product sits in
+      // one category and this is a move, not a copy.
+      expect(inSheet(find.textContaining('in Tables')), findsOneWidget);
+      expect(inSheet(find.textContaining('in Uncategorized')), findsOneWidget);
+
+      await tester.tap(inSheet(find.text('Oak table')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add 1'));
+      await tester.pumpAndSettle();
+
+      expect(products.bulkCalls.single.action, BulkProductAction.setCategory);
+      expect(products.bulkCalls.single.ids, ['p1']);
+      expect(products.bulkCalls.single.categoryId, 'a');
+      expect(find.textContaining('added to Chairs'), findsOneWidget);
+      // The pane re-read itself rather than patching a row in.
+      expect(find.text('Oak table'), findsOneWidget);
+    });
+
+    testWidgets('nothing ticked is not a write', (tester) async {
+      final repo = FakeCategoriesRepository([category('a', name: 'Chairs')]);
+      final products = FakeCategoryProductsRepository({
+        'b': [productIn('p1', 'b', name: 'Oak table')],
+      });
+      await tester.pumpWidget(harness(repo, products: products, width: 1000));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Chairs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add products'));
+      await tester.pumpAndSettle();
+
+      final add =
+          tester.widget<ElevatedButton>(find.widgetWithText(ElevatedButton, 'Add'));
+      expect(add.onPressed, isNull);
+      expect(products.bulkCalls, isEmpty);
+    });
+
+    testWidgets('an empty catalog and a category that already holds everything '
+        'are different sentences', (tester) async {
+      final repo = FakeCategoriesRepository([category('a', name: 'Chairs')]);
+      final products = FakeCategoryProductsRepository({});
+      await tester.pumpWidget(harness(repo, products: products, width: 1000));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Chairs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add products'));
+      await tester.pumpAndSettle();
+      expect(find.text('No products yet'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+
+      // The other empty: there ARE products, and they are all already here. The
+      // entry point is the selection bar now, because the pane is not empty.
+      final full = FakeCategoriesRepository([
+        category('a', name: 'Chairs', productCount: 1),
+      ]);
+      await tester.pumpWidget(harness(
+        full,
+        products: FakeCategoryProductsRepository({
+          'a': [productIn('p1', 'a', name: 'Oak chair')],
+        }),
+        width: 1000,
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Chairs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add products'));
+      await tester.pumpAndSettle();
+      expect(find.text('Everything is already here'), findsOneWidget);
+    });
+
+    testWidgets('search narrows the list without dropping what is ticked',
+        (tester) async {
+      final repo = FakeCategoriesRepository([category('a', name: 'Chairs')]);
+      final products = FakeCategoryProductsRepository({
+        'b': [
+          productIn('p1', 'b', name: 'Oak table'),
+          productIn('p2', 'b', name: 'Pine bench'),
+        ],
+      });
+      await tester.pumpWidget(harness(repo, products: products, width: 1000));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Chairs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add products'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Oak table'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.ancestor(
+          of: find.text('Search products'),
+          matching: find.byType(TextFormField),
+        ),
+        'bench',
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Oak table'), findsNothing);
+      expect(find.text('Pine bench'), findsOneWidget);
+      // Ticked, filtered out, still counted — the selection is by id, and a
+      // search that silently untick things would send the wrong list.
+      expect(find.text('1 selected'), findsOneWidget);
+
+      // "Select all" under a filter means all of THESE, and adds to what is
+      // already ticked rather than replacing it.
+      await tester.tap(find.text('Select these'));
+      await tester.pumpAndSettle();
+      expect(find.text('2 selected'), findsOneWidget);
+    });
+
+    testWidgets('a pick the server no longer has is not confirmed as an add',
+        (tester) async {
+      final repo = FakeCategoriesRepository([category('a', name: 'Chairs')]);
+      final products = FakeCategoryProductsRepository({
+        'b': [productIn('p1', 'b', name: 'Oak table')],
+      });
+      await tester.pumpWidget(harness(repo, products: products, width: 1000));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Chairs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add products'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Oak table'));
+      await tester.pumpAndSettle();
+
+      // Deleted from another device between the picker reading it and the user
+      // pressing Add. The server moves nothing, and the count it reports — not
+      // the number asked for — is what the screen may claim.
+      products.byCategory = {'b': <CatalogProduct>[]};
+      await tester.tap(find.text('Add 1'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('had already moved'), findsOneWidget);
+      expect(find.textContaining('added to Chairs'), findsNothing);
+    });
+
+    testWidgets('a refused write says so', (tester) async {
+      final repo = FakeCategoriesRepository([category('a', name: 'Chairs')]);
+      final products = FakeCategoryProductsRepository({
+        'b': [productIn('p1', 'b', name: 'Oak table')],
+      })
+        ..bulkFailure = const CatalogFailure(
+          code: 'INTERNAL',
+          message: 'nope',
+          statusCode: 500,
+        );
+      await tester.pumpWidget(harness(repo, products: products, width: 1000));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Chairs'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add products'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Oak table'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add 1'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('could not be added'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the Uncategorized bucket is not somewhere you add TO',
+        (tester) async {
+      // "Adding" a product to Uncategorized is REMOVING its category, and that
+      // already has a name and a place: Move to… on the category it is in.
+      final repo = FakeCategoriesRepository([category('a', name: 'Chairs')]);
+      await tester.pumpWidget(harness(
+        repo,
+        products: FakeCategoryProductsRepository({}),
+        width: 1000,
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Uncategorized'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Nothing in here yet'), findsOneWidget);
+      expect(find.text('Add products'), findsNothing);
+    });
+  });
+
+  group('the create row, under the app\'s own theme', () {
+    // The bug this locks down: the theme gives every button
+    // `minimumSize: Size(double.infinity, 48)` for the full-width CTA shape,
+    // and a content-width button inherited it. As a non-flexible Row child —
+    // exactly what "Add" is, beside an Expanded field — the infinite minimum
+    // stays infinite, layout throws, and the whole screen paints nothing. The
+    // other harness uses Flutter's default theme and cannot see it.
+    for (final scale in const [1.0, 1.3]) {
+      testWidgets('lays out and aligns at ${scale}x text', (tester) async {
+        final errors = <String>[];
+        final prior = FlutterError.onError;
+        FlutterError.onError = (details) => errors.add(details.exceptionAsString());
+        addTearDown(() => FlutterError.onError = prior);
+
+        await tester.pumpWidget(MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+          child: harness(
+            FakeCategoriesRepository([category('a', name: 'Chairs')]),
+            theme: AppTheme.dark,
+          ),
+        ));
+        await tester.pumpAndSettle();
+
+        expect(errors, isEmpty);
+        // The button sits on the row the user is typing in — not below the
+        // field's label, which is where a hard-coded offset used to put it.
+        final field = find.ancestor(
+          of: find.text('New category'),
+          matching: find.byType(TextFormField),
+        );
+        final add = find.widgetWithText(ElevatedButton, 'Add');
+        expect(tester.getTopLeft(add).dy, tester.getTopLeft(field).dy);
+      });
+    }
   });
 
   testWidgets('says once, quietly, that this order is what customers see',

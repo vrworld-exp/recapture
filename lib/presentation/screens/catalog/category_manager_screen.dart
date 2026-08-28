@@ -19,6 +19,7 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/catalog_categories_notifier.dart';
+import '../../../application/catalog/category_candidates_notifier.dart';
 import '../../../application/catalog/category_products_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog_category.dart';
@@ -393,16 +394,15 @@ class _CreateCategoryFieldState extends ConsumerState<_CreateCategoryField> {
             ),
           ),
           const SizedBox(width: AppSpacing.md),
-          Padding(
-            // Aligns the button with the field's input row rather than its
-            // label, which sits above it.
-            padding: const EdgeInsets.only(top: AppSpacing.xxl),
-            child: AppButton(
-              label: 'Add',
-              isFullWidth: false,
-              isLoading: _busy,
-              onPressed: _submit,
-            ),
+          // Top-aligned, NOT offset. The field's input box and the button are
+          // both 48 high, so `start` lands them on the same line — and when an
+          // error message appears the field grows DOWNWARD, which is the only
+          // alignment that keeps the button on the row the user is typing in.
+          AppButton(
+            label: 'Add',
+            isFullWidth: false,
+            isLoading: _busy,
+            onPressed: _submit,
           ),
         ],
       );
@@ -620,22 +620,22 @@ class _RenameFieldState extends ConsumerState<_RenameField> {
               ),
             ),
             const SizedBox(width: AppSpacing.sm),
-            Padding(
-              padding: const EdgeInsets.only(top: AppSpacing.xxl),
-              child: Row(
-                children: [
-                  TextButton(
-                    onPressed: _busy ? null : widget.onDone,
-                    child: const Text('Cancel'),
-                  ),
-                  AppButton(
-                    label: 'Save',
-                    isFullWidth: false,
-                    isLoading: _busy,
-                    onPressed: _submit,
-                  ),
-                ],
-              ),
+            // Aligned with the field's input box, for the reason spelled out on
+            // the create row above.
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton(
+                  onPressed: _busy ? null : widget.onDone,
+                  child: const Text('Cancel'),
+                ),
+                AppButton(
+                  label: 'Save',
+                  isFullWidth: false,
+                  isLoading: _busy,
+                  onPressed: _submit,
+                ),
+              ],
             ),
           ],
         ),
@@ -1067,14 +1067,27 @@ class _CategoryProductsPane extends ConsumerWidget {
     if (state.isEmpty) {
       // Fills the viewport for the same reason [_NoCategoriesYet] does: this is
       // the whole pane, not a block inside something that already scrolls.
+      //
+      // A category the user has just created lands HERE, empty, so this is
+      // where the way to fill it belongs. An empty pane whose only advice is
+      // "do it from somewhere else" is a dead end at exactly the moment the
+      // user has decided what the category is for.
+      final destination = selection.id;
       return CatalogMessage(
         icon: Icons.inventory_2_outlined,
         title: 'Nothing in here yet',
         body: selection.isUncategorized
+            // No CTA on the bucket, and no promise of one: "adding" a product
+            // to Uncategorized is REMOVING its category, which is Move to… on
+            // the category the product is actually in.
             ? 'Every product has a category. That is what you want before you '
                 'publish.'
-            : 'Move products into this category from another one, or set it on '
-                'the product itself.',
+            : 'Add products from your catalog, or set this category on the '
+                'product itself.',
+        actionLabel: destination == null ? null : 'Add products',
+        onAction: destination == null
+            ? null
+            : () => _addProducts(context, destination),
       );
     }
 
@@ -1130,6 +1143,7 @@ class _SelectionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final destination = selection.id;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(
@@ -1138,33 +1152,58 @@ class _SelectionBar extends StatelessWidget {
         AppSpacing.screenPadding,
         0,
       ),
-      child: Row(
+      // A Wrap, not a Row: the count and two actions do not fit 320dp at a
+      // large text scale, and a bar that overflows is how the action the user
+      // came for ends up half off the screen.
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: AppSpacing.sm,
+        runSpacing: AppSpacing.xs,
         children: [
-          Expanded(
-            child: Text(
-              state.hasSelection
-                  ? '${state.selectedIds.length} selected'
-                  : _countLabel(state.items.length),
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: AppColors.textSecondary),
-            ),
+          Text(
+            state.hasSelection
+                ? '${state.selectedIds.length} selected'
+                : _countLabel(state.items.length),
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: AppColors.textSecondary),
           ),
-          if (state.hasSelection) ...[
-            TextButton(
-              onPressed: state.isMoving ? null : notifier.clearSelection,
-              child: const Text('Clear'),
-            ),
-            AppButton(
-              label: 'Move to…',
-              isFullWidth: false,
-              isLoading: state.isMoving,
-              onPressed: () => _move(context),
-            ),
-          ] else
-            TextButton(
-              onPressed: notifier.selectAll,
-              child: const Text('Select all'),
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: state.hasSelection
+                ? [
+                    TextButton(
+                      onPressed:
+                          state.isMoving ? null : notifier.clearSelection,
+                      child: const Text('Clear'),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    AppButton(
+                      label: 'Move to…',
+                      isFullWidth: false,
+                      isLoading: state.isMoving,
+                      onPressed: () => _move(context),
+                    ),
+                  ]
+                : [
+                    TextButton(
+                      onPressed: state.isMoving ? null : notifier.selectAll,
+                      child: const Text('Select all'),
+                    ),
+                    if (destination != null) ...[
+                      const SizedBox(width: AppSpacing.sm),
+                      AppButton(
+                        label: 'Add products',
+                        isFullWidth: false,
+                        // Not `isLoading`: the move already owns the spinner in
+                        // this bar, and two spinners say two things are running.
+                        onPressed: state.isMoving
+                            ? null
+                            : () => _addProducts(context, destination),
+                      ),
+                    ],
+                  ],
+          ),
         ],
       ),
     );
@@ -1237,16 +1276,357 @@ class _SelectionBar extends StatelessWidget {
   }
 }
 
+// ── Adding existing products to a category ───────────────────────
+
+/// Opens the picker for [categoryId] and writes back whatever it returns.
+///
+/// The WRITE is the destination pane's, not the picker's: the picker is a list
+/// of what could be added and dies with the sheet, while the counts an add
+/// moves — this category's, the one the product came from, the catalog header's
+/// — belong to the notifier the user is standing in front of.
+Future<void> _addProducts(BuildContext context, String categoryId) async {
+  // Captured while the context is certainly mounted. The sheet is a route the
+  // user can spend a while in, and on a narrow layout the pane underneath is a
+  // page they can leave from it.
+  final messenger = CatalogFeedback.of(context);
+  final container = ProviderScope.containerOf(context, listen: false);
+  final name =
+      container.read(categoryNameProvider(categoryId)) ?? 'this category';
+
+  final ids = await showModalBottomSheet<List<String>>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: AppColors.surface1,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
+    ),
+    builder: (_) =>
+        _AddProductsSheet(categoryId: categoryId, categoryName: name),
+  );
+  // Dismissed, or dismissed with nothing ticked. Neither is a write.
+  if (ids == null || ids.isEmpty) return;
+
+  try {
+    final added = await container
+        .read(categoryProductsProvider(categoryId).notifier)
+        .addProducts(ids);
+    if (added == 0) {
+      // The server moved nothing, so every product picked had been deleted or
+      // moved by someone else since the picker read them. Confirming an add
+      // that did not happen is worse than saying it did not.
+      CatalogFeedback.confirm(
+        messenger,
+        'Nothing was added — those products had already moved.',
+      );
+      return;
+    }
+    CatalogFeedback.confirm(
+      messenger,
+      '${_countLabel(added)} added to $name. Customers see it after you '
+      'publish.',
+    );
+  } on CatalogFailure catch (failure) {
+    // A part-written run still landed its earlier chunks, and the pane has
+    // already re-read itself — so this says what went wrong over a list that is
+    // already telling the truth about what arrived.
+    CatalogFeedback.failure(
+      messenger,
+      failure,
+      subject: 'Those products could not be added',
+    );
+  }
+}
+
+/// The picker: everything in the catalog that is NOT already in this category,
+/// ticked, and handed back as a list of ids.
+///
+/// Returns through `Navigator.pop` rather than writing anything itself, so
+/// success and failure are reported in one place — [_addProducts] — whether the
+/// user got here from the empty state or from the selection bar.
+class _AddProductsSheet extends ConsumerStatefulWidget {
+  const _AddProductsSheet({
+    required this.categoryId,
+    required this.categoryName,
+  });
+
+  final String categoryId;
+  final String categoryName;
+
+  @override
+  ConsumerState<_AddProductsSheet> createState() => _AddProductsSheetState();
+}
+
+class _AddProductsSheetState extends ConsumerState<_AddProductsSheet> {
+  final TextEditingController _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final provider = categoryCandidatesProvider(widget.categoryId);
+    final state = ref.watch(provider);
+    final notifier = ref.read(provider.notifier);
+    final visible = state.visible;
+
+    // Where each product is coming FROM, resolved once for the whole list: a
+    // thousand rows walking the same handful of categories is a thousand walks
+    // for one map.
+    final names = <String, String>{
+      for (final category
+          in ref.watch(catalogCategoriesProvider).valueOrNull?.categories ??
+              const <CatalogCategory>[])
+        category.id: category.name,
+    };
+
+    return Padding(
+      // The search field raises the keyboard; the sheet rides up with it rather
+      // than leaving the list behind it.
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: FractionallySizedBox(
+        heightFactor: 0.85,
+        child: SafeArea(
+          top: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.lg,
+                  AppSpacing.sm,
+                  0,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Add to ${widget.categoryName}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleLarge,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                child: Text(
+                  // Said once, up front. A product sits in exactly one
+                  // category, so this is a MOVE — and a user who reads it as a
+                  // copy will wonder why the category they took it from got
+                  // smaller.
+                  'A product sits in one category, so adding it here takes it '
+                  'out of the one it is in now.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: AppColors.textMuted),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.md,
+                  AppSpacing.lg,
+                  0,
+                ),
+                child: AppTextField(
+                  label: 'Search products',
+                  controller: _search,
+                  enabled: !state.isLoading,
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: state.isSearching
+                      ? IconButton(
+                          icon: const Icon(Icons.clear),
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            _search.clear();
+                            notifier.setQuery('');
+                          },
+                        )
+                      : null,
+                  textInputAction: TextInputAction.search,
+                  // Filters what is already loaded rather than re-fetching, so
+                  // there is nothing to debounce.
+                  onChanged: notifier.setQuery,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg,
+                  AppSpacing.sm,
+                  AppSpacing.lg,
+                  0,
+                ),
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: AppSpacing.sm,
+                  children: [
+                    Text(
+                      state.hasSelection
+                          ? '${state.selectedIds.length} selected'
+                          : '${visible.length} to choose from',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: AppColors.textSecondary),
+                    ),
+                    TextButton(
+                      onPressed:
+                          visible.isEmpty ? null : notifier.selectAllVisible,
+                      // While a search is on, "all" means these — and it ADDS
+                      // to the selection rather than replacing it, so the rows
+                      // the filter is hiding stay ticked.
+                      child: Text(
+                        state.isSearching ? 'Select these' : 'Select all',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (state.truncated)
+                Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                  child: Text(
+                    'Searched the first $kCategoryCandidatesMax products in '
+                    'your catalog.',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: AppColors.warning),
+                  ),
+                ),
+              Expanded(
+                child: _list(context, state, notifier, visible, names),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.sm,
+                  children: [
+                    TextButton(
+                      onPressed:
+                          state.hasSelection ? notifier.clearSelection : null,
+                      child: const Text('Clear'),
+                    ),
+                    AppButton(
+                      label: state.hasSelection
+                          ? 'Add ${state.selectedIds.length}'
+                          : 'Add',
+                      isFullWidth: false,
+                      // Nothing ticked is not a write: the button stays down
+                      // rather than closing the sheet on an empty list.
+                      onPressed: state.hasSelection
+                          ? () => Navigator.of(context)
+                              .pop(state.selectedIds.toList())
+                          : null,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The four ways this list can be empty each get their own sentence. "You
+  /// have no products yet", "they are all already in here", "your search found
+  /// nothing" and "we could not load them" are four different situations, and
+  /// one shared "Nothing to add" would leave the user guessing which.
+  Widget _list(
+    BuildContext context,
+    CategoryCandidatesState state,
+    CategoryCandidatesNotifier notifier,
+    List<CatalogProduct> visible,
+    Map<String, String> names,
+  ) {
+    if (state.isLoading && state.items.isEmpty) {
+      return const Center(child: AppLoadingIndicator());
+    }
+    if (state.error != null && state.items.isEmpty) {
+      return CatalogMessage(
+        icon: Icons.cloud_off_outlined,
+        title: "We couldn't load your products",
+        body: CatalogFeedback.failureText(state.error!),
+        actionLabel: 'Try again',
+        onAction: notifier.load,
+      );
+    }
+    if (state.catalogIsEmpty) {
+      return const CatalogMessage(
+        icon: Icons.inventory_2_outlined,
+        title: 'No products yet',
+        body: 'Add a product to your catalog first, then come back and group '
+            'it here.',
+      );
+    }
+    if (state.allAlreadyHere) {
+      return CatalogMessage(
+        icon: Icons.check_circle_outline,
+        title: 'Everything is already here',
+        body: 'Every product in your catalog is in ${widget.categoryName}.',
+      );
+    }
+    if (visible.isEmpty) {
+      return const CatalogMessage(
+        icon: Icons.search_off,
+        title: 'No match',
+        body: 'Nothing outside this category is named like that.',
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+      itemCount: visible.length,
+      itemBuilder: (context, index) {
+        final product = visible[index];
+        final from = product.categoryId == null
+            ? 'Uncategorized'
+            // A category the list has not fetched is named honestly rather
+            // than silently reported as Uncategorized, which is a real and
+            // different place for a product to be.
+            : names[product.categoryId] ?? 'another category';
+        return _ProductRow(
+          product: product,
+          selected: state.isSelected(product.id),
+          onChanged: (_) => notifier.toggle(product.id),
+          note: 'in $from',
+        );
+      },
+    );
+  }
+}
+
 class _ProductRow extends StatelessWidget {
   const _ProductRow({
     required this.product,
     required this.selected,
     required this.onChanged,
+    this.note,
   });
 
   final CatalogProduct product;
   final bool selected;
   final ValueChanged<bool?>? onChanged;
+
+  /// Appended to the subtitle. The picker uses it to say where a product is
+  /// coming FROM, because a product has one category and adding it here takes
+  /// it out of the one it is in now.
+  final String? note;
 
   @override
   Widget build(BuildContext context) => CheckboxListTile(
@@ -1263,9 +1643,13 @@ class _ProductRow extends StatelessWidget {
           style: Theme.of(context).textTheme.bodyMedium,
         ),
         subtitle: Text(
-          product.isArchived
-              ? '${product.type.label} · Archived'
-              : product.type.label,
+          [
+            product.type.label,
+            if (product.isArchived) 'Archived',
+            if (note != null) note!,
+          ].join(' · '),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: Theme.of(context)
               .textTheme
               .bodySmall

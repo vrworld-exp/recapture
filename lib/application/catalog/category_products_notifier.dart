@@ -210,6 +210,53 @@ class CategoryProductsNotifier
     return moved;
   }
 
+  /// Adds products that live SOMEWHERE ELSE to this category, returning how
+  /// many the server moved.
+  ///
+  /// The inbound half of [moveSelectedTo], and deliberately the same write —
+  /// a product has exactly one category, so "add to this one" is "set the
+  /// category to this one". What differs is only which list the ids came from:
+  /// this one takes them from the picker
+  /// ([categoryCandidatesProvider]), which is why the ids are a parameter
+  /// rather than this notifier's own selection.
+  ///
+  /// The count is the SERVER's, not `ids.length`: between the picker loading
+  /// and the user pressing Add, a product can be deleted or moved by another
+  /// device, and reporting the number asked for rather than the number done is
+  /// how a screen ends up disagreeing with the category it just wrote to.
+  ///
+  /// Throws [CatalogFailure]. Chunked to the server's per-call bound, so a
+  /// failure part-way leaves the earlier chunks landed — the re-read runs on
+  /// the failure path too, and what arrived is visible.
+  Future<int> addProducts(List<String> ids) async {
+    if (ids.isEmpty) return 0;
+
+    state = state.copyWith(isMoving: true);
+    var added = 0;
+    try {
+      for (var start = 0; start < ids.length; start += kBulkProductIdLimit) {
+        final chunk = ids.sublist(
+          start,
+          (start + kBulkProductIdLimit).clamp(0, ids.length),
+        );
+        added += await _repo.bulk(
+          action: BulkProductAction.setCategory,
+          ids: chunk,
+          categoryId: arg,
+        );
+      }
+    } finally {
+      if (!_disposed) {
+        // The selection is this category's OWN rows; the ids just added were
+        // never part of it, so it is left alone rather than cleared.
+        state = state.copyWith(isMoving: false);
+        await load();
+        _refreshSurroundings();
+      }
+    }
+    return added;
+  }
+
   /// Moves EVERY product out of this category and into [categoryId]
   /// (null = Uncategorized), returning how many moved.
   ///
