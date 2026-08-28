@@ -86,7 +86,8 @@ describe('business profile', () => {
     const res = await request(app).get('/catalog/profile').set(auth).expect(200);
 
     expect(res.body.profile.id).toBe(id);
-    expect(res.body.profile.name).toBe('Cafe Mocha');
+    // Names are stored as the slug Mirage keeps — see utils/catalogNames.ts.
+    expect(res.body.profile.name).toBe('cafe_mocha');
     expect(res.body.profile.businessName).toBeNull();
     expect(res.body.profile.contact).toBeNull();
     // The model stores keys; no key means no URL — not `<cdn>/undefined`.
@@ -158,7 +159,7 @@ describe('business profile', () => {
       .send({ name: 'Cafe Mocha', businessName: 'Mocha Foods Pvt Ltd', contact })
       .expect(200);
 
-    expect(patched.body.profile.name).toBe('Cafe Mocha');
+    expect(patched.body.profile.name).toBe('cafe_mocha');
     expect(patched.body.profile.businessName).toBe('Mocha Foods Pvt Ltd');
     expect(patched.body.profile.contact).toMatchObject(contact);
 
@@ -241,7 +242,7 @@ describe('business profile', () => {
     await request(app).patch('/catalog/profile').set(b.auth).send({ name: 'Hijacked' }).expect(404);
 
     const untouched = await request(app).get('/catalog/profile').set(a.auth).expect(200);
-    expect(untouched.body.profile.name).toBe('A Shop');
+    expect(untouched.body.profile.name).toBe('a_shop');
   });
 
   it('the profile view and the catalog root stay consistent', async () => {
@@ -252,10 +253,10 @@ describe('business profile', () => {
     // document, and applyCatalogPatch is the single write path.
     await request(app).patch('/catalog').set(auth).send({ name: 'Via Root' }).expect(200);
     const viaProfile = await request(app).get('/catalog/profile').set(auth).expect(200);
-    expect(viaProfile.body.profile.name).toBe('Via Root');
+    expect(viaProfile.body.profile.name).toBe('via_root');
 
     await request(app).patch('/catalog/profile').set(auth).send({ name: 'Via Profile' }).expect(200);
     const viaRoot = await request(app).get('/catalog').set(auth).expect(200);
-    expect(viaRoot.body.catalog.name).toBe('Via Profile');
+    expect(viaRoot.body.catalog.name).toBe('via_profile');
   });
 });

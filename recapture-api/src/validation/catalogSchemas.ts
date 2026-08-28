@@ -16,6 +16,7 @@ import {
   PRODUCT_TYPES,
 } from '@/models/types/catalog.types';
 import { BRANDING_SLOTS, PRODUCT_IMAGE_CONTENT_TYPES } from '@/utils/productImageKeys';
+import { isValidCatalogSlug, toCatalogSlug } from '@/utils/catalogNames';
 
 // A Mongo ObjectId as a 24-char hex string. Validated here so a malformed id is
 // a 400 that never reaches the DB, and mongoose stays out of the validation
@@ -32,6 +33,33 @@ const BUSINESS_NAME_MAX = 120;
 const CATEGORY_NAME_MAX = 80;
 const PRODUCT_NAME_MAX = 120;
 const PRODUCT_DESCRIPTION_MAX = 2000;
+
+/**
+ * A NAME, normalised to the slug form Mirage stores.
+ *
+ * The transform runs at the boundary rather than in each service, so the value
+ * a service uniqueness-checks, the value it writes and the value the response
+ * echoes back are all the SAME string — a service that normalised on write but
+ * not on the preceding `findOne` would report "available" and then collide.
+ *
+ * `.max()` is checked BEFORE the transform because slugging only ever shortens
+ * a string, so a name rejected here could never have fitted afterwards either;
+ * checking first is what makes the 400 name the length the user actually typed.
+ *
+ * The final refine catches the one input the transform cannot rescue: a name
+ * made entirely of punctuation or emoji slugs down to `''`, and storing that
+ * would leave a nameless row that no search or Mirage call can address.
+ */
+const slugName = (max: number, label: string) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .transform((value) => toCatalogSlug(value, { maxLength: max }))
+    .refine(isValidCatalogSlug, {
+      message: `${label} must contain at least one letter or number`,
+    });
 
 /** Tag bounds. ReCapture-only today; Mirage now has a tags field too (added in
  *  mirage-be), so these also bound what the publish worker can push. */
@@ -66,7 +94,7 @@ const contactSchema = z
  */
 export const createCatalogSchema = z
   .object({
-    name: z.string().trim().min(1).max(CATALOG_NAME_MAX),
+    name: slugName(CATALOG_NAME_MAX, 'Catalog name'),
     businessName: z.string().trim().min(1).max(BUSINESS_NAME_MAX).optional(),
     contact: contactSchema.optional(),
   })
@@ -86,7 +114,7 @@ export type CreateCatalogInput = z.infer<typeof createCatalogSchema>;
  */
 export const updateCatalogSchema = z
   .object({
-    name: z.string().trim().min(1).max(CATALOG_NAME_MAX).optional(),
+    name: slugName(CATALOG_NAME_MAX, 'Catalog name').optional(),
     businessName: z.string().trim().max(BUSINESS_NAME_MAX).optional(),
     contact: contactSchema.optional(),
   })
@@ -156,7 +184,7 @@ export type BrandingCommitInput = z.infer<typeof brandingCommitSchema>;
 
 export const createCategorySchema = z
   .object({
-    name: z.string().trim().min(1).max(CATEGORY_NAME_MAX),
+    name: slugName(CATEGORY_NAME_MAX, 'Category name'),
     /** Omit to append at the end — the service resolves the next position. */
     position: z.number().int().min(0).optional(),
   })
@@ -166,7 +194,7 @@ export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
 export const updateCategorySchema = z
   .object({
-    name: z.string().trim().min(1).max(CATEGORY_NAME_MAX).optional(),
+    name: slugName(CATEGORY_NAME_MAX, 'Category name').optional(),
     position: z.number().int().min(0).optional(),
   })
   .strict()
@@ -223,7 +251,7 @@ const tagsSchema = z
 export const createProductSchema = z
   .object({
     type: z.enum(PRODUCT_TYPES),
-    name: z.string().trim().min(1).max(PRODUCT_NAME_MAX),
+    name: slugName(PRODUCT_NAME_MAX, 'Product name'),
     description: z.string().trim().max(PRODUCT_DESCRIPTION_MAX).optional(),
     price: z.number().min(0).optional(),
     categoryId: objectId('category id').nullable().optional(),
@@ -299,7 +327,7 @@ export type CreateProductInput = z.infer<typeof createProductSchema>;
  */
 export const updateProductSchema = z
   .object({
-    name: z.string().trim().min(1).max(PRODUCT_NAME_MAX).optional(),
+    name: slugName(PRODUCT_NAME_MAX, 'Product name').optional(),
     description: z.string().trim().max(PRODUCT_DESCRIPTION_MAX).optional(),
     price: z.number().min(0).nullable().optional(),
     categoryId: objectId('category id').nullable().optional(),
@@ -418,7 +446,7 @@ export type BulkProductsInput = z.infer<typeof bulkProductsSchema>;
  */
 export const duplicateProductSchema = z
   .object({
-    name: z.string().trim().min(1).max(PRODUCT_NAME_MAX).optional(),
+    name: slugName(PRODUCT_NAME_MAX, 'Product name').optional(),
   })
   .strict();
 

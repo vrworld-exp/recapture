@@ -385,7 +385,7 @@ describe('provisionCatalog — adopting an existing Mirage restaurant', () => {
 
     expect(result.outcome).toBe('NAME_TAKEN');
     if (result.outcome !== 'NAME_TAKEN') return;
-    expect(result.suggestedName).toBe('Cafe 2');
+    expect(result.suggestedName).toBe('cafe_2');
     // Refused before the doomed create — one list call, nothing else.
     expect(mirage.calls).toEqual(['listRestaurants']);
   });
@@ -416,14 +416,16 @@ describe('provisionCatalog — adopting an existing Mirage restaurant', () => {
 
 describe('suggestAvailableName', () => {
   it('skips every suffix Mirage would still refuse', async () => {
+    // Containment is judged on the SLUG of both sides, which is the form Mirage
+    // holds: "cafe_2" is contained in "cafe_2_go", so the walk skips to 4.
     expect(suggestAvailableName('Cafe', ['Cafe', 'Cafe 2 Go', 'the cafe 3'], 'abc123')).toBe(
-      'Cafe 4'
+      'cafe_4'
     );
   });
 
   it('falls back to the catalog-id tail when the numbers are exhausted', async () => {
     const crowded = Array.from({ length: 9 }, (_, i) => `Cafe ${i + 1}`);
-    expect(suggestAvailableName('Cafe', crowded, 'abc123')).toBe('Cafe abc123');
+    expect(suggestAvailableName('Cafe', crowded, 'abc123')).toBe('cafe_abc123');
   });
 });
 
@@ -506,7 +508,7 @@ describe('branding', () => {
 
     expect(result.outcome).toBe('NAME_TAKEN');
     if (result.outcome !== 'NAME_TAKEN') return;
-    expect(result.suggestedName).toBe('Green Cafe 2');
+    expect(result.suggestedName).toBe('green_cafe_2');
 
     const stored = await Catalog.findById(id).exec();
     expect(stored?.publicUrl).toBe(provisioned.mapping.publicUrl);

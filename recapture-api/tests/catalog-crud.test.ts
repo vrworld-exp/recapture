@@ -187,7 +187,8 @@ describe('catalog root', () => {
       .send({ name: 'Cafe Mocha' })
       .expect(201);
 
-    expect(created.body.catalog.name).toBe('Cafe Mocha');
+    // Stored as the slug Mirage keeps, not as it was typed — see utils/catalogNames.ts.
+    expect(created.body.catalog.name).toBe('cafe_mocha');
     expect(created.body.catalog.status).toBe('DRAFT');
     expect(created.body.catalog.publicUrl).toBeNull();
     expect(created.body.catalog.isProvisioned).toBe(false);
@@ -210,7 +211,7 @@ describe('catalog root', () => {
 
     // Same catalog, and the replay did NOT overwrite the name.
     expect(second.body.catalog.id).toBe(first.body.catalog.id);
-    expect(second.body.catalog.name).toBe('A');
+    expect(second.body.catalog.name).toBe('a');
   });
 
   it('never exposes internal mapping fields', async () => {
@@ -277,7 +278,10 @@ describe('catalog categories', () => {
     expect(dup.body.code).toBe('DUPLICATE_NAME');
 
     const list = await request(app).get('/catalog/categories').set(auth).expect(200);
-    expect(list.body.categories.map((c: { name: string }) => c.name)).toEqual(['Drinks', 'Food']);
+    expect(list.body.categories.map((c: { name: string }) => c.name)).toEqual([
+      'drinks',
+      'food',
+    ]);
     expect(list.body.categories[0].position).toBe(0);
     expect(list.body.categories[1].position).toBe(1);
   });
@@ -297,7 +301,7 @@ describe('catalog categories', () => {
       .send({ ids: [b.body.category.id, a.body.category.id] })
       .expect(200);
 
-    expect(res.body.categories.map((c: { name: string }) => c.name)).toEqual(['B', 'A']);
+    expect(res.body.categories.map((c: { name: string }) => c.name)).toEqual(['b', 'a']);
   });
 
   it('reorder rejects a partial id set', async () => {
@@ -492,14 +496,14 @@ describe('catalog products', () => {
       .query({ categoryId })
       .set(auth)
       .expect(200);
-    expect(inCat.body.items.map((p: { name: string }) => p.name)).toEqual(['Latte']);
+    expect(inCat.body.items.map((p: { name: string }) => p.name)).toEqual(['latte']);
 
     const uncategorized = await request(app)
       .get('/catalog/products')
       .query({ categoryId: 'none' })
       .set(auth)
       .expect(200);
-    expect(uncategorized.body.items.map((p: { name: string }) => p.name)).toEqual(['Muffin']);
+    expect(uncategorized.body.items.map((p: { name: string }) => p.name)).toEqual(['muffin']);
 
     const search = await request(app)
       .get('/catalog/products')
@@ -535,7 +539,7 @@ describe('catalog products', () => {
       .query({ limit: 2 })
       .set(auth)
       .expect(200);
-    expect(first.body.items.map((p: { name: string }) => p.name)).toEqual(['A', 'B']);
+    expect(first.body.items.map((p: { name: string }) => p.name)).toEqual(['a', 'b']);
     expect(first.body.nextCursor).toBeTruthy();
 
     const second = await request(app)
@@ -543,7 +547,7 @@ describe('catalog products', () => {
       .query({ limit: 2, cursor: first.body.nextCursor })
       .set(auth)
       .expect(200);
-    expect(second.body.items.map((p: { name: string }) => p.name)).toEqual(['C']);
+    expect(second.body.items.map((p: { name: string }) => p.name)).toEqual(['c']);
     expect(second.body.nextCursor).toBeNull();
   });
 

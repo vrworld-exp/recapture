@@ -19,11 +19,15 @@
 //      categories, match the NORMALIZED name, adopt the id. A retry could never
 //      succeed; it would fail identically forever.
 //
-//   3. RECAPTURE'S NAME STAYS RECAPTURE'S. Mirage lowercases the name and
-//      replaces spaces with underscores on the way in (adminController.js:738-
-//      739), so "Garden Chairs" is stored as "garden_chairs". That echo is NEVER
-//      written back over `CatalogCategory.name` — the display name is authoring
-//      data and the mangled form is a projection detail.
+//   3. THE NAME IS ALREADY THE STORED NAME. ReCapture now slugs a category name
+//      at the boundary (utils/catalogNames.ts), so `CatalogCategory.name` is
+//      ALREADY the "garden_chairs" form Mirage keeps — the two sides hold the
+//      same string and nothing has to be reconciled across a spelling
+//      difference. `mirageCategoryName` therefore normally returns its input
+//      unchanged; it stays in the call path for rows written before that change
+//      (and for anything seeded straight into the collection), which is exactly
+//      the case where sending the raw name would create a duplicate. Mirage's
+//      echo is still never written back over our row.
 import { Types } from 'mongoose';
 
 import { Catalog } from '@/models/Catalog';
@@ -42,16 +46,24 @@ import type {
 import { markCategorySynced } from '@/services/catalog/publishRunState';
 import type { CatalogSnapshotCategory } from '@/services/catalog/publishSnapshot';
 import { CatalogCategory } from '@/models/CatalogCategory';
+import { toCatalogSlug } from '@/utils/catalogNames';
+
+/** `CatalogCategory.name`'s own bound — slugging must not shorten past it. */
+const CATEGORY_NAME_SLUG_MAX = 80;
 
 /**
- * The display name for the Uncategorized bucket, BEFORE normalization.
+ * The name of the Uncategorized bucket, in the stored slug form.
  *
  * A real category with a real name, not a sentinel: it appears as a tab on the
  * public page like any other, because Mirage has no concept of an item without
  * a category and inventing a hidden one would only mean inventing a way to hide
  * it on the client too.
+ *
+ * Written as the slug rather than as "Uncategorized" so it reads as what is
+ * actually stored on both sides — it is a name a user can see next to their own
+ * categories, and those are all slugs now.
  */
-export const UNCATEGORIZED_NAME = 'Uncategorized';
+export const UNCATEGORIZED_NAME = 'uncategorized';
 
 /**
  * The name Mirage will actually store, computed on OUR side.
@@ -65,7 +77,7 @@ export const UNCATEGORIZED_NAME = 'Uncategorized';
  * reconciliation lookup able to match.
  */
 export function mirageCategoryName(name: string): string {
-  return name.trim().toLowerCase().replace(/ /g, '_');
+  return toCatalogSlug(name, { maxLength: CATEGORY_NAME_SLUG_MAX });
 }
 
 /** Finds a Mirage category by the name we would have sent for it. */
