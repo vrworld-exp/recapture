@@ -2,20 +2,35 @@
 //
 // Releases a catalog whose publish lock outlived its run.
 //
-// WHEN YOU NEED THIS. `activePublishRunId` is cleared in exactly one place —
-// finalizeCatalogAfterRun, inside the publish processor. A job that dies
-// BEFORE reaching that processor therefore strands the catalog: the run stays
-// QUEUED, `isPublishing` stays true, the client polls forever, and every later
-// publish gets 409 PUBLISH_IN_PROGRESS. The known way in was a stale worker on
-// the shared queue failing the job with UNSUPPORTED_JOB_TYPE (fixed at source
-// by claimNextJob's jobType filter — see src/worker/jobQueue.ts).
+// WHEN YOU STILL NEED THIS. The API now repairs the common case by itself:
+// hasActiveRun and the publish-status endpoint call releaseAbandonedRun
+// (src/services/catalog/publishRunState.ts) on every read, so a QUEUED run
+// behind a terminally dead job is cleared the moment anyone polls or presses
+// Publish. What is left for this script is the case that repair deliberately
+// REFUSES: a RUNNING run whose job died mid-walk, where rows may already be
+// half-pushed to Mirage and a human has to look before the lock comes off.
+// It also stays the way to see, and fix, the whole database at once.
 //
-// WHAT IT REFUSES TO DO. It will not touch a run that is RUNNING, and it will
-// not touch a QUEUED run whose job is still claimable — those are live work,
-// and clearing the lock under them would let a second run race Mirage's
-// non-idempotent writes, which is the exact thing the lock exists to prevent.
-// A run only qualifies when its job is terminally dead (FAILED/CANCELED) or
-// gone entirely.
+// WHY THE STRANDING HAPPENS AT ALL. `activePublishRunId` is cleared on the
+// happy path in exactly one place — finalizeCatalogAfterRun, inside the publish
+// processor. A job that dies BEFORE reaching that processor strands the
+// catalog. The way in has been a stale deployment on the shared queue: the Job
+// collection IS the queue, every deployment pointed at one database polls it,
+// and a build predating MIRAGE_CATALOG_PUBLISH claims the job, finds no
+// processor and fails it terminally with UNSUPPORTED_JOB_TYPE.
+//
+// claimNextJob's jobType filter (src/worker/jobQueue.ts) is often described as
+// having fixed that. IT DID NOT, AND IT CANNOT: a claim-side filter only ever
+// binds the builds that contain it, and a stale deployment is still running the
+// old query. The filter stops CURRENT builds from causing the problem; the
+// automatic repair keeps a stale one from wedging a catalog permanently. The
+// actual prevention is an ops action — retire or redeploy the stale service.
+//
+// WHAT IT REFUSES TO DO. It will not touch a run whose job is still claimable —
+// that is live work, and clearing the lock under it would let a second run race
+// Mirage's non-idempotent writes, which is the exact thing the lock exists to
+// prevent. A run only qualifies when its job is terminally dead (FAILED/
+// CANCELED) or gone entirely.
 //
 // Run with: npx tsx scripts/release-stuck-publish.ts            # dry run, all catalogs
 //           npx tsx scripts/release-stuck-publish.ts --apply    # write
@@ -33,58 +48,22 @@ import { env } from '../src/config/env';
 import { Catalog } from '../src/models/Catalog';
 import { CatalogPublishRun } from '../src/models/CatalogPublishRun';
 import { Job } from '../src/models/Job';
-
-/** Job states from which a job can still be picked up by some worker. */
-const LIVE_JOB_STATES = new Set(['QUEUED', 'CLAIMED', 'PROCESSING', 'TEXTURING', 'OPTIMIZING']);
-
-const RELEASE_CODE = 'PUBLISH_ABANDONED';
+import type { PublishRunState } from '../src/models/types/catalog.types';
+// The judge and the write both live in the service, so this script and the
+// API's automatic repair can never disagree about what is safe to release.
+import { judgeAbandonedRun, releaseAbandonedRun } from '../src/services/catalog/publishRunState';
 
 interface Candidate {
   catalogId: Types.ObjectId;
   catalogName: string;
   runId: Types.ObjectId;
-  runState: string;
-  jobState: string;
+  /** null = the run document is gone. */
+  runState: PublishRunState | null;
+  /** null = the job document is gone. */
+  jobState: string | null;
   jobError: string | null;
   /** What the run actually pushed before it died — the thing --force must be judged against. */
   entries: { target: string; action: string; targetName: string; outcome: string; code: string }[];
-}
-
-type Verdict = { release: true; reason: string } | { release: false; reason: string };
-
-/**
- * Is this lock dead, or merely slow?
- *
- * The distinction is the whole safety argument of the script, so it is one
- * function with every branch named rather than a condition inlined at the call
- * site.
- */
-function judge(runState: string, jobState: string | null, force: boolean): Verdict {
-  if (runState !== 'QUEUED' && runState !== 'RUNNING') {
-    // Terminal run still holding the lock: finalizeRun landed, the catalog
-    // write after it did not. Releasing is pure repair.
-    return { release: true, reason: `run already terminal (${runState}), lock never cleared` };
-  }
-  if (jobState === null) {
-    return { release: true, reason: 'job document no longer exists' };
-  }
-  if (LIVE_JOB_STATES.has(jobState)) {
-    return { release: false, reason: `job is ${jobState} — still claimable, leave it alone` };
-  }
-  if (runState === 'RUNNING') {
-    // A dead job under a RUNNING run means a worker died mid-walk — or, in the
-    // UNSUPPORTED_JOB_TYPE case, that a stale worker on the shared queue
-    // claimed the job and killed it before the processor ever ran. Rows may be
-    // half-pushed to Mirage, so the default is to stop and let a human read the
-    // STEPS list above. --force is that human saying they have.
-    return force
-      ? { release: true, reason: `FORCED — run is RUNNING with a ${jobState} job` }
-      : {
-          release: false,
-          reason: `run is RUNNING with a ${jobState} job — inspect the steps above, then re-run with --force`,
-        };
-  }
-  return { release: true, reason: `job is ${jobState} and will never run` };
 }
 
 async function collect(only: Types.ObjectId | null): Promise<Candidate[]> {
@@ -111,8 +90,8 @@ async function collect(only: Types.ObjectId | null): Promise<Candidate[]> {
       catalogId: catalog._id as Types.ObjectId,
       catalogName: catalog.name,
       runId,
-      runState: run?.state ?? '(run missing)',
-      jobState: job?.state ?? '(job missing)',
+      runState: run?.state ?? null,
+      jobState: job?.state ?? null,
       jobError: job?.error?.code ?? null,
       entries: (run?.entries ?? []).map((e) => ({
         target: e.target,
@@ -124,36 +103,6 @@ async function collect(only: Types.ObjectId | null): Promise<Candidate[]> {
     });
   }
   return out;
-}
-
-/**
- * Two writes, run-first, mirroring finalizeCatalogAfterRun's own ordering: a
- * released catalog pointing at a still-QUEUED run would read as publishable
- * while the status endpoint reported a phantom publish in flight.
- */
-async function release(candidate: Candidate, reason: string): Promise<void> {
-  await CatalogPublishRun.updateOne(
-    { _id: candidate.runId, state: { $in: ['QUEUED', 'RUNNING'] } },
-    {
-      $set: {
-        state: 'FAILED',
-        finishedAt: new Date(),
-        error: {
-          code: RELEASE_CODE,
-          message: 'This publish never ran. Press Publish again.',
-        },
-      },
-    }
-  ).exec();
-
-  // Fenced on the run id: if a new publish somehow took the lock between the
-  // read and here, that one is live and must not be cleared.
-  await Catalog.updateOne(
-    { _id: candidate.catalogId, activePublishRunId: candidate.runId },
-    { $set: { activePublishRunId: null } }
-  ).exec();
-
-  console.log(`  released — ${reason}`);
 }
 
 async function main(): Promise<void> {
@@ -179,15 +128,12 @@ async function main(): Promise<void> {
     console.log(`${candidates.length} catalog(s) holding a publish lock:\n`);
     let released = 0;
     for (const candidate of candidates) {
-      const verdict = judge(
-        candidate.runState,
-        candidate.jobState === '(job missing)' ? null : candidate.jobState,
-        force
-      );
+      const verdict = judgeAbandonedRun(candidate.runState, candidate.jobState, force);
+      const jobError = candidate.jobError ? ` (${candidate.jobError})` : '';
       console.log(
         `${candidate.catalogName} (${candidate.catalogId.toHexString()})\n` +
-          `  run ${candidate.runId.toHexString()} — ${candidate.runState}\n` +
-          `  job — ${candidate.jobState}${candidate.jobError ? ` (${candidate.jobError})` : ''}`
+          `  run ${candidate.runId.toHexString()} — ${candidate.runState ?? '(run missing)'}\n` +
+          `  job — ${candidate.jobState ?? '(job missing)'}${jobError}`
       );
       // Always printed, dry run included: these steps are the evidence --force
       // is meant to be judged on, so seeing them must never need a second command.
@@ -210,9 +156,15 @@ async function main(): Promise<void> {
         released++;
         continue;
       }
-      await release(candidate, verdict.reason);
-      console.log('');
-      released++;
+      // Re-judged inside, against a fresh read and fenced on the run id — so a
+      // publish that started between collect() and here is not clobbered.
+      const done = await releaseAbandonedRun(candidate.catalogId, candidate.runId, { force });
+      console.log(
+        done
+          ? `  released — ${verdict.reason}\n`
+          : '  NOT released — the lock changed hands while this script ran; re-run to re-read\n'
+      );
+      if (done) released++;
     }
 
     console.log(

@@ -39,6 +39,27 @@ export const PROJECT_STATUS_VALUES = [
 
 export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
+/**
+ * Where a project's photos come from — a property of the PROJECT, deliberately
+ * NOT a new ProjectStatus.
+ *
+ * `capture`  the guided in-app capture flow: rings, a capture manifest, an
+ *            object size and a capture mode.
+ * `upload`   an artist's hand-picked photo set, uploaded from the gallery over
+ *            the same presigned-multipart transport. It has no rings and no
+ *            manifest, which is why `objectSize`/`mode` are not required on it
+ *            and why server-side photo selection runs a different rule for it
+ *            (`selectPhotosFromUploadedSet` — the artist's own order, since the
+ *            manifest's blur and yaw were never measured).
+ *
+ * The schema default backfills every pre-existing document as `capture` on
+ * read, so this field needs NO migration — the same pattern `User.role`,
+ * `Job.captureVariant` and `Job.captureMode` already use.
+ */
+export const PROJECT_SOURCE_VALUES = ['capture', 'upload'] as const;
+
+export type ProjectSource = (typeof PROJECT_SOURCE_VALUES)[number];
+
 /** How the capture session is driven (mirrors the app's CaptureMode). */
 export type CaptureMode = 'GUIDED' | 'MANUAL';
 
@@ -49,9 +70,19 @@ export type CaptureMode = 'GUIDED' | 'MANUAL';
 export interface IProject extends Document {
   userId: Types.ObjectId;
   name: string;
-  objectSize: ObjectSize;
-  mode: CaptureMode;
+  /**
+   * CONDITIONALLY required: present on a `capture` project, absent on an
+   * `upload` one. Both drive camera-distance guidance and a capture flow an
+   * uploaded photo set never enters, so writing a placeholder `MEDIUM` would be
+   * a lie that later reads act on.
+   */
+  objectSize?: ObjectSize;
+  /** Conditionally required — see {@link IProject.objectSize}. */
+  mode?: CaptureMode;
   category?: string;
+  /** Photo origin. Defaults to `capture` for every document written before
+   * this field existed (schema default — no migration). */
+  source: ProjectSource;
   status: ProjectStatus;
   /** When `status` last changed — written on EVERY transition (see
    * projectsService.updateProjectStatus); null until the first transition. */
@@ -77,14 +108,27 @@ const ProjectSchema = new Schema<IProject>(
       trim: true,
       maxlength: 100,
     },
+    // Conditionally required — the exact idiom Job.projectId already uses. An
+    // upload project has neither, and `required: true` would make one
+    // unwritable without a placeholder value nothing means.
     objectSize: {
       type: String,
       enum: ['SMALL', 'MEDIUM', 'LARGE'],
-      required: true,
+      required(this: IProject) {
+        return this.source !== 'upload';
+      },
     },
     mode: {
       type: String,
       enum: ['GUIDED', 'MANUAL'],
+      required(this: IProject) {
+        return this.source !== 'upload';
+      },
+    },
+    source: {
+      type: String,
+      enum: PROJECT_SOURCE_VALUES,
+      default: 'capture',
       required: true,
     },
     category: {

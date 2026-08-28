@@ -15,7 +15,7 @@ import { CAPTURE_FLOW_VARIANTS } from '@/models/types/captureVariants';
 // actor's role as an enum value, never a free-form string.
 import { USER_ROLES } from '@/models/User';
 // Same for the project status filter values the admin list accepts.
-import { PROJECT_STATUS_VALUES } from '@/models/Project';
+import { PROJECT_SOURCE_VALUES, PROJECT_STATUS_VALUES } from '@/models/Project';
 // And for a generated model's origin flag (meshy | manual).
 import { MODEL_SOURCES } from '@/models/types/projectModel.types';
 // And for the admin project-delete mode (SOFT | HARD) — the route's enum.
@@ -74,6 +74,10 @@ export const AnalyticsEvent = {
   MODEL_GENERATION_DECLINED: 'model_generation_declined',
   MODEL_APPROVED: 'model_approved',
   MODEL_IMAGE_UPLOADS_GENERATED: 'model_image_uploads_generated',
+  // ── Artist photo-upload projects (MODEL_ARTIST) ───────────────────────────
+  PHOTO_UPLOAD_SESSION_CREATED: 'photo_upload_session_created',
+  PHOTO_UPLOAD_COMMITTED: 'photo_upload_committed',
+  PHOTO_UPLOAD_GENERATION_REQUESTED: 'photo_upload_generation_requested',
   // ── Model optimization (the OPT variant) ──────────────────────────────────
   MODEL_OPTIMIZE_REQUESTED: 'model_optimize_requested',
   MODEL_OPTIMIZE_COMPLETED: 'model_optimize_completed',
@@ -231,8 +235,11 @@ const projectCreatedProps = z
   .object({
     user_id_hash: z.string().min(1),
     project_id: z.string().min(1),
-    object_size: z.enum(OBJECT_SIZE_VALUES),
-    mode: z.enum(CAPTURE_MODE_VALUES),
+    // NULL on an upload project — it has neither. Nullable rather than
+    // omitted so the property set stays the same shape for every project.
+    object_size: z.enum(OBJECT_SIZE_VALUES).nullable(),
+    mode: z.enum(CAPTURE_MODE_VALUES).nullable(),
+    source: z.enum(PROJECT_SOURCE_VALUES),
     // `category` is free-form in this product (no fixed taxonomy in
     // projectSchemas), so it stays a nullable string — not an enum.
     category: z.string().nullable(),
@@ -652,6 +659,46 @@ const adminAccessDeniedProps = z
   })
   .strict();
 
+// ── Artist photo-upload projects ─────────────────────────────────────────────
+//
+// NON-PII ONLY, and in particular: no S3 keys and no presigned URLs. A
+// presigned URL is a bearer credential — it belongs in a response body and
+// nowhere else. Identifiers are hashed with the ONE hashing util
+// (utils/otp.ts -> hashIdentifier); project/job ids are opaque ObjectIds that
+// the existing project events already carry in the clear, so they stay that way
+// here for consistency with them.
+
+/** An artist opened an upload session (server assigned the keys). Costs nothing. */
+const photoUploadSessionCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    project_id: z.string().min(1),
+    file_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/** The photo set was verified in S3 and the job flipped to UPLOADED. */
+const photoUploadCommittedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    project_id: z.string().min(1),
+    job_id: z.string().min(1),
+    photo_count: z.number().int().nonnegative(),
+    total_bytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/** The artist hand-picked a selection and asked for a model. THIS is the
+ * event that corresponds to spending Meshy credits. */
+const photoUploadGenerationRequestedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    project_id: z.string().min(1),
+    job_id: z.string().min(1),
+    selected_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
 /**
  * A publish run began.
  *
@@ -779,6 +826,9 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.MODEL_GENERATION_DECLINED]: modelGenerationDeclinedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,
   [AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED]: modelImageUploadsGeneratedProps,
+  [AnalyticsEvent.PHOTO_UPLOAD_SESSION_CREATED]: photoUploadSessionCreatedProps,
+  [AnalyticsEvent.PHOTO_UPLOAD_COMMITTED]: photoUploadCommittedProps,
+  [AnalyticsEvent.PHOTO_UPLOAD_GENERATION_REQUESTED]: photoUploadGenerationRequestedProps,
   [AnalyticsEvent.MODEL_OPTIMIZE_REQUESTED]: modelOptimizeRequestedProps,
   [AnalyticsEvent.MODEL_OPTIMIZE_COMPLETED]: modelOptimizeCompletedProps,
   [AnalyticsEvent.CATALOG_CREATED]: catalogCreatedProps,

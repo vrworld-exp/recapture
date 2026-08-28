@@ -11,6 +11,7 @@ import {
   MESHY_MODEL_GENERATION_JOB_TYPE,
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
+  PHOTO_UPLOAD_JOB_TYPE,
   JobState,
   StageProgress,
   StageTimestamps,
@@ -109,7 +110,8 @@ const UploadInfoSchema = new Schema<UploadInfo>(
     },
     rawBucket: { type: String, required: true },
     rawPrefix: { type: String, required: true },
-    manifestKey: { type: String, required: true },
+    // Not required: a PHOTO_UPLOAD job has no capture manifest. See UploadInfo.
+    manifestKey: { type: String },
   },
   { _id: false }
 );
@@ -421,6 +423,7 @@ export {
   CAPTURE_PROCESSING_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
+  PHOTO_UPLOAD_JOB_TYPE,
 };
 
 export type {

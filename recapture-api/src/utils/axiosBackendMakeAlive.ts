@@ -9,9 +9,9 @@ async function ping(): Promise<HealthResponse> {
         // console.log(backendUrl)
 
 
-        if (!backendUrl.startsWith('http://')) {
-            console.log('Backend health check URL is not http://, skipping ping:', backendUrl);
-            return { ok: false, message: 'Backend health check URL is not http://, skipping ping' } as HealthResponse;
+        if (!backendUrl.startsWith('https://')) {
+            console.log('Backend health check URL is not https://, skipping ping:', backendUrl);
+            return { ok: false, message: 'Backend health check URL is not https://, skipping ping' } as HealthResponse;
         }
 
         const res: AxiosResponse<HealthResponse> = await axios.get(

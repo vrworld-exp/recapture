@@ -38,10 +38,12 @@ import type {
 import { hasRoleAtLeast } from '@/models/User';
 import {
   findExportableJob,
+  DELETED_KEY_PREFIX,
   MODEL_INPUT_KEY_PREFIX,
 } from '@/services/adminProjectsService';
 import {
   selectPhotosForAutoGeneration,
+  selectPhotosFromUploadedSet,
   type AutoSelectionDeclineReason,
   type AutoSelectionTrace,
 } from '@/services/autoPhotoSelectionService';
@@ -55,6 +57,7 @@ import {
 } from '@/services/projectModelsService';
 import { getServerFlag } from '@/services/remoteConfigService';
 import { getObjectText, listObjectsUnderPrefix } from '@/services/s3ObjectStore';
+import { UPLOADED_PHOTOS_KEY_PREFIX } from '@/utils/s3Keys';
 
 export type { GenerationStep, GenerationStepName } from '@/models/types/projectModel.types';
 
@@ -73,7 +76,8 @@ export type OnDemandBlockReason =
   | 'DISABLED'
   /** The actor hit the rolling 24h ceiling shared with automatic generations. */
   | 'USER_CAP_REACHED'
-  /** The project has no finalized capture to select photos from. */
+  /** The project has no finalized capture — and no committed photo set —
+   * to select photos from. */
   | 'NOT_EXPORTABLE'
   /** No such project (or soft-deleted). */
   | 'PROJECT_NOT_FOUND';
@@ -176,7 +180,7 @@ export async function generateModelOnDemand(
     _id: new Types.ObjectId(projectId),
     deletedAt: null,
   })
-    .select('_id')
+    .select('_id source')
     .lean()
     .exec();
   if (!project) {
@@ -184,9 +188,19 @@ export async function generateModelOnDemand(
     return { outcome: 'BLOCKED', reason: 'PROJECT_NOT_FOUND', steps: recorder.steps };
   }
 
+  // WHICH selector runs is decided here, once, and nothing downstream re-asks.
+  // An uploaded set has no capture manifest — see selectPhotosFromUploadedSet
+  // for why that needs its own rules rather than a relaxed pass through the
+  // capture ones.
+  const isUpload = project.source === 'upload';
+
   const job = await findExportableJob(projectId);
   if (!job || !job.upload) {
-    recorder.record('RESOLVE_JOB', 'FAILED', 'no finalized capture job');
+    recorder.record(
+      'RESOLVE_JOB',
+      'FAILED',
+      isUpload ? 'no committed photo set' : 'no finalized capture job'
+    );
     return { outcome: 'BLOCKED', reason: 'NOT_EXPORTABLE', steps: recorder.steps };
   }
   const upload = job.upload;
@@ -218,28 +232,41 @@ export async function generateModelOnDemand(
   // an infrastructure failure — it is a capture we cannot select from, and the
   // selector already has a typed refusal for exactly that. Only a TRANSPORT
   // failure throws (getObjectText returns `absent` only on a true 404).
+  //
+  // SKIPPED outright on an upload project: there is no manifest to fetch, and
+  // recording a FAILED "manifest is not in S3" step for a set that never had
+  // one would read as a fault in the staff trace.
   let manifest: unknown;
-  try {
-    const object = await getObjectText(upload.rawBucket, upload.manifestKey);
-    if (object.outcome === 'absent') {
-      manifest = undefined;
-      recorder.record('LOAD_MANIFEST', 'FAILED', 'capture manifest is not in S3');
-    } else {
-      try {
-        manifest = JSON.parse(object.body);
-        recorder.record('LOAD_MANIFEST', 'OK', `${object.body.length} bytes`);
-      } catch {
+  if (isUpload) {
+    recorder.record('LOAD_MANIFEST', 'SKIPPED', 'uploaded photo set — no capture manifest');
+  } else {
+    try {
+      // No manifestKey at all means no manifest to select from — the same
+      // outcome as a key whose object is gone, and the selector already has a
+      // typed refusal for it.
+      const object = upload.manifestKey
+        ? await getObjectText(upload.rawBucket, upload.manifestKey)
+        : ({ outcome: 'absent' } as const);
+      if (object.outcome === 'absent') {
         manifest = undefined;
-        recorder.record('LOAD_MANIFEST', 'FAILED', 'manifest is not valid JSON');
+        recorder.record('LOAD_MANIFEST', 'FAILED', 'capture manifest is not in S3');
+      } else {
+        try {
+          manifest = JSON.parse(object.body);
+          recorder.record('LOAD_MANIFEST', 'OK', `${object.body.length} bytes`);
+        } catch {
+          manifest = undefined;
+          recorder.record('LOAD_MANIFEST', 'FAILED', 'manifest is not valid JSON');
+        }
       }
+    } catch (err: unknown) {
+      recorder.record('LOAD_MANIFEST', 'FAILED', 'could not read the manifest object');
+      throw new GenerationInfrastructureError(
+        'Could not read the capture manifest.',
+        recorder.steps,
+        err
+      );
     }
-  } catch (err: unknown) {
-    recorder.record('LOAD_MANIFEST', 'FAILED', 'could not read the manifest object');
-    throw new GenerationInfrastructureError(
-      'Could not read the capture manifest.',
-      recorder.steps,
-      err
-    );
   }
 
   // ── Step 3: what is ACTUALLY in the bucket, as keys RELATIVE to rawPrefix.
@@ -248,17 +275,30 @@ export async function generateModelOnDemand(
   // manifest derives, so every candidate is dropped and the selector declines
   // 100% of real captures. The slice below is load-bearing.
   //
-  // Soft-deleted photos need no special casing: the delete MOVES the object to
-  // `deleted/`, so its original relative key is simply absent and drops out.
-  // The reserved `model-input/` namespace is excluded to mirror the capture
-  // processor — those are staff-edited copies, not capture photos.
+  // Soft-deleted photos need no special casing on the CAPTURE path: the delete
+  // MOVES the object to `deleted/`, so its original relative key is simply
+  // absent and drops out. The reserved `model-input/` namespace is excluded to
+  // mirror the capture processor — those are staff-edited copies, not capture
+  // photos.
+  //
+  // On the UPLOAD path the pool IS the listing (there is no manifest to
+  // intersect against), so both reserved namespaces have to be excluded here or
+  // a soft-deleted photo would be selected straight back out of `deleted/`.
+  // Narrowing to the `uploads/` namespace does both at once and is the same
+  // namespace the artist's grid and the owner soft-delete already work in.
   let availableKeys: string[];
   try {
     const modelInputPrefix = `${upload.rawPrefix}${MODEL_INPUT_KEY_PREFIX}`;
-    availableKeys = (await listObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix))
+    const relativeKeys = (await listObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix))
       .filter((object) => !object.key.startsWith(modelInputPrefix))
       .filter((object) => object.key.startsWith(upload.rawPrefix))
       .map((object) => object.key.slice(upload.rawPrefix.length));
+    availableKeys = isUpload
+      ? relativeKeys.filter(
+          (key) =>
+            key.startsWith(UPLOADED_PHOTOS_KEY_PREFIX) && !key.startsWith(DELETED_KEY_PREFIX)
+        )
+      : relativeKeys;
     recorder.record('LIST_OBJECTS', 'OK', `${availableKeys.length} objects under the job prefix`);
   } catch (err: unknown) {
     recorder.record('LIST_OBJECTS', 'FAILED', 'could not list the job prefix');
@@ -269,12 +309,16 @@ export async function generateModelOnDemand(
     );
   }
 
-  // ── Step 4: the selector. Spread first, sharpness second — and a DECLINE is
-  // a saved generation, not a bug.
-  const selection = selectPhotosForAutoGeneration(manifest, {
-    minBlurScore: env.AUTO_MODEL_MIN_BLUR_SCORE,
-    availableKeys,
-  });
+  // ── Step 4: the selector. On a capture: spread first, sharpness second. On an
+  // upload: the artist's own order, because they already did the choosing (see
+  // selectPhotosFromUploadedSet). Either way a DECLINE is a saved generation,
+  // not a bug.
+  const selection = isUpload
+    ? selectPhotosFromUploadedSet(availableKeys)
+    : selectPhotosForAutoGeneration(manifest, {
+        minBlurScore: env.AUTO_MODEL_MIN_BLUR_SCORE,
+        availableKeys,
+      });
   const trace = selection.trace ?? emptySelectionTrace();
   if (selection.outcome === 'DECLINED') {
     recorder.record('SELECT_PHOTOS', 'FAILED', describeDecline(selection.reason, trace));

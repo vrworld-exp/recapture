@@ -25,6 +25,25 @@ export const MESHY_MODEL_GENERATION_JOB_TYPE = 'MESHY_MODEL_GENERATION';
  */
 export const MODEL_OPTIMIZATION_JOB_TYPE = 'MODEL_OPTIMIZATION';
 /**
+ * An artist's UPLOADED photo set. Holds objects; is never processed.
+ *
+ * State path: CREATED → UPLOADING (flipped by the existing per-file
+ * `/jobs/:jobId/uploads/initiate`) → UPLOADED. It stops there, and in
+ * particular it NEVER enters QUEUED — `claimNextJob` only ever matches
+ * queued (or lease-expired) rows, so a job that never queues is invisible to the
+ * worker. It is doubly invisible now that the claim also filters on jobType,
+ * but the state alone is what guarantees it.
+ *
+ * DELIBERATELY NO PROCESSOR IS REGISTERED FOR THIS TYPE, and a no-op one must
+ * not be added: there is nothing to process here, only photos to hold until a
+ * human hand-picks 3–4 of them and asks for a Meshy generation. The missing
+ * registration is the design, not an oversight.
+ *
+ * It carries an ordinary `upload` block, which is what makes the admin
+ * hard-delete's prefix sweep purge its objects from both buckets for free.
+ */
+export const PHOTO_UPLOAD_JOB_TYPE = 'PHOTO_UPLOAD';
+/**
  * Projecting one catalog onto Mirage. Carries
  * `payload.{catalogId, publishRunId, mode, productIds?}` — no upload, no
  * project. Unlike the three above it does not act on a ProjectModel at all: its
@@ -136,8 +155,17 @@ export interface UploadInfo {
    */
   rawPrefix: string;
 
-  /** S3 key for the capture_manifest.json file */
-  manifestKey: string;
+  /**
+   * S3 key for the capture_manifest.json file.
+   *
+   * OPTIONAL because a PHOTO_UPLOAD job has no manifest — an uploaded photo set
+   * carries no rings, no blur/yaw scores and nothing to validate ring-by-ring.
+   * Every CAPTURE job still gets one at creation (jobsService.createJob), and
+   * the readers that need it (finalize, the capture processor, the auto-photo
+   * selector) treat its absence as `manifest_missing` rather than assuming a
+   * placeholder key that points at no object.
+   */
+  manifestKey?: string;
 }
 
 /**

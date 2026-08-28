@@ -1,6 +1,8 @@
 // src/validation/projectSchemas.ts
 import { z } from 'zod';
 
+import { PROJECT_SOURCE_VALUES } from '@/models/Project';
+
 /**
  * GET /projects query params. `limit` is coerced and hard-bounded to 1-100
  * (default 20) so a client can never trigger an unbounded scan; `cursor` is an
@@ -33,11 +35,44 @@ const NAME_MAX = 100;
 export const createProjectSchema = z
   .object({
     name: z.string().trim().min(1).max(NAME_MAX),
-    size: z.enum(OBJECT_SIZE_VALUES),
-    mode: z.enum(CAPTURE_MODE_VALUES),
+    // Conditionally required — see the superRefine below. NOT `.optional()`
+    // because the caller forgot them: a capture project without a size or a
+    // mode is still a 400, exactly as it has always been.
+    size: z.enum(OBJECT_SIZE_VALUES).optional(),
+    mode: z.enum(CAPTURE_MODE_VALUES).optional(),
     category: z.string().trim().min(1).max(50).optional(),
+    /** Photo origin. Absent means `capture` — every existing client is
+     * unaffected and keeps sending exactly what it sends today. */
+    source: z.enum(PROJECT_SOURCE_VALUES).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.source === 'upload') {
+      // PRESENT is a 400, not silently ignored: an upload project has no rings
+      // and never enters the capture flow, so a client sending a size or a mode
+      // has a bug worth surfacing rather than a value worth storing.
+      for (const field of ['size', 'mode'] as const) {
+        if (value[field] !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: `${field} does not apply to an upload project`,
+          });
+        }
+      }
+      return;
+    }
+    // Absent or 'capture' → both required, exactly as before this field existed.
+    for (const field of ['size', 'mode'] as const) {
+      if (value[field] === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field],
+          message: 'Required',
+        });
+      }
+    }
+  });
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 
