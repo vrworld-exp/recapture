@@ -44,7 +44,7 @@ import {
 } from '@/services/catalogProvisioningService';
 import type { PublishStepExecutor } from '@/services/catalog/publishExecutors';
 import { pruneRunHistory } from '@/services/catalogActivityService';
-import { hasActiveRun } from '@/services/catalog/publishRunState';
+import { hasActiveRun, releaseAbandonedRun } from '@/services/catalog/publishRunState';
 import { CatalogSyncErrorCode, syncFailure } from '@/services/catalog/publishSyncErrors';
 import { mirageCategoryName } from '@/services/catalog/categorySync';
 import { getMirageClient, isMirageConfigured, MirageError } from '@/services/mirage';
@@ -753,10 +753,20 @@ export interface PublishStatusDto {
 export async function getPublishStatus(
   userId: string
 ): Promise<{ outcome: 'OK'; status: PublishStatusDto } | { outcome: 'NOT_FOUND' }> {
-  const catalog = await ownCatalog(userId);
-  if (!catalog) return { outcome: 'NOT_FOUND' };
+  const loaded = await ownCatalog(userId);
+  if (!loaded) return { outcome: 'NOT_FOUND' };
 
-  const catalogId = catalog._id as Types.ObjectId;
+  const catalogId = loaded._id as Types.ObjectId;
+
+  // LAZY REPAIR ON READ — the polling clients way out of a lock whose run can
+  // never finish (releaseAbandonedRun leaves anything merely slow alone). It
+  // must happen BEFORE the run is read below: reading first would pair a
+  // cleared lock with a run still reported as QUEUED, and the screen would go
+  // on spinning against a run that had just been failed underneath it.
+  const catalog =
+    loaded.activePublishRunId && (await releaseAbandonedRun(catalogId, loaded.activePublishRunId))
+      ? ((await ownCatalog(userId)) ?? loaded)
+      : loaded;
 
   const [run, products] = await Promise.all([
     CatalogPublishRun.findOne({ catalogId }).sort({ createdAt: -1 }).lean().exec(),

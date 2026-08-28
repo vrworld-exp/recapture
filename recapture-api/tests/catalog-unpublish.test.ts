@@ -172,9 +172,27 @@ describe('POST /catalog/unpublish', () => {
   it('gets 409 while a publish is already running', async () => {
     const { id, auth } = await makeUser();
     const { catalogId } = await seedPublished(id);
+    // A REAL in-flight publish: a QUEUED run behind a job a worker can still
+    // claim. A bare id pointing at no run at all is not "a publish in progress" —
+    // it is an abandoned lock, and the gates now clear those on sight
+    // (releaseAbandonedRun), so this fixture has to be the genuine article for
+    // the 409 it asserts to mean anything.
+    const publishJob = await Job.create({
+      userId: new Types.ObjectId(id),
+      jobType: 'MIRAGE_CATALOG_PUBLISH',
+      state: 'QUEUED',
+    });
+    const activeRun = await CatalogPublishRun.create({
+      catalogId,
+      userId: new Types.ObjectId(id),
+      jobId: publishJob._id,
+      snapshotRevision: 1,
+      mode: 'FULL',
+      state: 'QUEUED',
+    });
     await Catalog.updateOne(
       { _id: catalogId },
-      { $set: { activePublishRunId: new Types.ObjectId() } }
+      { $set: { activePublishRunId: activeRun._id } }
     ).exec();
 
     const res = await request(app).post('/catalog/unpublish').set(auth).send({});

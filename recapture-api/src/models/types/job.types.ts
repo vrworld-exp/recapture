@@ -29,9 +29,10 @@ export const MODEL_OPTIMIZATION_JOB_TYPE = 'MODEL_OPTIMIZATION';
  *
  * State path: CREATED → UPLOADING (flipped by the existing per-file
  * `/jobs/:jobId/uploads/initiate`) → UPLOADED. It stops there, and in
- * particular it NEVER enters QUEUED — `claimNextJob` filters on
- * `state: 'QUEUED'` alone (jobType-agnostically), so a job that never queues is
- * invisible to the worker.
+ * particular it NEVER enters QUEUED — `claimNextJob` only ever matches
+ * queued (or lease-expired) rows, so a job that never queues is invisible to the
+ * worker. It is doubly invisible now that the claim also filters on jobType,
+ * but the state alone is what guarantees it.
  *
  * DELIBERATELY NO PROCESSOR IS REGISTERED FOR THIS TYPE, and a no-op one must
  * not be added: there is nothing to process here, only photos to hold until a
@@ -42,6 +43,14 @@ export const MODEL_OPTIMIZATION_JOB_TYPE = 'MODEL_OPTIMIZATION';
  * hard-delete's prefix sweep purge its objects from both buckets for free.
  */
 export const PHOTO_UPLOAD_JOB_TYPE = 'PHOTO_UPLOAD';
+/**
+ * Projecting one catalog onto Mirage. Carries
+ * `payload.{catalogId, publishRunId, mode, productIds?}` — no upload, no
+ * project. Unlike the three above it does not act on a ProjectModel at all: its
+ * unit of work is a CatalogPublishRun, and the run document (not the job) is
+ * what the publish screen reads.
+ */
+export const MIRAGE_CATALOG_PUBLISH_JOB_TYPE = 'MIRAGE_CATALOG_PUBLISH';
 
 /**
  * Job processing lifecycle states.
