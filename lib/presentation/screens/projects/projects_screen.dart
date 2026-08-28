@@ -1,4 +1,5 @@
 // lib/presentation/screens/projects/projects_screen.dart
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -524,7 +525,15 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
 
     final listBody = showLive
         ? const LiveProjectsView()
-        : _buildBody(projectsAsync);
+        : Column(
+            children: [
+              // The GET /projects trace sits ABOVE the list, so it is visible in
+              // every state — in flight, loaded, or failed — without moving the
+              // list itself.
+              _GetProjectsStatusStrip(state: projectsAsync),
+              Expanded(child: _buildBody(projectsAsync)),
+            ],
+          );
     final tabbedBody = isStaff
         ? Column(
             children: [
@@ -578,7 +587,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   Widget _buildBody(AsyncValue<List<Project>> projectsAsync) {
     return projectsAsync.when(
       // A refresh/mutation keeps the previous data visible via `skipLoadingOn*`
-      // defaults; a true first load / reload has no data yet → skeleton.
+      // defaults; a true first load / reload has no data yet → skeleton cards
+      // under the strip's "API calling…" line, so the page has the shape of the
+      // list it is about to become.
       loading: () => const _SkeletonList(),
       error: (_, __) => _ErrorView(
         onRetry: () => ref.invalidate(projectsProvider),
@@ -734,7 +745,9 @@ class _ProfileAvatarAction extends ConsumerWidget {
   }
 }
 
-/// Lightweight skeleton placeholder shown while the list loads.
+/// Placeholder cards shown under the status strip while the first
+/// `GET /projects` is in flight — the page keeps the shape of the list it is
+/// loading instead of sitting empty behind one line of text.
 class _SkeletonList extends StatelessWidget {
   const _SkeletonList();
 
@@ -742,7 +755,7 @@ class _SkeletonList extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListView.separated(
       padding: const EdgeInsets.all(AppSpacing.lg),
-      itemCount: 4,
+      itemCount: 5,
       physics: const NeverScrollableScrollPhysics(),
       separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
       itemBuilder: (_, __) => const AppCard(
@@ -820,4 +833,94 @@ class _ErrorView extends StatelessWidget {
       ),
     );
   }
+}
+
+/// One line tracing the `GET /projects` call that fills this screen — shown
+/// ONLY while the call is in flight, or when it failed.
+///
+/// A loaded list needs no narration: the strip takes zero height once the
+/// projects are on screen, so the list sits exactly where it always did.
+///
+/// The failure branch is the ONE place the getProject error is shown as TEXT —
+/// small and red, carrying the server's own status/code/message instead of the
+/// generic sentence the offline modal and [_ErrorView] show. Everything else on
+/// the screen renders exactly as it did before.
+class _GetProjectsStatusStrip extends StatelessWidget {
+  const _GetProjectsStatusStrip({required this.state});
+
+  final AsyncValue<List<Project>> state;
+
+  @override
+  Widget build(BuildContext context) {
+    // Error wins over loading: a retry in flight must not hide why the last one
+    // failed.
+    final failure = state.error;
+    // `isLoading` (not `is AsyncLoading`) so a pull-to-refresh — which keeps the
+    // old list on screen — still announces the call it just made.
+    final isCalling = failure == null && state.isLoading;
+
+    // Settled and successful → nothing to say. Gone completely, not just blank,
+    // so it leaves no gap above the list.
+    if (failure == null && !isCalling) return const SizedBox.shrink();
+
+    final text = failure != null
+        ? 'GET /projects failed — ${_getProjectsErrorText(failure)}'
+        : 'GET /projects — API calling…';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (isCalling) ...[
+            const SizedBox(
+              width: 10,
+              height: 10,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: AppColors.textMuted,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+          ],
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    fontSize: 11,
+                    color: failure != null
+                        ? AppColors.error
+                        : AppColors.textMuted,
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact, one-line rendering of a `GET /projects` failure.
+///
+/// Prefers what the server actually said (`{code, message}` envelope, per
+/// AGENTS.md) over Dio's own wording; falls back to the transport message when
+/// there is no response at all (offline / timeout).
+String _getProjectsErrorText(Object error) {
+  if (error is! DioException) return error.toString();
+
+  final status = error.response?.statusCode;
+  final body = error.response?.data;
+  final parts = <String>[
+    if (status != null) 'HTTP $status',
+    if (body is Map && body['code'] != null) '${body['code']}',
+    if (body is Map && body['message'] != null) '${body['message']}',
+  ];
+  if (parts.isEmpty) {
+    final message = error.message;
+    parts.add(message != null && message.isNotEmpty ? message : error.type.name);
+  }
+  return parts.join(' · ');
 }
