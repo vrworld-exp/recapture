@@ -65,6 +65,14 @@ import {
   mapMirageFailure,
   syncFailure,
 } from '@/services/catalog/publishSyncErrors';
+import { toCatalogSlug } from '@/utils/catalogNames';
+
+/** `CatalogProduct.name`'s own bound — slugging must not shorten past it. */
+const PRODUCT_NAME_SLUG_MAX = 120;
+
+/** The stored form of a product name, on either side of the boundary. */
+const mirageProductName = (name: string): string =>
+  toCatalogSlug(name, { maxLength: PRODUCT_NAME_SLUG_MAX });
 
 const failed = (failure: RowFailure): PublishStepResult => ({
   outcome: 'FAILED',
@@ -288,7 +296,13 @@ async function reconcileDuplicate(
 ): Promise<PublishStepResult> {
   const client = getMirageClient();
   const existing = await client.listItemsForCategory(mirageCategoryId);
-  const match = existing.find((item) => item.name === product.name);
+  // Compared through the slug on BOTH sides, not by raw equality: Mirage slugs
+  // every name it stores, and a product row written before ReCapture did the
+  // same (or seeded straight into the collection) still carries the spaced form
+  // — which would never equal Mirage's echo, turning a perfectly reconcilable
+  // orphan into a RECONCILE_FAILED the user has no way to act on.
+  const wanted = mirageProductName(product.name);
+  const match = existing.find((item) => mirageProductName(item.name) === wanted);
 
   // ⚠ IS IT OURS, OR A SIBLING'S? Mirage's uniqueness is per-restaurant, so a
   // catalog holding two products called "Chair" produces this same refusal — and

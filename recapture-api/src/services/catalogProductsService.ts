@@ -24,6 +24,7 @@ import type {
   SyncStatus,
 } from '@/models/types/catalog.types';
 import { encodePositionCursor, type PositionCursor } from '@/utils/cursor';
+import { appendSlugSuffix, flexibleSlugRegex } from '@/utils/catalogNames';
 import { bumpDraftRevision, findOwnedCatalog } from '@/services/catalogService';
 import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
@@ -171,11 +172,20 @@ export async function listProducts(
   if (query.type !== undefined) filter.type = query.type;
   if (query.availability !== undefined) filter.availability = query.availability;
 
-  // Case-insensitive substring search on name. The user's text is escaped, so a
-  // name containing regex metacharacters is matched literally instead of being
-  // interpreted as a pattern.
+  // Case-insensitive substring search on name.
+  //
+  // Names are STORED as slugs ("paneer_tikka"), but nobody searching types one:
+  // they type "paneer tikka". `flexibleSlugRegex` lets any run of separators —
+  // including none — sit between the words, so all of "paneer tikka",
+  // "paneer-tikka" and "paneertikka" find the stored row. It escapes the literal
+  // chunks, so user text with regex metacharacters is still matched as text.
+  //
+  // A query that is ALL separators yields an empty body, which as a regex would
+  // match every row; that falls back to the escaped literal, which correctly
+  // matches nothing.
   if (query.q !== undefined) {
-    filter.name = { $regex: escapeRegex(query.q), $options: 'i' };
+    const flexible = flexibleSlugRegex(query.q);
+    filter.name = { $regex: flexible || escapeRegex(query.q), $options: 'i' };
   }
 
   // Keyset predicate: everything strictly after the cursor under
@@ -624,7 +634,12 @@ async function nextCopyName(
   // Leave room for the suffix inside the model's 120-char name bound.
   const base = sourceName.slice(0, 100);
   for (let n = 1; n <= MAX_COPIES; n++) {
-    const candidate = n === 1 ? base + ' (copy)' : base + ' (copy ' + n + ')';
+    // Built through appendSlugSuffix, not string concatenation: the old form
+    // (" (copy)") would put a space and brackets back into a stored slug, and
+    // the copy's name would then be the one name in the catalog that Mirage
+    // rewrites on arrival.
+    const candidate =
+      n === 1 ? appendSlugSuffix(base, 'copy') : appendSlugSuffix(base, `copy_${n}`);
     const taken = await CatalogProduct.findOne({ catalogId, name: candidate, deletedAt: null })
       .select('_id')
       .exec();

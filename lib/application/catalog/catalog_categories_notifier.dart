@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
-import '../../domain/entities/auth_state.dart';
 import '../../domain/entities/catalog_category.dart';
 import '../auth/auth_notifier.dart';
 
@@ -29,11 +28,11 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
 
   @override
   Future<CatalogCategoryList> build() async {
-    ref.listen<AuthState>(authProvider, (_, next) {
-      if (next is AuthUnauthenticated) {
-        state = const AsyncData(CatalogCategoryList.empty);
-      }
-    });
+    // Session-scoped for the same reason the catalog is: a sign-out blanks the
+    // list, and the next sign-in re-fetches it with a loading state, rather
+    // than leaving the empty list from the previous session on screen.
+    final session = ref.watch(sessionIdentityProvider);
+    if (session == null) return CatalogCategoryList.empty;
 
     return _repo.listCategories();
   }

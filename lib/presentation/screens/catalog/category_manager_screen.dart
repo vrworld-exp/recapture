@@ -37,6 +37,13 @@ import '../../widgets/catalog/catalog_message.dart';
 /// platform-sniffed.
 const double kCategoryMasterDetailWidth = 900;
 
+/// Below this width the rows draw finger-sized drag handles.
+///
+/// Same 600 the product grid uses. An 18px icon is a fine mouse target and an
+/// unhittable touch one — on a phone the handle was there but neither visible
+/// as an affordance nor reliably grabbable, so the list read as un-reorderable.
+const double kCategoryTouchWidth = 600;
+
 /// Which bucket the detail pane is showing.
 ///
 /// A nullable `String` cannot express this: null would have to mean both "the
@@ -69,6 +76,20 @@ class CategoryManagerScreen extends ConsumerStatefulWidget {
 }
 
 class _CategoryManagerScreenState extends ConsumerState<CategoryManagerScreen> {
+  /// Re-reads the list every time the screen is entered — the notifier is
+  /// app-wide, so without this a revisit shows the counts from the last visit
+  /// and nothing tells the user they are stale. Silent (the rows stay on
+  /// screen), and skipped on a first mount that is already loading.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ref.read(catalogCategoriesProvider).isLoading) return;
+      ref.read(catalogCategoriesProvider.notifier).refresh();
+    });
+  }
+
   /// The detail pane's subject on wide layouts. Null until the user picks one.
   CategorySelection? _selected;
 
@@ -124,9 +145,11 @@ class _CategoryManagerScreenState extends ConsumerState<CategoryManagerScreen> {
           data: (list) => LayoutBuilder(
             builder: (context, constraints) {
               final wide = constraints.maxWidth >= kCategoryMasterDetailWidth;
+              final touch = constraints.maxWidth < kCategoryTouchWidth;
 
               final master = _CategoryList(
                 list: list,
+                touch: touch,
                 selected: wide ? _selected : null,
                 editingId: _editingId,
                 onEdit: (id) => setState(() => _editingId = id),
@@ -164,6 +187,7 @@ class _CategoryManagerScreenState extends ConsumerState<CategoryManagerScreen> {
 class _CategoryList extends ConsumerWidget {
   const _CategoryList({
     required this.list,
+    required this.touch,
     required this.selected,
     required this.editingId,
     required this.onEdit,
@@ -171,6 +195,10 @@ class _CategoryList extends ConsumerWidget {
   });
 
   final CatalogCategoryList list;
+
+  /// Narrow layout — see [kCategoryTouchWidth].
+  final bool touch;
+
   final CategorySelection? selected;
   final String? editingId;
   final ValueChanged<String?> onEdit;
@@ -205,6 +233,7 @@ class _CategoryList extends ConsumerWidget {
                     return _CategoryRow(
                       key: ValueKey(category.id),
                       category: category,
+                      touch: touch,
                       index: index,
                       count: categories.length,
                       isSelected: selected?.id == category.id,
@@ -228,6 +257,7 @@ class _CategoryList extends ConsumerWidget {
             0,
           ),
           child: _UncategorizedRow(
+            touch: touch,
             count: list.uncategorizedCount,
             isSelected: selected?.isUncategorized ?? false,
             onOpen: () => onOpen(const CategorySelection.uncategorized()),
@@ -414,6 +444,7 @@ class _CategoryRow extends ConsumerWidget {
   const _CategoryRow({
     super.key,
     required this.category,
+    required this.touch,
     required this.index,
     required this.count,
     required this.isSelected,
@@ -423,6 +454,10 @@ class _CategoryRow extends ConsumerWidget {
   });
 
   final CatalogCategory category;
+
+  /// Narrow layout — see [kCategoryTouchWidth].
+  final bool touch;
+
   final int index;
   final int count;
   final bool isSelected;
@@ -483,22 +518,30 @@ class _CategoryRow extends ConsumerWidget {
               child: Row(
                 children: [
                   // ReorderableDragStartListener works for touch AND mouse, so
-                  // the web build's drag needs no second implementation.
+                  // the web build's drag needs no second implementation. The
+                  // box around the icon is the hit target, so on a phone it is
+                  // padded to 40 — the icon alone is 18, which a finger misses.
                   ReorderableDragStartListener(
                     index: index,
-                    child: const MouseRegion(
+                    child: MouseRegion(
                       cursor: SystemMouseCursors.grab,
                       child: Tooltip(
                         message: 'Drag to reorder (or Alt + ↑ / ↓)',
-                        child: Icon(
-                          Icons.drag_indicator,
-                          size: 18,
-                          color: AppColors.textMuted,
+                        child: SizedBox(
+                          width: touch ? 40 : 18,
+                          height: touch ? 40 : 18,
+                          child: Center(
+                            child: Icon(
+                              Icons.drag_indicator,
+                              size: touch ? 22 : 18,
+                              color: AppColors.textMuted,
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: AppSpacing.md),
+                  SizedBox(width: touch ? AppSpacing.sm : AppSpacing.md),
                   Expanded(
                     child: Text(
                       category.name,
@@ -680,10 +723,15 @@ class _CategoryRowMenu extends ConsumerWidget {
 /// The Uncategorized bucket (feature 26).
 class _UncategorizedRow extends StatelessWidget {
   const _UncategorizedRow({
+    required this.touch,
     required this.count,
     required this.isSelected,
     required this.onOpen,
   });
+
+  /// Narrow layout — see [kCategoryTouchWidth]. Only the alignment spacer cares:
+  /// this row has no handle, and the handle is what it lines up behind.
+  final bool touch;
 
   final int count;
   final bool isSelected;
@@ -715,10 +763,18 @@ class _UncategorizedRow extends StatelessWidget {
           ),
           child: Row(
             children: [
-              const SizedBox(width: 18 + AppSpacing.md), // aligns with handles
+              // Aligns with the handles above, whichever size they are.
+              SizedBox(
+                width: touch ? 40 + AppSpacing.sm : 18 + AppSpacing.md,
+              ),
               Expanded(
                 child: Text(
                   'Uncategorized',
+                  // Bounded like every other row label. Unbounded, it WRAPS
+                  // when the column is narrow and the text scale is large,
+                  // which grows the row and overflows the column it sits in.
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyLarge
                       ?.copyWith(color: AppColors.textSecondary),
                 ),

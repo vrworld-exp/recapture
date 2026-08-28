@@ -36,6 +36,7 @@ import {
   type MirageRestaurant,
 } from '@/services/mirage';
 import { isDuplicateKeyError } from '@/services/catalogService';
+import { appendSlugSuffix, toCatalogSlug } from '@/utils/catalogNames';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
 import { parseProductImageKey, productImageContentTypeFor } from '@/utils/productImageKeys';
@@ -111,7 +112,19 @@ function mappingOf(catalog: ICatalog): CatalogMappingDto | null {
   };
 }
 
-const normalized = (name: string): string => name.trim().toLowerCase();
+/**
+ * The form a name is COMPARED in.
+ *
+ * The slug, not a lowercased copy: Mirage stores slugs, so every name in a
+ * `listRestaurants` response is already one, and a lowercase-only fold left
+ * "cafe_2" and "Cafe 2 Go" looking unrelated — which is how a candidate name
+ * gets suggested that Mirage then refuses.
+ */
+const normalized = (name: string): string =>
+  toCatalogSlug(name, { maxLength: CATALOG_NAME_SLUG_MAX });
+
+/** `Catalog.name`'s own bound — slugging must not shorten past it. */
+const CATALOG_NAME_SLUG_MAX = 120;
 
 /**
  * Would Mirage refuse to create a restaurant called [desired]?
@@ -146,12 +159,16 @@ export function suggestAvailableName(
   const isFree = (candidate: string): boolean =>
     !existingNames.some((existing) => collidesInMirage(candidate, existing));
 
+  // Suffixed through appendSlugSuffix so a suggestion is itself a valid stored
+  // name: the client hands it straight back as the new catalog name, and a
+  // suggestion carrying a space would be silently rewritten on the way in and
+  // then no longer be the name that was checked as free.
   const base = desired.trim();
   for (let n = 2; n <= 9; n++) {
-    const candidate = `${base} ${n}`;
+    const candidate = appendSlugSuffix(base, n);
     if (isFree(candidate)) return candidate;
   }
-  return `${base} ${fallbackSuffix}`;
+  return appendSlugSuffix(base, fallbackSuffix);
 }
 
 /** The catalog id's tail — a disambiguator no other catalog can be using. */

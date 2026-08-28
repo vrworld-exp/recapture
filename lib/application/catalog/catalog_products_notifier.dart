@@ -9,6 +9,7 @@ import '../../data/repositories/catalog_products_repository.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
 import '../../domain/entities/product_type.dart';
+import '../auth/auth_notifier.dart';
 
 /// The category filter value that means "products with no category".
 ///
@@ -227,15 +228,42 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
 
   @override
   CatalogProductsState build() {
+    // The grid is scoped to the session that loaded it. Watching this is what
+    // makes a sign-out drop the previous user's products AND the next sign-in
+    // load the new user's with skeletons — without it the provider loaded once
+    // per app run and whatever it held then stayed on screen, unrefreshed and
+    // with nothing to show a load was even pending.
+    final session = ref.watch(sessionIdentityProvider);
+
+    // A rebuild REUSES this notifier instance, so the per-session scratch state
+    // is reset by hand. The generation bump is the important one: a page still
+    // in flight from the previous session must not land in the new one's grid.
+    _disposed = false;
+    _generation++;
+    _debounce?.cancel();
+    _debounce = null;
+
     ref.onDispose(() {
       _disposed = true;
       _debounce?.cancel();
     });
 
+    // Signed out: an empty grid that is NOT loading, so nothing is requested
+    // without a token and no skeletons sit spinning behind the auth screen.
+    if (session == null) {
+      return const CatalogProductsState(
+        query: CatalogProductQuery(),
+        isLoading: false,
+      );
+    }
+
     // The first page is fetched off the build, not inside it: build() must
     // return state synchronously, and the microtask lands after this provider
     // is fully initialised.
-    scheduleMicrotask(() => _load(showSkeleton: true));
+    scheduleMicrotask(() {
+      if (_disposed) return;
+      _load(showSkeleton: true);
+    });
 
     return const CatalogProductsState(query: CatalogProductQuery());
   }

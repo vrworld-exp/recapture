@@ -291,7 +291,7 @@ describe('POST /catalog/products/image/bytes', () => {
       .expect(201);
 
     expect(res.body.product.type).toBe('IMAGE_ONLY');
-    expect(res.body.product.name).toBe('Paneer Tikka');
+    expect(res.body.product.name).toBe('paneer_tikka');
   });
 
   /** Upload bytes through the route and return the key they landed on. */

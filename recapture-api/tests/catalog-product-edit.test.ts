@@ -360,7 +360,9 @@ describe('duplicate a product (feature 18)', () => {
     expect(res.body.product.id).not.toBe(created.body.product.id);
     // Mirage keys items by name within a restaurant, so a shared name would
     // collide at publish — long after the user pressed Duplicate.
-    expect(res.body.product.name).toBe('Latte (copy)');
+    // The copy suffix is slugged too, so a duplicate cannot be the one name in
+    // the catalog that Mirage rewrites on arrival.
+    expect(res.body.product.name).toBe('latte_copy');
     expect(res.body.product.price).toBe(250);
     expect(res.body.product.tags).toEqual(['hot']);
     expect(res.body.product.featured).toBe(true);
@@ -413,8 +415,8 @@ describe('duplicate a product (feature 18)', () => {
       .send({})
       .expect(201);
 
-    expect(first.body.product.name).toBe('Latte (copy)');
-    expect(second.body.product.name).toBe('Latte (copy 2)');
+    expect(first.body.product.name).toBe('latte_copy');
+    expect(second.body.product.name).toBe('latte_copy_2');
   });
 
   it('accepts a caller-chosen name and rejects one already taken', async () => {
@@ -428,7 +430,7 @@ describe('duplicate a product (feature 18)', () => {
       .set(auth)
       .send({ name: 'Latte Large' })
       .expect(201);
-    expect(ok.body.product.name).toBe('Latte Large');
+    expect(ok.body.product.name).toBe('latte_large');
 
     const clash = await request(app)
       .post(`/catalog/products/${created.body.product.id}/duplicate`)

@@ -39,6 +39,8 @@ enum PublishGateCode {
   productThumbnailMissing,
   productModelNotReady,
   productNameDuplicate,
+  productCategoryUnknown,
+  categoryNameInvalid,
   publishingUnavailable,
   unknown,
 }
@@ -52,6 +54,8 @@ extension PublishGateCodeX on PublishGateCode {
         PublishGateCode.productThumbnailMissing => 'PRODUCT_THUMBNAIL_MISSING',
         PublishGateCode.productModelNotReady => 'PRODUCT_MODEL_NOT_READY',
         PublishGateCode.productNameDuplicate => 'PRODUCT_NAME_DUPLICATE',
+        PublishGateCode.productCategoryUnknown => 'PRODUCT_CATEGORY_UNKNOWN',
+        PublishGateCode.categoryNameInvalid => 'CATEGORY_NAME_INVALID',
         PublishGateCode.publishingUnavailable => 'PUBLISHING_UNAVAILABLE',
         PublishGateCode.unknown => 'UNKNOWN',
       };
@@ -64,6 +68,8 @@ extension PublishGateCodeX on PublishGateCode {
         'PRODUCT_THUMBNAIL_MISSING' => PublishGateCode.productThumbnailMissing,
         'PRODUCT_MODEL_NOT_READY' => PublishGateCode.productModelNotReady,
         'PRODUCT_NAME_DUPLICATE' => PublishGateCode.productNameDuplicate,
+        'PRODUCT_CATEGORY_UNKNOWN' => PublishGateCode.productCategoryUnknown,
+        'CATEGORY_NAME_INVALID' => PublishGateCode.categoryNameInvalid,
         'PUBLISHING_UNAVAILABLE' => PublishGateCode.publishingUnavailable,
         _ => PublishGateCode.unknown,
       };
@@ -80,6 +86,11 @@ extension PublishGateCodeX on PublishGateCode {
         PublishGateCode.catalogNameMissing => 'Name your catalog',
         PublishGateCode.productAssetMissing => 'Open product',
         PublishGateCode.productNameDuplicate => 'Rename',
+        // Both fixes are a CATEGORY edit, and they are different edits: the
+        // product needs a category picked for it, the category needs a usable
+        // name. Same screen, so the label says what to do there.
+        PublishGateCode.productCategoryUnknown => 'Pick a category',
+        PublishGateCode.categoryNameInvalid => 'Rename category',
         PublishGateCode.productThumbnailMissing => null,
         PublishGateCode.productModelNotReady => null,
         PublishGateCode.publishingUnavailable => null,
