@@ -17,7 +17,7 @@ import {
   markFailed,
   markProcessing,
 } from '@/worker/jobQueue';
-import { getProcessor } from '@/worker/processorRegistry';
+import { getProcessor, listRegisteredTypes } from '@/worker/processorRegistry';
 import { log, toError } from '@/worker/workerLog';
 import {
   ClaimLostError,
@@ -48,6 +48,14 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   let pollCount = 0;
   let activeJobs = 0;
 
+  // Read ONCE, here, because the registry is written entirely at boot
+  // (registerAllProcessors) and frozen for the process's life — and because
+  // this list is the worker's declaration of what it is allowed to take off a
+  // SHARED queue. Claiming a type it has no processor for would fail that job
+  // terminally below, so a build that predates a job type must not be able to
+  // touch one; see the note on claimNextJob's `jobTypes` parameter.
+  const processableTypes = config.jobTypes ?? listRegisteredTypes();
+
   const stop = (signal: string): void => {
     if (!running) return;
     running = false;
@@ -65,7 +73,13 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
     claimTimeoutMs,
     concurrency,
     heartbeatEveryNPolls,
+    processableTypes,
   });
+  // An empty registry is a boot bug, not a quiet idle worker: the loop below
+  // would poll forever and claim nothing while the queue grows.
+  if (processableTypes.length === 0) {
+    log('error', 'No processors registered — this worker will claim nothing', { workerId });
+  }
 
   while (running) {
     pollCount++;
@@ -85,7 +99,7 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
       continue;
     }
 
-    const job = await claimNextJob(workerId, claimTimeoutMs).catch((err: unknown) => {
+    const job = await claimNextJob(workerId, claimTimeoutMs, processableTypes).catch((err: unknown) => {
       log('error', 'Failed to claim job', { workerId, error: toError(err).message });
       return null;
     });
@@ -131,8 +145,10 @@ async function processJob(job: WorkerJob, workerId: string): Promise<void> {
   const processor = getProcessor(jobType);
 
   if (!processor) {
-    // Deployment mismatch (job enqueued for a type this build doesn't know).
-    // Fail terminally — retrying can never succeed. Alert on this in prod logs.
+    // Defence in depth. claimNextJob now filters on the registered types, so
+    // reaching here means the registry changed under a claim we already hold —
+    // it is no longer the deployment-mismatch path, which is handled by simply
+    // never claiming the row. Fail terminally: retrying cannot add a processor.
     log('warn', 'No processor registered for jobType', { jobId: job._id, jobType, workerId });
     await markFailed(job._id, new Error(`No processor for jobType: ${jobType}`), {
       attempts: attempts + 1,

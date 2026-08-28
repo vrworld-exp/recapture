@@ -428,6 +428,96 @@ do not remove it).
   (`assertMeshyConfigured()`): only the worker calls Meshy, so the API must not
   fail to boot over a secret it never uses.
 
+### Catalog publish (ReCapture → Mirage)
+
+- **Publishing is an explicit user action that runs as ONE background job over a
+  SNAPSHOT** — never per-edit auto-sync. `POST /catalog/publish` creates a
+  `CatalogPublishRun`, enqueues a **`MIRAGE_CATALOG_PUBLISH`** job (a fourth
+  `jobType`, peer of the other three), and takes the catalog's lock. The whole
+  catalog is read ONCE (`services/catalog/publishSnapshot.ts`, deep-frozen) and
+  every later decision reads that object, so a user who keeps editing during a
+  run gets what they pressed the button on.
+- **`Job.projectId` is now OPTIONAL** — conditionally required by `jobType`. A
+  catalog publish has no project, and a placeholder id would poison every
+  `{projectId, createdAt}` query. Readers that mean "the capture job" already
+  filter on `jobType`.
+- **The planner is PURE** (`services/catalog/publishPlanner.ts`): snapshot + mode
+  → an ordered plan, no IO, no clock, no randomness. Order is load-bearing —
+  restaurant, then categories, then products — because Mirage's create-item
+  rejects a missing category ObjectId. The product diff is a TABLE keyed by
+  `PRODUCT_DIFF_FIELDS` declared as a total `Record`, so adding a field without
+  giving it accessors is a **compile error**. Never `JSON.stringify` two objects
+  to compare them, and never spread a document into a snapshot: a field the diff
+  forgets reads back as "unchanged" and the user's edit silently never publishes.
+- **Only `SUCCEEDED` advances `publishedRevision`.** Zero failures → SUCCEEDED;
+  ≥1 success and ≥1 failure → PARTIAL; zero successes → FAILED. A PARTIAL run's
+  successes are live, but "draft changes not yet live" is the truth, so the badge
+  stays on. `hasDraftChanges` is DERIVED (`draftRevision > publishedRevision`),
+  never a stored flag. `activePublishRunId` is cleared on **every** terminal path
+  including a thrown processor error — a catalog holding a dead run id can never
+  be published again.
+- **Mirage has no idempotency keys and no upserts.** A replayed create answers
+  `400 "… already exist"` WITHOUT the id. Two mechanisms make "publish twice ⇒
+  one item" true: (1) `mirageItemId`/`mirageCategoryId` are persisted the instant
+  the create returns, before anything else that can throw; (2) RECONCILIATION —
+  a duplicate refusal triggers a list, an exact-name match, and adoption of the
+  existing id. An adopted item already CLAIMED by another row of the same catalog
+  is a sibling collision, not our orphan, and fails with a rename instruction.
+- **Mirage's prose never escapes the adapter.** Its `message` is a
+  classification input inside `services/mirage/mirageErrors.ts` and stops there.
+  What lands on `syncError`, in a run entry, or in any response body is an
+  `UPPER_SNAKE` ReCapture code (`services/catalog/publishSyncErrors.ts`) plus OUR
+  sentence — resolved FROM the code at read time, so improving a message improves
+  history too.
+- **Category names: send Mirage the NORMALIZED form** (lowercase, spaces →
+  underscores). Its duplicate check compares the RAW request name against stored
+  (already-normalized) names, so posting "Garden Chairs" against a stored
+  `garden_chairs` passes the check and creates a twin. ReCapture's display name
+  stays authoritative — never write Mirage's echo back over it.
+- **Assets stream, they are never buffered.** `MirageFileUpload` is a union:
+  `kind: 'bytes'` for things small by construction (a logo), `kind: 'stream'`
+  for anything model-sized. `mirageClient` encodes the multipart body BY HAND so
+  a 90 MiB GLB pipes from S3 into the socket a chunk at a time; a `FormData` +
+  `Blob` version would hold the whole model in RAM, twice. Preflight
+  (`assetPreflight.ts`) HEADs every asset BEFORE any Mirage call — missing,
+  oversize and wrong-content-type are TERMINAL row failures that cost one round
+  trip instead of ninety seconds of doomed upload. An asset whose S3 **ETag**
+  matches `publishedSnapshot.assetIdentities` is not re-uploaded.
+  `MIRAGE_ASSET_TRANSFER_MODE` defaults to `bytes`; `url` needs Mirage prompt M1
+  and publishes assetless products until then.
+- **Never `delete-restaurant` from a publish path — `DELETE /catalog` is the ONE
+  exception.** Unpublish removes the ITEMS and flips `restaurant.isPublished`.
+  `mirageRestaurantId`, `publicUrl` and `publicUrlScheme` are written ONCE and
+  frozen — a printed QR resolves through them, and `assertMappingImmutable`
+  THROWS on an attempt to rewrite. The QR is rendered server-side from the STORED
+  `publicUrl` verbatim; `catalogQrService` does not import
+  `MIRAGE_PUBLIC_BASE_URL`, and it should stay that way.
+
+  The exception exists because "delete my catalog and start over" cannot be
+  honoured any other way, and it is the one action where giving up the URL is the
+  user's stated intent rather than a side effect. Leaving the restaurant behind
+  would be actively worse than deleting it: the old page keeps serving the old
+  products at the old link, and provisioning ADOPTS a name-matching restaurant
+  (§7.5), so the user's "fresh" catalog would silently re-adopt it on its first
+  publish and inherit everything they just deleted. `DELETE /catalog` therefore
+  calls `deleteRestaurant` FIRST and aborts the whole delete if Mirage refuses,
+  which keeps "the mapping is never orphaned" true. Guarded by
+  `tests/catalog-delete.test.ts`, which is the deliberate opposite of
+  `tests/catalog-unpublish.test.ts` — read both before changing either. No other
+  caller may reach for it.
+- **Gates run BEFORE Mirage, and they all run.** Every reason a catalog cannot
+  publish is a ReCapture-side fact, so `POST /catalog/publish` returns EVERY
+  failing gate in one 422 (the client shows a checklist) and an empty catalog is
+  never provisioned.
+- **Analytics are a PROXY, not a redirect.** Mirage's three report endpoints are
+  admin-scoped and its own in-code note forbids opening them to client scope.
+  ReCapture reads them with its admin credential and FORCES `restaurant` from the
+  caller's mapping — an empty value makes Mirage's `buildMatch` drop the filter
+  and return every business's numbers, so an unprovisioned catalog returns empty
+  with ZERO calls. Responses are built field by field; `byRestaurant`,
+  `byDevice`, `topCategories` and `topZoomed` are cross-client panels that must
+  never be spread into a per-business response.
+
 ### S3 key scheme (capture jobs)
 - **One builder, one parser: `utils/s3Keys.ts`.** Inline key templates anywhere
   else are a bug. The exact scheme:
@@ -540,6 +630,16 @@ do not remove it).
 - **NOT YET BUILT:** a typed `AnalyticsEvent` registry with per-event Zod schemas,
   a PII guardrail baked into the emit layer, a real destination integration, and
   a tracking-plan artifact. Until then, event names/props are validated by review.
+- The typed `AnalyticsEvent` registry and its per-event Zod schemas now exist
+  (`src/validation/analyticsSchemas.ts` — the single tracking-plan source of
+  truth); `EVENT_SCHEMAS` is exhaustive by a `satisfies` clause, so a new event
+  without a schema is a compile error.
+- ⚠ The emit layer STRIPS any prop whose NAME contains "code" as a suspected
+  OTP/secret leak. A failure code therefore travels as `failure_reason`, never
+  as `code`/`error_code`/`failure_code` — those are silently dropped and the
+  event arrives with no diagnosis at all.
+- **NOT YET BUILT:** a real destination integration. Until then the sink logs in
+  non-prod only.
 
 ### Client foundations
 - **Tokens** live in `flutter_secure_storage` (OS Keychain/Keystore), **not Hive**.

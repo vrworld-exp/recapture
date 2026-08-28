@@ -282,7 +282,11 @@ async function withUploadingStatus(result: CreateJobResult): Promise<CreateJobRe
  */
 function replayOrConflict(existing: IJob, input: CreateJobInput): CreateJobResult {
   const samePayload =
-    existing.projectId.toHexString() === input.projectId &&
+    // `?.` rather than `!`: every job this service creates is a CAPTURE_PROCESSING
+    // job and therefore has a project, but the field is optional on the model
+    // now (a catalog publish has none) and an undefined must compare unequal
+    // rather than throw.
+    existing.projectId?.toHexString() === input.projectId &&
     existing.objectSize === WIRE_TO_MODEL[input.objectSize] &&
     variantOf(existing) === input.captureVariant &&
     // A repeat with the same key but a different MODE is a different capture
@@ -355,7 +359,9 @@ export function planExpiresAt(job: IJob): Date {
 function toDto(job: IJob): JobDto {
   return {
     id: job.id as string,
-    projectId: job.projectId.toHexString(),
+    // Capture jobs only — this DTO is never built for a catalog publish, which
+    // is the one job type with no project.
+    projectId: job.projectId?.toHexString() ?? '',
     state: job.state,
     objectSize: MODEL_TO_WIRE[job.objectSize ?? 'MEDIUM'],
     captureVariant: variantOf(job),

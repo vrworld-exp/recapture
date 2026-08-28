@@ -14,11 +14,21 @@
 // model came from (they are looking at the pipeline that made it), while an
 // owner needs "Created by Maya AI" attached to the row. It defaults to OFF so
 // the staff surface is byte-for-byte what it was.
+//
+// The row's LAYOUT lives here; every visual TERM inside it (thumbnail, stamp,
+// status word, the `OPT` / origin / Approved chips, `formatBytes`) lives in
+// model_presentation.dart, shared with [ModelChoiceTile] — the picker renders
+// the same facts with a different affordance, and two copies of them is how the
+// picker starts disagreeing with the history it is picking from. Re-exported so
+// every existing `import 'model_row.dart'` keeps resolving `formatBytes`.
 import 'package:flutter/material.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../domain/entities/project_model.dart';
+import 'model_presentation.dart';
+
+export 'model_presentation.dart';
 
 /// One generation attempt: when it ran, how it ended, what it was built from.
 class ModelRow extends StatefulWidget {
@@ -87,7 +97,7 @@ class _ModelRowState extends State<ModelRow> {
           padding: const EdgeInsets.all(AppSpacing.md),
           child: Row(
             children: [
-              _RowThumbnail(model: model),
+              ModelThumbnail(model: model),
               const SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Column(
@@ -97,7 +107,7 @@ class _ModelRowState extends State<ModelRow> {
                       children: [
                         Flexible(
                           child: Text(
-                            '${_stamp(model.createdAt)} · ${_statusLabel(model.status)}',
+                            '${modelStamp(model.createdAt)} · ${modelStatusLabel(model.status)}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: text.bodyMedium,
@@ -109,11 +119,11 @@ class _ModelRowState extends State<ModelRow> {
                           // approved: "OPT · 21.4 MB (−68%)" plus the Approved
                           // chip plus a timestamp does not fit a 360dp phone,
                           // and the badge shrinking is better than an overflow.
-                          Flexible(child: _OptBadge(model: model)),
+                          Flexible(child: ModelOptBadge(model: model)),
                         ],
                         if (model.approved) ...[
                           const SizedBox(width: AppSpacing.sm),
-                          const _ApprovedBadge(),
+                          const ModelApprovedBadge(),
                         ],
                       ],
                     ),
@@ -128,7 +138,7 @@ class _ModelRowState extends State<ModelRow> {
                         spacing: AppSpacing.sm,
                         runSpacing: AppSpacing.xs,
                         children: [
-                          _SourceBadge(label: origin),
+                          ModelSourceBadge(label: origin),
                           if (detail.isNotEmpty)
                             Text(detail, maxLines: 2, style: muted),
                         ],
@@ -213,167 +223,6 @@ class _ModelRowState extends State<ModelRow> {
     ];
     return parts.join(' · ');
   }
-
-  static String _statusLabel(ModelStatus status) => switch (status) {
-        ModelStatus.queued => 'Queued',
-        ModelStatus.processing => 'Processing…',
-        ModelStatus.succeeded => 'Succeeded',
-        ModelStatus.failed => 'Failed',
-        ModelStatus.unknown => 'Unknown',
-      };
-
-  /// Compact local "Jul 17, 11:42". Hand-rolled: the app has no `intl`
-  /// dependency, and one date format does not justify adding it.
-  static String _stamp(DateTime? at) {
-    if (at == null) return 'Unknown date';
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-    ];
-    final local = at.toLocal();
-    final hh = local.hour.toString().padLeft(2, '0');
-    final mm = local.minute.toString().padLeft(2, '0');
-    return '${months[local.month - 1]} ${local.day}, $hh:$mm';
-  }
-}
-
-/// The Meshy preview image we re-hosted, when the attempt got far enough to
-/// produce one; otherwise a neutral placeholder so every row is the same shape.
-class _RowThumbnail extends StatelessWidget {
-  const _RowThumbnail({required this.model});
-
-  final ProjectModelView model;
-
-  @override
-  Widget build(BuildContext context) {
-    final url = model.previewUrl;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(AppRadius.xs),
-      child: SizedBox(
-        width: 44,
-        height: 44,
-        child: url == null
-            ? const _ThumbPlaceholder()
-            : Image.network(
-                url,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => const _ThumbPlaceholder(),
-              ),
-      ),
-    );
-  }
-}
-
-class _ThumbPlaceholder extends StatelessWidget {
-  const _ThumbPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: AppColors.surface2,
-      alignment: Alignment.center,
-      child: const Icon(Icons.view_in_ar_outlined,
-          color: AppColors.textMuted, size: 20),
-    );
-  }
-}
-
-/// Human-readable size, or null when the size is UNKNOWN.
-///
-/// Uses the BINARY divisor (1024), which is the same one
-/// MODEL_OPTIMIZE_THRESHOLD_BYTES is expressed in on the backend. That is not
-/// cosmetic: mix the two and a 5,100,000-byte model reads "5.1 MB" while the
-/// server, measuring against 5 MiB = 5,242,880, still calls it below threshold
-/// and shows no button — a display that contradicts the affordance next to it.
-///
-/// Returns null rather than "0 B" for an absent size: absent means unknown.
-String? formatBytes(int? bytes) {
-  if (bytes == null || bytes <= 0) return null;
-  const kb = 1024;
-  const mb = kb * 1024;
-  if (bytes >= mb) return '${(bytes / mb).toStringAsFixed(1)} MB';
-  if (bytes >= kb) return '${(bytes / kb).toStringAsFixed(0)} KB';
-  return '$bytes B';
-}
-
-/// Where the model came from — the owner-facing origin label.
-///
-/// An outline chip, deliberately unlike both the filled `OPT` pill and the
-/// red Approved mark: it is neither a result nor a sign-off, just provenance.
-class _SourceBadge extends StatelessWidget {
-  const _SourceBadge({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      key: const ValueKey('model_source_badge'),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm,
-        vertical: 2,
-      ),
-      decoration: BoxDecoration(
-        border: Border.all(color: AppColors.textMuted),
-        borderRadius: BorderRadius.circular(AppRadius.xs),
-      ),
-      child: Text(
-        label,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(context)
-            .textTheme
-            .bodySmall
-            ?.copyWith(color: AppColors.textMuted),
-      ),
-    );
-  }
-}
-
-/// The `OPT` chip — a STATE LABEL, not an action.
-///
-/// Everything about it is chosen to keep it from reading as a button: it is a
-/// filled pill with no ripple, no border, no chevron and no tap target. Its
-/// colour is deliberately NOT [AppColors.mirageRed] — that already means
-/// "Approved" one chip along this same row, and two different facts wearing the
-/// same colour is how a row starts lying.
-class _OptBadge extends StatelessWidget {
-  const _OptBadge({required this.model});
-
-  final ProjectModelView model;
-
-  @override
-  Widget build(BuildContext context) {
-    final saving = model.optimizationSavingPercent;
-    final size = formatBytes(model.sizeBytes);
-    // "OPT · 6.8 MB (−68%)" when everything is known, degrading term by term.
-    final label = [
-      'OPT',
-      if (size != null) size,
-    ].join(' · ');
-    return Container(
-      key: const ValueKey('model_opt_badge'),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm,
-        vertical: 2,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.success,
-        borderRadius: BorderRadius.circular(AppRadius.xs),
-      ),
-      child: Text(
-        saving == null ? label : '$label (−$saving%)',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              // On the light-green fill, the app's dark background is the
-              // readable foreground.
-              color: AppColors.bgPrimary,
-              fontWeight: FontWeight.w600,
-            ),
-      ),
-    );
-  }
 }
 
 /// The Optimize action — unmistakably a BUTTON, and unmistakably not the badge.
@@ -409,28 +258,6 @@ class _OptimizeButton extends StatelessWidget {
         visualDensity: VisualDensity.compact,
         textStyle: Theme.of(context).textTheme.bodySmall,
       ),
-    );
-  }
-}
-
-class _ApprovedBadge extends StatelessWidget {
-  const _ApprovedBadge();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Icon(Icons.check_circle, size: 13, color: AppColors.mirageRed),
-        const SizedBox(width: AppSpacing.xs),
-        Text(
-          'Approved',
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: AppColors.mirageRed),
-        ),
-      ],
     );
   }
 }

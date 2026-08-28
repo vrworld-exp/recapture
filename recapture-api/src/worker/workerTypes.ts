@@ -13,6 +13,7 @@ import type { Types } from 'mongoose';
 import {
   CAPTURE_PROCESSING_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
+  MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
   type ExecutableStage,
   type JobState,
@@ -28,6 +29,7 @@ export const DEFAULT_JOB_TYPE = CAPTURE_PROCESSING_JOB_TYPE;
 export {
   CAPTURE_PROCESSING_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
+  MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
 };
 
@@ -162,4 +164,10 @@ export interface WorkerConfig {
    * tripping the test runner's own handlers).
    */
   stopSignal?: AbortSignal;
+  /**
+   * Which jobTypes this instance may claim. Defaults to the registry's
+   * contents, which is what every real deployment wants — override only to
+   * exercise a mismatch between what is claimed and what can be processed.
+   */
+  jobTypes?: readonly string[];
 }

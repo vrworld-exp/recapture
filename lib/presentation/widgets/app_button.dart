@@ -80,14 +80,30 @@ class AppButton extends StatelessWidget {
               )
             : Text(label);
 
+    // The theme's button styles carry `minimumSize: Size(double.infinity, 48)`
+    // — the full-width CTA shape this app uses almost everywhere. A minimum
+    // width of infinity is harmless in a slot with a bounded width (it clamps
+    // to it), but in an UNBOUNDED one — a non-flexible Row child, a Wrap — it
+    // stays infinite and layout throws "BoxConstraints forces an infinite
+    // width", which blanks the whole subtree rather than just this button.
+    // A content-width button therefore has to drop that minimum: the height
+    // stays 48 so the tap target does not change.
+    final ButtonStyle? contentWidth = isFullWidth
+        ? null
+        : const ButtonStyle(
+            minimumSize: WidgetStatePropertyAll<Size>(Size(0, 48)),
+          );
+
     // Width wrapper: full-width or content-width
     Widget button = switch (variant) {
       AppButtonVariant.primary => ElevatedButton(
           onPressed: effectiveOnPressed,
+          style: contentWidth,
           child: child,
         ),
       AppButtonVariant.secondary => OutlinedButton(
           onPressed: effectiveOnPressed,
+          style: contentWidth,
           child: child,
         ),
     };

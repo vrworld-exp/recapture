@@ -20,6 +20,16 @@ import { PROJECT_SOURCE_VALUES, PROJECT_STATUS_VALUES } from '@/models/Project';
 import { MODEL_SOURCES } from '@/models/types/projectModel.types';
 // And for the admin project-delete mode (SOFT | HARD) — the route's enum.
 import { ADMIN_DELETE_MODES } from '@/validation/adminSchemas';
+// And for the catalog product kind (THREE_D | IMAGE_ONLY) and the bulk-action
+// verb — the same constants the /catalog routes validate against.
+import {
+  PRODUCT_TYPES,
+  PUBLISH_ACTIONS,
+  PUBLISH_MODES,
+  PUBLISH_RUN_STATES,
+  PUBLISH_TARGET_KINDS,
+} from '@/models/types/catalog.types';
+import { BULK_PRODUCT_ACTIONS } from '@/validation/catalogSchemas';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -71,6 +81,34 @@ export const AnalyticsEvent = {
   // ── Model optimization (the OPT variant) ──────────────────────────────────
   MODEL_OPTIMIZE_REQUESTED: 'model_optimize_requested',
   MODEL_OPTIMIZE_COMPLETED: 'model_optimize_completed',
+  // ── Catalog authoring (the Mirage publish feature) ────────────────────────
+  CATALOG_CREATED: 'catalog_created',
+  CATALOG_UPDATED: 'catalog_updated',
+  CATALOG_DELETED: 'catalog_deleted',
+  CATALOG_CATEGORY_CREATED: 'catalog_category_created',
+  CATALOG_CATEGORY_DELETED: 'catalog_category_deleted',
+  CATALOG_PRODUCTS_LISTED: 'catalog_products_listed',
+  CATALOG_PRODUCT_CREATED: 'catalog_product_created',
+  CATALOG_PRODUCT_UPDATED: 'catalog_product_updated',
+  CATALOG_PRODUCT_ARCHIVED: 'catalog_product_archived',
+  CATALOG_PRODUCT_DELETED: 'catalog_product_deleted',
+  CATALOG_PRODUCTS_BULK_ACTION: 'catalog_products_bulk_action',
+  CATALOG_CLIENT_PROVISIONED: 'catalog_client_provisioned',
+  // ── Publish runs (the worker's own lifecycle) ─────────────────────────────
+  // Emitted by the publish PROCESSOR, not by a route: the run is a background
+  // unit and the endpoint that enqueues it knows nothing about how it went.
+  CATALOG_PUBLISH_STARTED: 'catalog_publish_started',
+  CATALOG_PUBLISH_FINISHED: 'catalog_publish_finished',
+  CATALOG_PUBLISH_TARGET_FAILED: 'catalog_publish_target_failed',
+  // ── Publish REQUESTS (the endpoints) ──────────────────────────────────────
+  // Separate from the run lifecycle above because they answer a different
+  // question: how often does a user TRY to publish, and what stops them. A
+  // blocked attempt never produces a run at all, so it is invisible to the
+  // events above — and it is the number that says whether the gates are
+  // helping or just in the way.
+  CATALOG_PUBLISH_REQUESTED: 'catalog_publish_requested',
+  CATALOG_UNPUBLISH_REQUESTED: 'catalog_unpublish_requested',
+  CATALOG_QR_RENDERED: 'catalog_qr_rendered',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -486,6 +524,133 @@ const modelOptimizeCompletedProps = z
   })
   .strict();
 
+// ── Catalog authoring ───────────────────────────────────────────────────────
+// Catalog/product/category NAMES are business content, not analytics data, and
+// never appear here — only ids, enums and counts. `catalog_id` is an opaque
+// ObjectId the same way `project_id` already is.
+
+const catalogCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    /** True when the create was a replay of an existing catalog. */
+    was_existing: z.boolean(),
+  })
+  .strict();
+
+/**
+ * The catalog was bound to a Mirage restaurant — the moment its public URL is
+ * minted and frozen, and therefore the moment the QR becomes printable. Emitted
+ * ONCE per catalog for the rest of its life.
+ *
+ * The Mirage restaurant id is deliberately absent: it is another system's
+ * identifier and the customer-facing URL is built from it, so it is closer to a
+ * public address than to an opaque analytics id.
+ */
+const catalogClientProvisionedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    /** True when an existing Mirage restaurant was adopted instead of created. */
+    adopted_existing: z.boolean(),
+  })
+  .strict();
+
+const catalogUpdatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    /** Which fields the patch touched — names only, never values. */
+    fields: z.array(z.string()).min(1),
+  })
+  .strict();
+
+/**
+ * The user deleted their whole catalog to start over (feature: delete catalog).
+ *
+ * Worth its own event because it is the one authoring action that is not an
+ * edit: it gives up the public URL, and a business doing it is telling us the
+ * catalog was not recoverable by editing. The counts say how much work was
+ * discarded — no names, so nothing of the owner's content travels.
+ */
+const catalogDeletedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    deleted_product_count: z.number().int().nonnegative(),
+    deleted_category_count: z.number().int().nonnegative(),
+    /** True when a live Mirage restaurant was torn down with it. */
+    was_published: z.boolean(),
+  })
+  .strict();
+
+const catalogCategoryCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    category_id: z.string().min(1),
+  })
+  .strict();
+
+const catalogCategoryDeletedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    category_id: z.string().min(1),
+    /** Products moved to Uncategorized as a result. */
+    moved_product_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const catalogProductsListedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    result_count: z.number().int().nonnegative(),
+    is_filtered: z.boolean(),
+  })
+  .strict();
+
+const catalogProductCreatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    product_type: z.enum(PRODUCT_TYPES),
+    has_category: z.boolean(),
+  })
+  .strict();
+
+const catalogProductUpdatedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    fields: z.array(z.string()).min(1),
+  })
+  .strict();
+
+const catalogProductArchivedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    /** false = restored. */
+    archived: z.boolean(),
+  })
+  .strict();
+
+const catalogProductDeletedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    product_id: z.string().min(1),
+    was_already_deleted: z.boolean(),
+  })
+  .strict();
+
+const catalogProductsBulkActionProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    action: z.enum(BULK_PRODUCT_ACTIONS),
+    requested_count: z.number().int().nonnegative(),
+    affected_count: z.number().int().nonnegative(),
+  })
+  .strict();
+
 /** requireRole rejected an authenticated caller (role below the minimum). */
 const adminAccessDeniedProps = z
   .object({
@@ -535,6 +700,98 @@ const photoUploadGenerationRequestedProps = z
   .strict();
 
 /**
+ * A publish run began.
+ *
+ * NOTE what is absent and must stay absent: no product names, no category
+ * names, no business name, no phone or email. `targetName` is catalog content
+ * and the run entries are where it belongs — an analytics pipeline is a
+ * different blast radius (catalog.types.ts, PublishRunEntry).
+ */
+const catalogPublishStartedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    run_id: z.string().min(1),
+    mode: z.enum(PUBLISH_MODES),
+    /** Steps the planner emitted — the denominator of "7 of 10 published". */
+    planned_total: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const catalogPublishFinishedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    run_id: z.string().min(1),
+    mode: z.enum(PUBLISH_MODES),
+    state: z.enum(PUBLISH_RUN_STATES),
+    total: z.number().int().nonnegative(),
+    synced: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * One target failed inside an otherwise-continuing run.
+ *
+ * ⚠ The ReCapture failure code travels as `failure_reason`, NOT as `code`:
+ * utils/analytics.ts strips any property whose NAME contains "code" as a
+ * suspected OTP/secret leak, so a prop called `code` (or `error_code`, or
+ * `failure_code`) would be silently dropped and this event would carry no
+ * diagnosis at all.
+ */
+const catalogPublishTargetFailedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    run_id: z.string().min(1),
+    target: z.enum(PUBLISH_TARGET_KINDS),
+    action: z.enum(PUBLISH_ACTIONS),
+    /** The UPPER_SNAKE ReCapture code. Never Mirage prose. */
+    failure_reason: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * A publish attempt, whatever came of it.
+ *
+ * `blocked_by` carries the gate codes, never their messages — the messages name
+ * products ("\"Chair\" has no photo yet"), and a product name is catalog content
+ * that must not leave the owner's own responses.
+ */
+const catalogPublishRequestedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    mode: z.enum(PUBLISH_MODES),
+    outcome: z.enum(['QUEUED', 'BLOCKED', 'IN_PROGRESS', 'NAME_TAKEN', 'NOTHING_TO_RETRY']),
+    /** How many gates failed. Zero on a successful request. */
+    gate_count: z.number().int().nonnegative(),
+    /** The distinct UPPER_SNAKE gate codes, deduplicated. Never messages. */
+    blocked_by: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
+const catalogUnpublishRequestedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    outcome: z.enum(['QUEUED', 'NOT_PUBLISHED', 'IN_PROGRESS']),
+  })
+  .strict();
+
+/** A QR render. No URL, no business name — the format and the size, nothing else. */
+const catalogQrRenderedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    format: z.enum(['png', 'pdf']),
+    size: z.number().int().positive(),
+  })
+  .strict();
+
+/**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
  * is a compile error.
@@ -574,6 +831,24 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PHOTO_UPLOAD_GENERATION_REQUESTED]: photoUploadGenerationRequestedProps,
   [AnalyticsEvent.MODEL_OPTIMIZE_REQUESTED]: modelOptimizeRequestedProps,
   [AnalyticsEvent.MODEL_OPTIMIZE_COMPLETED]: modelOptimizeCompletedProps,
+  [AnalyticsEvent.CATALOG_CREATED]: catalogCreatedProps,
+  [AnalyticsEvent.CATALOG_UPDATED]: catalogUpdatedProps,
+  [AnalyticsEvent.CATALOG_DELETED]: catalogDeletedProps,
+  [AnalyticsEvent.CATALOG_CATEGORY_CREATED]: catalogCategoryCreatedProps,
+  [AnalyticsEvent.CATALOG_CATEGORY_DELETED]: catalogCategoryDeletedProps,
+  [AnalyticsEvent.CATALOG_PRODUCTS_LISTED]: catalogProductsListedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_CREATED]: catalogProductCreatedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_UPDATED]: catalogProductUpdatedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_ARCHIVED]: catalogProductArchivedProps,
+  [AnalyticsEvent.CATALOG_PRODUCT_DELETED]: catalogProductDeletedProps,
+  [AnalyticsEvent.CATALOG_PRODUCTS_BULK_ACTION]: catalogProductsBulkActionProps,
+  [AnalyticsEvent.CATALOG_CLIENT_PROVISIONED]: catalogClientProvisionedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_STARTED]: catalogPublishStartedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_FINISHED]: catalogPublishFinishedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_TARGET_FAILED]: catalogPublishTargetFailedProps,
+  [AnalyticsEvent.CATALOG_PUBLISH_REQUESTED]: catalogPublishRequestedProps,
+  [AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED]: catalogUnpublishRequestedProps,
+  [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

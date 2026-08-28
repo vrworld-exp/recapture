@@ -1,0 +1,195 @@
+// tests/product-image-keys.test.ts
+//
+// The product-image key space (src/utils/productImageKeys.ts) — PURE, no DB,
+// no S3.
+//
+// parseProductImageKey is the containment guard for every route that accepts a
+// client-supplied image key. The client names the key at commit time, and
+// everything that stops one business pointing a product at another business's
+// object starts with this parser refusing anything but the exact canonical
+// scheme. That is why it is tested directly here as well as through the routes.
+//
+// ENV NOTE: vitest.config.ts sets NODE_ENV=development BEFORE the module graph
+// loads, so s3EnvPrefix() is 'dev' throughout this file.
+import { describe, it, expect } from 'vitest';
+
+import {
+  PRODUCT_IMAGE_CONTENT_TYPES,
+  PRODUCT_IMAGE_EXTENSIONS,
+  ProductImageKeyError,
+  buildCatalogProductsPrefix,
+  buildProductImageKey,
+  buildProductImagePrefix,
+  parseProductImageKey,
+  productImageExtensionFor,
+  productImagePrefixOf,
+} from '@/utils/productImageKeys';
+import { s3EnvPrefix } from '@/utils/s3Keys';
+
+const CATALOG = '507f1f77bcf86cd799439011';
+const SLOT = '507f1f77bcf86cd799439022';
+const IMAGE = 'b3f1c2de-1111-4222-8333-444455556666';
+
+describe('builders', () => {
+  it('build the canonical prefixes and key under the CONFIGURED env', () => {
+    expect(s3EnvPrefix()).toBe('dev'); // imported, never re-derived here
+    expect(buildCatalogProductsPrefix(CATALOG)).toBe(`dev/catalog/${CATALOG}/products/`);
+    expect(buildProductImagePrefix(CATALOG, SLOT)).toBe(
+      `dev/catalog/${CATALOG}/products/${SLOT}/`
+    );
+    expect(buildProductImageKey(CATALOG, SLOT, IMAGE, 'jpg')).toBe(
+      `dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`
+    );
+  });
+
+  it('round-trip through the parser for every allowed extension', () => {
+    for (const ext of PRODUCT_IMAGE_EXTENSIONS) {
+      const parsed = parseProductImageKey(buildProductImageKey(CATALOG, SLOT, IMAGE, ext));
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.value).toEqual({
+        env: 'dev',
+        catalogId: CATALOG,
+        slotId: SLOT,
+        imageId: IMAGE,
+        ext,
+      });
+    }
+  });
+
+  it('map every accepted content type to exactly one extension', () => {
+    // The content type is baked into the presigned signature, so this mapping
+    // decides what can ever be STORED at the key.
+    expect(PRODUCT_IMAGE_CONTENT_TYPES.map(productImageExtensionFor)).toEqual([
+      'jpg',
+      'png',
+      'webp',
+    ]);
+  });
+
+  it('THROW rather than emit a malformed key', () => {
+    // Builders throw; only the parser reports failure as a value.
+    expect(() => buildProductImageKey('', SLOT, IMAGE, 'jpg')).toThrow(ProductImageKeyError);
+    expect(() => buildProductImageKey(CATALOG, '', IMAGE, 'jpg')).toThrow(ProductImageKeyError);
+    expect(() => buildProductImageKey(CATALOG, SLOT, '', 'jpg')).toThrow(ProductImageKeyError);
+    expect(() =>
+      buildProductImageKey(CATALOG, SLOT, IMAGE, 'gif' as never)
+    ).toThrow(ProductImageKeyError);
+  });
+
+  it('refuse any segment that could traverse or inject a key level', () => {
+    // The whole point of the SEGMENT_RE: a hostile id must not be able to climb
+    // out of its catalog's prefix or add levels to the hierarchy.
+    const hostile = [
+      '..',
+      '../..',
+      'a/b',
+      'a\\b',
+      '.hidden',
+      'has space',
+      'tab\there',
+      'null\u0000byte',
+      'newline\nhere',
+    ];
+    for (const value of hostile) {
+      expect(() => buildProductImagePrefix(value, SLOT)).toThrow(ProductImageKeyError);
+      expect(() => buildProductImagePrefix(CATALOG, value)).toThrow(ProductImageKeyError);
+      expect(() => buildProductImageKey(CATALOG, SLOT, value, 'jpg')).toThrow(
+        ProductImageKeyError
+      );
+    }
+  });
+});
+
+describe('parseProductImageKey — the containment guard', () => {
+  const good = `dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`;
+
+  it('accepts the exact canonical scheme', () => {
+    expect(parseProductImageKey(good).ok).toBe(true);
+  });
+
+  it('reports which catalog a key claims, so the caller can compare ownership', () => {
+    // This is the ONE fact the commit route acts on: parsed.catalogId vs the
+    // caller's own catalog. The parser deliberately does not know the caller.
+    const parsed = parseProductImageKey(good);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.catalogId).toBe(CATALOG);
+  });
+
+  const rejected: Array<[string, string]> = [
+    ['an empty string', ''],
+    ['too few segments', `dev/catalog/${CATALOG}/${IMAGE}.jpg`],
+    ['too many segments', `dev/catalog/${CATALOG}/products/${SLOT}/extra/${IMAGE}.jpg`],
+    ['an unknown env prefix', `qa/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`],
+    ['a wrong namespace segment', `dev/catalogs/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`],
+    ['a wrong products segment', `dev/catalog/${CATALOG}/product/${SLOT}/${IMAGE}.jpg`],
+    ['the avatar key space', `dev/avatars/${CATALOG}/${IMAGE}.jpg`],
+    ['a capture key', `dev/chair_${CATALOG}/${SLOT}/images/EYE/1.jpg`],
+    ['an unsupported extension', `dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.gif`],
+    ['an uppercase extension', `dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.JPG`],
+    ['no extension at all', `dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}`],
+    ['a dotfile filename', `dev/catalog/${CATALOG}/products/${SLOT}/.jpg`],
+    ['a traversing catalogId', `dev/catalog/../products/${SLOT}/${IMAGE}.jpg`],
+    ['a traversing slotId', `dev/catalog/${CATALOG}/products/../${IMAGE}.jpg`],
+    ['a leading slash', `/dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`],
+    ['a trailing slash', `dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg/`],
+  ];
+
+  for (const [what, key] of rejected) {
+    it(`rejects ${what}`, () => {
+      const parsed = parseProductImageKey(key);
+      expect(parsed.ok).toBe(false);
+      // A discriminated failure with a reason, never a partial parse.
+      if (parsed.ok) return;
+      expect(parsed.reason.length).toBeGreaterThan(0);
+    });
+  }
+
+  it('reports the env a key CLAIMS without judging it', () => {
+    // Whether a prod key may be committed by a dev deploy is the route's call —
+    // keeping it there is what makes the mismatch a distinguishable 422 rather
+    // than an indistinguishable "malformed".
+    const parsed = parseProductImageKey(
+      `prod/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.env).toBe('prod');
+    expect(parsed.value.env).not.toBe(s3EnvPrefix());
+  });
+});
+
+describe('productImagePrefixOf — the sweep boundary', () => {
+  it('derives the slot prefix from a stored key', () => {
+    expect(productImagePrefixOf(`dev/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`)).toBe(
+      `dev/catalog/${CATALOG}/products/${SLOT}/`
+    );
+  });
+
+  it('preserves the key\'s own env rather than the configured one', () => {
+    // A sweep must delete where the object actually IS. Rebuilding the prefix
+    // from s3EnvPrefix() would silently target the wrong environment.
+    expect(productImagePrefixOf(`prod/catalog/${CATALOG}/products/${SLOT}/${IMAGE}.jpg`)).toBe(
+      `prod/catalog/${CATALOG}/products/${SLOT}/`
+    );
+  });
+
+  it('returns null for a key that is not ours', () => {
+    // Callers must not be able to turn an arbitrary string into a delete prefix.
+    expect(productImagePrefixOf(`dev/avatars/${CATALOG}/${IMAGE}.jpg`)).toBeNull();
+    expect(productImagePrefixOf('')).toBeNull();
+    expect(productImagePrefixOf('dev/catalog/../products/x/y.jpg')).toBeNull();
+  });
+
+  it('a staged upload keeps its own slot, which is NOT the product id', () => {
+    // Feature 13: an image-only product is created WITH a committed key, so the
+    // upload happens before the product exists and its slot is a fresh uuid.
+    // Rebuilding the prefix from the product id would sweep the wrong place.
+    const staged = buildProductImageKey(CATALOG, IMAGE, IMAGE, 'webp');
+    expect(productImagePrefixOf(staged)).toBe(`dev/catalog/${CATALOG}/products/${IMAGE}/`);
+    expect(productImagePrefixOf(staged)).not.toBe(
+      `dev/catalog/${CATALOG}/products/${SLOT}/`
+    );
+  });
+});

@@ -34,35 +34,52 @@ import 'app_router.dart';
 String? flowBackRouteFor(String location) {
   // The Preview gallery path carries a concrete project id (`:id`), so it can't
   // be matched by the exact-string switch below — detect it by shape first.
-  if (location.startsWith('/admin/projects/') && location.endsWith('/preview')) {
+  if (location.startsWith('/admin/projects/') &&
+      location.endsWith('/preview')) {
     return AppRoutes.projects;
   }
-  // Same shape rule for the artist photo grid, which the upload flow reaches by
-  // go() (replacing the finished create form) — so BACK has nothing to pop and
-  // would otherwise exit the app from the middle of the flow.
-  if (location.startsWith('/projects/') && location.endsWith('/photos')) {
-    return AppRoutes.projects;
+  // Same shape problem: the change-model path carries a concrete product id.
+  // Normally pushed (so this never fires); the mapping is for the cold
+  // deep-link, where there is no catalog underneath to pop to.
+  if (location.startsWith('/catalog/products/') &&
+      location.endsWith('/model')) {
+    return AppRoutes.catalog;
   }
   return switch (location) {
-      AppRoutes.otpVerify => AppRoutes.auth,
-      AppRoutes.createProject => AppRoutes.projects,
-      AppRoutes.profile => AppRoutes.projects,
-      AppRoutes.preCapture => AppRoutes.projects,
-      AppRoutes.permissions => AppRoutes.preCapture,
-      AppRoutes.levelAIntro => AppRoutes.permissions,
-      AppRoutes.levelAReview => AppRoutes.levelACapture,
-      AppRoutes.levelAComplete => AppRoutes.levelAReview,
-      AppRoutes.levelBIntro => AppRoutes.levelAComplete,
-      AppRoutes.levelBReview => AppRoutes.levelBCapture,
-      AppRoutes.levelBComplete => AppRoutes.levelBReview,
-      AppRoutes.levelCIntro => AppRoutes.levelBComplete,
-      AppRoutes.levelCReview => AppRoutes.levelCCapture,
-      AppRoutes.levelCComplete => AppRoutes.levelCReview,
-      AppRoutes.processing => AppRoutes.projects,
-      AppRoutes.modelReady => AppRoutes.projects,
-      AppRoutes.arPreview => AppRoutes.modelReady,
-      _ => null,
-    };
+    AppRoutes.otpVerify => AppRoutes.auth,
+    AppRoutes.createProject => AppRoutes.projects,
+    AppRoutes.profile => AppRoutes.projects,
+    // The catalog shell is a top-level destination reached with go() from
+    // Projects, so it has nothing to pop — back lands on Projects rather than
+    // exiting the app. Its sub-screens map back to the shell as they land.
+    AppRoutes.catalog => AppRoutes.projects,
+    // Normally pushed from the shell (so this never fires); the mapping is
+    // for the cold deep-link, where there is no shell underneath to pop to.
+    AppRoutes.productNew => AppRoutes.catalog,
+    AppRoutes.catalogCategories => AppRoutes.catalog,
+    AppRoutes.catalogSettings => AppRoutes.catalog,
+    AppRoutes.catalogPreview => AppRoutes.catalog,
+    AppRoutes.catalogPublish => AppRoutes.catalog,
+    // Back from the QR lands on the shell, not on publish: the QR is reachable
+    // from both, and a cold deep-link (a bookmark, a link a business mailed
+    // themselves) has no publish screen behind it to return to.
+    AppRoutes.catalogQr => AppRoutes.catalog,
+    AppRoutes.preCapture => AppRoutes.projects,
+    AppRoutes.permissions => AppRoutes.preCapture,
+    AppRoutes.levelAIntro => AppRoutes.permissions,
+    AppRoutes.levelAReview => AppRoutes.levelACapture,
+    AppRoutes.levelAComplete => AppRoutes.levelAReview,
+    AppRoutes.levelBIntro => AppRoutes.levelAComplete,
+    AppRoutes.levelBReview => AppRoutes.levelBCapture,
+    AppRoutes.levelBComplete => AppRoutes.levelBReview,
+    AppRoutes.levelCIntro => AppRoutes.levelBComplete,
+    AppRoutes.levelCReview => AppRoutes.levelCCapture,
+    AppRoutes.levelCComplete => AppRoutes.levelCReview,
+    AppRoutes.processing => AppRoutes.projects,
+    AppRoutes.modelReady => AppRoutes.projects,
+    AppRoutes.arPreview => AppRoutes.modelReady,
+    _ => null,
+  };
 }
 
 /// The one BACK behavior every back affordance (system key, AppBar arrow)
@@ -72,7 +89,19 @@ String? flowBackRouteFor(String location) {
 void navigateBack(BuildContext context) {
   final router = GoRouter.maybeOf(context);
   if (router == null) {
-    Navigator.maybePop(context);
+    // `pop`, NOT `maybePop`. This function is the "we have DECIDED to go back"
+    // action — every caller reaches it after its guard has already said yes.
+    // `maybePop` re-asks the route's `PopScope`, and the screens that call this
+    // are exactly the ones whose `PopScope(canPop: false)` calls it BACK from
+    // `onPopInvoked`: the editor's exit guard, FlowBackScope below. That is an
+    // unbounded loop, not a fallback — it hangs the isolate with no stack
+    // overflow to point at it.
+    //
+    // Only reachable outside a GoRouter (plain-MaterialApp widget tests); the
+    // router branch below never had the problem because `router.pop()` does not
+    // consult PopScope either.
+    final navigator = Navigator.maybeOf(context);
+    if (navigator != null && navigator.canPop()) navigator.pop();
     return;
   }
   if (router.canPop()) {

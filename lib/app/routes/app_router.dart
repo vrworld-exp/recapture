@@ -25,6 +25,16 @@ import '../../presentation/screens/projects/project_photos_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
+import '../../presentation/screens/catalog/add_product_screen.dart';
+import '../../presentation/screens/catalog/catalog_analytics_screen.dart';
+import '../../presentation/screens/catalog/business_profile_screen.dart';
+import '../../presentation/screens/catalog/catalog_screen.dart';
+import '../../presentation/screens/catalog/category_manager_screen.dart';
+import '../../presentation/screens/catalog/catalog_preview_screen.dart';
+import '../../presentation/screens/catalog/catalog_qr_screen.dart';
+import '../../presentation/screens/catalog/change_product_model_screen.dart';
+import '../../presentation/screens/catalog/product_editor_screen.dart';
+import '../../presentation/screens/catalog/publish_screen.dart';
 import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
@@ -73,6 +83,53 @@ abstract final class AppRoutes {
   /// Sign out). Protected like every non-auth route.
   static const profile = '/profile';
 
+  // ── Catalog (the storefront authoring surface) ────────────────────────────
+  // Declared as ONE flat group under /catalog so a deep link from a QR-adjacent
+  // context, a push from the grid and a cold start all resolve identically.
+  // Registration below lags this list on purpose: a constant exists as soon as
+  // the path is decided, but a GoRoute is only added once its screen does — a
+  // route wired to a screen that does not exist yet is a crash, not a stub.
+
+  /// The catalog shell — grid of products, or the first-run empty state.
+  static const catalog = '/catalog';
+
+  /// Catalog metadata: name, business name, logo, cover (feature 2).
+  static const catalogSettings = '/catalog/settings';
+
+  /// The draft rendered in the public page's shape, before publishing.
+  static const catalogPreview = '/catalog/preview';
+
+  /// Publish status, progress and partial-failure retry.
+  static const catalogPublish = '/catalog/publish';
+
+  /// The QR code for the frozen public URL — view, download, share.
+  static const catalogQr = '/catalog/qr';
+
+  /// Category manager with drag reorder.
+  static const catalogCategories = '/catalog/categories';
+
+  /// Add a product — existing model, fresh scan, or image-only.
+  static const productNew = '/catalog/products/new';
+
+  /// One product's editor. `:productId` = the catalog product id.
+  static const productDetail = '/catalog/products/:productId';
+
+  /// Re-point one 3D product at a different model.
+  ///
+  /// A SIBLING of [productDetail] rather than that route itself, deliberately:
+  /// this is a single-purpose screen, and registering it as the product editor
+  /// would pre-empt whatever the real editor turns out to be — a later editor
+  /// would then have to either absorb this screen or take its URL away from
+  /// anyone who bookmarked it. As a sibling it can keep working underneath the
+  /// editor when that lands, or be dropped without touching it.
+  static const productModel = '/catalog/products/:productId/model';
+
+  /// The business profile behind the storefront (features 58-60).
+  static const businessProfile = '/profile/business';
+
+  /// Customer-facing analytics for the published catalog (feature 66).
+  static const catalogAnalytics = '/catalog/analytics';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -114,6 +171,17 @@ abstract final class AppRouteNames {
   static const createProject = 'createProject';
   static const projectPhotos = 'projectPhotos';
   static const profile = 'profile';
+  static const catalog = 'catalog';
+  static const catalogSettings = 'catalogSettings';
+  static const catalogPreview = 'catalogPreview';
+  static const catalogPublish = 'catalogPublish';
+  static const catalogQr = 'catalogQr';
+  static const catalogCategories = 'catalogCategories';
+  static const productNew = 'productNew';
+  static const productDetail = 'productDetail';
+  static const productModel = 'productModel';
+  static const businessProfile = 'businessProfile';
+  static const catalogAnalytics = 'catalogAnalytics';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const modelViewer = 'modelViewer';
@@ -241,6 +309,129 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.profile,
         builder: (_, __) => const FlowBackScope(child: ProfileScreen()),
       ),
+      // The catalog shell — a STANDALONE top-level destination like /profile,
+      // reached with go() from the Projects app bar, so a cold deep-link to
+      // /catalog behaves identically to the in-app entry. FlowBackScope maps
+      // back → /projects (flowBackRouteFor) when there is nothing to pop.
+      //
+      // Registered below: the shell, the business profile, the preview, publish,
+      // the QR, the analytics dashboard, the category manager, add-product, the
+      // product editor and the model swap. Every `/catalog/*` constant now has
+      // a screen behind it.
+      GoRoute(
+        path: AppRoutes.catalog,
+        name: AppRouteNames.catalog,
+        builder: (_, __) => const FlowBackScope(child: CatalogScreen()),
+      ),
+      // The business profile — name, branding, contact and socials (features
+      // 58-60, 2). STATIC, and declared before the product routes for the same
+      // reason the category manager is.
+      //
+      // `onExit` is the BROWSER BACK guard, exactly as on the product editor: a
+      // PopScope inside the screen covers the system gesture and the Android
+      // hardware button, but a browser's back button is a router event that
+      // never reaches the widget.
+      GoRoute(
+        path: AppRoutes.catalogSettings,
+        name: AppRouteNames.catalogSettings,
+        onExit: (context, state) => confirmDiscardProfileEdits(context),
+        builder: (_, __) => const FlowBackScope(child: BusinessProfileScreen()),
+      ),
+      // The catalog preview — the draft in the public page's shape (feature 5).
+      // STATIC, declared before the product routes for the same reason the
+      // category manager is: a literal segment must never be matchable as an
+      // id. Read-only, so no onExit guard — there is nothing to discard.
+      GoRoute(
+        path: AppRoutes.catalogPreview,
+        name: AppRouteNames.catalogPreview,
+        builder: (_, __) => const FlowBackScope(child: CatalogPreviewScreen()),
+      ),
+      // Publish and the QR. STATIC, declared before the product routes for the
+      // same reason the preview is.
+      //
+      // The publish screen holds a POLL LOOP, which is why it must be a real
+      // route rather than a dialog over the shell: leaving it disposes the
+      // provider, and disposing the provider is what stops the loop. A modal
+      // that merely goes invisible would keep polling behind the catalog.
+      GoRoute(
+        path: AppRoutes.catalogPublish,
+        name: AppRouteNames.catalogPublish,
+        builder: (_, __) => const FlowBackScope(child: PublishScreen()),
+      ),
+      // Reachable in its own right, not only from the success state: a business
+      // that published last month wants the QR again without republishing.
+      GoRoute(
+        path: AppRoutes.catalogQr,
+        name: AppRouteNames.catalogQr,
+        builder: (_, __) => const FlowBackScope(child: CatalogQrScreen()),
+      ),
+      // The analytics dashboard (feature 66). STATIC, declared before the
+      // product routes for the same reason the QR is.
+      //
+      // Reachable BEFORE the first publish, unlike the QR — and that is not an
+      // inconsistency. There is no QR to show before publishing, so an entry
+      // point to an explanation would be a broken feature; there IS an
+      // analytics destination, its empty state is the instruction "publish
+      // first, then the numbers appear here", and a business looking for its
+      // visitor numbers should find that sentence rather than a missing button.
+      GoRoute(
+        path: AppRoutes.catalogAnalytics,
+        name: AppRouteNames.catalogAnalytics,
+        builder: (_, __) => const FlowBackScope(child: CatalogAnalyticsScreen()),
+      ),
+      // The category manager. STATIC, and declared before the product routes
+      // for the same reason `products/new` is: a literal segment must never be
+      // matchable as an id.
+      GoRoute(
+        path: AppRoutes.catalogCategories,
+        name: AppRouteNames.catalogCategories,
+        builder: (_, __) => const FlowBackScope(child: CategoryManagerScreen()),
+      ),
+      // Add a product. STATIC, and declared before any `/catalog/products/:id`
+      // route lands so the literal "new" cannot be swallowed as a product id —
+      // the same ordering rule the backend router follows for this path.
+      //
+      // Pushed from the catalog shell rather than go()n, so back pops straight
+      // to it; FlowBackScope covers the cold deep-link case, where there is
+      // nothing to pop and back maps to /catalog.
+      GoRoute(
+        path: AppRoutes.productNew,
+        name: AppRouteNames.productNew,
+        builder: (_, __) => const FlowBackScope(child: AddProductScreen()),
+      ),
+      // One product's editor. Registered AFTER the static `products/new` above
+      // so the literal "new" cannot be swallowed as a product id, and BEFORE
+      // nothing in particular — `:productId/model` is a longer, more specific
+      // path and go_router matches it on its own.
+      //
+      // `onExit` is the BROWSER BACK guard. A PopScope inside the screen covers
+      // the system gesture and the Android hardware button, but a browser's back
+      // button is a router event that never reaches the widget — without this,
+      // web users lose typed edits in the one way phone users cannot.
+      GoRoute(
+        path: AppRoutes.productDetail,
+        name: AppRouteNames.productDetail,
+        onExit: (context, state) => confirmDiscardProductEdits(context),
+        builder: (context, state) => FlowBackScope(
+          child: ProductEditorScreen(
+            productId: state.pathParameters['productId'] ?? '',
+          ),
+        ),
+      ),
+      // Change one product's 3D model. Takes ONLY the id from the path and
+      // fetches the product itself, so a browser reload on this URL behaves
+      // exactly like a push from inside the app (nothing arrives via `extra`,
+      // which a reload does not carry) and a stale id shows the mapped
+      // not-found state rather than a blank.
+      GoRoute(
+        path: AppRoutes.productModel,
+        name: AppRouteNames.productModel,
+        builder: (context, state) => FlowBackScope(
+          child: ChangeProductModelScreen(
+            productId: state.pathParameters['productId'] ?? '',
+          ),
+        ),
+      ),
       // Staff-only per-project Preview gallery. Reached via push (hardware back
       // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel
       // through navigateBack so a go()-replaced entry can't exit the app either.
@@ -348,7 +539,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                   coveragePct: 92,
                   rejected: 1,
                 ),
-                primaryLabel: meshy ? 'Finish — go to summary' : 'Start Level B',
+                primaryLabel:
+                    meshy ? 'Finish — go to summary' : 'Start Level B',
                 onStartLevelB: meshy
                     ? () => context.go(AppRoutes.captureSummary)
                     : () => context.go(AppRoutes.levelBIntro),
@@ -378,8 +570,9 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           levelName: 'Top Ring',
           nextRoute: AppRoutes.levelBReview,
           instructions: kLevelBCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+          retakeRequest: state.extra is RetakeRequest
+              ? state.extra! as RetakeRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -448,8 +641,9 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           levelName: 'Low Ring',
           nextRoute: AppRoutes.levelCReview,
           instructions: kLevelCCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+          retakeRequest: state.extra is RetakeRequest
+              ? state.extra! as RetakeRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -519,9 +713,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // never a button that would 404.
         builder: (_, state) => FlowBackScope(
           child: ProcessingScreen(
-            projectId: state.extra is String && (state.extra! as String).isNotEmpty
-                ? state.extra! as String
-                : null,
+            projectId:
+                state.extra is String && (state.extra! as String).isNotEmpty
+                    ? state.extra! as String
+                    : null,
           ),
         ),
       ),
