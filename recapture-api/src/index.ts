@@ -46,13 +46,33 @@ function installProcessGuards(): void {
 
 async function main(): Promise<void> {
   installProcessGuards();
+
+  const app = createApp();
+
+  /**
+   * Bind the port FIRST — before any network round trip.
+   *
+   * Render fails a deploy with "No open ports detected" when nothing is
+   * listening inside its scan window, and connectDB() is exactly the kind of
+   * call that can outlast it: a slow SRV lookup, a cold Atlas cluster, or an
+   * IP allow-list rejection all keep the socket closed while the platform
+   * gives up. Listening first makes the deploy succeed or fail on its own
+   * merits, and turns a Mongo problem into a Mongo error in the logs instead
+   * of a port-scan timeout that says nothing about the cause.
+   *
+   * Safe because mongoose BUFFERS commands until the connection is up, so a
+   * request landing in the gap waits rather than failing.
+   *
+   * '0.0.0.0' is explicit for the same class of reason: Render routes to the
+   * container's external interface, never loopback.
+   */
+  app.listen(env.PORT, '0.0.0.0', () => {
+    console.log(`🚀 recapture-api listening on 0.0.0.0:${env.PORT} [${env.NODE_ENV}]`);
+  });
+
   await connectDB();
   await axiosBackendMakeAlive();      // // This fn keep alive our remote backend server.
-  const app = createApp();
-  app.listen(env.PORT, () => {
-    console.log(`🚀 recapture-api running on port ${env.PORT} [${env.NODE_ENV}]`);
-    startInProcessWorker();
-  });
+  startInProcessWorker();
 }
 
 /**

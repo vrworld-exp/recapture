@@ -12,8 +12,10 @@ services:
       # dev probe depends on, and maps S3 keys to the dev/ prefix.
       - key: NODE_ENV
         value: development
-      - key: PORT
-        value: 3000
+      # NO explicit PORT. Render injects its own, and hardcoding one here
+      # overrides it — the app then listens on a port the platform is not
+      # routing to, which surfaces as "No open ports detected" on deploy.
+      # src/config/env.ts still defaults to 3000 for local runs.
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
