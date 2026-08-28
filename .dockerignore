@@ -1,0 +1,71 @@
+# .dockerignore — what NOT to send to the Docker build context.
+#
+# Without this file the context is ~1.4 GB (build/ 896M, recapture-api/ 206M,
+# .dart_tool/ 146M, recapture/ 55M, .git/ 17M). With it, the context is ~5 MB
+# and `docker build` starts instantly.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# NEVER add these — the Flutter web build genuinely needs them:
+#
+#   pubspec.yaml  pubspec.lock  analysis_options.yaml
+#   lib/  web/  assets/
+#   .env  .env.dev  .env.staging  .env.prod
+#       ^ these four are declared under `flutter: assets:` in pubspec.yaml.
+#         Excluding any one of them fails the build with
+#         "no file or variants found for asset: .env".
+#         The Dockerfile OVERWRITES them with build-arg values before
+#         compiling, so nothing from your local machine is baked in.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Version control / editors / CI ───────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+.github
+.idea
+.vscode
+.claude
+*.iml
+
+# ── Build outputs and tool caches (regenerated inside the image) ─────────────
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+coverage/
+.last_build_id
+
+# ── Platform folders irrelevant to a web build ──────────────────────────────
+android/
+ios/
+linux/
+macos/
+windows/
+
+# ── Not part of the app ─────────────────────────────────────────────────────
+test/
+docs/
+fastlane/
+Gemfile
+Gemfile.lock
+maya-viewer/
+recapture/
+recapture-api/
+node_modules/
+**/node_modules/
+
+# ── Docker's own files ──────────────────────────────────────────────────────
+# NOT nginx.conf — stage 2 does `COPY nginx.conf` and the build fails without
+# it ("/nginx.conf: not found"). The Dockerfile and .dockerignore themselves
+# are read by the builder outside the context, so excluding them is safe.
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# ── Root-level notes and scratch files (nextPrompt.txt alone is 600 KB) ─────
+# NOTE: these globs do not cross "/", so they match ROOT level only —
+#       an asset such as assets/data/foo.txt is still included.
+*.md
+*.txt
+Makefile
