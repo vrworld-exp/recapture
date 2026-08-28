@@ -1,0 +1,4 @@
+# Enforce LF line endings for GitHub-parsed files on Windows dev machines
+.github/CODEOWNERS                  text eol=lf
+.github/ISSUE_TEMPLATE/*.yml        text eol=lf
+.github/pull_request_template.md    text eol=lf

@@ -1,3 +1,11 @@
+import java.util.Properties
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(keystorePropertiesFile.inputStream())
+}
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -7,7 +15,10 @@ plugins {
 
 android {
     namespace = "com.mayasabhaxr.recapture"
-    compileSdk = 36
+    // 37, not 36: flutter_secure_storage compiles against Android SDK 37 and
+    // compileSdk must be >= the highest of any dependency (backward compatible).
+    // targetSdk stays at 36 — that's the runtime-behavior contract, unaffected.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -20,18 +31,43 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.mayasabhaxr.recapture"
-        minSdk = flutter.minSdkVersion
-        targetSdk = 34
+        minSdk = 24
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true
     }
 
+    signingConfigs {
+        create("release") {
+            keyAlias = keystoreProperties["keyAlias"] as String? ?: ""
+            keyPassword = keystoreProperties["keyPassword"] as String? ?: ""
+            storeFile = (keystoreProperties["storeFile"] as String?)?.let { file(it) }
+            storePassword = keystoreProperties["storePassword"] as String? ?: ""
+        }
+    }
+
+    // Android release "vital" lint (lintVitalAnalyzeRelease) is not part of the
+    // Flutter release pipeline and, on Windows, its jar cache is prone to
+    // file-lock failures ("process cannot access the file"). Skip it so a stray
+    // daemon or AV scan can't fail the release build.
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            // Use release signing only when a real keystore is configured in
+            // android/key.properties; otherwise fall back to debug signing so
+            // `flutter build apk --release` still works during development.
+            val releaseKeystore = (keystoreProperties["storeFile"] as String?)?.let { file(it) }
+            signingConfig = if (releaseKeystore?.exists() == true) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             isShrinkResources = false
         }
@@ -40,4 +76,35 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // ActivityCompat / ContextCompat used by the native permissions channel.
+    // (Normally present transitively via the Flutter embedding; declared
+    // explicitly so PermissionManager compiles independently of that.)
+    implementation("androidx.core:core-ktx:1.13.1")
+
+    // CameraX — live back-camera PREVIEW bridged to Flutter via an external
+    // texture (CameraPreviewManager). camera-view (PreviewView) is intentionally
+    // omitted: Architecture Decision A uses a SurfaceProducer, not a PlatformView.
+    val cameraxVersion = "1.4.1"
+    implementation("androidx.camera:camera-core:$cameraxVersion")
+    implementation("androidx.camera:camera-camera2:$cameraxVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
+
+    // EXIF read/normalize for captured JPEGs (CaptureMetadataWriter). androidx
+    // ExifInterface does a temp+rename safe save; we add our own copy/validate too.
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    // LifecycleRegistry — CameraPreviewManager owns a private LifecycleOwner so
+    // bindToLifecycle is driven by start/stop/dispose, decoupled from the Activity.
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+
+    // WorkManager — background auto-resume of offline-queued uploads under a
+    // NetworkType.CONNECTED constraint (UploadResumeWorker). The OS runs the
+    // resume when connectivity returns, even if the app process was killed.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // JVM unit tests for the pure permission mapping logic (PermissionMapperTest).
+    testImplementation("junit:junit:4.13.2")
 }

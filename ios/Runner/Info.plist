@@ -6,17 +6,35 @@
 	     PERMISSION USAGE DESCRIPTIONS
 	─────────────────────────────────────────────── -->
 
-	<!-- Camera — required for AR and camera capture features -->
+	<!-- Single-locale app (only Base.lproj; no InfoPlist.strings / lib/l10n).
+	     These English strings are authoritative. When localization is added,
+	     move each usage description into per-locale ios/Runner/<locale>.lproj/
+	     InfoPlist.strings so the dialogs show translated copy.
+
+	     App Store note: every iOS permission the app requests has its usage key
+	     below — Camera (4A required), Photos (4A optional), and Microphone (video
+	     audio). The "Motion" tier uses raw inertial sensors (CMMotionManager:
+	     attitude/gyro/accel), which require NO permission and NO usage string, so
+	     NSMotionUsageDescription is intentionally ABSENT — the app never touches
+	     CMMotionActivityManager (Motion & Fitness). Strings are kept specific and
+	     truthful to the observed behavior — generic/mismatched copy is rejected. -->
+
+	<!-- Camera (required) — photographs the object for 3D capture. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Recapture needs camera access to enable AR experiences and capture content.</string>
+	<string>Recapture uses the camera to photograph your object from multiple angles and build a 3D capture.</string>
 
-	<!-- Microphone — required alongside camera for video and AR recording -->
+	<!-- Microphone — records audio alongside video capture sessions. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Recapture needs microphone access to record audio during video capture sessions.</string>
+	<string>Recapture uses the microphone to record audio while you capture video of your object.</string>
 
-	<!-- Motion — required for AR motion tracking and device orientation -->
-	<key>NSMotionUsageDescription</key>
-	<string>Recapture needs motion sensor access to enable accurate AR tracking and experiences.</string>
+	<!-- Photo Library — Screen 4A requests Permission.photos (read access) to
+	     import reference images and browse saved captures; the add-only key
+	     covers saving finished captures. Without these keys, requesting the
+	     permission CRASHES on iOS. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Recapture uses your photo library to import reference images and open captures you have saved.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Recapture saves your finished captures to your photo library.</string>
 
 	<!-- ───────────────────────────────────────────
 	     AR CAPABILITY DECLARATION

@@ -1,18 +1,10 @@
-// // This is a basic Flutter widget test.
-// //
-// // To perform an interaction with a widget in your test, use the WidgetTester
-// // utility in the flutter_test package. For example, you can send tap and scroll
-// // gestures. You can also use WidgetTester to find child widgets in the widget
-// // tree, read text, and verify that the values of widget properties are correct.
+// test/widget_test.dart
+//
+// Widget tests for ReCapture.
+// Individual screen tests are added alongside their screen implementation tasks.
+//
+// No tests are written here until screens are implemented (P1 onwards).
 
-// import 'package:flutter_test/flutter_test.dart';
-// // import 'package:recapture/main.dart';
-// import 'package:recapture/main.dart';
-
-// void main() {
-//   testWidgets('Recapture placeholder screen test', (WidgetTester tester) async {
-//     await tester.pumpWidget(const RecaptureApp());
-
-//     expect(find.text('Recapture'), findsOneWidget);
-//   });
-// }
+void main() {
+  // Tests added per feature phase. See phase plan for test task breakdown.
+}

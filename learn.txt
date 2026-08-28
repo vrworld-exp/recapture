@@ -1,9 +1,47 @@
 
 
-Commands for Flutter :-------------
-    flutter clean
-    flutter doctor
-    flutter pub get
+Commands for Flutter :------------->
+
     flutter emulators
 
+        : Above will remove all unneccessory things from the project.
+        
+    flutter clean    
+
+    flutter pub outdated
+
+    flutter pub upgrade --major-versions
+
+    flutter pub get
+
+    flutter doctor
+
+    flutter run
+
+    flutter build apk
+
+
+
+
+
+
+
+
+----------------------- Follow this flow --------------------------->>>>>
+
+
+
+flutter clean
+
+flutter pub outdated
+
+flutter pub upgrade --major-versions
+
+flutter pub get
+
+flutter doctor
+
+flutter run
+
+flutter build apk --release
 
