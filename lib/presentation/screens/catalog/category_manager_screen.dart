@@ -76,6 +76,20 @@ class CategoryManagerScreen extends ConsumerStatefulWidget {
 }
 
 class _CategoryManagerScreenState extends ConsumerState<CategoryManagerScreen> {
+  /// Re-reads the list every time the screen is entered — the notifier is
+  /// app-wide, so without this a revisit shows the counts from the last visit
+  /// and nothing tells the user they are stale. Silent (the rows stay on
+  /// screen), and skipped on a first mount that is already loading.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ref.read(catalogCategoriesProvider).isLoading) return;
+      ref.read(catalogCategoriesProvider.notifier).refresh();
+    });
+  }
+
   /// The detail pane's subject on wide layouts. Null until the user picks one.
   CategorySelection? _selected;
 
@@ -756,6 +770,11 @@ class _UncategorizedRow extends StatelessWidget {
               Expanded(
                 child: Text(
                   'Uncategorized',
+                  // Bounded like every other row label. Unbounded, it WRAPS
+                  // when the column is narrow and the text scale is large,
+                  // which grows the row and overflows the column it sits in.
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.bodyLarge
                       ?.copyWith(color: AppColors.textSecondary),
                 ),

@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/catalog_repository.dart';
-import '../../domain/entities/auth_state.dart';
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../auth/auth_notifier.dart';
@@ -36,11 +35,14 @@ class CatalogNotifier extends AsyncNotifier<Catalog?> {
 
   @override
   Future<Catalog?> build() async {
-    ref.listen<AuthState>(authProvider, (_, next) {
-      if (next is AuthUnauthenticated) {
-        state = const AsyncData<Catalog?>(null);
-      }
-    });
+    // WATCHED, not listened to: this provider outlives any one session, so a
+    // sign-out must blank it AND the next sign-in must load it again. Only
+    // resetting on sign-out left the reset value — `AsyncData(null)`, which is
+    // the create prompt — in place for the next session with no request in
+    // flight and so no loading UI, until a create (idempotent server-side)
+    // handed back the catalog that was there all along.
+    final session = ref.watch(sessionIdentityProvider);
+    if (session == null) return null; // signed out — nothing to read
 
     return _repo.fetch();
   }

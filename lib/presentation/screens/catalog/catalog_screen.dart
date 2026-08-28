@@ -46,6 +46,38 @@ class CatalogScreen extends ConsumerStatefulWidget {
 }
 
 class _CatalogScreenState extends ConsumerState<CatalogScreen> {
+  /// Re-reads what this screen shows every time it is ENTERED.
+  ///
+  /// The catalog providers are app-wide and outlive the screen, so a second
+  /// visit renders whatever the first one left behind — a header count from
+  /// before a product was added on another surface, with no request in flight
+  /// to correct it. These are the silent refreshes (current content stays put),
+  /// and a first mount skips them: the providers are already loading that data
+  /// and a second request would only race the one on the way.
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final catalog = ref.read(catalogProvider);
+      if (catalog.isLoading) return; // first load is already on its way
+      ref.read(catalogProvider.notifier).refresh();
+
+      // No catalog means the create prompt: there are no products or
+      // categories behind it, and reading them would only start two requests
+      // the server answers with nothing.
+      if (catalog.valueOrNull == null) return;
+
+      if (!ref.read(catalogProductsProvider).isLoading) {
+        ref.read(catalogProductsProvider.notifier).refresh();
+      }
+      if (!ref.read(catalogCategoriesProvider).isLoading) {
+        ref.read(catalogCategoriesProvider.notifier).refresh();
+      }
+    });
+  }
+
   /// Opens the create form and acknowledges the result.
   ///
   /// Nothing is refreshed on success: [CatalogNotifier.create] has already put

@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/repositories/business_profile_repository.dart';
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
-import '../../domain/entities/auth_state.dart';
 import '../../domain/entities/business_profile.dart';
 import '../auth/auth_notifier.dart';
 import 'catalog_notifier.dart';
@@ -92,10 +91,15 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
 
   CatalogRepository get _catalogRepo => ref.read(catalogRepositoryProvider);
 
-  final Map<BrandingSlot, ValueNotifier<BrandingUpload>> _uploads = {
-    for (final slot in BrandingSlot.values)
-      slot: ValueNotifier<BrandingUpload>(const BrandingUpload()),
-  };
+  /// One upload channel per slot, REBUILT with the rest of this provider: the
+  /// set registered in `onDispose` is torn down on a session change, so a fresh
+  /// map has to replace it or `uploadOf` would hand out disposed notifiers.
+  Map<BrandingSlot, ValueNotifier<BrandingUpload>> _uploads = _freshUploads();
+
+  static Map<BrandingSlot, ValueNotifier<BrandingUpload>> _freshUploads() => {
+        for (final slot in BrandingSlot.values)
+          slot: ValueNotifier<BrandingUpload>(const BrandingUpload()),
+      };
 
   bool _disposed = false;
 
@@ -105,11 +109,15 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
 
   @override
   Future<BusinessProfile?> build() async {
-    ref.listen<AuthState>(authProvider, (_, next) {
-      if (next is AuthUnauthenticated) {
-        state = const AsyncData<BusinessProfile?>(null);
-      }
-    });
+    // Session-scoped like the catalog itself: blanked on sign-out, re-fetched
+    // (with a loading state) on the next sign-in rather than left showing the
+    // previous session's reset value.
+    final session = ref.watch(sessionIdentityProvider);
+
+    // A rebuild reuses this instance: the previous build's notifiers are
+    // disposed by its own onDispose below, so this build starts a clean set.
+    if (_disposed) _uploads = _freshUploads();
+    _disposed = false;
 
     ref.onDispose(() {
       _disposed = true;
@@ -117,6 +125,8 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
         upload.dispose();
       }
     });
+
+    if (session == null) return null; // signed out — nothing to read
 
     return _repo.fetch();
   }

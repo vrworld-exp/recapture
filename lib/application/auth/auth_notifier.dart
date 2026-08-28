@@ -233,3 +233,35 @@ class AuthNotifier extends Notifier<AuthState> {
 /// App-wide auth state. The single source of truth for authentication.
 final authProvider =
     NotifierProvider<AuthNotifier, AuthState>(AuthNotifier.new);
+
+/// Identifies the session that every user-scoped cache is currently reading
+/// for. Null means signed out.
+///
+/// Providers holding server data for the signed-in user watch THIS instead of
+/// listening to [authProvider], because there are two transitions they must
+/// react to, not one:
+///   - a sign-out has to blank them — a stale catalog must never outlive its
+///     session, and
+///   - the NEXT sign-in has to re-fetch them. A listener that only handles
+///     [AuthUnauthenticated] leaves the reset value ("no catalog yet", "no
+///     categories") sitting there for the next session, with no request in
+///     flight and therefore no loading UI either.
+///
+/// A token refresh keeps the SAME value — [AuthRefreshing] carries the session
+/// it is refreshing — so it never costs a re-fetch. A sign-out followed by a
+/// sign-in always changes it, even for the same user, because it passes
+/// through null on the way.
+///
+/// [AuthRestoring] is deliberately NOT null: it means "secure storage is still
+/// being read", not "no user". The router keeps user-scoped screens behind its
+/// guard until restore resolves, and treating restore as signed-out would make
+/// these caches answer with an empty first-run state instead of a load.
+final sessionIdentityProvider = Provider<String?>((ref) {
+  final auth = ref.watch(authProvider);
+  return switch (auth) {
+    AuthUnauthenticated() || AuthError() => null,
+    AuthRestoring() => 'restoring',
+    AuthAuthenticated(:final session) => 'user:${session.userId}',
+    AuthRefreshing(:final previous) => 'user:${previous.userId}',
+  };
+});
