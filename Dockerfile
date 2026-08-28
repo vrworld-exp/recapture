@@ -28,8 +28,7 @@ FROM ghcr.io/cirruslabs/flutter:3.41.1 AS build
 ARG APP_ENV=dev
 # ARG API_BASE_URL=https://recapture-api.onrender.com
 # ARG API_BASE_URL=https://recapture-unvp.onrender.com
-ARG API_BASE_URL=https://mirage-be-recap-2.onrender.com
-
+ARG API_BASE_URL=https://recapture-be-phase-2.onrender.com
 WORKDIR /app
 
 # Dependencies before source: this layer stays cached until pubspec.* actually
