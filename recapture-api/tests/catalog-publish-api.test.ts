@@ -358,6 +358,91 @@ describe('publish gates', () => {
     // publish over its missing photo would trap the user with no way out.
     expect(res.status).toBe(202);
   });
+
+  // ── Categories ───────────────────────────────────────────────────────────
+  //
+  // A category is a TAB on the public page, so a wrong one is not a silent
+  // data problem — it is a label a customer reads. These three prove the check
+  // runs before anything reaches Mirage.
+
+  it('blocks a product filed under a category this catalog no longer has', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id, { products: [{ name: 'Chair' }] });
+    const category = await CatalogCategory.create({
+      catalogId,
+      userId: new Types.ObjectId(id),
+      name: 'seating',
+      position: 0,
+    });
+    await CatalogProduct.updateOne(
+      { catalogId, name: 'Chair' },
+      { $set: { categoryId: category._id } }
+    ).exec();
+    // Straight to deleted, WITHOUT the service's move-to-Uncategorized step —
+    // the dangling state a race, a restore or a hand-edited document leaves.
+    await CatalogCategory.updateOne(
+      { _id: category._id },
+      { $set: { deletedAt: new Date() } }
+    ).exec();
+
+    const res = await request(app).post('/catalog/publish').set(auth).send({});
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('PUBLISH_BLOCKED');
+    const gate = res.body.gates.find(
+      (g: { code: string }) => g.code === 'PRODUCT_CATEGORY_UNKNOWN'
+    );
+    expect(gate.productName).toBe('Chair');
+
+    // Blocked BEFORE Mirage, like every other gate: no restaurant, no URL, and
+    // above all no tab created for a category that does not exist here.
+    const catalog = await Catalog.findById(catalogId).lean().exec();
+    expect(catalog?.mirageRestaurantId).toBeUndefined();
+    expect(mirage.calls).toHaveLength(0);
+    expect(await CatalogPublishRun.countDocuments({})).toBe(0);
+  });
+
+  it('blocks a category whose name would reach Mirage as nothing at all', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id, { products: [{ name: 'Chair' }] });
+    // No letters or digits: `toCatalogSlug` returns ''. The validation layer
+    // refuses this today, so it can only be a row written before it or seeded
+    // straight into the collection — and a FULL publish pushes EVERY live
+    // category, product under it or not.
+    await CatalogCategory.create({
+      catalogId,
+      userId: new Types.ObjectId(id),
+      name: '!!!',
+      position: 0,
+    });
+
+    const res = await request(app).post('/catalog/publish').set(auth).send({});
+
+    expect(res.status).toBe(422);
+    expect(res.body.gates.map((g: { code: string }) => g.code)).toContain(
+      'CATEGORY_NAME_INVALID'
+    );
+    expect(mirage.calls).toHaveLength(0);
+  });
+
+  it('passes a product filed under a live category of the same catalog', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id, { products: [{ name: 'Chair' }] });
+    const category = await CatalogCategory.create({
+      catalogId,
+      userId: new Types.ObjectId(id),
+      name: 'seating',
+      position: 0,
+    });
+    await CatalogProduct.updateOne(
+      { catalogId, name: 'Chair' },
+      { $set: { categoryId: category._id } }
+    ).exec();
+
+    const res = await request(app).post('/catalog/publish').set(auth).send({});
+
+    expect(res.status).toBe(202);
+  });
 });
 
 // ── Retry ───────────────────────────────────────────────────────────────────

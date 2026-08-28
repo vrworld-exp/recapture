@@ -24,6 +24,7 @@
 import { Types } from 'mongoose';
 
 import { Catalog, type ICatalog } from '@/models/Catalog';
+import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun, type ICatalogPublishRun } from '@/models/CatalogPublishRun';
 import { Job } from '@/models/Job';
@@ -45,7 +46,9 @@ import type { PublishStepExecutor } from '@/services/catalog/publishExecutors';
 import { pruneRunHistory } from '@/services/catalogActivityService';
 import { hasActiveRun } from '@/services/catalog/publishRunState';
 import { CatalogSyncErrorCode, syncFailure } from '@/services/catalog/publishSyncErrors';
+import { mirageCategoryName } from '@/services/catalog/categorySync';
 import { getMirageClient, isMirageConfigured, MirageError } from '@/services/mirage';
+import { isValidCatalogSlug } from '@/utils/catalogNames';
 
 // ── Gates ───────────────────────────────────────────────────────────────────
 
@@ -66,6 +69,10 @@ export const PublishGateCode = {
   PRODUCT_MODEL_NOT_READY: 'PRODUCT_MODEL_NOT_READY',
   /** Mirage enforces per-restaurant item-name uniqueness. */
   PRODUCT_NAME_DUPLICATE: 'PRODUCT_NAME_DUPLICATE',
+  /** The product is filed under a category this catalog no longer has. */
+  PRODUCT_CATEGORY_UNKNOWN: 'PRODUCT_CATEGORY_UNKNOWN',
+  /** A category whose stored name would reach Mirage as nothing at all. */
+  CATEGORY_NAME_INVALID: 'CATEGORY_NAME_INVALID',
   /** MIRAGE_* config is absent on this deployment. */
   PUBLISHING_UNAVAILABLE: 'PUBLISHING_UNAVAILABLE',
 } as const;
@@ -207,6 +214,68 @@ function gateDuplicateNames(products: readonly ICatalogProduct[]): PublishGate[]
     );
 }
 
+/**
+ * Does every category this publish would touch actually exist in THIS catalog?
+ *
+ * WHY THIS RUNS BEFORE ANYTHING ELSE TOUCHES MIRAGE. A category is not a label
+ * carried along with a product — it is a row Mirage creates, and a TAB the
+ * customer sees on the public page. Two ways that goes wrong, and both are
+ * invisible until a stranger is looking at the menu:
+ *
+ *   • A PRODUCT POINTS AT A CATEGORY THAT IS GONE. The authoring routes all
+ *     scope their category lookup to the catalog, so this should be
+ *     unreachable — but "should be" is doing a lot of work for a value that
+ *     survives a soft-delete race, a restore, a hand-edited document or a
+ *     seeded row. The publish path is where it stops being a dangling id and
+ *     starts being a tab: `resolveCategory` finds nothing in the snapshot,
+ *     falls through to the Uncategorized bucket, and the product silently
+ *     changes category on the live page.
+ *
+ *   • A CATEGORY NAME THAT SLUGS TO NOTHING. Names are stored in Mirage's own
+ *     slug form now, and the validation layer rejects one with no letters or
+ *     digits in it — but a row written before that (or seeded straight into the
+ *     collection) can still hold `"!!!"`, which reaches create-category as an
+ *     empty name and comes back as a tab nobody can explain.
+ *
+ * A FULL publish pushes EVERY live category, not only the ones with products
+ * under them (publishPlanner.neededCategories), so the name check covers all of
+ * them rather than just the referenced set.
+ *
+ * One query for the whole catalog, like every other gate here — the check costs
+ * a single indexed read and saves a public page nobody can un-see.
+ */
+async function gateCatalogCategories(
+  catalogId: Types.ObjectId,
+  products: readonly ICatalogProduct[]
+): Promise<PublishGate[]> {
+  const categories = await CatalogCategory.find({ catalogId, deletedAt: null })
+    .select({ _id: 1, name: 1 })
+    .lean()
+    .exec();
+
+  const known = new Map(categories.map((category) => [String(category._id), category.name]));
+
+  const gates: PublishGate[] = categories
+    .filter((category) => !isValidCatalogSlug(mirageCategoryName(category.name)))
+    .map((category) => ({
+      code: PublishGateCode.CATEGORY_NAME_INVALID,
+      message: `The category "${category.name}" cannot be published under that name. Rename it.`,
+    }));
+
+  for (const product of products) {
+    if (!product.categoryId) continue; // Uncategorized — a real bucket, not a gap.
+    if (known.has(String(product.categoryId))) continue;
+    gates.push({
+      code: PublishGateCode.PRODUCT_CATEGORY_UNKNOWN,
+      message: `"${product.name}" is filed under a category that is no longer in your catalog. Pick one for it, or move it to Uncategorized.`,
+      productId: (product._id as Types.ObjectId).toHexString(),
+      productName: product.name,
+    });
+  }
+
+  return gates;
+}
+
 /** The products a FULL publish would actually push. */
 function publishableProducts(products: readonly ICatalogProduct[]): ICatalogProduct[] {
   return products.filter((product) => !product.deletedAt && !product.archivedAt);
@@ -255,7 +324,14 @@ export async function evaluatePublishGates(
 
   for (const product of live) gates.push(...gateProduct(product));
   gates.push(...gateDuplicateNames(live));
-  gates.push(...(await gateSourceModels(catalog.userId, live)));
+
+  // The two database-backed gates go together rather than one after the other:
+  // they read different collections and neither depends on the other's answer.
+  const [modelGates, categoryGates] = await Promise.all([
+    gateSourceModels(catalog.userId, live),
+    gateCatalogCategories(catalog._id as Types.ObjectId, live),
+  ]);
+  gates.push(...modelGates, ...categoryGates);
 
   return gates;
 }
