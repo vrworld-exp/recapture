@@ -102,6 +102,12 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
       return;
     }
     _projectId = projectId;
+    // Bind the in-memory capture ledgers to THIS run's project. They are
+    // app-scoped and nothing else bounds their lifetime, so a second capture
+    // would otherwise review the previous object's frames alongside its own —
+    // and inherit its variant lock below. Re-binding the same project is a
+    // no-op, so a resume keeps the pass it is resuming.
+    ref.read(levelCaptureLedgerRegistryProvider).bindProject(projectId);
     // Restore the project's CAPTURE MODE before anything reads a segment count.
     // This is the resume path's only chance to learn it: a user reopening a
     // project from the list never passes through the creation sheet, and every

@@ -412,6 +412,12 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
     // Best-effort: an unavailable store keeps the in-memory variant.
     final projectId = _projectId;
     if (projectId != null) {
+      // Bind the ledgers to this run's project BEFORE the draft resume below —
+      // entering capture for a different project must start from an empty
+      // ledger, not the previous object's frames. The checklist already binds
+      // it, so this is a no-op on the normal path and the guard for an entry
+      // that skipped the checklist. Same project → nothing is wiped.
+      ref.read(levelCaptureLedgerRegistryProvider).bindProject(projectId);
       try {
         await ref
             .read(captureFlowVariantProvider.notifier)

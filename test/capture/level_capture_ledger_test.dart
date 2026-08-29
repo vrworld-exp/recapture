@@ -347,4 +347,77 @@ void main() {
       expect(() => LevelCaptureLedgerRegistry().resetAll(), returnsNormally);
     });
   });
+
+  // The capture-run boundary: the ledgers are app-scoped, so a second capture
+  // must not review the first object's frames alongside its own.
+  group('LevelCaptureLedgerRegistry run ownership', () {
+    test('a fresh registry is bound to no project', () {
+      expect(LevelCaptureLedgerRegistry().projectId, isNull);
+    });
+
+    test('bindProject records the project without wiping on first bind', () {
+      final r = LevelCaptureLedgerRegistry();
+      expect(r.bindProject('p1'), isFalse);
+      expect(r.projectId, 'p1');
+    });
+
+    test('re-binding the SAME project keeps the pass (resume)', () {
+      final r = LevelCaptureLedgerRegistry();
+      r.bindProject('p1');
+      r.ledgerFor('mid').recordAccepted(makeAccepted());
+      expect(r.bindProject('p1'), isFalse);
+      expect(r.ledgerFor('mid').accepted.length, 1);
+    });
+
+    test('binding a DIFFERENT project wipes every level', () {
+      final r = LevelCaptureLedgerRegistry();
+      r.bindProject('p1');
+      r.ledgerFor('mid').recordAccepted(makeAccepted());
+      r.ledgerFor('high').recordAccepted(makeAccepted());
+      r.ledgerFor('mid').recordWarned(makeWarned());
+      r.ledgerFor('mid').recordRejected(makeRejected());
+
+      expect(r.bindProject('p2'), isTrue);
+
+      expect(r.projectId, 'p2');
+      expect(r.ledgerFor('mid').accepted, isEmpty);
+      expect(r.ledgerFor('mid').warned, isEmpty);
+      expect(r.ledgerFor('mid').rejected, isEmpty);
+      expect(r.ledgerFor('high').accepted, isEmpty);
+    });
+
+    test('an empty project id never wipes a bound run', () {
+      final r = LevelCaptureLedgerRegistry();
+      r.bindProject('p1');
+      r.ledgerFor('mid').recordAccepted(makeAccepted());
+      expect(r.bindProject(''), isFalse);
+      expect(r.projectId, 'p1');
+      expect(r.ledgerFor('mid').accepted.length, 1);
+    });
+
+    test('endRun resets every ledger and unbinds the project', () {
+      final r = LevelCaptureLedgerRegistry();
+      r.bindProject('p1');
+      r.ledgerFor('mid').recordAccepted(makeAccepted());
+      r.ledgerFor('high').recordAccepted(makeAccepted());
+
+      r.endRun();
+
+      expect(r.projectId, isNull);
+      expect(r.ledgerFor('mid').accepted, isEmpty);
+      expect(r.ledgerFor('high').accepted, isEmpty);
+    });
+
+    test('after endRun the same project rebinds without wiping', () {
+      final r = LevelCaptureLedgerRegistry();
+      r.bindProject('p1');
+      r.endRun();
+      expect(r.bindProject('p1'), isFalse);
+      expect(r.projectId, 'p1');
+    });
+
+    test('endRun on an unbound registry does not throw', () {
+      expect(() => LevelCaptureLedgerRegistry().endRun(), returnsNormally);
+    });
+  });
 }

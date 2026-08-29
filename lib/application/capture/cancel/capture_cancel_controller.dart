@@ -17,6 +17,7 @@ import '../../../domain/entities/active_session.dart';
 import '../../../domain/entities/project_status.dart';
 import '../../projects/project_capture_cleanup.dart';
 import '../../projects/projects_notifier.dart';
+import '../ledger/level_capture_ledger_registry_provider.dart';
 import '../session/capture_session_store.dart';
 
 /// The DATA operations behind the cancel confirmation. Pure control surface — no
@@ -33,9 +34,10 @@ abstract interface class CaptureCancelController {
   Future<bool> keepAsDraft(String projectId);
 
   /// Delete the in-progress session/captures — the ONLY deletion path. Clears the
-  /// resumable session snapshots + the local captured frames + the active-session
-  /// marker via the existing cleanup APIs. Best-effort per resource; a partial
-  /// failure never throws (a missed purge is reclaimable by the orphan sweep).
+  /// live in-memory ledgers + the resumable session snapshots + the local captured
+  /// frames + the active-session marker via the existing cleanup APIs.
+  /// Best-effort per resource; a partial failure never throws (a missed purge is
+  /// reclaimable by the orphan sweep).
   Future<void> discard(String projectId);
 }
 
@@ -60,7 +62,8 @@ class NoCaptureCancelController implements CaptureCancelController {
 ///     fallible save point) and reflects the project as a [ProjectStatus.draft]
 ///     in the live list. The captured frames themselves already persist on-device
 ///     from capture; this path adds nothing to delete and removes nothing.
-///   • Discard — [CaptureSessionStore.clearProject] (per-level snapshots) +
+///   • Discard — [LevelCaptureLedgerRegistry.endRun] (the live in-memory
+///     captured set) + [CaptureSessionStore.clearProject] (per-level snapshots) +
 ///     [ProjectCaptureCleanup.purgeProjectCaptureData] (native frames) + clears
 ///     the active-session marker.
 class DefaultCaptureCancelController implements CaptureCancelController {
@@ -111,6 +114,11 @@ class DefaultCaptureCancelController implements CaptureCancelController {
 
   @override
   Future<void> discard(String projectId) async {
+    // The LIVE captured set first: the snapshots and frames below are the
+    // durable copies, but the in-memory ledgers are what the review grid and
+    // summary read — leaving them populated would carry the discarded photos
+    // straight into the next capture.
+    _ref.read(levelCaptureLedgerRegistryProvider).endRun();
     // Per-level resumable snapshots.
     try {
       await _sessionStore.clearProject(projectId);

@@ -6,6 +6,8 @@ import 'level_capture_ledger_registry.dart';
 /// Root-scoped registry of per-level capture ledgers (keyed by PitchBand.id —
 /// the repo has no `PitchLevel` enum; see [LevelCaptureLedgerRegistry]). A single
 /// instance persists for the app session — ledgers within it are reset via
+/// [LevelCaptureLedgerRegistry.bindProject] / [LevelCaptureLedgerRegistry.endRun]
+/// (the capture-run boundaries) or the per-level
 /// [LevelCaptureLedgerRegistry.resetLevel] / [LevelCaptureLedgerRegistry.resetAll],
 /// not by recreating this provider.
 ///

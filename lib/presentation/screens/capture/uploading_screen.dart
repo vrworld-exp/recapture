@@ -24,6 +24,7 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/capture/analytics/capture_level_session.dart';
+import '../../../application/capture/ledger/level_capture_ledger_registry_provider.dart';
 import '../../../application/upload/upload_controller.dart';
 import '../../../application/upload/upload_flow.dart';
 import '../../../application/upload/upload_progress_provider.dart';
@@ -138,6 +139,11 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
         'duration_ms': DateTime.now().difference(_entryTime).inMilliseconds,
         'device_type': _deviceType,
       });
+      // The captured set has been handed off — end the run so its frames stop
+      // being "the captures under review". Without this the in-memory ledgers
+      // outlive the upload and the NEXT capture's review grid/summary would
+      // show this object's photos alongside the new ones.
+      ref.read(levelCaptureLedgerRegistryProvider).endRun();
       // Carry the REMOTE project id the flow minted into the post-upload
       // screen. Re-deriving it there would read the local session's id, which
       // is a different id space — and the button it feeds spends money on
