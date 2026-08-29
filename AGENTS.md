@@ -581,6 +581,41 @@ do not remove it).
   still the right call for displaying raw-bucket objects: reads there are not
   presigned-PUT-shaped and go through the API by design.
 
+#### Native (Android/iOS) specifics for this flow
+- **Sniffing reads a HEAD, not a file.** `project_photo_picker.dart` streams the
+  first `kImageSniffHeaderBytes` (12 — the WebP RIFF check is the longest
+  signature) off each photo via `XFile.openRead(0, n)`. It must never call
+  `readAsBytes()` on native: doing so pulled the whole set through RAM at pick
+  time (48 x up to 15 MiB of short-lived allocations on the UI isolate) to read
+  twelve magic bytes. Only WEB reads full bytes, because there they ARE the
+  payload. Pinned by `project_photo_upload_test.dart`.
+- **The flow uses the durable `UploadProgressStore`**, exactly like the capture
+  flow. Without it the engine is stateless, so every auto-retry re-initiated
+  each file and re-sent every part from zero — contradicting the idempotency
+  note in `resilient_upload_runner.dart`.
+- **The connectivity gate needs a way back.** `ChunkedUploadManager`'s `isOnline`
+  gate AUTO-PAUSES a worker that finds the network gone, and only
+  `UploadController.resume()` reopens that gate. The capture flow has two callers
+  for it (the on-screen upload controls, and the offline queue's
+  `autoResumeQueued`); this flow has NEITHER — its progress screen offers only
+  Cancel. `RunnerPhotoSetUploadEngine` therefore subscribes to connectivity edges
+  for the life of one run and resumes on reconnect. Do not enable the gate
+  anywhere without wiring its exit. Pinned by `chunked_upload_manager_test.dart`.
+- **`FOREGROUND_SERVICE_DATA_SYNC` is declared but this flow does NOT use it.**
+  `UploadForegroundServiceClient` is driven only from `offline_upload_queue.dart`
+  (the capture path). A photo-set upload therefore survives backgrounding only
+  as long as Android leaves the process alive — it is not protected by a
+  foreground service. Stated here because the manifest comment reads as though
+  every upload is covered.
+- **The sniffed content type never reaches S3.** It is used only to choose the
+  key's extension (`projectPhotosService.ts` → `buildUploadedPhotoKey`);
+  `initiateMultipartUpload` issues `CreateMultipartUploadCommand` with no
+  `ContentType`, so objects land at `uploads/….jpg` with S3's default
+  `binary/octet-stream`. This does NOT fail the PUT (an `UploadPartCommand`
+  presign does not sign content-type) — it is wrong metadata, not a broken
+  transfer. **Open; not yet fixed** — the fix is in a service the capture path
+  shares, so it changes bundle-object metadata too.
+
 ### Testing
 - Hermetic: isolated store, deterministic, no real network, full teardown. Never
   modify prod code just to make a test pass.

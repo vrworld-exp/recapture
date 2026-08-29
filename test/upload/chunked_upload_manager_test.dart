@@ -12,6 +12,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/upload/chunked_upload_manager.dart';
 import 'package:recapture/application/upload/multipart_upload_api.dart';
+import 'package:recapture/application/upload/photo_set_upload_flow.dart';
+import 'package:recapture/application/upload/resilient_upload_runner.dart';
 import 'package:recapture/domain/entities/upload_progress.dart';
 import 'package:recapture/domain/upload/upload_part_plan.dart';
 import 'package:recapture/domain/upload/upload_session_spec.dart';
@@ -997,4 +999,91 @@ void main() {
     });
   });
 
+  // ── The photo-set engine's connectivity auto-resume ────────────────────────
+  //
+  // The isOnline gate PARKS a worker that finds the network gone, and only
+  // resume() reopens that gate. The capture flow has two callers for it (the
+  // on-screen upload controls, and the offline queue's autoResumeQueued); the
+  // artist photo-set flow has NEITHER — its progress screen offers only Cancel.
+  // So airplane mode mid-upload parked every worker permanently and the
+  // transfer hung even after the network came back. RunnerPhotoSetUploadEngine
+  // now subscribes to connectivity edges for the life of one run; this pins it.
+  group('photo-set engine un-parks a connectivity auto-pause', () {
+    test('a drop mid-transfer resumes on reconnect, without re-sending a part',
+        () async {
+      final api = _FakeApi();
+      final s3 = _GatedS3();
+      var online = true;
+      final onlineEdges = StreamController<bool>.broadcast();
+      addTearDown(onlineEdges.close);
+
+      final manager = ChunkedUploadManager(
+        api: api,
+        s3: s3,
+        byteSource: _ZeroBytes({'f0': kS3MinPartSize + 100}), // 2 parts
+        maxConcurrentParts: 1,
+        chunkSize: kS3MinPartSize,
+        isOnline: () => online,
+      );
+      addTearDown(manager.dispose);
+
+      final engine = RunnerPhotoSetUploadEngine(
+        manager: manager,
+        runner: ResilientUploadRunner(
+          attempt: ManagerUploadAttempt(manager),
+          sleep: (_) async {},
+        ),
+        onlineChanges: onlineEdges.stream,
+      );
+
+      final done = engine.run(_session([kS3MinPartSize + 100]));
+
+      // Part 1 confirms, then the network vanishes before part 2 is picked up.
+      await s3.waitStarted(1);
+      online = false;
+      s3.release(1);
+
+      // The worker re-checks connectivity at the top of its loop and parks
+      // rather than launching part 2 into a dead network.
+      await _until(() => manager.currentStatus == UploadStatus.paused);
+      expect(s3.started, [1], reason: 'part 2 must not start while offline');
+
+      // Airplane mode off. THIS is the edge that used to go unheard.
+      online = true;
+      onlineEdges.add(true);
+
+      // Bounded, so the pre-fix behaviour fails HERE with a legible reason
+      // rather than hanging until the suite-level timeout.
+      await s3.waitStarted(2).timeout(
+            const Duration(seconds: 5),
+            onTimeout: () =>
+                fail('the transfer never resumed after the network returned'),
+          );
+      s3.release(2);
+
+      final outcome = await done.timeout(const Duration(seconds: 5));
+
+      expect(outcome.status, ResilientUploadStatus.succeeded);
+      expect(s3.started, [1, 2],
+          reason: 'resume continues the session; it never re-sends part 1');
+      expect(api.initiated, ['file_0.jpg'],
+          reason: 'one multipart upload — a resume is not a fresh initiate');
+    });
+  });
+}
+
+/// Polls [predicate] until it holds. Used where the thing being awaited is an
+/// ENGINE state change with no future of its own (a worker parking on the pause
+/// gate), so there is nothing else to await.
+Future<void> _until(
+  bool Function() predicate, {
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!predicate()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('condition was not reached within $timeout');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
 }

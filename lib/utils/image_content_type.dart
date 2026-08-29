@@ -15,6 +15,13 @@
 // own check on the bytes it receives; the two must not be able to disagree.
 import 'dart:typed_data';
 
+/// The most leading bytes [sniffImageContentType] can ever need: the WebP check
+/// reads through byte 11, so 12 is the exact floor and every other signature is
+/// shorter. A caller streaming a file off disk reads THIS many and stops — see
+/// `project_photo_picker.dart`, where reading whole photos just to sniff them
+/// would pull a 48-photo set through RAM at pick time.
+const int kImageSniffHeaderBytes = 12;
+
 /// The content types this app will upload. Ordered as the sniffer tries them.
 const String kContentTypeJpeg = 'image/jpeg';
 const String kContentTypePng = 'image/png';

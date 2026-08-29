@@ -144,6 +144,28 @@ void main() {
       final picker = ImagePickerProjectPhotoSource(_FakeBackend(const []));
       expect((await picker.pickPhotos()).isEmpty, isTrue);
     });
+
+    // The file header promises sniffing "does read a short HEAD of each file —
+    // never the whole thing". It did not: readAsBytes() ran on every file on
+    // every platform, so picking a 48-photo set pulled the entire set through
+    // RAM — 48 x up to 15 MiB of short-lived allocations on the UI isolate — to
+    // read twelve magic bytes. This pins the promise to the behaviour.
+    test('on NATIVE it sniffs from the file HEAD — a photo is never read whole',
+        () async {
+      const size = 4 * 1024 * 1024;
+      final big = _FakeXFile('big.jpg', _jpeg(size), size + 3);
+      final picker = ImagePickerProjectPhotoSource(_FakeBackend([big]));
+
+      final set = await picker.pickPhotos();
+
+      expect(set.accepted.single.contentType, kContentTypeJpeg);
+      expect(set.accepted.single.bytes, isNull,
+          reason: 'native holds no payload — the engine streams it off disk');
+      expect(big.readAsBytesCalled, isFalse,
+          reason: 'reading a whole photo to sniff it IS the memory bug');
+      expect(big.bytesRead, lessThanOrEqualTo(kImageSniffHeaderBytes),
+          reason: 'only the sniff header itself may leave the disk');
+    });
   });
 
   // ── The web byte source ────────────────────────────────────────────────────
@@ -803,6 +825,11 @@ class _FakeXFile implements XFile {
   final Uint8List _bytes;
   final int _size;
 
+  /// HOW the picker touched this file — the native memory contract, in two
+  /// numbers. Sniffing must cost a dozen bytes, not the whole photograph.
+  bool readAsBytesCalled = false;
+  int bytesRead = 0;
+
   @override
   String get name => _name;
 
@@ -813,7 +840,19 @@ class _FakeXFile implements XFile {
   Future<int> length() async => _size;
 
   @override
-  Future<Uint8List> readAsBytes() async => _bytes;
+  Future<Uint8List> readAsBytes() async {
+    readAsBytesCalled = true;
+    bytesRead += _bytes.length;
+    return _bytes;
+  }
+
+  @override
+  Stream<Uint8List> openRead([int? start, int? end]) async* {
+    final from = start ?? 0;
+    final to = (end ?? _bytes.length).clamp(from, _bytes.length);
+    bytesRead += to - from;
+    yield Uint8List.sublistView(_bytes, from, to);
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
