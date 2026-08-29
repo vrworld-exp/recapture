@@ -31,6 +31,7 @@ import '../../presentation/screens/capture/permissions_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
 import '../../presentation/screens/capture/level_b_intro_screen.dart';
 import '../../presentation/screens/capture/level_c_intro_screen.dart';
+import '../../presentation/screens/capture/capture_preflight_gate.dart';
 import '../../presentation/screens/capture/capture_screen.dart';
 import '../../presentation/screens/capture/level_review_grid_screen.dart';
 import '../../presentation/screens/capture/level_a_complete_screen.dart';
@@ -301,13 +302,19 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // Optionally entered in RETAKE mode: Review passes a [RetakeRequest] via
         // `extra` to force the active target to one segment. A normal entry has
         // no extra (null → standard guided capture).
-        builder: (context, state) => CaptureScreen(
-          levelLabel: 'A',
-          levelName: 'Eye Ring',
-          nextRoute: AppRoutes.levelAReview,
-          retakeRequest: state.extra is RetakeRequest
-              ? state.extra! as RetakeRequest
-              : null,
+        // Gated on the capability probe so a browser that cannot finish the job
+        // says so in ONE screen up front, naming what is missing — instead of
+        // after 30 photos that cannot upload. All-clear (and one extra build) on
+        // Android/iOS.
+        builder: (context, state) => CapturePreflightGate(
+          child: CaptureScreen(
+            levelLabel: 'A',
+            levelName: 'Eye Ring',
+            nextRoute: AppRoutes.levelAReview,
+            retakeRequest: state.extra is RetakeRequest
+                ? state.extra! as RetakeRequest
+                : null,
+          ),
         ),
       ),
       GoRoute(
@@ -348,7 +355,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
                   coveragePct: 92,
                   rejected: 1,
                 ),
-                primaryLabel: meshy ? 'Finish — go to summary' : 'Start Level B',
+                primaryLabel:
+                    meshy ? 'Finish — go to summary' : 'Start Level B',
                 onStartLevelB: meshy
                     ? () => context.go(AppRoutes.captureSummary)
                     : () => context.go(AppRoutes.levelBIntro),
@@ -373,13 +381,16 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // tuned top-ring instruction copy. Analytics `level` is derived from
         // levelLabel ('B'), so the capture funnel is tagged level=B automatically.
         // Optionally entered in RETAKE mode from Review (RetakeRequest via `extra`).
-        builder: (context, state) => CaptureScreen(
-          levelLabel: 'B',
-          levelName: 'Top Ring',
-          nextRoute: AppRoutes.levelBReview,
-          instructions: kLevelBCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+        builder: (context, state) => CapturePreflightGate(
+          child: CaptureScreen(
+            levelLabel: 'B',
+            levelName: 'Top Ring',
+            nextRoute: AppRoutes.levelBReview,
+            instructions: kLevelBCaptureInstructions,
+            retakeRequest: state.extra is RetakeRequest
+                ? state.extra! as RetakeRequest
+                : null,
+          ),
         ),
       ),
       GoRoute(
@@ -443,13 +454,16 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // The pitch band (Bottom Ring 'low') is selected per-level via
         // pitchBandIdForLevel — the tilt meter + shutter gate already target it.
         // Optionally entered in RETAKE mode from Review (RetakeRequest via `extra`).
-        builder: (context, state) => CaptureScreen(
-          levelLabel: 'C',
-          levelName: 'Low Ring',
-          nextRoute: AppRoutes.levelCReview,
-          instructions: kLevelCCaptureInstructions,
-          retakeRequest:
-              state.extra is RetakeRequest ? state.extra! as RetakeRequest : null,
+        builder: (context, state) => CapturePreflightGate(
+          child: CaptureScreen(
+            levelLabel: 'C',
+            levelName: 'Low Ring',
+            nextRoute: AppRoutes.levelCReview,
+            instructions: kLevelCCaptureInstructions,
+            retakeRequest: state.extra is RetakeRequest
+                ? state.extra! as RetakeRequest
+                : null,
+          ),
         ),
       ),
       GoRoute(
@@ -519,9 +533,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // never a button that would 404.
         builder: (_, state) => FlowBackScope(
           child: ProcessingScreen(
-            projectId: state.extra is String && (state.extra! as String).isNotEmpty
-                ? state.extra! as String
-                : null,
+            projectId:
+                state.extra is String && (state.extra! as String).isNotEmpty
+                    ? state.extra! as String
+                    : null,
           ),
         ),
       ),

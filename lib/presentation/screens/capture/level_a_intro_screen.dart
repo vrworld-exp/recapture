@@ -1,5 +1,4 @@
 // lib/presentation/screens/capture/level_a_intro_screen.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -17,6 +16,7 @@ import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/capture_tip.dart';
 import '../../widgets/eye_ring_intro_animation.dart';
+import '../../../utils/platform_name.dart';
 
 /// Stable persistence/analytics key for this intro.
 const String _kIntroId = 'level_a';
@@ -115,8 +115,7 @@ class _LevelAIntroScreenState extends ConsumerState<LevelAIntroScreen> {
     });
   }
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   /// Persists the seen/opt-out flags, emits the dismissed event, then navigates.
   /// Guarded so a rapid double-tap on Begin/Skip fires navigation only once.

@@ -9,7 +9,6 @@
 // result for the duration of the pass (see CaptureScreen._resolvedBand). A
 // mid-pass remote-config or override change therefore does NOT alter the band of a
 // capture pass already in progress — it applies on the next level entry.
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/capture/pitch_band_resolution.dart';
@@ -17,6 +16,7 @@ import '../../domain/entities/capture_config.dart';
 import '../../utils/analytics.dart';
 import 'effective_capture_config_provider.dart';
 import 'pitch_band_override_provider.dart';
+import '../../utils/platform_name.dart';
 
 /// The effective [PitchBand] for [bandId] (a `PitchBand.id` — the canonical
 /// per-level key from `pitchBandIdForLevel`). Resolves override → remote/cache →
@@ -53,7 +53,6 @@ void logPitchBandReject({
     'reason': reason,
     'min_degrees': minDegrees,
     'max_degrees': maxDegrees,
-    'device_type':
-        defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+    'device_type': appPlatformName,
   });
 }

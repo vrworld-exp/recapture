@@ -315,8 +315,8 @@ class OfflineUploadQueue {
 
     // Re-read: the job may have been cancelled or user-paused DURING the run.
     final current = _byId[entry.jobId];
-    if (current == null)
-      return true; // cancelled underneath us — nothing to record
+    // cancelled underneath us — nothing to record
+    if (current == null) return true;
 
     switch (outcome.status) {
       case ResilientUploadStatus.succeeded:

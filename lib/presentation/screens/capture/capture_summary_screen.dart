@@ -28,9 +28,7 @@
 // shared `evaluateLevelA` validator over the live ledger) — this screen recomputes
 // no coverage and owns no sequencing or upload mechanics.
 import 'dart:async';
-import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -52,6 +50,8 @@ import '../../../domain/capture/capture_cancel.dart';
 import '../../../domain/capture/level_completion.dart';
 import '../../../domain/capture/upload_gate.dart';
 import '../../../utils/analytics.dart';
+import '../../../utils/platform_name.dart';
+import '../../../platform/capture_ports/capture_image_source.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import 'capture_cancel_flow.dart';
@@ -103,7 +103,7 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
   Timer? _connectivityDebounce;
 
   static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+      appPlatformName;
 
   /// The opaque funnel session id, or '' when no session was observed (app
   /// restart / deep-link) — the same accepted edge the rest of the funnel uses.
@@ -1066,10 +1066,16 @@ class _Thumb extends StatelessWidget {
           ? placeholder
           : ClipRRect(
               borderRadius: radius,
-              child: Image.file(
-                File(path!),
+              child: Image(
+                // Resolved through the capture-storage port, never
+                // `File(path)`: a file read natively, an IndexedDB lookup of
+                // the `idb://` handle on web.
+                image: ResizeImage(
+                  captureImage(path!),
+                  width: (_size * dpr).round(),
+                  policy: ResizeImagePolicy.fit,
+                ),
                 fit: BoxFit.cover,
-                cacheWidth: (_size * dpr).round(),
                 gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => placeholder,
               ),

@@ -1,7 +1,6 @@
 // lib/presentation/screens/auth/otp_verification_screen.dart
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -15,6 +14,7 @@ import '../../../utils/analytics.dart';
 import '../../../utils/app_env.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/offline_retry_modal.dart';
+import '../../../utils/platform_name.dart';
 
 /// Number of OTP digits. Single source of truth — change here if the backend
 /// uses a different length.
@@ -84,8 +84,7 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
 
   String get _code => _controller.text;
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   @override
   void initState() {
@@ -257,7 +256,8 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary),
+          icon: const Icon(Icons.arrow_back_ios_new,
+              color: AppColors.textPrimary),
           onPressed: () => navigateBack(context),
         ),
       ),

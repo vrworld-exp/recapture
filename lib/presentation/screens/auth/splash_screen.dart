@@ -1,7 +1,6 @@
 // lib/presentation/screens/auth/splash_screen.dart
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +12,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../../utils/platform_name.dart';
 
 /// Screen 0 — entry/splash. Shows the brand mark while a fully-offline
 /// bootstrap check decides whether to route to the Auth flow or the Projects
@@ -98,8 +98,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     Analytics.logEvent('app_launch', {
       'auth_status': authed ? 'authenticated' : 'unauthenticated',
       'init_duration_ms': initDurationMs,
-      'platform':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      'platform': appPlatformName,
     });
 
     // The router's guard reads the same auth source via the bridged listenable,
@@ -141,8 +140,8 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                           color: AppColors.mirageRed,
                           borderRadius: BorderRadius.circular(AppRadius.md),
                         ),
-                        child:
-                            const Icon(Icons.videocam, color: Colors.white, size: 32),
+                        child: const Icon(Icons.videocam,
+                            color: Colors.white, size: 32),
                       ),
                       const SizedBox(height: AppSpacing.xxl),
                       Text(

@@ -1,11 +1,11 @@
 // lib/presentation/widgets/offline_retry_modal.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../platform/haptics.dart';
 import '../../utils/analytics.dart';
 import 'app_button.dart';
+import '../../utils/platform_name.dart';
 
 /// Which screen surfaced the offline modal — used for analytics.
 enum OfflineSource { auth, projectsHub }
@@ -91,8 +91,7 @@ class _OfflineRetryModalState extends State<OfflineRetryModal> {
     });
   }
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   Future<void> _onRetry() async {
     if (_inFlight) return; // double-tap guard

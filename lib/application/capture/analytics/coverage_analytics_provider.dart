@@ -24,7 +24,6 @@
 // (segmentCoverageProvider.recordCapture on an accepted capture) is owned by a
 // separate wiring task, so today this observer is dormant in-app until that lands
 // — it is fully exercised in tests by driving the coverage notifier directly.
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../domain/entities/capture_readiness.dart' show CaptureMode;
@@ -34,6 +33,7 @@ import '../segment_coverage_provider.dart';
 import 'capture_level_events.dart';
 import 'capture_level_session.dart';
 import 'coverage_analytics_tracker.dart';
+import '../../../utils/platform_name.dart';
 
 /// Activates the coverage-analytics observer. Listens to [segmentCoverageProvider]
 /// transitions (so the model stays pure) and re-arms/seeds the tracker per level
@@ -84,8 +84,7 @@ final coverageAnalyticsObserverProvider =
       projectId: session?.projectId ?? '',
       sessionId: session?.sessionId ?? '',
       captureMode: mode == CaptureMode.manual ? 'manual' : 'guided',
-      deviceType:
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      deviceType: appPlatformName,
     );
     // Persist this level's fired milestones so a later resume won't re-fire them.
     // Best-effort + a no-op when unchanged (recordLevelProgress skips an equal

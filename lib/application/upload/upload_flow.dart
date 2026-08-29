@@ -30,12 +30,10 @@
 // Every boundary (context resolution, packer, backend, engine) is injected so
 // the orchestrator is unit-testable with fakes — no Hive/network/filesystem.
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../data/local/active_session_box.dart';
 import '../../data/local/upload_progress_box.dart';
@@ -58,6 +56,9 @@ import '../capture/progression/level_progression.dart';
 import '../capture/progression/level_progression_builder.dart';
 import '../capture/progression/level_progression_provider.dart';
 import '../config/config_notifier.dart';
+import 'upload_platform_stub.dart'
+    if (dart.library.io) 'upload_platform_io.dart'
+    if (dart.library.js_interop) 'upload_platform_web.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../projects/projects_notifier.dart';
 import '../warmup/backend_warmup.dart';
@@ -77,6 +78,7 @@ import '../../domain/capture/capture_mode.dart';
 // enum (guided/manual, the PROJECT mode); we want only its ObjectSize +
 // apiValue extension for reading the reused project's stored size.
 import '../../domain/entities/create_project_options.dart' hide CaptureMode;
+import '../../utils/platform_name.dart';
 
 /// A terminal upload-flow failure carrying its ALREADY-MAPPED category — the
 /// authoritative [UploadFailureSignal] `classifyUploadFailure` honors, so 9F
@@ -418,7 +420,9 @@ UploadSessionSpec buildUploadSessionSpec({
   required String sessionId,
   int Function(String path)? fileSize,
 }) {
-  final sizeOf = fileSize ?? _fileSizeOnDisk;
+  // Platform seam: a real `File.lengthSync` natively, the virtual bundle
+  // index on web. Tests still inject their own.
+  final sizeOf = fileSize ?? bundleFileSize;
   final files = <UploadFileSpec>[];
 
   void add(String path, String key) {
@@ -439,11 +443,6 @@ UploadSessionSpec buildUploadSessionSpec({
   add(bundle.manifestPath, manifestKey);
 
   return UploadSessionSpec(sessionId: sessionId, files: files);
-}
-
-int _fileSizeOnDisk(String path) {
-  final f = File(path);
-  return f.existsSync() ? f.lengthSync() : 0;
 }
 
 /// Thrown internally when a cancel lands between flow steps.
@@ -608,8 +607,9 @@ class UploadFlowOrchestrator {
           mode: 'guided',
         );
         _checkCancel();
-        DevUploadLog.instance.add('project created (remoteId=$remoteProjectId); '
-            'POST /jobs (expectedFiles=${bundle.totalImages + 1}) …');
+        DevUploadLog.instance
+            .add('project created (remoteId=$remoteProjectId); '
+                'POST /jobs (expectedFiles=${bundle.totalImages + 1}) …');
         progress.remoteProjectId = remoteProjectId;
         progress.stepCompleted(
           UploadFlowStepId.createProject,
@@ -742,8 +742,7 @@ class UploadFlowOrchestrator {
   static bool _isReusableProjectId(String id) =>
       id.isNotEmpty && !id.startsWith(kPendingProjectIdPrefix);
 
-  static String get _platformName =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _platformName => appPlatformName;
 }
 
 /// The ACTIVE upload flow's progress/control surface, or null when idle.
@@ -896,7 +895,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
           '${now.minute.toString().padLeft(2, '0')}';
     }
 
-    final docs = await getApplicationDocumentsDirectory();
+    final workspaceRoot = await resolveUploadWorkspaceRoot();
     return UploadFlowContext(
       localProjectId: projectId,
       projectName: projectName,
@@ -906,7 +905,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       registry: ref.read(levelCaptureLedgerRegistryProvider),
       variant: ref.read(captureFlowVariantProvider),
       mode: ref.read(captureModeProvider),
-      workspaceRoot: '${docs.path}/upload_workspace',
+      workspaceRoot: workspaceRoot,
       objectSize: objectSize,
     );
   }
@@ -917,7 +916,11 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
     required ManifestDevice device,
     BundleCancelToken? cancelToken,
   }) =>
-      CaptureBundlePacker(workspaceRoot: context.workspaceRoot).pack(
+      // Platform seam: the staging-directory packer natively, the virtual
+      // (copy-free) bundle index on web. Both produce the same layout, the same
+      // deterministic names and the same manifest.
+      packCaptureBundle(
+        workspaceRoot: context.workspaceRoot,
         session: session,
         device: device,
         config: context.config,
@@ -929,14 +932,16 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       );
 
   UploadEngine _buildEngine(String jobId) {
-    final deviceType =
-        defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+    final deviceType = appPlatformName;
     final manager = ChunkedUploadManager(
       api: JobsMultipartUploadApi(
         dio: ref.read(uploadApiDioProvider),
         jobId: jobId,
       ),
       s3: DioS3PartClient(),
+      // Platform seam: lazy range reads off disk natively, lazy `Blob.slice()`
+      // reads out of IndexedDB on web. Neither ever holds a whole image.
+      byteSource: createBundlePartByteSource(),
       store: HiveUploadProgressStore(),
       // Connectivity gate: parts park (auto-pause) instead of burning retries
       // into a dead network; the user resumes from the upload controls.

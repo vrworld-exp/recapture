@@ -1,7 +1,6 @@
 // lib/presentation/screens/projects/create_project_screen.dart
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -26,6 +25,7 @@ import '../../widgets/app_text_field.dart';
 import '../../widgets/offline_retry_modal.dart';
 import 'capture_mode_sheet.dart';
 import 'photo_upload_progress_screen.dart';
+import '../../../utils/platform_name.dart';
 
 /// Create Project form, in one of TWO variants picked by the sheet that opened
 /// it (see [ProjectCreationChoice]).
@@ -76,8 +76,7 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
   /// argument — the two variants never swap at runtime.
   bool get _isUpload => widget.choice is UploadChoice;
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   /// CTA enables only when the name is non-blank and, per variant:
   ///  • capture — a size and a mode are both chosen;
@@ -86,7 +85,8 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
   bool get _canSubmit {
     if (_creating || _nameController.text.trim().isEmpty) return false;
     if (_isUpload) {
-      return ref.read(projectPhotosProvider).picked.length >= kProjectPhotoMinCount;
+      return ref.read(projectPhotosProvider).picked.length >=
+          kProjectPhotoMinCount;
     }
     return _selectedSize != null && _selectedMode != null;
   }
@@ -167,9 +167,7 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
       // property of the PROJECT: a user resuming from the list never passes
       // through the sheet again. Offline, the id is a temp one and the outbox
       // migrates the record when the server id arrives.
-      await ref
-          .read(captureModeProvider.notifier)
-          .persistFor(created!.id);
+      await ref.read(captureModeProvider.notifier).persistFor(created!.id);
 
       // Persist the object SIZE against the project for the same reason — a
       // resumed session never revisits this form, and the server Project DTO
@@ -268,10 +266,12 @@ class _CreateProjectScreenState extends ConsumerState<CreateProjectScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary),
+          icon: const Icon(Icons.arrow_back_ios_new,
+              color: AppColors.textPrimary),
           onPressed: () => navigateBack(context),
         ),
-        title: Text('New Project', style: Theme.of(context).textTheme.titleLarge),
+        title:
+            Text('New Project', style: Theme.of(context).textTheme.titleLarge),
       ),
       body: SafeArea(
         top: false,
@@ -388,7 +388,8 @@ class _PhotoPickerSection extends ConsumerWidget {
               ? 'Pick $kProjectPhotoMinCount to $kProjectPhotoMaxCount photos of the object, '
                   'all the way around it.'
               : '${state.picked.length} of $kProjectPhotoMaxCount selected.',
-          style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          style:
+              theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
         ),
         if (state.picked.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.md),
@@ -410,7 +411,8 @@ class _PhotoPickerSection extends ConsumerWidget {
           const SizedBox(height: AppSpacing.xs),
           Text(
             '${rejected.name} — ${_reasonText(rejected.reason)}',
-            style: theme.textTheme.bodySmall?.copyWith(color: AppColors.mirageRed),
+            style:
+                theme.textTheme.bodySmall?.copyWith(color: AppColors.mirageRed),
           ),
         ],
       ],
@@ -519,9 +521,8 @@ class _SizeChipRow extends StatelessWidget {
               _SizeChip(
                 label: option.label,
                 selected: selected == option.value,
-                onTap: onSelected == null
-                    ? null
-                    : () => onSelected!(option.value),
+                onTap:
+                    onSelected == null ? null : () => onSelected!(option.value),
               ),
           ],
         ),

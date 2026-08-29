@@ -1,7 +1,5 @@
 // lib/presentation/screens/capture/review_grid_screen.dart
-import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/routes/flow_back.dart';
@@ -15,6 +13,8 @@ import '../../../domain/entities/review_item.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/verdict_badge.dart';
+import '../../../utils/platform_name.dart';
+import '../../../platform/capture_ports/capture_image_source.dart';
 
 /// Screen 7A — Level A Review grid. Shows every captured photo for the session as
 /// a responsive, lazy thumbnail grid, each tile badged with its quality verdict
@@ -121,8 +121,7 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
   DateTime? _lastRetakeAt;
   static const Duration _retakeDebounce = Duration(milliseconds: 800);
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   bool get _selectionEnabled => widget.onDeleteSelected != null;
 
@@ -145,7 +144,8 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
     });
     // Review-session funnel: once per OPEN (initState — never on rebuild/rotate),
     // even with zero photos. Only when the owner supplied funnel context.
-    widget.reviewAnalytics?.opened(widget.items.length, deviceType: _deviceType);
+    widget.reviewAnalytics
+        ?.opened(widget.items.length, deviceType: _deviceType);
   }
 
   @override
@@ -239,7 +239,8 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
     if (cb == null || ringIndex == null) return;
 
     final now = DateTime.now();
-    if (_lastRetakeAt != null && now.difference(_lastRetakeAt!) < _retakeDebounce) {
+    if (_lastRetakeAt != null &&
+        now.difference(_lastRetakeAt!) < _retakeDebounce) {
       return; // swallow the rapid second tap — one navigation only
     }
     _lastRetakeAt = now;
@@ -308,10 +309,9 @@ class _ReviewGridScreenState extends State<ReviewGridScreen> {
                             selectionMode: selectionMode,
                             isSelected: _selection.isSelected,
                             onTapItem: _handleTap,
-                            onLongPressItem:
-                                (_selectionEnabled && !isCupertino)
-                                    ? _handleLongPress
-                                    : null,
+                            onLongPressItem: (_selectionEnabled && !isCupertino)
+                                ? _handleLongPress
+                                : null,
                             // Retake control is hidden during selection (the tile
                             // is busy being (de)selected) and when no hook is set.
                             onRetakeItem:
@@ -559,7 +559,8 @@ class _SummaryHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          _SummaryChip(verdict: CaptureVerdict.accepted, count: counts.accepted),
+          _SummaryChip(
+              verdict: CaptureVerdict.accepted, count: counts.accepted),
           const SizedBox(width: AppSpacing.md),
           _SummaryChip(verdict: CaptureVerdict.warn, count: counts.warned),
           const SizedBox(width: AppSpacing.md),
@@ -656,9 +657,8 @@ class _Grid extends StatelessWidget {
               selectionMode: selectionMode,
               selected: isSelected(item.captureId),
               onTap: () => onTapItem(item),
-              onLongPress: onLongPressItem == null
-                  ? null
-                  : () => onLongPressItem!(item),
+              onLongPress:
+                  onLongPressItem == null ? null : () => onLongPressItem!(item),
               // Only tiles with a known ring position can be retaken (the request
               // targets a segment). Missing ringIndex → no control.
               onRetake: (onRetakeItem == null || item.ringIndex == null)
@@ -704,10 +704,13 @@ class _ReviewTile extends StatelessWidget {
     // perf/memory guard for large sets on low-end devices.
     final cachePx = (tileWidth * dpr).round();
 
-    final image = Image.file(
-      File(item.filePath),
+    final image = Image(
+      image: ResizeImage(
+        captureImage(item.filePath),
+        width: cachePx,
+        policy: ResizeImagePolicy.fit,
+      ),
       fit: BoxFit.cover,
-      cacheWidth: cachePx,
       gaplessPlayback: true,
       frameBuilder: (context, child, frame, wasSync) =>
           frame == null ? const _TileSurface() : child,
@@ -883,9 +886,7 @@ class _RetakeButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       button: true,
-      label: ringIndex != null
-          ? 'Retake position ${ringIndex! + 1}'
-          : 'Retake',
+      label: ringIndex != null ? 'Retake position ${ringIndex! + 1}' : 'Retake',
       child: GestureDetector(
         key: Key('review_retake_$captureId'),
         behavior: HitTestBehavior.opaque,
@@ -898,7 +899,8 @@ class _RetakeButton extends StatelessWidget {
             shape: BoxShape.circle,
             border: Border.all(color: AppColors.royalGold, width: 1.5),
           ),
-          child: const Icon(Icons.refresh, size: 16, color: AppColors.royalGold),
+          child:
+              const Icon(Icons.refresh, size: 16, color: AppColors.royalGold),
         ),
       ),
     );

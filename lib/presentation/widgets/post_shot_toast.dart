@@ -1,7 +1,6 @@
 // lib/presentation/widgets/post_shot_toast.dart
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/app_colors.dart';
@@ -10,6 +9,7 @@ import '../../domain/entities/capture_evaluation.dart';
 import '../../platform/haptics.dart';
 import '../../utils/analytics.dart';
 import 'post_shot_messages.dart';
+import '../../utils/platform_name.dart';
 
 /// Post-shot feedback toast for Level A: right after a capture it tells the user
 /// whether the shot was accepted, accepted-with-a-warning, or rejected, and (for
@@ -172,8 +172,7 @@ class _PostShotToastState extends State<PostShotToast> {
     setState(() => _displayed = null);
   }
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   @override
   void dispose() {
@@ -300,7 +299,8 @@ class _ToastCard extends StatelessWidget {
             ),
             if (evaluation.retakeOffered) ...[
               const SizedBox(width: AppSpacing.md),
-              _RetakeButton(accent: accent, onTap: onRetake, prominent: isReject),
+              _RetakeButton(
+                  accent: accent, onTap: onRetake, prominent: isReject),
             ],
           ],
         ),

@@ -20,7 +20,6 @@
 // confirms first (retain-semantics wording) and guards against opening a second
 // confirmation. The pipeline's control API is also idempotent, so a slipped-through
 // duplicate is still a safe no-op.
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -30,6 +29,7 @@ import '../../domain/entities/upload_progress.dart';
 import '../../utils/analytics.dart';
 import 'app_button.dart';
 import 'upload_cancel_confirmation.dart';
+import '../../utils/platform_name.dart';
 
 class UploadControls extends ConsumerStatefulWidget {
   const UploadControls({
@@ -59,8 +59,7 @@ class _UploadControlsState extends ConsumerState<UploadControls> {
   /// True while the Cancel confirmation is open — prevents stacking a second one.
   bool _confirming = false;
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   @override
   void didUpdateWidget(covariant UploadControls oldWidget) {
@@ -124,10 +123,10 @@ class _UploadControlsState extends ConsumerState<UploadControls> {
       return;
     }
     setState(() => _inFlight = true);
-    _controller.cancel(); // aborts the TRANSFER; local captured data is retained
+    _controller
+        .cancel(); // aborts the TRANSFER; local captured data is retained
     _logControl(AnalyticsEvents.uploadCancelled, {
-      'from_state':
-          from == UploadStatus.paused ? 'paused' : 'uploading',
+      'from_state': from == UploadStatus.paused ? 'paused' : 'uploading',
     });
   }
 

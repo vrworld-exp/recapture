@@ -558,6 +558,68 @@ do not remove it).
   secret). Staff-only surfaces (the Projects screen's "Live projects" tab)
   gate on `isStaffProvider`; the backend re-checks the role on every request.
 
+### Capture platform ports (`lib/platform/capture_ports/`) — LIVE on web and native
+Every native capability the guided capture consumes sits behind a **port** with
+an `_io` (MethodChannel/EventChannel) and a `_web` (browser API) implementation,
+selected by conditional import — the same pattern
+`application/projects/model_export_service.dart` established:
+
+```dart
+import 'x_stub.dart'
+    if (dart.library.io) 'x_io.dart'
+    if (dart.library.js_interop) 'x_web.dart';
+```
+
+| Port | Native | Web |
+|---|---|---|
+| `CameraPreviewPort` | `camera_preview` channel | `getUserMedia` → `<video>` in an `HtmlElementView` |
+| `StillCapturePort` (capture + its event stream) | `capture` + `captureEvents` channels | canvas draw → JPEG → IndexedDB |
+| `OrientationPort` | `imu_rotation` / `imu_orientation` | `DeviceOrientationEvent` |
+| `StabilityPort` | `stability` | `devicemotion` |
+| `FrameQualityPort` (blur + exposure) | `blur` / `exposure` | canvas `ImageData` |
+| `CaptureStoragePort` | `capture_storage` | IndexedDB |
+| Browser permission backend | `permissions` channel / `permission_handler` | Permissions API + `getUserMedia` + iOS Safari's motion handshake |
+
+Rules that hold this together — break any of them and the platforms drift:
+
+- **No `kIsWeb` in `lib/application/**` or `lib/presentation/**` for capture.**
+  The port boundary is the branch. (`kIsWeb` in `lib/platform/**`, and the few
+  pre-existing UI advisories, are fine.)
+- The legacy wrapper classes (`CaptureChannel`, `ImuOrientationStream`,
+  `StabilityGateStream`, `CaptureStorageClient`, …) kept their names,
+  constructors and signatures and now **delegate** to their port. Their value
+  types moved into `capture_ports/*_models.dart` and are **re-exported**, so
+  every existing import still resolves.
+- The web side **ports the native algorithms rather than re-tuning them**:
+  `orientation_math.dart`, `stability_math.dart` and `frame_quality_math.dart`
+  are line-for-line Dart ports of the Kotlin in
+  `android/app/src/main/kotlin/.../sensors|camera/`. In particular blur is
+  normalized to the **same 640px width**, so one threshold set serves both
+  platforms — there is deliberately no web-specific threshold config.
+- **`CapturedFrame.path` is opaque.** A filesystem path natively, an
+  `idb://{projectId}/{jobId}/{level}/{frameId}.jpg` handle on web. Never
+  `File(path)` it — resolve through `CaptureStorageClient.readFrameBytes` or
+  `captureImage(path)` (`capture_ports/capture_image_source.dart`).
+- **`CaptureStorageClient.setActiveScope` / `setJobActive` are no-ops natively**
+  and load-bearing on web (they are what scope an IndexedDB key and arm the
+  `active_job` delete guard). The capture screen calls them when a level session
+  starts.
+- **The web bundle is virtual.** `web_capture_bundle_packer.dart` copies
+  nothing: it indexes the already-stored frames (`web_bundle_registry.dart`) and
+  generates the same manifest. Copying would double a quota-limited origin's
+  storage for no gain.
+- **`full` fails open, `meshy` hard-gates — on web too.** `usesHardTiltGate`,
+  `oneShotPerSegment` and `CaptureReadiness`'s fail-open are unchanged, and
+  `test/capture/capture_readiness_web_regression_test.dart` exists to make
+  "fixing" the web Maya shutter by relaxing them fail loudly.
+- **Platform token:** `appPlatformName` (`utils/platform_name.dart`) is the ONE
+  source of `'web' | 'ios' | 'android'`. Never inline
+  `defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android'` again — on
+  web it reports the host OS and silently mislabels every event.
+- **Web capture requires HTTPS** and Full Capture on web is a **degraded tier**
+  (no exposure/focus lock, lower resolution, no background upload). Both are
+  documented in the README web section and surfaced in the UI.
+
 ### Web upload of artist photo sets (LIVE on web and native)
 - The presigned part PUTs go **direct to S3**, and the avatar bytes-proxy
   precedent explicitly **does not extend here** — a 48-photo set is

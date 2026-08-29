@@ -10,7 +10,6 @@
 // This replaces the former placeholder `ReviewScreen` (static fake tiles) — A/B/C
 // now share one rich grid showing actual frames + per-frame QC badges, so there is
 // a SINGLE review-grid implementation across the flow.
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -21,6 +20,7 @@ import '../../../application/capture/review_grid_items_provider.dart';
 import '../../../domain/entities/retake_request.dart';
 import '../../../utils/analytics.dart';
 import 'review_grid_screen.dart';
+import '../../../utils/platform_name.dart';
 
 /// Maps a [CaptureLevel] to its capture route — where a per-tile Retake navigates
 /// (in retake mode, via a [RetakeRequest] passed as GoRouter `extra`).
@@ -87,8 +87,7 @@ class LevelReviewGridScreen extends ConsumerWidget {
       'action': action,
       'level': level.code,
       if (frameId != null) 'frame_id': frameId,
-      'device_type':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      'device_type': appPlatformName,
     });
   }
 }

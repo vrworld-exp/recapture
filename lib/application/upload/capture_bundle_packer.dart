@@ -46,8 +46,10 @@ import '../../domain/upload/capture_bundle.dart';
 import '../../domain/upload/capture_manifest.dart';
 import '../../domain/upload/file_checksum.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 import '../capture/ledger/level_capture_ledger_registry.dart';
 import '../capture/progression/level_progression.dart';
+import 'bundle_cancel_token.dart';
 import 'capture_manifest_assembler.dart'
     show
         CaptureSidecarReader,
@@ -55,15 +57,7 @@ import 'capture_manifest_assembler.dart'
         fileNameOf,
         sidecarPathForFrame;
 
-/// Cooperative cancellation for a pack. The packer checks [isCancelled] between
-/// files and before each heavy stage, aborts promptly, and cleans up staging.
-class BundleCancelToken {
-  bool _cancelled = false;
-
-  bool get isCancelled => _cancelled;
-
-  void cancel() => _cancelled = true;
-}
+export 'bundle_cancel_token.dart' show BundleCancelToken;
 
 /// Copies one file `src → dst`, returning the bytes written. Injectable so the
 /// heavy work runs off the main isolate in production and in-process in tests. The
@@ -122,8 +116,7 @@ class CaptureBundlePacker {
   final CaptureSidecarReader _sidecarReader;
   final FileChecksum _checksum;
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   /// Packs [session]'s accepted frames into a finalized bundle. Reports progress
   /// (`done`, `total`) and honours [cancelToken]. Throws [BundlePackException] on

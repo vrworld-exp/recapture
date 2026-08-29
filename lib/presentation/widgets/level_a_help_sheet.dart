@@ -1,5 +1,4 @@
 // lib/presentation/widgets/level_a_help_sheet.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -10,6 +9,7 @@ import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../utils/analytics.dart';
 import 'capture_tip.dart';
+import '../../utils/platform_name.dart';
 
 /// Opens the Level A Help sheet: a modal bottom sheet of 5–7 quick capture tips.
 ///
@@ -27,8 +27,7 @@ Future<void> showLevelAHelpSheet(
   VoidCallback? onReplayIntro,
 }) {
   Analytics.logEvent(AnalyticsEvents.levelAHelpOpened, {
-    'device_type':
-        defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+    'device_type': appPlatformName,
   });
 
   return showModalBottomSheet<void>(
@@ -92,11 +91,13 @@ class LevelAHelpSheet extends ConsumerWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text('Capture tips', style: theme.textTheme.titleLarge),
+                    child:
+                        Text('Capture tips', style: theme.textTheme.titleLarge),
                   ),
                   IconButton(
                     tooltip: 'Close',
-                    icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                     onPressed: () {
                       _logAction('close');
                       Navigator.of(context).pop();

@@ -1,11 +1,11 @@
 // lib/presentation/widgets/thumbnail_strip.dart
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../domain/entities/capture_thumbnail.dart';
+import '../../platform/capture_ports/capture_image_source.dart';
 
 /// Level A thumbnail strip: a compact row of the most recent captures
 /// (newest-first, capped at [maxVisible]) for quick visual confirmation that
@@ -13,7 +13,7 @@ import '../../domain/entities/capture_thumbnail.dart';
 /// and emits an optional [onTapThumbnail]; it does NOT capture, save, or own the
 /// photo set, and builds no preview.
 ///
-/// Each tile downscale-decodes its image (`cacheWidth` matched to the tile's
+/// Each tile downscale-decodes its image (`ResizeImage` matched to the tile's
 /// pixel size) so full-res photos never decode into memory for tiny tiles — the
 /// key low-end-device guard. A new capture animates in (a fresh keyed tile fades
 /// + slides); the row resizes via [AnimatedSize] as the oldest drops off.
@@ -51,7 +51,8 @@ class ThumbnailStrip extends StatelessWidget {
         .toList();
 
     return AnimatedSize(
-      duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 220),
+      duration:
+          reduceMotion ? Duration.zero : const Duration(milliseconds: 220),
       alignment: Alignment.centerLeft,
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -108,7 +109,8 @@ class _ThumbTileState extends State<_ThumbTile>
     super.didChangeDependencies();
     if (_entryStarted) return;
     _entryStarted = true;
-    final reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     if (reduceMotion) {
       _entry.value = 1; // instant
     } else {
@@ -134,10 +136,17 @@ class _ThumbTileState extends State<_ThumbTile>
       child: SizedBox(
         width: widget.size,
         height: widget.size,
-        child: Image.file(
-          File(widget.thumbnail.filePath),
+        child: Image(
+          // Resolved through the capture-storage port, never `File(path)`:
+          // natively that is still a file read, on web it is an IndexedDB
+          // lookup of the `idb://` handle. `ResizeImage` keeps the
+          // decode-at-tile-size guard the old `cacheWidth` gave us.
+          image: ResizeImage(
+            captureImage(widget.thumbnail.filePath),
+            width: cachePx,
+            policy: ResizeImagePolicy.fit,
+          ),
           fit: BoxFit.cover,
-          cacheWidth: cachePx,
           gaplessPlayback: true,
           // Neutral placeholder while decoding.
           frameBuilder: (context, child, frame, wasSync) =>
@@ -161,7 +170,8 @@ class _ThumbTileState extends State<_ThumbTile>
           color: AppColors.royalGold.withValues(alpha: 0.7),
         ),
         boxShadow: const [
-          BoxShadow(color: AppColors.scrim, blurRadius: 4, offset: Offset(0, 1)),
+          BoxShadow(
+              color: AppColors.scrim, blurRadius: 4, offset: Offset(0, 1)),
         ],
       ),
       child: tile,

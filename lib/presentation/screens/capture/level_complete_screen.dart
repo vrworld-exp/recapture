@@ -1,5 +1,4 @@
 // lib/presentation/screens/capture/level_complete_screen.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,6 +13,7 @@ import '../../../domain/entities/capture_config.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
+import '../../../utils/platform_name.dart';
 
 /// Generic per-level completion interstitial (Levels B & C; Screen 6B-Complete is
 /// the Level B instance). A parameterized recap once a level's capture pass meets
@@ -67,8 +67,7 @@ class _LevelCompleteScreenState extends ConsumerState<LevelCompleteScreen> {
   /// One-shot guard so a rapid double-tap on either CTA fires a single nav.
   bool _dispatched = false;
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   CaptureLevel get _level => captureLevelFromLabel(widget.levelLabel);
 

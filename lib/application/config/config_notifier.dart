@@ -1,11 +1,11 @@
 // lib/application/config/config_notifier.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/config_repository.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/capture_config_validator.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// The lowest cached [CaptureConfig.version] still trusted at startup. A
 /// returning user's Hive cache is applied BEFORE the remote fetch lands and
@@ -83,8 +83,7 @@ class ConfigNotifier extends Notifier<CaptureConfig> {
       'result': result,
       'source_used': sourceUsed,
       'config_version': version,
-      'device_type':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      'device_type': appPlatformName,
     });
   }
 }

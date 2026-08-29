@@ -1,5 +1,4 @@
 // lib/application/offline/offline_queue_notifier.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/local/offline_queue_box.dart';
@@ -13,6 +12,7 @@ import '../../utils/analytics.dart';
 import '../auth/auth_notifier.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../projects/projects_notifier.dart';
+import '../../utils/platform_name.dart';
 
 /// Drop an action once it has failed this many drains, so a permanently-failing
 /// action can never wedge the queue. Kept deliberately simple — no backoff.
@@ -97,7 +97,8 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
       final bumped = action.incremented();
       if (bumped.attempts >= kMaxOfflineAttempts) {
         // Runaway action — drop it so it can't wedge the queue forever.
-        _log(event: 'action_dropped', actionType: bumped.type, pendingCount: -1);
+        _log(
+            event: 'action_dropped', actionType: bumped.type, pendingCount: -1);
         continue;
       }
       retained.add(bumped);
@@ -164,7 +165,9 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
             size: objectSizeFromApi(action.payload['size'] as String? ?? ''),
             mode: captureModeFromApi(action.payload['mode'] as String? ?? ''),
           );
-      ref.read(projectsProvider.notifier).reconcilePendingCreate(tempId, created);
+      ref
+          .read(projectsProvider.notifier)
+          .reconcilePendingCreate(tempId, created);
       return true;
     } catch (_) {
       return false; // network/server failure → keep it queued for the next drain
@@ -188,7 +191,9 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
   Future<void> _persist(List<OfflineAction> actions) async {
     try {
       await _box.save(actions);
-    } catch (_) {/* persistence is best-effort; never break the in-memory queue */}
+    } catch (_) {
+      /* persistence is best-effort; never break the in-memory queue */
+    }
   }
 
   void _log({
@@ -201,8 +206,7 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
       'event': event,
       if (actionType != null) 'action_type': actionType.analyticsValue,
       'pending_count': pendingCount < 0 ? state.pendingCount : pendingCount,
-      'device_type':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      'device_type': appPlatformName,
     });
   }
 }

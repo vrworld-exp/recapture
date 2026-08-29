@@ -27,6 +27,7 @@ import 'capture_mode_sheet.dart';
 import 'model_building_screen.dart';
 import 'model_viewer_screen.dart';
 import 'owner_model_history_screen.dart';
+import '../../../utils/platform_name.dart';
 
 /// Which list the (staff-only) segmented control shows. Non-staff users never
 /// see the control and always get [mine].
@@ -43,7 +44,8 @@ class ProjectsScreen extends ConsumerStatefulWidget {
   ConsumerState<ProjectsScreen> createState() => _ProjectsScreenState();
 }
 
-class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware {
+class _ProjectsScreenState extends ConsumerState<ProjectsScreen>
+    with RouteAware {
   /// Per-project in-flight guard so a double-tap can't fire two requests/navs.
   final Set<String> _actionInFlight = <String>{};
 
@@ -111,8 +113,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     }
   }
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   // ── Data ─────────────────────────────────────────────────────────────────────
 
@@ -141,8 +142,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   void _logRefresh(String result) {
     Analytics.logEvent('projects_list_refreshed', {
       'result': result,
-      'project_count':
-          result == 'success' ? (_projectsOrEmpty().length) : 0,
+      'project_count': result == 'success' ? (_projectsOrEmpty().length) : 0,
       'device_type': _deviceType,
     });
   }
@@ -218,7 +218,8 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     if (!_claim(p)) return;
     _logAction('view', p);
     try {
-      final state = await ref.read(projectsRepositoryProvider).fetchModelState(p.id);
+      final state =
+          await ref.read(projectsRepositoryProvider).fetchModelState(p.id);
       if (!mounted) return;
       if (state.hasViewableModel) {
         await Navigator.of(context).push(
@@ -530,9 +531,8 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     final isStaff = ref.watch(isStaffProvider);
     final showLive = isStaff && _tab == _ProjectsTab.live;
 
-    final listBody = showLive
-        ? const LiveProjectsView()
-        : _buildBody(projectsAsync);
+    final listBody =
+        showLive ? const LiveProjectsView() : _buildBody(projectsAsync);
     final tabbedBody = isStaff
         ? Column(
             children: [

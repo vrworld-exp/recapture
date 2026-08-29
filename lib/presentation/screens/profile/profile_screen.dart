@@ -42,6 +42,7 @@ import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/delete_confirmation_modal.dart';
+import '../../../utils/platform_name.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -78,8 +79,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     unawaited(_recoverLostAvatar());
   }
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   @override
   Widget build(BuildContext context) {
@@ -276,8 +276,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       lost = await ref.read(avatarImagePickerProvider).recoverLostAvatar();
     } catch (error, stack) {
-      DevUploadLog.instance
-          .add('avatar: lost-pick recovery skipped', error: error, stack: stack);
+      DevUploadLog.instance.add('avatar: lost-pick recovery skipped',
+          error: error, stack: stack);
       return;
     }
     if (lost == null) return;
@@ -296,7 +296,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   /// notifier outlives this widget, so an unmount between picking and uploading
   /// must not silently discard the user's photo. Only the analytics/snackbar
   /// that follow care whether a screen is still there.
-  Future<void> _uploadPicked(PickedAvatar picked, ProfileNotifier notifier) async {
+  Future<void> _uploadPicked(
+      PickedAvatar picked, ProfileNotifier notifier) async {
     await notifier.updateAvatar(picked.bytes, contentType: picked.contentType);
     Analytics.logEvent(AnalyticsEvents.profileAvatarUpdated, {
       'device_type': _deviceType,
@@ -453,8 +454,8 @@ Future<AvatarAction?> showAvatarActionSheet(
               leading: const Icon(Icons.delete_outline, color: AppColors.error),
               title: Text(
                 'Remove photo',
-                style: theme.textTheme.bodyLarge
-                    ?.copyWith(color: AppColors.error),
+                style:
+                    theme.textTheme.bodyLarge?.copyWith(color: AppColors.error),
               ),
               onTap: () => Navigator.of(ctx).pop(AvatarAction.remove),
             ),
@@ -482,8 +483,8 @@ class _DangerButtonTheme extends StatelessWidget {
     return Theme(
       data: theme.copyWith(
         outlinedButtonTheme: OutlinedButtonThemeData(
-          style: (theme.outlinedButtonTheme.style ?? const ButtonStyle())
-              .copyWith(
+          style:
+              (theme.outlinedButtonTheme.style ?? const ButtonStyle()).copyWith(
             // Keeps the theme's muted disabled colour — only the ENABLED
             // label/icon turns red.
             foregroundColor: WidgetStateProperty.resolveWith<Color>(

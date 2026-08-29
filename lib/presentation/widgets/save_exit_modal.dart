@@ -1,5 +1,4 @@
 // lib/presentation/widgets/save_exit_modal.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/app_colors.dart';
@@ -7,6 +6,7 @@ import '../../app/theme/app_spacing.dart';
 import '../../domain/entities/save_exit_decision.dart';
 import '../../platform/haptics.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// Shows the Save & Exit confirmation and resolves to a [SaveExitChoice]. ANY
 /// dismissal (tap-outside, system back) resolves to [SaveExitChoice.cancel] —
@@ -20,8 +20,7 @@ Future<SaveExitChoice> showSaveExitConfirmation(
   BuildContext context, {
   required SaveExitContext ctx,
 }) async {
-  final deviceType =
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  final deviceType = appPlatformName;
 
   Analytics.logEvent(AnalyticsEvents.saveExitPromptShown, {
     'captured_count': ctx.capturedCount,

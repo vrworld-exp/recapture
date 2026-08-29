@@ -13,7 +13,6 @@
 // the retryable classification, and any shown code all derive from the category, so
 // no stack trace / server body / token / path / PII can surface. Raw detail is
 // logged via diagnostics at the failure site (the uploading screen), not here.
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -29,6 +28,7 @@ import '../../../domain/upload/upload_failure.dart';
 import '../../../utils/analytics.dart';
 import '../../../utils/app_env.dart';
 import '../../widgets/app_button.dart';
+import '../../../utils/platform_name.dart';
 
 class UploadFailedScreen extends ConsumerStatefulWidget {
   const UploadFailedScreen({super.key, required this.failure});
@@ -45,8 +45,7 @@ class _UploadFailedScreenState extends ConsumerState<UploadFailedScreen> {
   /// Single-flight guard so a double-tap yields exactly one retry / navigation.
   bool _navigating = false;
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   String get _sessionId =>
       ref.read(captureLevelSessionProvider)?.sessionId ?? '';
@@ -200,8 +199,7 @@ class _UploadFailedScreenState extends ConsumerState<UploadFailedScreen> {
   static _FailureContent _contentFor(UploadErrorCategory c) => switch (c) {
         UploadErrorCategory.network => const _FailureContent(
             title: "Couldn't connect",
-            message:
-                'Your photos are safe on this device. Check your internet '
+            message: 'Your photos are safe on this device. Check your internet '
                 'connection and try again.',
           ),
         UploadErrorCategory.server => const _FailureContent(
@@ -328,8 +326,8 @@ class _DevLogSheet extends StatelessWidget {
                     child: log.isEmpty
                         ? Center(
                             child: Text('No entries',
-                                style: textTheme.bodySmall?.copyWith(
-                                    color: AppColors.textMuted)),
+                                style: textTheme.bodySmall
+                                    ?.copyWith(color: AppColors.textMuted)),
                           )
                         : ListView.builder(
                             itemCount: log.entries.length,

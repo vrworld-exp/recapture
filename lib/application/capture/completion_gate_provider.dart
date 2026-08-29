@@ -12,7 +12,6 @@
 // READ-ONLY over capture/review data; the gate mutates nothing. The unlock /
 // blocked analytics live in [SummaryGateAnalyticsNotifier], which dedups the
 // milestone to the locked→unlocked transition.
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/capture/completion_gate.dart';
@@ -22,6 +21,7 @@ import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
 import 'capture_mode_provider.dart';
 import 'review_grid_items_provider.dart';
+import '../../utils/platform_name.dart';
 
 /// The live final completion gate. Watch it for `isUnlocked` / per-level status;
 /// it reflects the current ledger + config + flow variant every time it is read
@@ -36,8 +36,9 @@ final completionGateProvider = Provider.autoDispose<SummaryGate>((ref) {
       LevelCompletionStatus(
         levelCode: level.code,
         // Live accepted frames — the SAME source the review grids + summary read.
-        acceptedCount:
-            ref.watch(reviewGridItemsProvider(pitchBandIdForLevel(level))).length,
+        acceptedCount: ref
+            .watch(reviewGridItemsProvider(pitchBandIdForLevel(level)))
+            .length,
         minAcceptedFrames: thresholds.minAcceptedFramesFor(level.code),
       ),
   ]);
@@ -60,8 +61,7 @@ class SummaryGateAnalyticsNotifier extends Notifier<void> {
   @override
   void build() {}
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   /// Reconciles the latch with the observed [gate] and emits BOTH
   /// `guided_capture_summary_unlocked` AND the funnel-end

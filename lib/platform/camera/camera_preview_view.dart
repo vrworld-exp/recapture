@@ -5,19 +5,84 @@ import 'package:flutter/services.dart';
 
 import '../../utils/constants.dart';
 import 'camera_preview_controller.dart';
+import 'web_preview_surface_stub.dart'
+    if (dart.library.js_interop) 'web_preview_surface_web.dart';
 
-/// Renders the live native camera preview for a [CameraPreviewController].
+/// Renders the live camera preview for a [CameraPreviewController].
 ///
 /// The render path is platform-specific (the lifecycle contract is not):
+///  - **Web** hosts the `getUserMedia` `<video>` element in an
+///    `HtmlElementView`. This branch MUST come first: on web
+///    `defaultTargetPlatform` reports the HOST OS, so a phone browser would
+///    otherwise take the Android `Texture` or iOS `UiKitView` path — both dead,
+///    leaving `hasTexture` false and the placeholder showing forever (the
+///    original black-preview bug).
 ///  - **Android** draws the external `Texture` at its native resolution, rotated
 ///    by [CameraPreviewState.rotationDegrees] and scaled with [BoxFit.cover]
 ///    (FILL_CENTER) so it fills the viewport without stretching.
 ///  - **iOS** embeds the native `AVCaptureVideoPreviewLayer` via a `UiKitView`
 ///    (platform view), which self-sizes and self-rotates — no Dart geometry.
 ///
-/// Both share the three observable surfaces: a graceful error (camera
+/// All three share the three observable surfaces: a graceful error (camera
 /// unavailable / permission missing), a placeholder while binding, and the live
 /// feed once running.
+/// Which surface [CameraPreview] draws for a given platform + state.
+enum CameraPreviewRenderPath {
+  /// A graceful error surface (camera unavailable / permission missing).
+  error,
+
+  /// The neutral placeholder shown while binding, or once stopped.
+  placeholder,
+
+  /// Web: the `getUserMedia` `<video>` in an `HtmlElementView`.
+  webElement,
+
+  /// iOS: the native `AVCaptureVideoPreviewLayer` in a `UiKitView`.
+  iosPlatformView,
+
+  /// Android: the external `Texture`.
+  androidTexture,
+}
+
+/// The render-path decision, extracted so the rule that caused the black-preview
+/// bug is directly testable.
+///
+/// [isWeb] is checked BEFORE [platform] and that ordering is the whole fix: on
+/// web `defaultTargetPlatform` reports the HOST OS, so a phone browser reads as
+/// `TargetPlatform.android` / `.iOS` and would otherwise take a native path that
+/// cannot work there. No web state may ever resolve to
+/// [CameraPreviewRenderPath.androidTexture] or
+/// [CameraPreviewRenderPath.iosPlatformView].
+@visibleForTesting
+CameraPreviewRenderPath resolveCameraPreviewRenderPath({
+  required bool isWeb,
+  required TargetPlatform platform,
+  required CameraPreviewState state,
+}) {
+  if (state.status == CameraPreviewStatus.error) {
+    return CameraPreviewRenderPath.error;
+  }
+  if (isWeb) {
+    // The browser composites the element itself; there is no texture to wait
+    // for, so "running" is the only signal that a frame exists to show.
+    return state.status == CameraPreviewStatus.running
+        ? CameraPreviewRenderPath.webElement
+        : CameraPreviewRenderPath.placeholder;
+  }
+  if (platform == TargetPlatform.iOS) {
+    // An interrupted session keeps showing its last frame rather than going
+    // black; a stopped/idle one tears the platform view down.
+    final live = state.status == CameraPreviewStatus.running ||
+        state.status == CameraPreviewStatus.interrupted;
+    return live
+        ? CameraPreviewRenderPath.iosPlatformView
+        : CameraPreviewRenderPath.placeholder;
+  }
+  return state.hasTexture
+      ? CameraPreviewRenderPath.androidTexture
+      : CameraPreviewRenderPath.placeholder;
+}
+
 class CameraPreview extends StatelessWidget {
   const CameraPreview({
     super.key,
@@ -40,43 +105,25 @@ class CameraPreview extends StatelessWidget {
     return ValueListenableBuilder<CameraPreviewState>(
       valueListenable: controller,
       builder: (context, state, _) {
-        if (state.status == CameraPreviewStatus.error) {
-          return errorBuilder?.call(context, state) ??
-              _DefaultError(message: state.errorMessage);
-        }
-        if (defaultTargetPlatform == TargetPlatform.iOS) {
-          return _IosPlatformPreview(state: state, placeholder: placeholder);
-        }
-        if (!state.hasTexture) {
-          return placeholder ?? const _DefaultPlaceholder();
-        }
-        return _TexturePreview(state: state);
+        final path = resolveCameraPreviewRenderPath(
+          isWeb: kIsWeb,
+          platform: defaultTargetPlatform,
+          state: state,
+        );
+        return switch (path) {
+          CameraPreviewRenderPath.error => errorBuilder?.call(context, state) ??
+              _DefaultError(message: state.errorMessage),
+          CameraPreviewRenderPath.placeholder =>
+            placeholder ?? const _DefaultPlaceholder(),
+          CameraPreviewRenderPath.webElement => buildWebCameraPreview(),
+          CameraPreviewRenderPath.iosPlatformView => const UiKitView(
+              viewType: AppConfig.viewTypeCameraPreviewIos,
+              creationParamsCodec: StandardMessageCodec(),
+            ),
+          CameraPreviewRenderPath.androidTexture =>
+            _TexturePreview(state: state),
+        };
       },
-    );
-  }
-}
-
-/// iOS render path: the native `AVCaptureVideoPreviewLayer` hosted in a
-/// `UiKitView`. Mounted only once the session is live (running or interrupted —
-/// an interrupted session keeps showing its last frame rather than going black),
-/// so a stopped/idle preview shows the placeholder and tears the platform view
-/// down (which only *detaches* from the session — the native manager keeps it).
-class _IosPlatformPreview extends StatelessWidget {
-  const _IosPlatformPreview({required this.state, this.placeholder});
-
-  final CameraPreviewState state;
-  final Widget? placeholder;
-
-  @override
-  Widget build(BuildContext context) {
-    final live = state.status == CameraPreviewStatus.running ||
-        state.status == CameraPreviewStatus.interrupted;
-    if (!live) {
-      return placeholder ?? const _DefaultPlaceholder();
-    }
-    return const UiKitView(
-      viewType: AppConfig.viewTypeCameraPreviewIos,
-      creationParamsCodec: StandardMessageCodec(),
     );
   }
 }

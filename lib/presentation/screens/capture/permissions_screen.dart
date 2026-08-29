@@ -1,5 +1,4 @@
 // lib/presentation/screens/capture/permissions_screen.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
@@ -13,6 +12,7 @@ import '../../../platform/permissions_service.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/permission_card.dart';
+import '../../../utils/platform_name.dart';
 
 /// Permissions gate. Requests Camera (required), Motion (recommended), and
 /// Photos (optional). The Continue CTA gates solely on Camera being granted —
@@ -45,7 +45,8 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     with WidgetsBindingObserver {
   PermissionsService get _service => widget.service;
 
-  late final PermissionFlowStore _flowStore = widget.flowStore ?? PermissionFlowBox();
+  late final PermissionFlowStore _flowStore =
+      widget.flowStore ?? PermissionFlowBox();
 
   final Map<AppPermissionType, AppPermissionStatus> _statuses = {
     for (final item in defaultPermissionItems)
@@ -121,10 +122,12 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   ///   • granted → not-granted  ⇒ `permission_denied` (revocation in Settings)
   /// Transitions between two non-granted states are not grant/deny edges and
   /// emit nothing.
-  void _emitResumeTransitions(Map<AppPermissionType, AppPermissionStatus> next) {
+  void _emitResumeTransitions(
+      Map<AppPermissionType, AppPermissionStatus> next) {
     for (final item in defaultPermissionItems) {
       final wasGranted = _statusOf(item.type).isGranted;
-      final isGranted = (next[item.type] ?? AppPermissionStatus.notRequested).isGranted;
+      final isGranted =
+          (next[item.type] ?? AppPermissionStatus.notRequested).isGranted;
       if (wasGranted == isGranted) continue;
       if (isGranted) {
         _emitGranted(item.type, _GrantSource.settingsReturn);
@@ -158,9 +161,8 @@ class _PermissionsScreenState extends State<PermissionsScreen>
       if (!mounted) return;
       setState(() {
         _statuses[item.type] = result;
-        _flow[item.type] =
-            (_flow[item.type] ?? PermissionFlowState.initial)
-                .copyWith(hasBeenAsked: true);
+        _flow[item.type] = (_flow[item.type] ?? PermissionFlowState.initial)
+            .copyWith(hasBeenAsked: true);
       });
     } finally {
       if (mounted) setState(() => _inFlight.remove(item.type));
@@ -215,7 +217,10 @@ class _PermissionsScreenState extends State<PermissionsScreen>
     // is an explicit skip — persist it so the gate doesn't nag on a later visit.
     // Camera is required (it gates this CTA) and is never skipped. Fire-and-forget:
     // navigation should not wait on local persistence.
-    for (final type in const [AppPermissionType.motion, AppPermissionType.photos]) {
+    for (final type in const [
+      AppPermissionType.motion,
+      AppPermissionType.photos
+    ]) {
       if (!_statusOf(type).isGranted) {
         _flowStore.markSkipped(type);
       }
@@ -226,8 +231,7 @@ class _PermissionsScreenState extends State<PermissionsScreen>
   AppPermissionStatus _statusOf(AppPermissionType type) =>
       _statuses[type] ?? AppPermissionStatus.notRequested;
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   /// Emits the named granted event for a permission that just became granted.
   /// Camera and Motion have named events; Photos has none (documented analytics
@@ -289,10 +293,12 @@ class _PermissionsScreenState extends State<PermissionsScreen>
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary),
+          icon: const Icon(Icons.arrow_back_ios_new,
+              color: AppColors.textPrimary),
           onPressed: () => navigateBack(context),
         ),
-        title: Text('Enable permissions', style: Theme.of(context).textTheme.titleLarge),
+        title: Text('Enable permissions',
+            style: Theme.of(context).textTheme.titleLarge),
       ),
       body: SafeArea(
         top: false,
@@ -315,7 +321,8 @@ class _PermissionsScreenState extends State<PermissionsScreen>
               child: ListView.separated(
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
                 itemCount: defaultPermissionItems.length,
-                separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+                separatorBuilder: (_, __) =>
+                    const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (context, index) {
                   final item = defaultPermissionItems[index];
                   return PermissionCard(

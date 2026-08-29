@@ -5,18 +5,21 @@
 // S3 multipart part ETags the upload manager collects (a different value for a
 // different purpose): never cross-assign the two.
 //
-// The digest is computed by STREAMING the file from disk (`File.openRead()` fed
-// into the `crypto` MD5 sink) — never `md5.convert(readAsBytes())`, which would
-// buffer the whole file and OOM on a large capture on a low-end device.
+// The digest is always STREAMED, on both platforms, and for the same reason:
+// buffering a whole capture would OOM a low-end device (native) or blow the tab's
+// heap (web). Native streams `File.openRead()`; web streams `Blob.slice()` chunks
+// out of the IndexedDB capture store. Neither ever holds a whole image.
 //
 // Encoding is a SINGLE, explicit choice: lowercase hex (`Digest.toString()`). If
 // the backend later mandates base64 (S3 `Content-MD5` style), switch it HERE only.
 //
 // [FileChecksum] is an interface so manifest assembly is unit-testable with a fake
-// (no real filesystem); [StreamingMd5Checksum] is the dart:io-backed default.
-import 'dart:io';
-
+// (no real filesystem); the platform default comes from the conditional import.
 import 'package:crypto/crypto.dart';
+
+import 'file_checksum_stub.dart'
+    if (dart.library.io) 'file_checksum_io.dart'
+    if (dart.library.js_interop) 'file_checksum_web.dart';
 
 /// The algorithm token emitted alongside the checksum in the manifest.
 const String kChecksumAlgorithmMd5 = 'md5';
@@ -29,12 +32,15 @@ abstract interface class FileChecksum {
   Future<String> md5Hex(String path);
 }
 
-/// Streams the file from disk into the MD5 sink (bounded memory). Default impl.
+/// The platform default: `dart:io` streaming natively, IndexedDB Blob slices on
+/// web. Named for what it guarantees (streaming, bounded memory) rather than for
+/// its backing store, because that is the property every call site depends on.
 class StreamingMd5Checksum implements FileChecksum {
   const StreamingMd5Checksum();
 
   @override
-  Future<String> md5Hex(String path) => md5HexOfStream(File(path).openRead());
+  Future<String> md5Hex(String path) =>
+      md5HexOfStream(openChecksumStream(path));
 }
 
 /// Pure streaming MD5 over an arbitrary byte stream → lowercase hex. Isolated so it

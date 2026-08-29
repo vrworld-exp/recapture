@@ -1,7 +1,5 @@
 // lib/presentation/screens/capture/level_a_complete_screen.dart
-import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -15,6 +13,8 @@ import '../../../domain/entities/level_a_summary.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
+import '../../../utils/platform_name.dart';
+import '../../../platform/capture_ports/capture_image_source.dart';
 
 /// Level A (Eye Ring) completion screen: a restrained on-brand recap once the
 /// eye-ring meets its target/coverage threshold, with the next actions —
@@ -70,8 +70,7 @@ class _LevelACompleteScreenState extends ConsumerState<LevelACompleteScreen>
   /// One-shot guard so a rapid double-tap on any CTA fires a single intent.
   bool _dispatched = false;
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   @override
   void initState() {
@@ -85,7 +84,8 @@ class _LevelACompleteScreenState extends ConsumerState<LevelACompleteScreen>
     // the completion latch in the provider prevents a re-visit of THIS completion
     // from double-emitting. A missing session (restart/deep-link) still emits once
     // with an empty session_id + 0 duration, never a missing/NaN field.
-    final claim = ref.read(captureLevelSessionProvider.notifier).claimCompletion();
+    final claim =
+        ref.read(captureLevelSessionProvider.notifier).claimCompletion();
     if (claim.shouldEmit) {
       final s = widget.summary;
       final session = claim.session;
@@ -108,7 +108,8 @@ class _LevelACompleteScreenState extends ConsumerState<LevelACompleteScreen>
     super.didChangeDependencies();
     if (_celebrateStarted) return;
     _celebrateStarted = true;
-    final reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     if (reduceMotion) {
       _celebrate.value = 1; // static completion state
     } else {
@@ -125,7 +126,8 @@ class _LevelACompleteScreenState extends ConsumerState<LevelACompleteScreen>
   void _dispatch(String action, VoidCallback cb) {
     if (_dispatched) return;
     _dispatched = true;
-    Analytics.logEvent(AnalyticsEvents.levelACompleteAction, {'action': action});
+    Analytics.logEvent(
+        AnalyticsEvents.levelACompleteAction, {'action': action});
     cb();
   }
 
@@ -369,7 +371,9 @@ class _Montage extends StatelessWidget {
     return Wrap(
       spacing: AppSpacing.sm,
       runSpacing: AppSpacing.sm,
-      children: [for (final t in tiles) _MontageTile(thumbnail: t, size: _tile)],
+      children: [
+        for (final t in tiles) _MontageTile(thumbnail: t, size: _tile)
+      ],
     );
   }
 }
@@ -390,10 +394,13 @@ class _MontageTile extends StatelessWidget {
       child: SizedBox(
         width: size,
         height: size,
-        child: Image.file(
-          File(thumbnail.filePath),
+        child: Image(
+          image: ResizeImage(
+            captureImage(thumbnail.filePath),
+            width: cachePx,
+            policy: ResizeImagePolicy.fit,
+          ),
           fit: BoxFit.cover,
-          cacheWidth: cachePx,
           gaplessPlayback: true,
           frameBuilder: (context, child, frame, wasSync) =>
               frame == null ? _surface() : child,

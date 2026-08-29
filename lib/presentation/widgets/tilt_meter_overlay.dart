@@ -1,5 +1,4 @@
 // lib/presentation/widgets/tilt_meter_overlay.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -12,6 +11,7 @@ import '../../application/capture/current_tilt_provider.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/entities/tilt_target.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// Guided-capture tilt meter: a vertical gauge over the camera preview that
 /// shows the device's smoothed current camera tilt (a needle) against the
@@ -167,8 +167,7 @@ class _TiltMeterOverlayState extends ConsumerState<TiltMeterOverlay> {
         'pitch': tilt,
         'session_id': session?.sessionId ?? '',
         'project_id': session?.projectId ?? '',
-        'device_type':
-            defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+        'device_type': appPlatformName,
       });
     }
   }

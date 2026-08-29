@@ -1,6 +1,5 @@
 // lib/application/auth/auth_notifier.dart
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/local/auth_storage.dart';
@@ -9,6 +8,7 @@ import '../../data/repositories/auth_repository.dart';
 import '../../domain/entities/auth_session.dart';
 import '../../domain/entities/auth_state.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// Owns the authentication lifecycle and is the single source of truth for
 /// "is the user authenticated". Login, logout, refresh, and session restore all
@@ -224,8 +224,7 @@ class AuthNotifier extends Notifier<AuthState> {
     // Analytics carries only the event name + device type — never tokens or ids.
     Analytics.logEvent('auth_session_event', {
       'event': event,
-      'device_type':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      'device_type': appPlatformName,
     });
   }
 }

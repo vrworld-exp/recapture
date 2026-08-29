@@ -14,7 +14,6 @@
 // system-back-while-open) so only one confirmation / save / discard / navigation
 // ever occurs. Leaving uses `context.go(projects)`, which replaces the stack so
 // back cannot re-enter the capture flow.
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -25,6 +24,7 @@ import '../../../application/capture/cancel/capture_cancel_controller.dart';
 import '../../../domain/capture/capture_cancel.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/capture_cancel_confirmation.dart';
+import '../../../utils/platform_name.dart';
 
 /// Mixed into a screen's [ConsumerState]. The host supplies the phase + session id
 /// and, on the upload step, the in-progress signal + a clean abort.
@@ -34,8 +34,7 @@ mixin CaptureCancelFlow<T extends ConsumerStatefulWidget> on ConsumerState<T> {
   /// draft save) so the user can try again.
   bool _cancelInFlight = false;
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   /// Which step this screen is — carried as the analytics `phase`.
   CaptureCancelPhase get cancelPhase;

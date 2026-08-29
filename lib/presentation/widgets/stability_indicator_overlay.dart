@@ -1,7 +1,6 @@
 // lib/presentation/widgets/stability_indicator_overlay.dart
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,6 +8,7 @@ import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../application/capture/stability_provider.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// Level A stability indicator: a small status dot + label telling the user
 /// whether the device is steady enough for a sharp frame ("Stable") or moving
@@ -85,7 +85,8 @@ class _StabilityIndicatorOverlayState
   /// Pulse only while UNSTABLE and motion is allowed; otherwise rest at full
   /// size (the dot still changes colour/text without it).
   void _syncPulse() {
-    final reduceMotion = MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    final reduceMotion =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     final shouldPulse = _stability == Stability.unstable && !reduceMotion;
     if (shouldPulse) {
       if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
@@ -105,8 +106,7 @@ class _StabilityIndicatorOverlayState
         _holdTimer = null;
         if (!mounted || _stability != Stability.unstable) return;
         Analytics.logEvent(AnalyticsEvents.captureHoldSteady, {
-          'device_type':
-              defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+          'device_type': appPlatformName,
         });
       });
     } else {

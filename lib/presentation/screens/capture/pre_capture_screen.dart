@@ -1,5 +1,5 @@
 // lib/presentation/screens/capture/pre_capture_screen.dart
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,6 +22,7 @@ import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/checklist_item_tile.dart';
 import '../../widgets/selectable_option_card.dart';
+import '../../../utils/platform_name.dart';
 
 /// Pre-capture checklist. The user acknowledges each required item — and
 /// answers the "can you capture the bottom?" question that selects the capture
@@ -174,8 +175,7 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
     if (variant == current) return;
     Analytics.logEvent(AnalyticsEvents.bottomCaptureOptionSelected, {
       'flow_variant': variant.id,
-      'device_type':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      'device_type': appPlatformName,
     });
     ref
         .read(captureFlowVariantProvider.notifier)
@@ -194,10 +194,12 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: AppColors.textPrimary),
+          icon: const Icon(Icons.arrow_back_ios_new,
+              color: AppColors.textPrimary),
           onPressed: () => navigateBack(context),
         ),
-        title: Text('Before you start', style: Theme.of(context).textTheme.titleLarge),
+        title: Text('Before you start',
+            style: Theme.of(context).textTheme.titleLarge),
       ),
       body: SafeArea(
         top: false,
@@ -222,6 +224,13 @@ class _PreCaptureScreenState extends ConsumerState<PreCaptureScreen> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
                 children: [
+                  // Honest, visible notice rather than a mode that quietly
+                  // produces unusable models: browser capture is a degraded
+                  // tier for photogrammetry (see the README web section).
+                  if (kIsWeb) ...[
+                    _WebCaptureQualityNotice(mode: mode),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
                   for (var i = 0; i < widget.items.length; i++) ...[
                     if (i > 0) const SizedBox(height: AppSpacing.sm),
                     ChecklistItemTile(
@@ -295,6 +304,7 @@ class _BottomCaptureQuestion extends ConsumerWidget {
       ];
       return parts.join(' + ');
     }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -359,10 +369,58 @@ class _MeshyCaptureNote extends StatelessWidget {
         Text(
           'Circle the object once, keeping the camera between eye level and '
           'looking down at its top. No underside needed.',
-          style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          style:
+              theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
         ),
       ],
     );
   }
 }
 
+/// Web-only advisory shown before capture starts.
+///
+/// A browser gives `getUserMedia` frames with no exposure lock, no focus lock,
+/// no RAW and a lower negotiated resolution than the native ImageCapture
+/// pipeline, and it cannot upload in the background. For Maya Capture (6 manual
+/// shots) that is a fair trade. For Full Capture — 48 photos feeding
+/// photogrammetry — it is a real quality reduction, and saying so here is the
+/// alternative to a user discovering it from a bad model.
+class _WebCaptureQualityNotice extends StatelessWidget {
+  const _WebCaptureQualityNotice({required this.mode});
+
+  final CaptureMode mode;
+
+  @override
+  Widget build(BuildContext context) {
+    final full = mode == CaptureMode.full;
+    return Container(
+      key: const Key('web_capture_quality_notice'),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surface1,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, size: 18, color: AppColors.warning),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              full
+                  ? 'You’re capturing in a browser. Photo quality is lower than '
+                      'the app (no exposure or focus lock, reduced resolution), '
+                      'so models built from a browser capture may be less '
+                      'detailed. Keep this tab open — uploads stop if you '
+                      'close it.'
+                  : 'You’re capturing in a browser. Keep this tab open — '
+                      'uploads stop if you close it.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

@@ -37,6 +37,9 @@ import '../../../utils/byte_format.dart';
 import '../../widgets/step_checklist_row.dart';
 import '../../widgets/upload_controls.dart';
 import 'capture_cancel_flow.dart';
+import '../../../utils/platform_name.dart';
+import '../../../platform/upload_tab_guard_stub.dart'
+    if (dart.library.js_interop) '../../../platform/upload_tab_guard_web.dart';
 
 class UploadingScreen extends ConsumerStatefulWidget {
   const UploadingScreen({super.key});
@@ -55,8 +58,7 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
   /// Step rows the user expanded to inspect their detail.
   final Set<UploadFlowStepId> _expandedSteps = <UploadFlowStepId>{};
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   String get _sessionId =>
       ref.read(captureLevelSessionProvider)?.sessionId ?? '';
@@ -96,6 +98,18 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
       ),
       fireImmediately: true,
     );
+    // Web has no background upload (see upload_background_session.dart /
+    // upload_foreground_service.dart, which correctly report unsupported for
+    // kIsWeb), so closing the tab kills the transfer. Arm the browser's own
+    // "Leave site?" confirmation for as long as this screen is up; it is
+    // disarmed on dispose and on every terminal state below. A no-op natively.
+    setUploadInFlight(true);
+  }
+
+  @override
+  void dispose() {
+    setUploadInFlight(false);
+    super.dispose();
   }
 
   void _react(UploadProgress p) {
@@ -115,6 +129,7 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
     if (_terminalLogged) return;
     if (p.isComplete) {
       _terminalLogged = true;
+      setUploadInFlight(false);
       Analytics.logEvent(AnalyticsEvents.uploadCompletedView, {
         'session_id': _sessionId,
         'phase': 'upload',
@@ -146,6 +161,7 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
       // captured set can be re-uploaded later, so leave the upload screen.
       if (cancelFlowActive) return;
       _terminalLogged = true;
+      setUploadInFlight(false);
       if (mounted) context.go(AppRoutes.projects);
     }
   }
@@ -163,6 +179,7 @@ class _UploadingScreenState extends ConsumerState<UploadingScreen>
   void _goToFailure(Object? error) {
     if (_terminalLogged) return;
     _terminalLogged = true;
+    setUploadInFlight(false);
     Analytics.logEvent(AnalyticsEvents.uploadFailedView, {
       'session_id': _sessionId,
       'phase': 'upload',
@@ -296,6 +313,17 @@ class _ProgressView extends StatelessWidget {
             message: 'Keep app open to upload faster',
           ),
         ],
+        // Web-only, and NOT an advisory: a browser has no background upload at
+        // all, so closing the tab ends the transfer and the recovery is to
+        // re-open and retry. Said plainly rather than implied.
+        if (kIsWeb) ...[
+          const SizedBox(height: AppSpacing.sm),
+          const _UploadHint(
+            key: Key('upload_keep_tab_open_hint'),
+            icon: Icons.tab,
+            message: 'Keep this tab open — closing it stops the upload',
+          ),
+        ],
         const SizedBox(height: AppSpacing.xl),
         // State-dependent Pause / Resume / Cancel — signals the pipeline and
         // reflects its state (driven by the same progress snapshot rendered above,
@@ -359,8 +387,8 @@ class _ProgressView extends StatelessWidget {
     if (progress.isPaused && !step.isDone) {
       return Container(
         key: const Key('upload_transfer_paused_badge'),
-        padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.sm, vertical: 2),
+        padding:
+            const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 2),
         decoration: BoxDecoration(
           color: AppColors.warning.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(AppRadius.xs),
@@ -384,11 +412,11 @@ class _ProgressView extends StatelessWidget {
   /// flavors — the raw devDetail lines in monospace (ids/paths/exceptions
   /// never render in production; same gate as the Dev Tools section).
   Widget? _stepDetail(BuildContext context, UploadFlowStepState step) {
-    final showDev =
-        !kAppEnvironment.isProduction && step.devDetail.isNotEmpty;
+    final showDev = !kAppEnvironment.isProduction && step.devDetail.isNotEmpty;
     // The running transfer's info is a transient trailing note, not detail.
-    final info =
-        step.id == UploadFlowStepId.transfer && step.isRunning ? null : step.info;
+    final info = step.id == UploadFlowStepId.transfer && step.isRunning
+        ? null
+        : step.info;
     if (info == null && !showDev) return null;
     final textTheme = Theme.of(context).textTheme;
     return Column(

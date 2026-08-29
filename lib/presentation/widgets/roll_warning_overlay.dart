@@ -1,5 +1,4 @@
 // lib/presentation/widgets/roll_warning_overlay.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,6 +8,7 @@ import '../../application/capture/analytics/capture_level_events.dart';
 import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/roll_warning_provider.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// Guided Capture (Levels B & C) roll advisory: a small non-blocking chip that
 /// appears when the device rolls past ±15° off level ("Keep the phone level")
@@ -61,8 +61,7 @@ class _RollWarningOverlayState extends ConsumerState<RollWarningOverlay> {
       'level': widget.level.code,
       'capture_session_id': session?.sessionId ?? '',
       'roll_degrees': rollDegrees,
-      'device_type':
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android',
+      'device_type': appPlatformName,
     });
   }
 

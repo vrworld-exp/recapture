@@ -6,6 +6,7 @@ import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
 import '../../domain/entities/capture_settings.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// Opens the Level A Settings sheet: auto-capture, save-to-gallery, and quality
 /// mode. Matches the existing sheet styling (rounded top, drag handle, dark
@@ -57,8 +58,7 @@ class LevelASettingsSheet extends StatelessWidget {
   /// that silently does nothing is worse still.
   final bool autoCaptureSupported;
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   void _emit(String setting, String value) {
     Analytics.logEvent(AnalyticsEvents.captureSettingChanged, {
@@ -96,7 +96,8 @@ class LevelASettingsSheet extends StatelessWidget {
                   ),
                   IconButton(
                     tooltip: 'Close',
-                    icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                    icon:
+                        const Icon(Icons.close, color: AppColors.textSecondary),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],

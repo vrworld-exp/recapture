@@ -1,192 +1,63 @@
 // lib/platform/capture_storage.dart
 //
-// MethodChannel wrapper for the native app-scoped capture storage backbone
-// (/recapture/{projectId}/{jobId}/images/{level}/). Dart uses this for accounting
-// (counts/bytes), free-space checks, incomplete-job listing, and deletion — most
-// importantly the P1 project-deletion cleanup hook (delete a project's capture data
-// when the project is deleted). Frame path allocation + writing stay native (the
-// burst task owns those). Channel: com.mayasabhaxr.recapture/capture_storage
-import 'package:flutter/foundation.dart';
+// Capture-storage entry point. Historically this file WAS the native
+// MethodChannel wrapper for the app-scoped capture backbone
+// (`/recapture/{projectId}/{jobId}/images/{level}/`); it is now the
+// platform-agnostic face of [CaptureStoragePort]
+// (capture_ports/capture_storage_port.dart), which resolves to:
+//
+//   • native → that same `capture_storage` channel, unchanged;
+//   • web    → an IndexedDB database keyed by the SAME hierarchy
+//     (capture_ports/web_capture_store.dart), so accounting (counts/bytes),
+//     incomplete-job listing, scoped deletion and — critically — the P1
+//     project-deletion cleanup hook all behave identically in a browser.
+//
+// Dart uses this for accounting, free-space checks, incomplete-job listing, and
+// deletion. Frame path allocation + writing stay on the platform side (the
+// native burst task, or the web still-capture port).
+// Channel: com.mayasabhaxr.recapture/capture_storage
+
 import 'package:flutter/services.dart';
 
-import '../utils/constants.dart';
+import 'capture_ports/capture_storage_port.dart';
+import 'capture_ports/capture_storage_port_stub.dart'
+    if (dart.library.io) 'capture_ports/capture_storage_port_io.dart'
+    if (dart.library.js_interop) 'capture_ports/capture_storage_port_web.dart';
 
-/// Frame count + on-disk bytes for a level/job/project scope.
-@immutable
-class StorageUsage {
-  const StorageUsage({required this.frameCount, required this.byteCount});
+export 'capture_ports/capture_storage_models.dart'
+    show
+        StorageUsage,
+        IncompleteJob,
+        StorageDeleteResult,
+        PurgeResult,
+        SweepResult;
 
-  final int frameCount;
-  final int byteCount;
-
-  static StorageUsage fromMap(Map<Object?, Object?> map) => StorageUsage(
-        frameCount: (map['frameCount'] as num?)?.toInt() ?? 0,
-        byteCount: (map['byteCount'] as num?)?.toInt() ?? 0,
-      );
-}
-
-/// A job interrupted mid-capture (manifest missing or not complete).
-@immutable
-class IncompleteJob {
-  const IncompleteJob({
-    required this.projectId,
-    required this.jobId,
-    required this.reason,
-  });
-
-  final String projectId;
-  final String jobId;
-
-  /// `no_manifest` (data but no marker) or `in_progress` (started, not finalized).
-  final String reason;
-
-  static IncompleteJob? fromMap(Object? value) {
-    if (value is! Map) return null;
-    final projectId = value['projectId'] as String?;
-    final jobId = value['jobId'] as String?;
-    if (projectId == null || jobId == null) return null;
-    return IncompleteJob(
-      projectId: projectId,
-      jobId: jobId,
-      reason: value['reason'] as String? ?? 'unknown',
-    );
-  }
-}
-
-/// Result of a delete (level/job/project). [ok] false with [code] `active_job`
-/// means the delete was guarded because a job in scope is actively capturing.
-@immutable
-class StorageDeleteResult {
-  const StorageDeleteResult({
-    required this.ok,
-    required this.code,
-    required this.filesDeleted,
-    required this.bytesFreed,
-  });
-
-  final bool ok;
-  final String code;
-  final int filesDeleted;
-  final int bytesFreed;
-
-  /// Whether the delete was refused because a job in scope is active.
-  bool get guardedByActiveJob => code == 'active_job';
-
-  static StorageDeleteResult fromMap(Map<Object?, Object?> map) =>
-      StorageDeleteResult(
-        ok: map['ok'] as bool? ?? false,
-        code: map['code'] as String? ?? 'io_error',
-        filesDeleted: (map['filesDeleted'] as num?)?.toInt() ?? 0,
-        bytesFreed: (map['bytesFreed'] as num?)?.toInt() ?? 0,
-      );
-}
-
-/// Result of purging a project's local capture data
-/// ([CaptureStorageClient.purgeProjectCaptureData]).
-@immutable
-class PurgeResult {
-  const PurgeResult({
-    required this.status,
-    required this.reclaimedBytes,
-    this.failed = const [],
-  });
-
-  /// `ok` (whole tree removed), `partial` (some files locked/in-use survived —
-  /// see [failed]), `refused` (a capture job for the project is active, nothing
-  /// deleted), or `noop` (nothing to purge — never captured / already gone).
-  final String status;
-
-  /// On-disk bytes of the files actually deleted (still reported on `partial`).
-  final int reclaimedBytes;
-
-  /// Absolute paths that could not be deleted — retry exactly these. Non-empty
-  /// only when [status] is `partial`.
-  final List<String> failed;
-
-  bool get ok => status == 'ok';
-  bool get isPartial => status == 'partial';
-  bool get refusedByActiveJob => status == 'refused';
-  bool get isNoop => status == 'noop';
-
-  static PurgeResult fromMap(Map<Object?, Object?> map) => PurgeResult(
-        status: map['status'] as String? ?? 'io_error',
-        reclaimedBytes: (map['reclaimedBytes'] as num?)?.toInt() ?? 0,
-        failed: (map['failed'] as List?)?.whereType<String>().toList() ?? const [],
-      );
-}
-
-/// Result of an orphan sweep ([CaptureStorageClient.sweepOrphanedCaptureData]).
-@immutable
-class SweepResult {
-  const SweepResult({
-    this.purgedProjects = const [],
-    this.reclaimedBytes = 0,
-    this.skipped = const [],
-  });
-
-  /// Project ids whose orphaned capture trees were purged.
-  final List<String> purgedProjects;
-  final int reclaimedBytes;
-
-  /// Project ids left untouched (a job was active, the purge was partial, or the
-  /// dir name was not a valid project id).
-  final List<String> skipped;
-
-  static SweepResult fromMap(Map<Object?, Object?> map) => SweepResult(
-        purgedProjects:
-            (map['purgedProjects'] as List?)?.whereType<String>().toList() ??
-                const [],
-        reclaimedBytes: (map['reclaimedBytes'] as num?)?.toInt() ?? 0,
-        skipped: (map['skipped'] as List?)?.whereType<String>().toList() ?? const [],
-      );
-}
-
-/// Dart entry point to the native capture storage manager.
+/// Dart entry point to the capture storage manager.
 class CaptureStorageClient {
   CaptureStorageClient([MethodChannel? channel])
-      : _channel = channel ?? const MethodChannel(AppConfig.channelCaptureStorage);
+      : _port = createCaptureStoragePort(channel);
 
-  final MethodChannel _channel;
+  final CaptureStoragePort _port;
 
-  /// Usable bytes on the volume holding the capture tree (for pre-burst space checks).
-  Future<int> freeSpaceBytes() async {
-    final v = await _channel.invokeMethod<Object?>('freeSpace');
-    return (v as num?)?.toInt() ?? 0;
-  }
+  /// Usable bytes for capture data (volume free space natively; the remaining
+  /// `navigator.storage.estimate()` quota on web) — for pre-burst space checks.
+  Future<int> freeSpaceBytes() => _port.freeSpaceBytes();
 
   /// Frame count + bytes for a project, a job (`jobId`), or a level (`jobId`+`level`).
   Future<StorageUsage> usage(
     String projectId, {
     String? jobId,
     String? level,
-  }) async {
-    final map = await _channel.invokeMapMethod<Object?, Object?>('usage', {
-      'projectId': projectId,
-      if (jobId != null) 'jobId': jobId,
-      if (level != null) 'level': level,
-    });
-    return StorageUsage.fromMap(map ?? const {});
-  }
+  }) =>
+      _port.usage(projectId, jobId: jobId, level: level);
 
-  Future<List<String>> listProjects() async {
-    final list = await _channel.invokeListMethod<String>('listProjects');
-    return list ?? const [];
-  }
+  Future<List<String>> listProjects() => _port.listProjects();
 
-  Future<List<String>> listJobs(String projectId) async {
-    final list = await _channel
-        .invokeListMethod<String>('listJobs', {'projectId': projectId});
-    return list ?? const [];
-  }
+  Future<List<String>> listJobs(String projectId) => _port.listJobs(projectId);
 
   /// Jobs interrupted mid-capture (resumable or cleanable).
-  Future<List<IncompleteJob>> listIncompleteJobs() async {
-    final list = await _channel.invokeListMethod<Object?>('listIncompleteJobs');
-    return (list ?? const [])
-        .map(IncompleteJob.fromMap)
-        .whereType<IncompleteJob>()
-        .toList();
-  }
+  Future<List<IncompleteJob>> listIncompleteJobs() =>
+      _port.listIncompleteJobs();
 
   Future<StorageDeleteResult> deleteLevel(
     String projectId,
@@ -194,69 +65,77 @@ class CaptureStorageClient {
     String level, {
     bool force = false,
   }) =>
-      _delete('deleteLevel', {
-        'projectId': projectId,
-        'jobId': jobId,
-        'level': level,
-        'force': force,
-      });
+      _port.deleteLevel(projectId, jobId, level, force: force);
 
   Future<StorageDeleteResult> deleteJob(
     String projectId,
     String jobId, {
     bool force = false,
   }) =>
-      _delete('deleteJob', {
-        'projectId': projectId,
-        'jobId': jobId,
-        'force': force,
-      });
+      _port.deleteJob(projectId, jobId, force: force);
 
-  /// Deletes a project's entire capture tree — the P1 project-deletion cleanup hook.
-  /// Guarded against active jobs unless [force].
+  /// Deletes a project's entire capture tree — the P1 project-deletion cleanup
+  /// hook. Guarded against active jobs unless [force].
   Future<StorageDeleteResult> deleteProject(
     String projectId, {
     bool force = false,
   }) =>
-      _delete('deleteProject', {'projectId': projectId, 'force': force});
+      _port.deleteProject(projectId, force: force);
 
-  Future<StorageDeleteResult> _delete(
-    String method,
-    Map<String, Object?> args,
-  ) async {
-    final map = await _channel.invokeMapMethod<Object?, Object?>(method, args);
-    return StorageDeleteResult.fromMap(map ?? const {});
-  }
-
-  /// Purges a project's entire local capture tree (`/recapture/{projectId}/`) —
-  /// the project-deletion cleanup hook. Reconciled with P1's soft delete as
-  /// purge-on-delete (Option A): a restored project recovers its server record
-  /// but NOT these local capture images. Guarded against an active capture job
-  /// (`refused`) unless [force]; idempotent (`noop` when already gone); reports
-  /// `partial` + the surviving paths if some files are locked.
+  /// Purges a project's entire local capture data — the project-deletion cleanup
+  /// hook. Reconciled with P1's soft delete as purge-on-delete (Option A): a
+  /// restored project recovers its server record but NOT these local capture
+  /// images. Guarded against an active capture job (`refused`) unless [force];
+  /// idempotent (`noop` when already gone); reports `partial` + the surviving
+  /// paths if some files are locked (native only — IndexedDB has no per-file
+  /// locking, so the web port never returns `partial`).
   Future<PurgeResult> purgeProjectCaptureData(
     String projectId, {
     bool force = false,
-  }) async {
-    final map = await _channel.invokeMapMethod<Object?, Object?>(
-      'purgeProjectCaptureData',
-      {'projectId': projectId, 'force': force},
-    );
-    return PurgeResult.fromMap(map ?? const {});
-  }
+  }) =>
+      _port.purgeProjectCaptureData(projectId, force: force);
 
-  /// Optional orphan sweep: purges capture trees for projects NOT in
-  /// [knownProjectIds] (data left behind by a project deleted while the app was
-  /// off). Pass the app's current project ids (server/local list). Applies the
-  /// same guards/policy as a single purge.
+  /// Optional orphan sweep: purges capture data for projects NOT in
+  /// [knownProjectIds] (left behind by a project deleted while the app was off).
+  /// Applies the same guards/policy as a single purge.
   Future<SweepResult> sweepOrphanedCaptureData(
     List<String> knownProjectIds, {
     bool force = false,
-  }) async {
-    final map = await _channel.invokeMapMethod<Object?, Object?>(
-      'sweepOrphanedCaptureData',
-      {'knownProjectIds': knownProjectIds, 'force': force},
-    );
-    return SweepResult.fromMap(map ?? const {});
-  }
+  }) =>
+      _port.sweepOrphanedCaptureData(knownProjectIds, force: force);
+
+  /// Declares which project/job/level the NEXT captured frames belong to.
+  ///
+  /// A no-op natively (CameraX writes into the session directory the native
+  /// manager owns). On web it is what scopes each IndexedDB key, and therefore
+  /// what makes usage accounting and the project purge correct — call it when a
+  /// capture level session starts.
+  void setActiveScope({
+    required String projectId,
+    required String jobId,
+    required String level,
+  }) =>
+      _port.setActiveScope(
+        projectId: projectId,
+        jobId: jobId,
+        level: level,
+      );
+
+  /// Marks a job as actively capturing — what makes a scoped delete return
+  /// `active_job`. No-op natively.
+  Future<void> setJobActive(
+    String projectId,
+    String jobId, {
+    required bool active,
+  }) =>
+      _port.setJobActive(projectId, jobId, active: active);
+
+  /// Records that a job's manifest was finalized (it stops being reported as
+  /// incomplete). No-op natively.
+  Future<void> markJobComplete(String projectId, String jobId) =>
+      _port.markJobComplete(projectId, jobId);
+
+  /// Resolves a `CapturedFrame.path` to its bytes — a file read natively, an
+  /// IndexedDB lookup on web. Null when the frame is gone.
+  Future<Uint8List?> readFrameBytes(String path) => _port.readFrameBytes(path);
 }

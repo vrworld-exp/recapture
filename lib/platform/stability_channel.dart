@@ -1,145 +1,66 @@
 // lib/platform/stability_channel.dart
 //
-// EventChannel wrapper for the native stability gate (gyro + gravity-removed
-// linear-accel motion detector). Emits a debounced stable/unstable STATE on
-// transitions, plus a "stable" TRIGGER the auto-capture flow consumes. The gate:
-// gyroMag < gyroThresh AND linAccelMag < accelThresh, held continuously for
-// dwellMs. Channel name: com.mayasabhaxr.recapture/stability
-import 'package:flutter/foundation.dart';
+// Stability entry point for the capture HUD and the auto-capture trigger.
+// Historically this file WAS the native EventChannel wrapper; it is now the
+// platform-agnostic face of [StabilityPort]
+// (capture_ports/stability_port.dart), which resolves to:
+//
+//   • native → the gyro + gravity-removed linear-accel motion detector on the
+//     `stability` channel (gate: gyroMag < gyroThresh AND linAccelMag <
+//     accelThresh, held continuously for dwellMs) — unchanged, the code moved
+//     into capture_ports/stability_port_io.dart;
+//   • web    → `devicemotion` fed into a Dart port of that same gate
+//     (capture_ports/stability_math.dart + stability_port_web.dart), so
+//     "stable" means the same physical steadiness in a browser.
+//
+// Class names, the injectable [EventChannel] constructor argument, method
+// signatures and the event types are unchanged, so every call site is
+// untouched. [StabilityEvent] and friends now live in
+// capture_ports/stability_models.dart and are re-exported here.
+// Channel name: com.mayasabhaxr.recapture/stability
 import 'package:flutter/services.dart';
 
-import '../utils/constants.dart';
+import 'capture_ports/stability_port.dart';
+import 'capture_ports/stability_port_stub.dart'
+    if (dart.library.io) 'capture_ports/stability_port_io.dart'
+    if (dart.library.js_interop) 'capture_ports/stability_port_web.dart';
 
-/// A native stability event. Discriminated by the native `type`.
-@immutable
-sealed class StabilityEvent {
-  const StabilityEvent();
+export 'capture_ports/stability_models.dart'
+    show
+        StabilityEvent,
+        StabilityStateEvent,
+        StabilityTriggerEvent,
+        StabilityScoreEvent;
 
-  /// Parses a native event map; returns null for an unknown/malformed shape.
-  static StabilityEvent? fromEvent(Object? event) {
-    if (event is! Map) return null;
-    final map = event.cast<String, dynamic>();
-    switch (map['type']) {
-      case 'state':
-        final stable = map['stable'];
-        if (stable is! bool) return null;
-        return StabilityStateEvent(
-          stable: stable,
-          gyroMag: (map['gyroMag'] as num?)?.toDouble() ?? 0,
-          linAccelMag: (map['linAccelMag'] as num?)?.toDouble() ?? 0,
-          timestampNs: (map['timestampNs'] as num?)?.toInt() ?? 0,
-        );
-      case 'trigger':
-        return StabilityTriggerEvent(
-          timestampNs: (map['timestampNs'] as num?)?.toInt() ?? 0,
-        );
-      case 'score':
-        final score = (map['score'] as num?)?.toDouble();
-        if (score == null) return null;
-        return StabilityScoreEvent(
-          score: score,
-          gyroMag: (map['gyroMag'] as num?)?.toDouble() ?? 0,
-          linAccelMag: (map['linAccelMag'] as num?)?.toDouble() ?? 0,
-          timestampNs: (map['timestampNs'] as num?)?.toInt() ?? 0,
-        );
-      default:
-        return null;
-    }
-  }
-}
-
-/// A debounced state transition (entered or left STABLE). [gyroMag]/[linAccelMag]
-/// are the magnitudes at the transition, for a UI indicator.
-@immutable
-class StabilityStateEvent extends StabilityEvent {
-  const StabilityStateEvent({
-    required this.stable,
-    required this.gyroMag,
-    required this.linAccelMag,
-    required this.timestampNs,
-  });
-
-  final bool stable;
-
-  /// Gyro magnitude (rad/s) at the transition.
-  final double gyroMag;
-
-  /// Gravity-removed linear-accel magnitude (m/s²) at the transition.
-  final double linAccelMag;
-
-  /// Camera-aligned (CLOCK_MONOTONIC) sensor timestamp of the transition.
-  final int timestampNs;
-}
-
-/// Fired when the gate ENTERS stable — the auto-capture trigger.
-@immutable
-class StabilityTriggerEvent extends StabilityEvent {
-  const StabilityTriggerEvent({required this.timestampNs});
-
-  /// Camera-aligned (CLOCK_MONOTONIC) sensor timestamp the gate opened at.
-  final int timestampNs;
-}
-
-/// A continuous (non-debounced) stillness score, emitted throttled (~10 Hz) for a
-/// UI stillness meter. [score] ∈ [0, 1]: 1.0 perfectly still, falling to 0.0 as
-/// gyro or gravity-removed linear-accel reaches its threshold — it crosses ~0
-/// around the same boundary the debounced gate flips, but is NOT the gate
-/// decision itself (use [StabilityTriggerEvent] for auto-capture).
-@immutable
-class StabilityScoreEvent extends StabilityEvent {
-  const StabilityScoreEvent({
-    required this.score,
-    required this.gyroMag,
-    required this.linAccelMag,
-    required this.timestampNs,
-  });
-
-  /// Stillness in [0, 1] (1.0 = perfectly still).
-  final double score;
-
-  /// Gyro magnitude (rad/s) at this sample.
-  final double gyroMag;
-
-  /// Gravity-removed linear-accel magnitude (m/s²) at this sample.
-  final double linAccelMag;
-
-  /// Camera-aligned (CLOCK_MONOTONIC) sensor timestamp of this sample.
-  final int timestampNs;
-}
-
-/// Streams native stability events over the [EventChannel].
+/// Streams stability events.
 ///
-/// Thresholds are best-effort hints with native defaults (0.8 rad/s, 0.15 g,
+/// Thresholds are best-effort hints with the gate's defaults (0.8 rad/s, 0.15 g,
 /// 250 ms) and may be sourced from remote config by the caller. An absent sensor
-/// surfaces as a `PlatformException('STABILITY_UNAVAILABLE')`.
+/// surfaces as a `PlatformException('STABILITY_UNAVAILABLE')` — on web that also
+/// covers "iOS Safari has not granted motion access".
 class StabilityGateStream {
   StabilityGateStream([EventChannel? channel])
-      : _channel = channel ?? const EventChannel(AppConfig.channelStability);
+      : _port = createStabilityPort(channel);
 
-  final EventChannel _channel;
+  final StabilityPort _port;
 
   static const double defaultGyroThreshRadS = 0.8;
   static const double defaultAccelThreshG = 0.15;
   static const int defaultDwellMs = 250;
 
-  /// All stability events (state transitions + triggers). Malformed events are
-  /// filtered. [gyroThresh] rad/s, [accelThresh] in g, [dwellMs] are forwarded to
-  /// the native gate (invalid values fall back to the native defaults).
+  /// All stability events (state transitions + triggers + scores). Malformed
+  /// events are filtered. [gyroThresh] rad/s, [accelThresh] in g, [dwellMs] are
+  /// forwarded to the gate (invalid values fall back to the defaults).
   Stream<StabilityEvent> events({
     double gyroThresh = defaultGyroThreshRadS,
     double accelThresh = defaultAccelThreshG,
     int dwellMs = defaultDwellMs,
-  }) {
-    return _channel
-        .receiveBroadcastStream(<String, dynamic>{
-          'gyroThresh': gyroThresh,
-          'accelThresh': accelThresh,
-          'dwellMs': dwellMs,
-        })
-        .map(StabilityEvent.fromEvent)
-        .where((e) => e != null)
-        .cast<StabilityEvent>();
-  }
+  }) =>
+      _port.events(
+        gyroThresh: gyroThresh,
+        accelThresh: accelThresh,
+        dwellMs: dwellMs,
+      );
 
   /// Only the "stable" triggers (for an auto-capture driver that ignores state).
   Stream<StabilityTriggerEvent> triggers({
@@ -152,7 +73,7 @@ class StabilityGateStream {
           .cast<StabilityTriggerEvent>();
 
   /// Only the continuous score samples (for a UI stillness meter that ignores
-  /// the debounced state/trigger). Throttled (~10 Hz) by the native side.
+  /// the debounced state/trigger). Throttled (~10 Hz).
   Stream<StabilityScoreEvent> scores({
     double gyroThresh = defaultGyroThreshRadS,
     double accelThresh = defaultAccelThreshG,

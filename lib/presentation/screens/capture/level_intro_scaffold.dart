@@ -1,5 +1,4 @@
 // lib/presentation/screens/capture/level_intro_scaffold.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +11,7 @@ import '../../../data/local/storage_providers.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import 'level_intro_content.dart';
+import '../../../utils/platform_name.dart';
 
 /// The SHARED guided-capture intro (Screens 5B & 5C). One widget, parameterized
 /// by [LevelIntroContent]: it plays the per-level illustration, lists the rules,
@@ -111,8 +111,7 @@ class _LevelIntroScaffoldState extends ConsumerState<LevelIntroScaffold> {
     });
   }
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   /// Persists the seen/opt-out flags, emits the dismissed event, then navigates.
   /// Guarded so a rapid double-tap on Begin/Skip fires navigation only once.
@@ -301,13 +300,13 @@ class _LevelProgressIndicator extends StatelessWidget {
       child: Row(
         children: [
           for (var i = 0; i < _levels.length; i++) ...[
-            _dot(context, label: _levels[i], index: i, activeIndex: activeIndex),
+            _dot(context,
+                label: _levels[i], index: i, activeIndex: activeIndex),
             if (i < _levels.length - 1)
               Expanded(
                 child: Container(
                   height: 2,
-                  margin:
-                      const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+                  margin: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
                   color: i < activeIndex
                       ? AppColors.royalGold
                       : AppColors.disabled,
@@ -332,9 +331,8 @@ class _LevelProgressIndicator extends StatelessWidget {
         : (isDone ? AppColors.royalGold : Colors.transparent);
     final Color border =
         isActive || isDone ? Colors.transparent : AppColors.disabled;
-    final Color text = isActive || isDone
-        ? AppColors.textPrimary
-        : AppColors.textSecondary;
+    final Color text =
+        isActive || isDone ? AppColors.textPrimary : AppColors.textSecondary;
     return Container(
       width: 28,
       height: 28,

@@ -1,13 +1,13 @@
 // lib/presentation/widgets/shutter_button.dart
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/theme/app_colors.dart';
 import '../../domain/entities/capture_readiness.dart';
 import '../../platform/haptics.dart';
 import '../../utils/analytics.dart';
+import '../../utils/platform_name.dart';
 
 /// Level A guided-capture shutter. Renders readiness and triggers a capture via
 /// the injected [onCapture]; it does NOT run the camera, compute tilt/stability,
@@ -63,8 +63,7 @@ class _ShutterButtonState extends State<ShutterButton> {
   bool _capturing = false;
   DateTime? _lastBlockedLog;
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   String get _modeLabel =>
       widget.readiness.mode == CaptureMode.guided ? 'guided' : 'manual';

@@ -54,6 +54,10 @@ import '../../../platform/camera/preview_geometry.dart';
 import '../../../platform/method_channels.dart';
 import '../../../platform/permissions_service.dart';
 import '../../../utils/analytics.dart';
+import '../../../utils/platform_name.dart';
+import '../../../domain/upload/capture_manifest.dart'
+    show ringNameForLevelCode;
+import '../../../platform/capture_storage.dart';
 import '../../widgets/auto_capture_indicator.dart';
 import '../../widgets/capture_overlay_layer.dart';
 import '../../widgets/capture_top_bar.dart';
@@ -239,6 +243,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   /// missing/unbound session or a busy capturer resolves to null, never throws.
   final CaptureChannel _captureChannel = CaptureChannel();
 
+  /// The scope handed to the capture storage layer, held so `dispose` can clear
+  /// the active-job flag it armed.
+  String? _boundStorageProjectId;
+  String? _boundStorageJobId;
+
   /// `level_a_camera_opened` is a once-per-screen reach metric.
   bool _openedLogged = false;
 
@@ -410,6 +419,13 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       } catch (_) {/* keep the in-memory variant */}
       if (!mounted) return;
     }
+    // The level session may have started before this resolved (the id is read
+    // asynchronously), in which case the storage scope was skipped. Re-bind it
+    // now so web frames are keyed under the right project from here on.
+    final startedSession = ref.read(captureLevelSessionProvider);
+    if (projectId != null && startedSession != null) {
+      _bindCaptureStorageScope(projectId, startedSession.sessionId);
+    }
     // Once the project context is known, restore any saved draft for this level.
     await _tryResume();
   }
@@ -513,6 +529,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
           level: _captureLevel,
           projectId: _projectId ?? '',
         );
+    _bindCaptureStorageScope(session.projectId, session.sessionId);
     CaptureAnalytics.log(CaptureLevelStarted(
       level: _captureLevel,
       projectId: session.projectId,
@@ -525,6 +542,52 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
       sensorSupported: _sensorSupportedNow(),
       deviceType: _deviceType,
     ));
+  }
+
+  /// Tells the capture-storage layer which project/job/ring the frames from
+  /// THIS level belong to, and marks the job active.
+  ///
+  /// A no-op on Android/iOS — the native manager derives all of it from the
+  /// session it owns. On web it is load-bearing: it is what gives each stored
+  /// frame its `{projectId}/{jobId}/{level}/` key, and therefore what makes
+  /// per-project usage accounting, the incomplete-job list and the
+  /// project-deletion purge correct. Marking the job active is also what makes
+  /// a delete during capture return `active_job` rather than pulling frames out
+  /// from under a running session.
+  ///
+  /// Best-effort: a storage failure must never block capture.
+  void _bindCaptureStorageScope(String projectId, String jobId) {
+    if (projectId.isEmpty || jobId.isEmpty) return;
+    try {
+      final storage = CaptureStorageClient();
+      storage.setActiveScope(
+        projectId: projectId,
+        jobId: jobId,
+        level: ringNameForLevelCode(_levelCode),
+      );
+      unawaited(storage.setJobActive(projectId, jobId, active: true));
+      _boundStorageProjectId = projectId;
+      _boundStorageJobId = jobId;
+    } catch (_) {
+      // Storage accounting is not worth failing a capture over.
+    }
+  }
+
+  /// Clears the active-job flag [_bindCaptureStorageScope] set. Best-effort and
+  /// fire-and-forget: this runs from `dispose`, where nothing can be awaited.
+  void _releaseCaptureStorageScope() {
+    final projectId = _boundStorageProjectId;
+    final jobId = _boundStorageJobId;
+    if (projectId == null || jobId == null) return;
+    _boundStorageProjectId = null;
+    _boundStorageJobId = null;
+    try {
+      unawaited(
+        CaptureStorageClient().setJobActive(projectId, jobId, active: false),
+      );
+    } catch (_) {
+      // Never let storage bookkeeping throw out of dispose.
+    }
   }
 
   /// Best-effort read of whether BOTH IMU-derived signals are usable right now
@@ -695,7 +758,7 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
   }
 
   String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+      appPlatformName;
 
   /// Reports the actual preview resolution (the native pipeline has no
   /// ResolutionPreset); falls back to 'unknown' before the size is known.
@@ -749,6 +812,11 @@ class _CaptureScreenState extends ConsumerState<CaptureScreen>
 
   @override
   void dispose() {
+    // Clear the active-job flag before anything else: a job left marked active
+    // guards every subsequent delete/purge for its project, so an abandoned
+    // capture would make the project-deletion cleanup permanently refuse. A
+    // no-op natively (the native manager tracks its own active jobs).
+    _releaseCaptureStorageScope();
     WidgetsBinding.instance.removeObserver(this);
     _cameraController.removeListener(_onCameraStateChanged);
     _cameraController.dispose();

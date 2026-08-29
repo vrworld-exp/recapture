@@ -43,7 +43,7 @@ Future<void> _pump(
 void main() {
   tearDown(() => Analytics.testSink = null);
 
-  final _mixed = <ReviewItem>[
+  final mixed = <ReviewItem>[
     _item('a', CaptureVerdict.accepted, ringIndex: 0),
     _item('b', CaptureVerdict.accepted, ringIndex: 1),
     _item('c', CaptureVerdict.warn, ringIndex: 2),
@@ -51,7 +51,7 @@ void main() {
   ];
 
   testWidgets('renders one badged tile per supplied item', (tester) async {
-    await _pump(tester, items: _mixed);
+    await _pump(tester, items: mixed);
     expect(find.text('Review — Level A'), findsOneWidget);
     // One VerdictBadge per tile (summary uses bare Icons, not VerdictBadge).
     expect(find.byType(VerdictBadge), findsNWidgets(4));
@@ -61,7 +61,7 @@ void main() {
   });
 
   testWidgets('header summary counts match the supplied list', (tester) async {
-    await _pump(tester, items: _mixed);
+    await _pump(tester, items: mixed);
     expect(find.bySemanticsLabel('Accepted: 2'), findsOneWidget);
     expect(find.bySemanticsLabel('Warned: 1'), findsOneWidget);
     expect(find.bySemanticsLabel('Rejected: 1'), findsOneWidget);
@@ -85,7 +85,7 @@ void main() {
     // does not surface synchronously in a test pump, so we assert structure +
     // no-crash rather than the fallback glyph — mirrors the completion screen
     // montage test.)
-    await _pump(tester, items: _mixed);
+    await _pump(tester, items: mixed);
     expect(find.byType(Image), findsNWidgets(4));
     expect(find.byType(VerdictBadge), findsNWidgets(4));
     expect(tester.takeException(), isNull);
@@ -116,7 +116,7 @@ void main() {
     Analytics.testSink = (name, props) {
       if (name == AnalyticsEvents.reviewTileTapped) events.add({...props});
     };
-    await _pump(tester, items: _mixed, onTapTile: taps.add);
+    await _pump(tester, items: mixed, onTapTile: taps.add);
 
     await tester.tap(find.byType(VerdictBadge).first);
     await tester.pump();
@@ -131,7 +131,7 @@ void main() {
     Analytics.testSink = (name, _) {
       if (name == AnalyticsEvents.reviewTileTapped) events.add(name);
     };
-    await _pump(tester, items: _mixed); // onTapTile null
+    await _pump(tester, items: mixed); // onTapTile null
     await tester.tap(find.byType(VerdictBadge).first);
     await tester.pump();
     expect(events, isEmpty);
@@ -144,7 +144,7 @@ void main() {
     Analytics.testSink = (name, props) {
       if (name == AnalyticsEvents.reviewGridViewed) events.add({...props});
     };
-    await _pump(tester, items: _mixed);
+    await _pump(tester, items: mixed);
     expect(events.length, 1);
     expect(events.single['total'], 4);
     expect(events.single['accepted'], 2);
@@ -176,12 +176,12 @@ void main() {
 
     // Narrow phone width.
     tester.view.physicalSize = const Size(360, 800);
-    await _pump(tester, items: _mixed);
+    await _pump(tester, items: mixed);
     final phoneCols = columnsAt(360);
 
     // Wide tablet width.
     tester.view.physicalSize = const Size(1100, 800);
-    await _pump(tester, items: _mixed);
+    await _pump(tester, items: mixed);
     final tabletCols = columnsAt(1100);
 
     expect(phoneCols, lessThan(tabletCols));
@@ -191,8 +191,7 @@ void main() {
   testWidgets('large set renders without crashing', (tester) async {
     final many = [
       for (var i = 0; i < 40; i++)
-        _item('c$i',
-            CaptureVerdict.values[i % CaptureVerdict.values.length],
+        _item('c$i', CaptureVerdict.values[i % CaptureVerdict.values.length],
             ringIndex: i),
     ];
     await _pump(tester, items: many);

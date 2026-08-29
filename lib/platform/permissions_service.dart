@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 import '../domain/entities/permission_item.dart';
 import 'permissions/android_permission_channel.dart';
+import 'permissions/web_permission_backend_stub.dart'
+    if (dart.library.js_interop) 'permissions/web_permission_backend_web.dart';
 
 /// UI-facing permission status — the SINGLE output vocabulary for the whole app
 /// (Screen 4A's controller, the permission cards, the settings launcher). The
@@ -54,6 +56,14 @@ enum PermissionBackend {
 
   /// The `permission_handler` plugin (via [PermissionHandlerBackend]).
   pluginHandler,
+
+  /// The browser backend (permissions/web_permission_backend_web.dart):
+  /// the Permissions API where it exists, `getUserMedia` as the camera prompt,
+  /// and iOS Safari's `DeviceOrientationEvent.requestPermission()` handshake
+  /// for motion. `permission_handler` is deliberately NOT used on web — it has
+  /// no endorsed web implementation in this dependency set, so every call would
+  /// throw where the routing table promises an answer.
+  webBrowser,
 }
 
 /// THE routing table — the single, authoritative source of truth for which
@@ -67,19 +77,32 @@ enum PermissionBackend {
 ///   • Media access is modeled app-wide as [AppPermissionType.photos]; the
 ///     Android native channel maps it internally to its `storage` logical key
 ///     (granular media on API 33+), while iOS uses permission_handler Photos.
-const Map<AppPermissionType, ({PermissionBackend android, PermissionBackend ios})>
-    _routingTable = {
+///   • Web: every permission routes to [PermissionBackend.webBrowser]. Motion
+///     is NOT permission-free there — iOS Safari gates the orientation and
+///     motion events behind a real, gesture-triggered prompt, and Maya/Meshy's
+///     hard tilt gate depends on the answer, so it must be modelled as a
+///     permission rather than assumed.
+const Map<
+    AppPermissionType,
+    ({
+      PermissionBackend android,
+      PermissionBackend ios,
+      PermissionBackend web
+    })> _routingTable = {
   AppPermissionType.camera: (
     android: PermissionBackend.androidNative,
     ios: PermissionBackend.pluginHandler,
+    web: PermissionBackend.webBrowser,
   ),
   AppPermissionType.motion: (
     android: PermissionBackend.permissionFree,
     ios: PermissionBackend.permissionFree,
+    web: PermissionBackend.webBrowser,
   ),
   AppPermissionType.photos: (
     android: PermissionBackend.androidNative,
     ios: PermissionBackend.pluginHandler,
+    web: PermissionBackend.webBrowser,
   ),
 };
 
@@ -168,9 +191,10 @@ class PermissionsService {
         'No permission backend routed for $type — add it to _routingTable.',
       );
     }
-    if (kIsWeb) {
-      throw StateError('Permissions are not supported on web (route for $type).');
-    }
+    // Web FIRST: `defaultTargetPlatform` reports the HOST OS in a browser, so
+    // checking it first would route a phone browser to a native channel that
+    // does not exist there.
+    if (kIsWeb) return row.web;
     return switch (_platform) {
       TargetPlatform.android => row.android,
       TargetPlatform.iOS => row.ios,
@@ -207,6 +231,9 @@ class PermissionsService {
       case PermissionBackend.pluginHandler:
         return normalizeHandlerStatus(
             await _handler.status(_handlerPermission(type)));
+      case PermissionBackend.webBrowser:
+        return normalizeNativeStatus(
+            await webPermissionStatus(_androidKey(type)));
     }
   }
 
@@ -220,6 +247,9 @@ class PermissionsService {
       case PermissionBackend.pluginHandler:
         return normalizeHandlerStatus(
             await _handler.request(_handlerPermission(type)));
+      case PermissionBackend.webBrowser:
+        return normalizeNativeStatus(
+            await webPermissionRequest(_androidKey(type)));
     }
   }
 
@@ -239,6 +269,10 @@ class PermissionsService {
         return _android.openAppSettings();
       case PermissionBackend.pluginHandler:
         return _handler.openAppSettings();
+      case PermissionBackend.webBrowser:
+        // A browser has no app-settings page to deep-link to; the caller falls
+        // back to its manual-instructions surface.
+        return webOpenPermissionSettings();
       case PermissionBackend.permissionFree:
         // Unreachable for camera; defensive (nothing to open).
         return Future<bool>.value(false);

@@ -17,7 +17,6 @@
 // READ-ONLY over capture/review data; the gate mutates nothing. The blocked /
 // passed analytics live in [UploadGateAnalyticsNotifier], which dedups the passed
 // milestone to the not-eligible→eligible transition.
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/capture/level_completion.dart';
@@ -29,6 +28,7 @@ import 'analytics/capture_level_events.dart';
 import 'capture_flow_variant_provider.dart';
 import 'capture_mode_provider.dart';
 import 'review_grid_items_provider.dart';
+import '../../utils/platform_name.dart';
 
 /// The live hard upload gate. Watch it for `eligible` / `shortLevels`; it reflects
 /// the current ledger + config every time it is read. Fail-safe: with no levels it
@@ -44,7 +44,8 @@ final uploadGateProvider = Provider.autoDispose<UploadGate>((ref) {
         // Live accepted shots — the SAME source the review grids + completion
         // gate read (no duplicated shot-counting).
         final items = ref.watch(reviewGridItemsProvider(bandId));
-        final segments = effectiveSegmentsFor(config, variant, bandId, mode: mode);
+        final segments =
+            effectiveSegmentsFor(config, variant, bandId, mode: mode);
         // Distinct in-range segments among the accepted shots — the ledger
         // analogue of SegmentCoverage.filledCount (same rule as the upload
         // flow's progressionFromLedger snapshot).
@@ -87,8 +88,7 @@ class UploadGateAnalyticsNotifier extends Notifier<void> {
   @override
   void build() {}
 
-  static String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  static String get _deviceType => appPlatformName;
 
   /// Reconciles the latch with the observed [gate] and emits `upload_gate_passed`
   /// exactly once on each not-eligible→eligible transition. A not-eligible

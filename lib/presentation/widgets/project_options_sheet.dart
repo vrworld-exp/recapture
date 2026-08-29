@@ -1,5 +1,4 @@
 // lib/presentation/widgets/project_options_sheet.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../app/theme/app_colors.dart';
 import '../../app/theme/app_spacing.dart';
@@ -10,6 +9,7 @@ import '../../utils/analytics.dart';
 import 'app_button.dart';
 import 'app_text_field.dart';
 import 'offline_retry_modal.dart';
+import '../../utils/platform_name.dart';
 
 /// Presents the project options bottom sheet (Rename / Delete) for [project].
 ///
@@ -70,8 +70,7 @@ class _ProjectOptionsSheetState extends State<_ProjectOptionsSheet> {
   /// In-flight guard for rename so a rapid double-tap fires only one request.
   bool _saving = false;
 
-  String get _deviceType =>
-      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  String get _deviceType => appPlatformName;
 
   @override
   void dispose() {
@@ -167,7 +166,8 @@ class _ProjectOptionsSheetState extends State<_ProjectOptionsSheet> {
         duration: const Duration(milliseconds: 150),
         curve: Curves.easeOut,
         // Lift content above the keyboard when the rename field is focused.
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
             AppSpacing.lg,
@@ -366,8 +366,7 @@ class _DeleteConfirmDialogState extends State<_DeleteConfirmDialog> {
       ),
       actions: [
         TextButton(
-          onPressed:
-              _deleting ? null : () => Navigator.of(context).pop(false),
+          onPressed: _deleting ? null : () => Navigator.of(context).pop(false),
           child: Text(
             'Cancel',
             style: Theme.of(context)
