@@ -13,6 +13,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show Uint8List;
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -775,6 +776,196 @@ void main() {
       expect(state.items.single.name, 'Kept');
       expect(state.error, isNull); // not a whole-screen failure
       expect(state.appendError, isNotNull); // reported in the footer instead
+    });
+  });
+
+  // The gesture itself, not just the notifier underneath it. Every bug this
+  // group covers passed the notifier tests above and still left the user with a
+  // grid whose cards would not move: the drag started, the card followed the
+  // finger, and the release did nothing at all.
+  group('reordering by drag', () {
+    /// Drags the handle of the card at [fromCard] onto the card at [ontoCard],
+    /// optionally releasing somewhere else entirely.
+    ///
+    /// Steps the pointer rather than using `tester.drag`, because the whole
+    /// point is what happens BETWEEN the two points — the live shuffle and,
+    /// with it, the rebuild that used to throw the drag away.
+    Future<void> dragCard(
+      WidgetTester tester, {
+      required int fromCard,
+      required int ontoCard,
+      Offset? releaseAt,
+      PointerDeviceKind kind = PointerDeviceKind.touch,
+    }) async {
+      final handles = find.byIcon(Icons.drag_indicator);
+      final cards = find.byType(ProductCard);
+      final start = tester.getCenter(handles.at(fromCard));
+      final end = tester.getCenter(cards.at(ontoCard));
+
+      final gesture = await tester.startGesture(start, kind: kind);
+      await tester.pump(const Duration(milliseconds: 30));
+      for (var step = 1; step <= 10; step++) {
+        await gesture.moveTo(Offset.lerp(start, end, step / 10)!);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      if (releaseAt != null) {
+        await gesture.moveTo(releaseAt);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
+    /// The ids the grid is showing, in slot order. The feedback under the
+    /// finger is a `ProductCard` too, so it is dropped: it is not a slot.
+    List<String> visibleIds(WidgetTester tester, {int? take}) {
+      final ids = tester
+          .widgetList<ProductCard>(find.byType(ProductCard))
+          .map((card) => card.product.id)
+          .toList();
+      return take == null ? ids : ids.take(take).toList();
+    }
+
+    FakeProductsRepository sixProducts() => FakeProductsRepository(
+          (_) async => pageOf([
+            for (var i = 0; i < 6; i++) product('p$i', position: i),
+          ]),
+        );
+
+    for (final kind in [PointerDeviceKind.touch, PointerDeviceKind.mouse]) {
+      // One implementation for the APK and the browser: a second code path per
+      // pointer kind is how the two builds drift until only one of them works.
+      testWidgets('a ${kind.name} drag onto another card writes the new order',
+          (tester) async {
+        final repo = sixProducts();
+        await tester.pumpWidget(harness(repo, width: 400, height: 800));
+        await tester.pumpAndSettle();
+
+        await dragCard(tester, fromCard: 0, ontoCard: 1, kind: kind);
+
+        expect(repo.reorders.single.take(3), ['p1', 'p0', 'p2']);
+      });
+    }
+
+    testWidgets('the cards shuffle under the finger before the drop',
+        (tester) async {
+      final repo = sixProducts();
+      await tester.pumpWidget(harness(repo, width: 400, height: 800));
+      await tester.pumpAndSettle();
+
+      final handles = find.byIcon(Icons.drag_indicator);
+      final cards = find.byType(ProductCard);
+      final start = tester.getCenter(handles.at(0));
+      final end = tester.getCenter(cards.at(1));
+
+      final gesture = await tester.startGesture(start);
+      await tester.pump(const Duration(milliseconds: 30));
+      for (var step = 1; step <= 10; step++) {
+        await gesture.moveTo(Offset.lerp(start, end, step / 10)!);
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      // Mid-drag, with nothing yet written: the grid already shows the order a
+      // release would produce. The user aims at a slot they can see.
+      expect(visibleIds(tester, take: 2), ['p1', 'p0']);
+      expect(repo.reorders, isEmpty);
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(repo.reorders.single.take(2), ['p1', 'p0']);
+    });
+
+    testWidgets('releasing over the gutter still lands the card', (tester) async {
+      // THE bug this whole path exists for. The drop used to be a DragTarget's
+      // onAccept, so a release over the 16px gap between two cards — or over
+      // anything else that is not a card — hit no target and silently did
+      // nothing, which is indistinguishable from a broken feature.
+      final repo = sixProducts();
+      await tester.pumpWidget(harness(repo, width: 400, height: 800));
+      await tester.pumpAndSettle();
+
+      final cards = find.byType(ProductCard);
+      final gutter = Offset(
+        (tester.getRect(cards.at(0)).right + tester.getRect(cards.at(1)).left) /
+            2,
+        tester.getRect(cards.at(0)).center.dy,
+      );
+
+      await dragCard(tester, fromCard: 0, ontoCard: 1, releaseAt: gutter);
+
+      expect(repo.reorders.single.take(2), ['p1', 'p0']);
+    });
+
+    testWidgets('a drag that never leaves its own slot writes nothing',
+        (tester) async {
+      final repo = sixProducts();
+      await tester.pumpWidget(harness(repo, width: 400, height: 800));
+      await tester.pumpAndSettle();
+
+      await dragCard(tester, fromCard: 0, ontoCard: 0);
+
+      expect(repo.reorders, isEmpty);
+    });
+
+    testWidgets('the grid scrolls itself when the drag reaches the bottom edge',
+        (tester) async {
+      // Without this a card can only ever be moved as far as the viewport
+      // shows, which for a catalog is most of the reordering anyone wants.
+      tester.view.physicalSize = const Size(500, 700);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      final repo = FakeProductsRepository(
+        (_) async => pageOf([
+          for (var i = 0; i < 20; i++) product('p$i', position: i),
+        ]),
+      );
+      await tester.pumpWidget(harness(repo, width: 400, height: 700));
+      await tester.pumpAndSettle();
+
+      // The filter bar scrolls horizontally, so "the Scrollable" has to name
+      // the vertical one explicitly.
+      final scrollable = tester.state<ScrollableState>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Scrollable && widget.axisDirection == AxisDirection.down,
+        ),
+      );
+      expect(scrollable.position.pixels, 0);
+
+      final start = tester.getCenter(find.byIcon(Icons.drag_indicator).at(0));
+      final gesture = await tester.startGesture(start);
+      await tester.pump(const Duration(milliseconds: 30));
+      // One move to pick the card up, then into the bottom band and HELD
+      // there: the scroll has to keep going while the finger sits still, or
+      // reaching the far end of a catalog means a series of little nudges.
+      await gesture.moveTo(start + const Offset(0, 40));
+      await tester.pump(const Duration(milliseconds: 16));
+      await gesture.moveTo(Offset(start.dx, 690));
+      for (var frame = 0; frame < 20; frame++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+
+      expect(scrollable.position.pixels, greaterThan(0));
+
+      await gesture.up();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('reordering is off while bulk selection is active',
+        (tester) async {
+      final repo = sixProducts();
+      await tester.pumpWidget(harness(repo, width: 400, height: 800));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.drag_indicator), findsWidgets);
+
+      await tester.longPress(find.byType(ProductCard).first);
+      await tester.pumpAndSettle();
+
+      // A drag that moved a card the user meant to tick is not a reorder
+      // anyone asked for, so the affordance goes away rather than misfiring.
+      expect(find.byIcon(Icons.drag_indicator), findsNothing);
     });
   });
 
