@@ -409,14 +409,30 @@ async function resolveOwnedModel(
   };
 }
 
-/** Appends after the current last product. */
+/**
+ * Puts a new product BEFORE the current first one, so the latest addition leads
+ * the grid instead of being buried at the end of it.
+ *
+ * Both surfaces read the same key ascending -- the owner grid sorts
+ * `(position ASC, _id ASC)`, and a publish copies `position` onto Mirage's
+ * `sortPosition`, which its catalog reads ascending too -- so one leading
+ * position is all that "newest first" costs, on both.
+ *
+ * It leads by going BELOW the current minimum rather than by shifting every
+ * other row up. Shifting would rewrite the whole catalog on each create and,
+ * because `position` is a published field, make the next publish re-push every
+ * product for an order nobody actually changed. Nothing requires the sequence
+ * to be non-negative or gap-free: the index is `{ catalogId, position, _id }`,
+ * the cursor carries the raw number, and an explicit reorder renumbers from 0
+ * anyway.
+ */
 async function nextProductPosition(catalogId: Types.ObjectId): Promise<number> {
-  const last = await CatalogProduct.findOne({ catalogId, deletedAt: null })
-    .sort({ position: -1 })
+  const first = await CatalogProduct.findOne({ catalogId, deletedAt: null })
+    .sort({ position: 1 })
     .select('position')
     .exec();
 
-  return last ? last.position + 1 : 0;
+  return first ? first.position - 1 : 0;
 }
 
 // ── Update ──────────────────────────────────────────────────────────────────

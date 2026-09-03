@@ -527,19 +527,22 @@ describe('catalog products', () => {
     expect(res.body.items).toHaveLength(0);
   });
 
-  it('paginates deterministically by position', async () => {
+  it('paginates deterministically by position, newest product first', async () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
     for (const name of ['A', 'B', 'C']) {
       await createImageOnly(auth, { name });
     }
 
+    // A create leads the list rather than joining the end of it, so the order
+    // is the reverse of the order they were added in -- and it holds ACROSS the
+    // page boundary, which is the half a single-page assertion would miss.
     const first = await request(app)
       .get('/catalog/products')
       .query({ limit: 2 })
       .set(auth)
       .expect(200);
-    expect(first.body.items.map((p: { name: string }) => p.name)).toEqual(['a', 'b']);
+    expect(first.body.items.map((p: { name: string }) => p.name)).toEqual(['c', 'b']);
     expect(first.body.nextCursor).toBeTruthy();
 
     const second = await request(app)
@@ -547,7 +550,7 @@ describe('catalog products', () => {
       .query({ limit: 2, cursor: first.body.nextCursor })
       .set(auth)
       .expect(200);
-    expect(second.body.items.map((p: { name: string }) => p.name)).toEqual(['c']);
+    expect(second.body.items.map((p: { name: string }) => p.name)).toEqual(['a']);
     expect(second.body.nextCursor).toBeNull();
   });
 
