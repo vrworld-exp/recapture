@@ -774,6 +774,11 @@ class _RolePill extends StatelessWidget {
     final label = switch (role) {
       UserRole.admin => 'Admin',
       UserRole.modelArtist => 'Model artist',
+      // Unreachable today — the pill is rendered under an isStaff gate and a
+      // SALES_REP is not staff. Present because the switch must stay TOTAL:
+      // leaving it out is a compile error, and a wildcard would hide the next
+      // role added.
+      UserRole.salesRep => 'Sales rep',
       UserRole.user => 'User',
     };
     const color = AppColors.royalGold;
