@@ -34,6 +34,7 @@ import {
   bytesUpload,
   type MirageFileUpload,
   type MirageRestaurant,
+  type MirageSocialLinks,
 } from '@/services/mirage';
 import { isDuplicateKeyError } from '@/services/catalogService';
 import { appendSlugSuffix, toCatalogSlug } from '@/utils/catalogNames';
@@ -205,6 +206,56 @@ function mirageDigits(phone: string | undefined): string | undefined {
   let digits = phone.replace(/\D/g, '');
   if (digits.length > 10 && digits.startsWith('91')) digits = digits.slice(2);
   return digits.length === 10 ? digits : undefined;
+}
+
+/**
+ * The WhatsApp number as `wa.me` needs to read it.
+ *
+ * The public page builds `https://wa.me/{value}` verbatim
+ * (mirage-fe/src/features/menu/MenuScreen.tsx:1071), and `wa.me` accepts DIGITS
+ * ONLY — a stored `+91 98765 43210` produces a link that opens to an error. So
+ * the separators come off here, at the seam, exactly as they do for `phoneNo`.
+ *
+ * A bare 10-digit number is given the `91` country code for the same reason
+ * Mirage prefixes `+91` onto `phone`: without a country code `wa.me` cannot
+ * resolve the number at all, and this is the market both fields already assume.
+ * Anything else is passed through as digits — an international number typed with
+ * its own country code is already correct.
+ */
+function whatsappDigits(value: string | undefined): string {
+  const digits = (value ?? '').replace(/\D/g, '');
+  if (digits.length === 0) return '';
+  return digits.length === 10 ? `91${digits}` : digits;
+}
+
+/**
+ * The link block Mirage's restaurant record carries (restaurantModel.js:75-105).
+ *
+ * EVERY KEY IS ALWAYS PRESENT, `''` for an unset one, and that is the whole
+ * point. Mirage merges `socialLinks` key by key rather than replacing the object
+ * (adminController.js:685-689), so an omitted key keeps whatever it held. Send
+ * only the filled-in handles and "remove my Instagram" silently fails — the
+ * handle stays live on the customer-facing page forever, while the app shows it
+ * as deleted.
+ *
+ * `x` and `linkedin` are deliberately NOT sent: ReCapture has no field for
+ * either, so they are left to whatever Mirage's own admin UI put there rather
+ * than being cleared by a system that does not know about them.
+ */
+function mirageLinks(catalog: ICatalog): {
+  website: string;
+  socialLinks: MirageSocialLinks;
+} {
+  const socials = catalog.contact?.socials;
+  return {
+    website: (catalog.contact?.website ?? '').trim(),
+    socialLinks: {
+      instagram: (socials?.instagram ?? '').trim(),
+      facebook: (socials?.facebook ?? '').trim(),
+      youtube: (socials?.youtube ?? '').trim(),
+      whatsapp: whatsappDigits(socials?.whatsapp),
+    },
+  };
 }
 
 /**
@@ -389,10 +440,12 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
     return nameTaken(catalog, existing);
   }
 
-  // (3) Create. `location` is always a string (Mirage 400s otherwise) and the
-  //     logo rides along, so the very first published page is already branded.
+  // (3) Create. `location` is always a string (Mirage 400s otherwise), and the
+  //     logo and link block ride along, so the very first published page is
+  //     already branded and reachable.
   const logo = await loadLogoUpload(catalog);
   const phoneNo = mirageDigits(catalog.contact?.phone);
+  const links = mirageLinks(catalog);
 
   let created: MirageRestaurant;
   try {
@@ -400,6 +453,8 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
       name: catalog.name,
       location: catalog.contact?.address ?? '',
       ...(phoneNo !== undefined ? { phoneNo } : {}),
+      website: links.website,
+      socialLinks: links.socialLinks,
       ...(logo ? { image: logo } : {}),
     });
   } catch (err) {
@@ -440,7 +495,9 @@ export type SyncBrandingResult =
  * Both `name` and `location` are always sent as strings. Mirage's update handler
  * accepts a partial body today, but it type-checks whatever is present, and an
  * omitted `location` on a restaurant that has one is the kind of silent gap that
- * only shows up on a customer's phone.
+ * only shows up on a customer's phone. `website` and `socialLinks` travel on the
+ * same call and for the same reason — see {@link mirageLinks} for why every
+ * social key is sent even when it is empty.
  *
  * ⚠ A rename can collide on Mirage's containment rule even though the original
  * create did not (adminController.js:496-508). It is reported, never retried
@@ -458,12 +515,15 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
   const client = getMirageClient();
   const logo = await loadLogoUpload(catalog);
   const phoneNo = mirageDigits(catalog.contact?.phone);
+  const links = mirageLinks(catalog);
 
   try {
     await client.updateRestaurant(catalog.mirageRestaurantId, {
       name: catalog.name,
       location: catalog.contact?.address ?? '',
       ...(phoneNo !== undefined ? { phoneNo } : {}),
+      website: links.website,
+      socialLinks: links.socialLinks,
       ...(logo ? { image: logo } : {}),
     });
 

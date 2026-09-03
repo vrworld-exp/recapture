@@ -125,15 +125,28 @@ describe('business profile', () => {
     const res = await request(app).get('/catalog/profile').set(auth).expect(200);
 
     expect(res.body.profile.publicFields).toEqual([...PUBLIC_PROFILE_FIELDS]);
-    // Mirage's update-restaurant (M3) carries name/location/phoneNo/icon only —
-    // everything else on the profile is ReCapture-only and must NOT be listed.
-    for (const carried of ['name', 'contact.phone', 'contact.address', 'logoUrl']) {
+    // Everything the publish path actually pushes onto the Mirage restaurant —
+    // including website and the social handles, which its schema gained in the
+    // phase-2 rework and its public contact sheet renders.
+    for (const carried of [
+      'name',
+      'contact.phone',
+      'contact.address',
+      'logoUrl',
+      'contact.website',
+      'contact.socials.instagram',
+      'contact.socials.facebook',
+      'contact.socials.youtube',
+      'contact.socials.whatsapp',
+    ]) {
       expect(res.body.profile.publicFields).toContain(carried);
     }
+    // Still ReCapture-only, and must NOT be marked public. `contact.socials` is
+    // in this list on purpose: the client matches the dotted path EXACTLY, so
+    // the bare prefix is not a field anything can label.
     for (const local of [
       'businessName',
       'contact.email',
-      'contact.website',
       'contact.socials',
       'coverImageUrl',
     ]) {
