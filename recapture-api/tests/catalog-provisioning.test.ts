@@ -144,6 +144,8 @@ function fakeMirage(seed: MirageRestaurant[] = []): FakeMirage {
         name: input.name,
         location: input.location,
         ...(input.phoneNo ? { phone: `+91${input.phoneNo}` } : {}),
+        website: input.website ?? '',
+        socialLinks: { ...input.socialLinks },
         categoryIds: [],
       };
       state.restaurants.push(created);
@@ -167,6 +169,13 @@ function fakeMirage(seed: MirageRestaurant[] = []): FakeMirage {
       if (!found) throw new Error(`no such restaurant ${id}`);
       found.name = input.name;
       found.location = input.location;
+      if (input.website !== undefined) found.website = input.website;
+      // Mirage MERGES this object key by key (adminController.js:685-689) rather
+      // than replacing it. Reproducing that here is what makes the "a cleared
+      // handle actually disappears" test mean anything.
+      if (input.socialLinks !== undefined) {
+        found.socialLinks = { ...found.socialLinks, ...input.socialLinks };
+      }
       return { ...found };
     },
     deleteRestaurant: unexpected('deleteRestaurant'),
@@ -200,7 +209,17 @@ function restaurant(name: string): MirageRestaurant {
 async function seedCatalog(
   overrides: Partial<{
     name: string;
-    contact: { phone?: string; address?: string };
+    contact: {
+      phone?: string;
+      address?: string;
+      website?: string;
+      socials?: {
+        instagram?: string;
+        facebook?: string;
+        youtube?: string;
+        whatsapp?: string;
+      };
+    };
     logoKey: string;
   }> = {}
 ): Promise<{ id: Types.ObjectId; name: string }> {
@@ -513,6 +532,111 @@ describe('branding', () => {
     const stored = await Catalog.findById(id).exec();
     expect(stored?.publicUrl).toBe(provisioned.mapping.publicUrl);
     expect(stored?.mirageRestaurantId).toBe(provisioned.mapping.mirageRestaurantId);
+  });
+
+  // ── Website and social links (the public contact sheet) ───────────────────
+  //
+  // Mirage's restaurant schema carries `website` and `socialLinks`, and the
+  // public page renders them in the contact sheet a customer opens from the call
+  // icon. They are stored on the catalog like any other contact field, so the
+  // only thing that can break them is this service forgetting to send them —
+  // which is exactly what it used to do.
+
+  it('carries website and social links onto the restaurant at provisioning', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({
+      contact: {
+        website: 'https://blue.example',
+        socials: { instagram: 'blue_cafe', youtube: 'https://youtube.com/@blue' },
+      },
+    });
+
+    await provisionCatalog(id);
+
+    expect(mirage.restaurants[0]?.website).toBe('https://blue.example');
+    expect(mirage.restaurants[0]?.socialLinks).toMatchObject({
+      instagram: 'blue_cafe',
+      youtube: 'https://youtube.com/@blue',
+    });
+  });
+
+  it('pushes website and social links on every branding sync', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({ name: 'Blue Cafe' });
+    await provisionCatalog(id);
+
+    await Catalog.updateOne(
+      { _id: id },
+      {
+        $set: {
+          'contact.website': 'blue.example',
+          'contact.socials': { instagram: 'blue_cafe', facebook: 'bluecafe' },
+        },
+      }
+    ).exec();
+
+    expect((await syncCatalogBranding(id)).outcome).toBe('SYNCED');
+    expect(mirage.restaurants[0]?.website).toBe('blue.example');
+    expect(mirage.restaurants[0]?.socialLinks).toMatchObject({
+      instagram: 'blue_cafe',
+      facebook: 'bluecafe',
+    });
+  });
+
+  // The reason every key is sent even when empty: Mirage merges this object, so
+  // an omitted key would leave a deleted handle live on the public page.
+  it('clears a handle the business removed instead of leaving it live', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({
+      contact: { website: 'blue.example', socials: { instagram: 'blue_cafe' } },
+    });
+    await provisionCatalog(id);
+    expect(mirage.restaurants[0]?.socialLinks?.instagram).toBe('blue_cafe');
+
+    // The profile screen REPLACES the whole contact block, so removing the
+    // handle leaves `socials` absent rather than holding an empty string.
+    await Catalog.updateOne({ _id: id }, { $set: { contact: {} } }).exec();
+    await syncCatalogBranding(id);
+
+    expect(mirage.restaurants[0]?.socialLinks?.instagram).toBe('');
+    expect(mirage.restaurants[0]?.website).toBe('');
+  });
+
+  // `x` and `linkedin` have no ReCapture field. Clearing them would delete
+  // something only Mirage's own admin UI can set.
+  it('leaves the Mirage-only handles alone', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog();
+    await provisionCatalog(id);
+
+    mirage.restaurants[0]!.socialLinks = { x: 'blue_cafe', linkedin: 'blue-cafe' };
+    await syncCatalogBranding(id);
+
+    expect(mirage.restaurants[0]?.socialLinks).toMatchObject({
+      x: 'blue_cafe',
+      linkedin: 'blue-cafe',
+    });
+  });
+
+  // The public page builds `https://wa.me/{value}`, which reads digits only.
+  it('normalises the WhatsApp number into something wa.me can resolve', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({
+      contact: { socials: { whatsapp: '+91 98765 43210' } },
+    });
+
+    await provisionCatalog(id);
+
+    expect(mirage.restaurants[0]?.socialLinks?.whatsapp).toBe('919876543210');
+  });
+
+  it('gives a bare 10-digit WhatsApp number its country code', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({ contact: { socials: { whatsapp: '9876543210' } } });
+
+    await provisionCatalog(id);
+
+    expect(mirage.restaurants[0]?.socialLinks?.whatsapp).toBe('919876543210');
   });
 
   it('is a no-op on a catalog that has never been provisioned', async () => {

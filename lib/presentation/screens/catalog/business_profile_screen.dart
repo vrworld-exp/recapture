@@ -534,11 +534,12 @@ class _ProfileFormState extends ConsumerState<_ProfileForm> {
 /// One field, with an honest note about how far it travels.
 ///
 /// The note is read PER FIELD from [BusinessProfile.publicFields], which the
-/// server owns. Anything not in that list is ReCapture-only — including fields
-/// Mirage's restaurant record has room for (`website`, `socialLinks`) but whose
-/// public page does not render yet. Saying "saved, not shown publicly" about a
-/// field that later goes live costs one stale sentence; saying the reverse tells
-/// a business their phone number is on their storefront when it is not.
+/// server owns — never hardcoded here, because the list grows whenever the
+/// publish worker learns to carry another field, and a copy on this side would
+/// go on claiming a field is private for as long as nobody noticed. Saying
+/// "saved, not shown publicly" about a field that later goes live costs one
+/// stale sentence; saying the reverse tells a business their phone number is on
+/// their storefront when it is not.
 class _Field extends StatelessWidget {
   const _Field({
     required this.profile,

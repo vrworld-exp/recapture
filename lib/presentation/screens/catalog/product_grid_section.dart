@@ -8,6 +8,8 @@
 // list inside a list: nesting them is what makes a grid scroll independently of
 // the header it belongs to, and breaks pull-to-refresh on the way.
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_colors.dart';
@@ -410,7 +412,21 @@ class _CatalogFilterChip extends StatelessWidget {
 
 // ── The grid ────────────────────────────────────────────────────────────────
 
-class _ProductGrid extends ConsumerWidget {
+/// How near the viewport's top or bottom edge the finger has to be before the
+/// grid starts scrolling itself during a drag.
+const double _kAutoScrollEdge = 96;
+
+/// Top speed of that auto-scroll, in logical pixels per second, reached at the
+/// very edge and eased down to nothing at [_kAutoScrollEdge] away from it.
+const double _kAutoScrollSpeed = 780;
+
+/// How long a card takes to slide into the slot a drag just freed.
+const Duration _kSlotShiftDuration = Duration(milliseconds: 190);
+
+/// How long the picked-up card takes to fade back to the hole it left behind.
+const Duration _kLiftDuration = Duration(milliseconds: 120);
+
+class _ProductGrid extends ConsumerStatefulWidget {
   const _ProductGrid({
     required this.state,
     required this.onOpenProduct,
@@ -420,6 +436,188 @@ class _ProductGrid extends ConsumerWidget {
   final CatalogProductsState state;
   final ValueChanged<CatalogProduct> onOpenProduct;
   final ProductMenuCallback? onProductMenu;
+
+  @override
+  ConsumerState<_ProductGrid> createState() => _ProductGridState();
+}
+
+/// Owns the live reorder.
+///
+/// Flutter ships no reorderable GRID, so this is built from [Draggable] and
+/// [DragTarget] directly — the same pair `ReorderableListView` is made of. What
+/// this state adds on top of them is everything that made the raw pair unusable
+/// in a scrolling grid:
+///
+///   • a PENDING order ([_from] → [_to]). The cards shuffle under the finger as
+///     it moves, so the drop lands where the grid has been showing it would,
+///     instead of the user aiming at an invisible slot and hoping.
+///   • the DROP IS COMMITTED BY THE SOURCE, on `onDragEnd`, from that pending
+///     order — never by a target's `onAccept`. A release over the 16px gutter
+///     between two cards, over the header, or past the last row hits no target
+///     at all, and every one of those used to be a silent no-op that looked
+///     exactly like a broken feature.
+///   • AUTO-SCROLL at the viewport edges, because a grid that cannot scroll
+///     while dragging cannot move a card further than one screen — which is
+///     most of what reordering a catalog is for.
+///
+/// Everything here is presentation. The order is only ever written through
+/// `CatalogProductsNotifier.reorder`, which stays the single place that knows
+/// about optimism, rollback and the server's index convention.
+class _ProductGridState extends ConsumerState<_ProductGrid>
+    with SingleTickerProviderStateMixin {
+  /// Index in `widget.state.items` of the card being dragged. Null when idle.
+  int? _from;
+
+  /// The slot that card currently occupies on screen, and the slot it lands in
+  /// if the finger lifts now.
+  int? _to;
+
+  /// Drives the edge auto-scroll. Created lazily and only ever once, which is
+  /// what [SingleTickerProviderStateMixin] allows.
+  Ticker? _ticker;
+  Duration _lastTick = Duration.zero;
+  double _scrollVelocity = 0;
+
+  bool get _dragging => _from != null && _to != null;
+
+  @override
+  void dispose() {
+    _ticker?.dispose();
+    super.dispose();
+  }
+
+  // ── The order on screen ───────────────────────────────────────────────────
+
+  /// `state.items` with the dragged card moved to the slot it is hovering.
+  ///
+  /// This is the ONLY list the grid builds from, so "what you see" and "what a
+  /// release would write" cannot drift apart.
+  List<CatalogProduct> get _visible {
+    final items = widget.state.items;
+    final from = _from;
+    final to = _to;
+    if (from == null || to == null || from == to) return items;
+    if (from < 0 || from >= items.length || to < 0 || to >= items.length) {
+      return items;
+    }
+    final moved = [...items];
+    moved.insert(to, moved.removeAt(from));
+    return moved;
+  }
+
+  // ── Drag lifecycle ────────────────────────────────────────────────────────
+
+  void _onDragStarted(int index) {
+    // A phone gives no cursor and no hover, so the buzz is the only signal that
+    // the handle was actually caught. No-op on the web build.
+    HapticFeedback.selectionClick();
+    setState(() {
+      _from = index;
+      _to = index;
+    });
+  }
+
+  /// The finger moved over the cell currently drawn at [slot].
+  ///
+  /// Stable by construction: after the shuffle the dragged card IS the cell at
+  /// [slot], so the next move over the same place reports the same slot and
+  /// nothing oscillates.
+  void _onHover(int slot) {
+    if (!_dragging || _to == slot) return;
+    if (slot < 0 || slot >= widget.state.items.length) return;
+    HapticFeedback.selectionClick();
+    setState(() => _to = slot);
+  }
+
+  /// Applies the pending order. Called from the DRAGGABLE, so it runs on every
+  /// release — including the ones that land on no target at all.
+  void _onDragEnd() {
+    final from = _from;
+    final to = _to;
+    _stopAutoScroll();
+
+    // Written BEFORE the pending order is cleared: `reorder` applies its
+    // optimistic list synchronously, so by the time this state drops back to
+    // "not dragging" the notifier is already holding the order the grid has
+    // been showing. Clearing first would flash one frame of the old order.
+    if (from != null && to != null && from != to) {
+      _move(context, ref, from: from, to: to);
+    }
+
+    setState(() {
+      _from = null;
+      _to = null;
+    });
+  }
+
+  // ── Auto-scroll ───────────────────────────────────────────────────────────
+
+  /// Reads the finger's position against the enclosing viewport and sets the
+  /// scroll speed from it. Called on every drag update, so it also STOPS the
+  /// scroll the moment the finger comes back inside.
+  void _onDragUpdate(Offset globalPosition) {
+    final scrollable = Scrollable.maybeOf(context);
+    final box = scrollable?.context.findRenderObject();
+    if (scrollable == null || box is! RenderBox || !box.hasSize) {
+      _stopAutoScroll();
+      return;
+    }
+
+    final top = box.localToGlobal(Offset.zero).dy;
+    final bottom = top + box.size.height;
+
+    double velocity = 0;
+    if (globalPosition.dy < top + _kAutoScrollEdge) {
+      final depth =
+          (top + _kAutoScrollEdge - globalPosition.dy) / _kAutoScrollEdge;
+      velocity = -_kAutoScrollSpeed * depth.clamp(0.0, 1.0);
+    } else if (globalPosition.dy > bottom - _kAutoScrollEdge) {
+      final depth =
+          (globalPosition.dy - (bottom - _kAutoScrollEdge)) / _kAutoScrollEdge;
+      velocity = _kAutoScrollSpeed * depth.clamp(0.0, 1.0);
+    }
+
+    _scrollVelocity = velocity;
+    if (velocity == 0) {
+      _ticker?.stop();
+      return;
+    }
+    _ticker ??= createTicker(_tick);
+    if (!_ticker!.isActive) {
+      _lastTick = Duration.zero;
+      _ticker!.start();
+    }
+  }
+
+  void _tick(Duration elapsed) {
+    final seconds = _lastTick == Duration.zero
+        ? 0.0
+        : (elapsed - _lastTick).inMicroseconds / Duration.microsecondsPerSecond;
+    _lastTick = elapsed;
+    if (seconds <= 0) return;
+
+    final position = Scrollable.maybeOf(context)?.position;
+    if (position == null ||
+        !position.hasPixels ||
+        !position.hasContentDimensions) {
+      return;
+    }
+
+    // jumpTo rather than animateTo: this already runs once a frame at a speed
+    // the finger is choosing, and an animation on top of it would fight it.
+    // It also emits the scroll notification the shell turns into a next-page
+    // fetch, so dragging to the bottom keeps loading rows to drop onto.
+    final target = (position.pixels + _scrollVelocity * seconds)
+        .clamp(position.minScrollExtent, position.maxScrollExtent);
+    if (target != position.pixels) position.jumpTo(target);
+  }
+
+  void _stopAutoScroll() {
+    _scrollVelocity = 0;
+    _ticker?.stop();
+  }
+
+  // ── Selection ─────────────────────────────────────────────────────────────
 
   /// One card's primary activation.
   ///
@@ -433,7 +631,7 @@ class _ProductGrid extends ConsumerWidget {
   ///
   /// Long-press (which the card routes to [_onSelectToggle]) enters selection on
   /// a phone, where there is no modifier to hold.
-  void _onActivate(WidgetRef ref, CatalogProduct product) {
+  void _onActivate(CatalogProduct product) {
     final selection = ref.read(bulkSelectionProvider);
     final notifier = ref.read(bulkSelectionProvider.notifier);
 
@@ -442,13 +640,13 @@ class _ProductGrid extends ConsumerWidget {
         notifier.enter(product.id);
         return;
       }
-      onOpenProduct(product);
+      widget.onOpenProduct(product);
       return;
     }
-    _onSelectToggle(ref, product);
+    _onSelectToggle(product);
   }
 
-  void _onSelectToggle(WidgetRef ref, CatalogProduct product) {
+  void _onSelectToggle(CatalogProduct product) {
     final notifier = ref.read(bulkSelectionProvider.notifier);
     if (bulkRangeModifierHeld()) {
       notifier.selectRangeTo(product.id);
@@ -457,9 +655,15 @@ class _ProductGrid extends ConsumerWidget {
     notifier.toggle(product.id);
   }
 
+  // ── Build ─────────────────────────────────────────────────────────────────
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final selection = ref.watch(bulkSelectionProvider);
+    // Reordering is suspended while selecting: a drag that moved a card the
+    // user meant to tick is not a reorder anyone asked for.
+    final canReorder = widget.state.canReorder && !selection.isActive;
+    final items = _visible;
 
     return SliverLayoutBuilder(
       builder: (context, constraints) {
@@ -468,7 +672,12 @@ class _ProductGrid extends ConsumerWidget {
         final width = constraints.crossAxisExtent;
         final columns = productGridColumns(width);
         final cellWidth = (width - AppSpacing.md * (columns - 1)) / columns;
+        final cellHeight = cellWidth + _kCardTextExtent;
         final touchHandle = productGridTouchHandle(width);
+        // What one step across / down the grid measures, which is what a card
+        // has to travel to slide into the slot beside it.
+        final stride =
+            Size(cellWidth + AppSpacing.md, cellHeight + AppSpacing.md);
 
         return SliverGrid(
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -478,11 +687,12 @@ class _ProductGrid extends ConsumerWidget {
             // Derived from the measured column width so the square image plus
             // its text block always fits — a fixed ratio overflows the moment
             // the text scale or the column count changes.
-            childAspectRatio: cellWidth / (cellWidth + _kCardTextExtent),
+            childAspectRatio: cellWidth / cellHeight,
           ),
           delegate: SliverChildBuilderDelegate(
             (context, index) {
-              final product = state.items[index];
+              final product = items[index];
+              final isDragged = _dragging && index == _to;
 
               // The Builder is what gives the overflow menu something to anchor
               // to. A `SliverChildBuilderDelegate` hands its builder the
@@ -491,53 +701,33 @@ class _ProductGrid extends ConsumerWidget {
               // context resolves to the cell's own box.
               return KeyedSubtree(
                 key: ValueKey<String>(product.id),
-                child: Builder(
-                  builder: (cellContext) {
-                    final card = ProductCard(
+                child: _SlotShift(
+                  slot: index,
+                  columns: columns,
+                  stride: stride,
+                  child: Builder(
+                    builder: (cellContext) => _cell(
+                      cellContext,
                       product: product,
-                      onTap: () => _onActivate(ref, product),
-                      // Null while selecting: an overflow menu that archived ONE
-                      // product from inside a twenty-product selection is a
-                      // second, contradictory answer to the same question.
-                      onMore: onProductMenu == null || selection.isActive
-                          ? null
-                          : () => onProductMenu!(cellContext, product),
-                      // Null unless selecting, so the checkbox is absent rather
-                      // than present-and-unchecked on an ordinary grid.
-                      isSelected: selection.isActive
-                          ? selection.contains(product.id)
-                          : null,
-                      // Passed even when NOT selecting: this is what the card's
-                      // long-press routes to, and long-press is how a phone
-                      // enters selection mode in the first place.
-                      onSelectedChanged: (_) => _onSelectToggle(ref, product),
-                      // Drawn at every width now: it is the ONLY way to
-                      // start a reorder, so hiding it on a phone left that
-                      // layout with no reorder at all.
-                      dragHandle: state.canReorder && !selection.isActive
-                          ? _DragHandle(index: index, touch: touchHandle)
-                          : null,
-                    );
-
-                    // The card is the DROP target at every width; the handle
-                    // inside it is the drag source, so a drag across the body of
-                    // a card stays a scroll/select gesture rather than an
-                    // accidental reorder. Reordering is suspended while
-                    // selecting: a drag that moved a card the user meant to tick
-                    // is not a reorder anyone asked for.
-                    return state.canReorder && !selection.isActive
-                        ? _ReorderableCell(index: index, child: card)
-                        : card;
-                  },
+                      slot: index,
+                      canReorder: canReorder,
+                      isDragged: isDragged,
+                      selection: selection,
+                      cellWidth: cellWidth,
+                      touchHandle: touchHandle,
+                    ),
+                  ),
                 ),
               );
             },
-            childCount: state.items.length,
-            // Keyed by product id so an optimistic reorder moves the widgets it
-            // built rather than repainting a stale card into a new slot.
+            childCount: items.length,
+            // Keyed by product id so a shuffle MOVES the widgets it already
+            // built rather than repainting a stale card into a new slot — and,
+            // during a drag, so the Draggable under the finger keeps its
+            // element and stays mounted while its slot changes underneath it.
             findChildIndexCallback: (key) {
               final id = (key as ValueKey<String>).value;
-              final index = state.items.indexWhere((p) => p.id == id);
+              final index = items.indexWhere((p) => p.id == id);
               return index == -1 ? null : index;
             },
           ),
@@ -545,49 +735,189 @@ class _ProductGrid extends ConsumerWidget {
       },
     );
   }
+
+  Widget _cell(
+    BuildContext cellContext, {
+    required CatalogProduct product,
+    required int slot,
+    required bool canReorder,
+    required bool isDragged,
+    required BulkSelectionState selection,
+    required double cellWidth,
+    required bool touchHandle,
+  }) {
+    final card = ProductCard(
+      product: product,
+      onTap: () => _onActivate(product),
+      // Null while selecting: an overflow menu that archived ONE product from
+      // inside a twenty-product selection is a second, contradictory answer to
+      // the same question.
+      onMore: widget.onProductMenu == null || selection.isActive
+          ? null
+          : () => widget.onProductMenu!(cellContext, product),
+      // Null unless selecting, so the checkbox is absent rather than
+      // present-and-unchecked on an ordinary grid.
+      isSelected: selection.isActive ? selection.contains(product.id) : null,
+      // Passed even when NOT selecting: this is what the card's long-press
+      // routes to, and long-press is how a phone enters selection mode.
+      onSelectedChanged: (_) => _onSelectToggle(product),
+      // Drawn at every width: it is the ONLY way to start a reorder, so hiding
+      // it on a phone left that layout with no reorder at all.
+      dragHandle: canReorder
+          ? _DragHandle(
+              touch: touchHandle,
+              // The card's CURRENT slot is where this drag starts from; the
+              // slot moves as the finger does, the start does not.
+              onDragStarted: () => _onDragStarted(slot),
+              onDragUpdate: _onDragUpdate,
+              onDragEnd: _onDragEnd,
+              feedback: _DragFeedback(
+                product: product,
+                width: cellWidth.clamp(140.0, 240.0),
+              ),
+            )
+          : null,
+    );
+
+    // The card being dragged reads as the HOLE it left behind: the feedback
+    // under the finger is the product now, and two solid copies of the same
+    // card is the thing that makes a drag look broken.
+    //
+    // ⚠ THE SHAPE OF THIS SUBTREE NEVER CHANGES, only its values. The drag
+    // SOURCE lives inside `card`, and swapping a card for a placeholder widget
+    // changes the element type at this position — which tears the Draggable
+    // down mid-gesture and silently orphans the drop. Same reason the
+    // decoration is always drawn and merely turns transparent.
+    final body = AnimatedContainer(
+      duration: _kLiftDuration,
+      decoration: BoxDecoration(
+        color: isDragged
+            ? AppColors.mirageRed.withValues(alpha: 0.06)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(
+          color: isDragged
+              ? AppColors.mirageRed.withValues(alpha: 0.55)
+              : Colors.transparent,
+          width: 1.5,
+        ),
+      ),
+      child: AnimatedOpacity(
+        duration: _kLiftDuration,
+        opacity: isDragged ? 0.22 : 1,
+        child: card,
+      ),
+    );
+
+    // Drawn at every width, reorderable or not, so that entering bulk
+    // selection does not nudge every card by the width of a border that only
+    // one of the two modes draws.
+    if (!canReorder) return body;
+
+    // Every cell is a target, but only so the grid knows where the finger is —
+    // the drop itself is committed by the source. `onWillAccept` is therefore
+    // unconditionally true: refusing the card's own slot would make the cell
+    // under the finger report nothing for the whole time it sits there.
+    return DragTarget<int>(
+      onWillAcceptWithDetails: (_) => true,
+      onMove: (_) => _onHover(slot),
+      builder: (_, __, ___) => body,
+    );
+  }
 }
 
-/// One draggable / droppable grid cell.
+/// Slides a card from the slot it used to hold into the one it holds now.
 ///
-/// Flutter ships no reorderable GRID, and `ReorderableListView` is a list — so
-/// the pair of primitives underneath it ([Draggable] and [DragTarget]) is used
-/// directly. Both touch drag and mouse drag come from the same widget, which is
-/// what makes the web build's reorder work without a second code path.
-class _ReorderableCell extends ConsumerWidget {
-  const _ReorderableCell({required this.index, required this.child});
+/// The sliver re-lays a reordered child out INSTANTLY; without this the whole
+/// grid would teleport on every hover change. Given the grid's own geometry the
+/// distance is known exactly, so the card is drawn at its old position and
+/// animates the difference away.
+///
+/// `transformHitTests: false` is deliberate: hit testing keeps using the
+/// SETTLED slot, so the hover a drag reads is the grid's real layout rather
+/// than a card still halfway through moving. That is what stops a dragged card
+/// ping-ponging between two slots.
+class _SlotShift extends StatefulWidget {
+  const _SlotShift({
+    required this.slot,
+    required this.columns,
+    required this.stride,
+    required this.child,
+  });
 
-  final int index;
+  final int slot;
+  final int columns;
+  final Size stride;
   final Widget child;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return DragTarget<int>(
-      onWillAcceptWithDetails: (details) => details.data != index,
-      onAcceptWithDetails: (details) =>
-          _move(context, ref, from: details.data, to: index),
-      builder: (context, candidate, __) {
-        final highlighted = candidate.isNotEmpty;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppRadius.sm),
-            border: Border.all(
-              color: highlighted ? AppColors.mirageRed : Colors.transparent,
-              width: 2,
-            ),
-          ),
-          child: child,
-        );
-      },
-    );
+  State<_SlotShift> createState() => _SlotShiftState();
+}
+
+class _SlotShiftState extends State<_SlotShift>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: _kSlotShiftDuration,
+  );
+  late final Animation<double> _curve = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeOutCubic,
+  );
+
+  /// Where this card was, relative to where it is now, at the start of the
+  /// current animation. Zero when nothing is moving.
+  Offset _offset = Offset.zero;
+
+  Offset _origin(int slot) => Offset(
+        (slot % widget.columns) * widget.stride.width,
+        (slot ~/ widget.columns) * widget.stride.height,
+      );
+
+  @override
+  void didUpdateWidget(covariant _SlotShift oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A column-count change is a relayout, not a move: animating across it
+    // would fling every card from a geometry that no longer exists.
+    if (oldWidget.slot == widget.slot || oldWidget.columns != widget.columns) {
+      return;
+    }
+    // Pick up from wherever the previous animation had got to, so a fast drag
+    // across several slots is one continuous slide rather than a series of
+    // restarts.
+    final current = _offset * (1 - _curve.value);
+    _offset = current + (_origin(oldWidget.slot) - _origin(widget.slot));
+    _controller.forward(from: 0);
   }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _curve,
+        child: widget.child,
+        // The Transform is ALWAYS in the tree, even at zero. Returning the
+        // bare child while idle and a Transform while moving swaps the widget
+        // type at this position every time a card starts or stops sliding —
+        // which rebuilds the whole card below it from scratch and, mid-drag,
+        // throws away the very Draggable that is driving the gesture.
+        builder: (context, child) => Transform.translate(
+          offset: _offset * (1 - _curve.value),
+          transformHitTests: false,
+          child: child,
+        ),
+      );
 }
 
 /// Moves a card and reports the outcome.
 ///
 /// The notifier speaks `ReorderableListView`'s index convention (the target
-/// counted BEFORE the dragged item is removed), so a "drop onto slot [to]"
-/// gesture has to be translated once, here, rather than in both call sites.
+/// counted BEFORE the dragged item is removed), so a "drop into slot [to]"
+/// gesture is translated once, here, rather than at every call site.
 Future<void> _move(
   BuildContext context,
   WidgetRef ref, {
@@ -617,58 +947,119 @@ Future<void> _move(
 /// recogniser `ReorderableDragStartListener` uses, so it wins the arena against
 /// the surrounding scroll view on touch and against a mouse drag on the web —
 /// one implementation for both.
+///
+/// It is drawn as a filled chip rather than a bare glyph because it is the only
+/// way into the feature: an 18px icon between a two-line product name and an
+/// overflow button reads as punctuation, and on a phone it was too small to
+/// catch reliably even once found.
 class _DragHandle extends StatelessWidget {
-  const _DragHandle({required this.index, required this.touch});
-
-  final int index;
+  const _DragHandle({
+    required this.touch,
+    required this.feedback,
+    required this.onDragStarted,
+    required this.onDragUpdate,
+    required this.onDragEnd,
+  });
 
   /// Narrow layout: pad the icon out to a finger-sized box. An 18px icon is a
   /// fine mouse target and an unhittable touch one.
   final bool touch;
 
+  final _DragFeedback feedback;
+  final VoidCallback onDragStarted;
+  final ValueChanged<Offset> onDragUpdate;
+  final VoidCallback onDragEnd;
+
   @override
   Widget build(BuildContext context) {
-    final icon = Icon(
-      Icons.drag_indicator,
-      size: touch ? 20 : 18,
-      color: AppColors.textMuted,
-    );
+    final size = touch ? 36.0 : 30.0;
 
     return Draggable<int>(
-      data: index,
-      feedback: const _DragHandleFeedback(),
+      data: 0,
+      feedback: feedback,
+      // The feedback is a card, not the glyph that was grabbed, so it is
+      // centred on the finger instead of hanging off wherever inside a 36px
+      // box the finger happened to land.
+      dragAnchorStrategy: (_, __, ___) => feedback.anchor,
+      onDragStarted: onDragStarted,
+      onDragUpdate: (details) => onDragUpdate(details.globalPosition),
+      // Both endings, one path. `onDragEnd` fires whether or not a target
+      // accepted, which is exactly why the drop is committed from here.
+      onDragEnd: (_) => onDragEnd(),
       child: MouseRegion(
         cursor: SystemMouseCursors.grab,
         child: Tooltip(
           message: 'Drag to reorder',
-          child: touch
-              // Matches the overflow button beside it, so the two icons in the
-              // title row are the same weight rather than one large and one
-              // incidental.
-              ? SizedBox(
-                  width: 32,
-                  height: 32,
-                  child: Center(child: icon),
-                )
-              : Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppSpacing.xs,
+          child: SizedBox(
+            width: size,
+            height: size,
+            child: Center(
+              child: Container(
+                width: size - 6,
+                height: size - 6,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.surface2,
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
+                  border: Border.all(
+                    color: AppColors.royalGold.withValues(alpha: 0.25),
+                    width: 0.5,
                   ),
-                  child: icon,
                 ),
+                child: Icon(
+                  Icons.drag_indicator,
+                  size: touch ? 18 : 16,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 }
 
-class _DragHandleFeedback extends StatelessWidget {
-  const _DragHandleFeedback();
+/// What follows the finger: the card itself, lifted.
+///
+/// A 22px glyph told the user a drag was happening but not WHAT was being
+/// dragged, which on a five-column grid of similar thumbnails is the only
+/// question that matters.
+class _DragFeedback extends StatelessWidget {
+  const _DragFeedback({required this.product, required this.width});
+
+  final CatalogProduct product;
+  final double width;
+
+  /// Where inside this feedback the finger sits — its middle. Read by the
+  /// draggable's anchor strategy, so the number comes from the same card
+  /// geometry the grid lays out with rather than being guessed.
+  Offset get anchor => Offset(width / 2, (width + _kCardTextExtent) / 2);
 
   @override
-  Widget build(BuildContext context) => const Material(
-        color: Colors.transparent,
-        child: Icon(Icons.drag_indicator, size: 22, color: AppColors.mirageRed),
+  Widget build(BuildContext context) => Material(
+        type: MaterialType.transparency,
+        child: Opacity(
+          opacity: 0.94,
+          child: SizedBox(
+            width: width,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              // No callbacks: the feedback is a picture of the card, and the
+              // card renders itself inert when it has nothing to call.
+              child: ProductCard(product: product),
+            ),
+          ),
+        ),
       );
 }
 

@@ -1,0 +1,186 @@
+================================================================================
+RECAPTURE PHASE 2 -- WHAT IT IS, IN ONE PAGE
+For anyone new to the project. Read this first; the long docs can wait.
+================================================================================
+
+WHAT IT IS
+
+  Phase 1 let someone photograph a real object and get a 3D model back.
+
+  Phase 2 turns those models into a public storefront. The user arranges their
+  products in the app, presses Publish once, and gets a permanent QR code.
+  Any customer can scan it and browse the products in 3D and AR on their own
+  phone.
+
+
+WHO USES IT
+
+  A small business owner. A cafe, a restaurant, a furniture shop. One phone,
+  not technical. They want three things: products that look good, a QR code
+  they can print, and proof that someone scanned it.
+
+
+THE WHOLE IDEA IN ONE PICTURE
+
+    photograph a dish  ->  pick the 3D model  ->  build the catalog
+                                                        |
+                                                        v
+                                                     preview
+                                                        |
+                                                        v
+        analytics  <-  customers scan  <-  QR code  <- PUBLISH
+
+
+================================================================================
+WHAT THE USER CAN DO
+================================================================================
+
+SIGN IN
+  Phone number, one-time code, in. No password, ever.
+
+CAPTURE A PRODUCT IN 3D
+  Walk one circle around it taking 6 photos. About a minute.
+  A longer 48-photo mode exists for when quality matters more than time.
+  The app rejects blurry, dark and shaky shots as they happen, and corrects
+  the user's angle.
+  Photos upload in the background. The user can switch apps or lose signal.
+  One capture can produce several 3D models. THE USER SEES ALL OF THEM and
+  picks the one that actually looks like the dish.
+
+BUILD THE CATALOG
+  One catalog per account. Add a name, a logo, business details.
+  Sort products into categories: Starters, Mains, Desserts.
+  Add a product two ways:
+      - from a finished capture, choosing which 3D model it uses
+      - as a photo only, for things never worth scanning
+  Give it a name, price, description, category.
+  Mark items featured, out of stock, or tag them.
+  Edit, duplicate, reorder, archive, restore or delete anything, one at a
+  time or in bulk.
+  ALL OF THIS IS A DRAFT. No customer sees any of it yet.
+
+CHECK BEFORE GOING LIVE
+  Preview shows the draft exactly as a customer will see it.
+  If anything would break, the app lists EVERY problem at once, each as a
+  plain sentence like "'Paneer Tikka' has no 3D model yet." Some rows carry
+  the fix as a button beside them.
+
+GO LIVE
+  Publish is one button, one deliberate action. It runs in the background.
+  Products turn green one at a time. Anything that fails says why, in plain
+  English, and Retry pushes only the failures.
+  The QR code is generated for them. Download it as PNG or PDF, share it,
+  print it.
+  Editing anything afterwards raises a "Draft changes not yet live" badge
+  until they publish again.
+  They can take the catalog offline and the QR code still works.
+
+SEE WHAT HAPPENED
+  Page views, visitors, product views, AR launches, contact taps.
+  A chart by day, a ranked list of top products, and a comparison against the
+  previous period. The user turned no tracking on. It comes with publishing.
+
+
+================================================================================
+HOW IT GOES IN PRACTICE -- ONE AFTERNOON
+================================================================================
+
+  1.  Signs in with a phone number.                          5 seconds
+
+  2.  Fills in business name, phone, address. Uploads a logo. 2 minutes
+
+  3.  Photographs seven dishes, one circle of six photos
+      each. Uploads run in the background while they shoot
+      the next one.                                          10 minutes
+
+  4.  Creates three categories. Adds each dish as a product,
+      choosing which of its 3D models to use. Adds two
+      drinks as photo-only products.                         10 minutes
+
+  5.  Opens Preview, spots a dark photo, replaces it.        1 minute
+
+  6.  Presses Publish. The app stops them with two problems
+      to fix. Fixes both, publishes again. Two products fail
+      on a bad connection; Retry pushes just those two.      3 minutes
+
+  7.  Downloads the QR PDF, sends it to a print shop, opens
+      the link on their own phone to check. The dishes spin.
+      AR puts a plate on their actual table.                 1 minute
+
+  8.  Two weeks later they change four prices and publish
+      again. THE PRINTED QR ON EVERY TABLE KEEPS WORKING.
+
+  9.  Three weeks later: 340 views, 210 visitors, 61 people
+      launched AR. They go photograph four more dishes.
+
+
+================================================================================
+THE FOUR RULES THE DESIGN RESTS ON
+================================================================================
+
+  1. NOTHING IS LIVE UNTIL PUBLISH IS PRESSED.
+     Editing a live catalog is always safe. Customers keep seeing the last
+     published version until the user says otherwise.
+
+  2. THE QR CODE NEVER CHANGES.
+     Rename the business, change every price, republish fifty times, take the
+     catalog offline and bring it back. The printed sticker keeps working.
+     This is what makes it safe to print on day one.
+
+  3. A HALF-FINISHED PUBLISH SAYS WHICH HALF.
+     Every product carries its own status and its own reason. Retry pushes
+     only what failed, never all of it again.
+
+  4. NO TECHNICAL ERROR EVER REACHES THE SCREEN.
+     Every failure is translated into a sentence with a next step.
+
+
+================================================================================
+WHAT IT CANNOT DO YET
+================================================================================
+
+Limits of the public catalog platform, not of the app. Do not promise these.
+
+  - Out of stock is private. It filters the owner's list, not the public page.
+  - Tags are private. Customers never see them.
+  - Website and social links are stored but do not appear publicly.
+  - Drag order inside the app does not fully carry to the public page.
+  - iPhone AR room placement is not served yet. iPhone customers get the 3D
+    viewer instead.
+  - Converting a photo-only product to 3D restarts that product's analytics.
+
+
+================================================================================
+WHAT IS COMING NEXT
+================================================================================
+
+Today the business owner does every step themselves.
+
+Next is SAME-DAY ACTIVATION: a sales rep walks in with a box of pre-printed QR
+standees, does the whole job for the owner in one visit, sticks a standee on
+the table and leaves with the catalog live. Dishes go live as photos that
+afternoon and quietly become 3D hours later when generation finishes.
+
+For the owner, the whole thing collapses into "someone came, took photos of my
+food, and left me a QR code that works."
+
+Designed, not built yet.
+
+
+================================================================================
+WHERE TO READ MORE
+================================================================================
+
+  docs/phase-2-user-journey.md    The full story with every feature and how
+  docs/phase-2-user-journey.txt   they chain together. Same thing, two formats.
+
+  docs/phase-2-feature-checklist.txt
+                                  All 71 features, one line each, with a
+                                  built/limited status. For a slide or a QA
+                                  sheet.
+
+  docs/same-day-activation/       The rep phase. Start with
+                                  00-preflight-and-corrections.md.
+
+Accurate as of 2026-09-03.
+================================================================================
