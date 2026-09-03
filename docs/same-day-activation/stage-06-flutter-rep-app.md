@@ -154,11 +154,17 @@ the fallback for a damaged or badly-lit code.
 - **Accept a pasted full URL too.** A rep will paste `https://…/r/ABCD2345` at some point; extract
   the trailing segment rather than failing validation.
 
-**⚠ Web exception.** Camera-based QR scanning does not exist on Flutter web the way it does on
-device, and the `run-recapture` skill's documented limit is that native capture surfaces (camera,
-sensors, permission channels) are absent on web. **On web, ship manual code entry only** and hide
-the scan button. State this in the screen's file comment. The rep app's real target is a phone;
-web is for demo and QA.
+**⚠ Web exception — and it has its own stage.** Camera scanning does not exist in a browser build,
+so the Scan button is **hidden** on web (never disabled) and manual entry, present on both targets,
+is what the screen offers instead.
+
+Do not hand-roll that gate here. [Stage 10](stage-10-web-parity.md) builds it the way this repo
+already does it — a capability flag behind a conditional import, read through a Riverpod provider,
+so one `flutter test` run asserts both platforms. A `kIsWeb` branch fails the existing structural
+guard in `test/catalog/web_parity_test.dart`.
+
+Build the screen in stage 6 assuming the flag exists; stage 10 supplies it, adds the matrix rows,
+and settles the deep-link question that removes most of the need for an in-app scanner at all.
 
 ### 7. Phone entry is the highest-consequence field on the screen
 
@@ -221,7 +227,8 @@ test that lets the client roll out before or after the backend.
 - [ ] The badge renders all four states, with `failed` reading as "3D unavailable", not an error.
 - [ ] `/rep/*` is gated on `isSalesRep` in the router redirect.
 - [ ] The capture flow has **zero** diff in this stage.
-- [ ] Web hides the scan button and offers manual entry, with the reason in a file comment.
+- [ ] The scan affordance reads a capability flag, not `kIsWeb` — the flag itself lands in
+      [stage 10](stage-10-web-parity.md).
 - [ ] Phone entry reuses the OTP screen's widget and validator, with a confirmation step.
 - [ ] `flutter analyze && flutter test` — green.
 - [ ] `flutter build web` — succeeds.

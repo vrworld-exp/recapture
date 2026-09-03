@@ -61,6 +61,13 @@ flutter build apk --debug
 | `test/auth/rep_role_gating_test.dart` | 6 | A rep sees no staff surfaces and reaches `/rep` |
 | `test/catalog/catalog_products_polling_test.dart` | 6 | pending → ready, and the loop stops |
 | `test/rep/rep_activation_test.dart` | 6 | Code normalisation and typed `409` copy |
+| `test/rep/rep_web_parity_test.dart` | 10 | A hidden affordance is `findsNothing`, not disabled |
+| `test/rep/rep_add_dish_source_test.dart` | 10 | 3 sources on mobile, 2 on web, both create a dish |
+| `test/catalog/web_parity_test.dart` (extended) | 10 | No `dart:io` or layout `kIsWeb` in the rep tree |
+
+**Run `make verify`, not just `flutter test`.** It gates analyze + test + **web build** + APK build
+together, and the two toolchains fail differently — `flutter test` passing proves nothing about
+whether the web build ships.
 
 ### End-to-end
 
@@ -161,6 +168,35 @@ why when it refuses.
 
 Replacing a standee for the **same** catalog is always safe and is the common case.
 
+## R4b — Which Mirage branch is deployed
+
+**AR works on every Mirage branch, including `production`** — `mirage-fe` gates the AR button on
+`arAvailable: !!(item.model && item.model.src)` (`mirage-fe/src/api/menu.ts:116`), never on
+`imgOnly`, and `production`'s `updateItem` does attach the model
+(`adminController.js:1174`, `if (objectUrl) findProduct.model.src = objectUrl`). So stage 5's
+promotion produces a working AR dish either way. **This is not a launch blocker.**
+
+What *does* differ: `production` sets `imgOnly` once on create and never re-derives it, so a
+promoted dish stays flagged `imgOnly: true` forever. The only consumer is the menu sort
+(`itemController.js:129, 234` — `.sort({createdAt: -1, imgOnly: 1})`), so the effect is **item
+ordering on the public menu**, cosmetic. `feature/recap-phase-2` re-derives it correctly
+(`adminController.js:1995`).
+
+**The larger, pre-existing issue this uncovers:** per
+`../next-phase/prompts/03-mirage-prompts.md`, `mirage-be:production` carries **none** of the
+phase-2 work — no `sortPosition`, `availability`, `socialLinks` or `isPublished`. That degrades the
+whole ReCapture publish path, not just this feature, and it is not caused by this work.
+
+**Establish which branch the target environment runs before rollout**, then pick from
+[`09-mirage-prompts.md`](stage-09-mirage-prompts.md):
+
+| Deployed branch | Action |
+|---|---|
+| `feature/recap-phase-2` or later | Nothing. Everything in this pack works as designed |
+| `production` | **SM1** (optional, cosmetic) or the full port-back, which is a pre-existing task |
+
+The one-item probe in **SM4** answers "which is it" in about two minutes.
+
 ## R5 — Phase 2 free-tier QR is not blocked
 
 `QrCode` carries no pricing or tier concept, and an unassigned code already has a graceful landing
@@ -189,7 +225,9 @@ Not caused by this work; should be fixed anyway. Do **not** fold them into a sta
 6. **Stage 4** — gated on `SALES_REP`, which nobody holds until you grant it.
 7. **R2** — turn on auto-generation for one restaurant, then widen.
 8. **Stage 6** — client. Grant `SALES_REP` to one rep and do a real onboarding visit.
-9. **Stage 7** — full sweep, device pass, and the R3 script.
+9. **Stage 10** — web parity. Ship in the same release as stage 6 wherever possible; the capability
+   flags are what keep the web build from shipping a broken Scan button in the meantime.
+10. **Stage 7** — full sweep, device pass, and the R3 script.
 
 Codes are printed physical objects. **Do not mint a large batch until stage 4 has completed one real
 end-to-end activation**, because `PUBLIC_RESOLVER_BASE_URL` is baked into every printed URL and a
@@ -207,6 +245,13 @@ wrong host is unrecoverable at scale.
 - [ ] R1 is either done or accepted in writing with an alert and a date.
 - [ ] R2's ceiling is confirmed with the budget owner and the flag was rolled out to one restaurant
       first.
+- [ ] R4b: the deployed Mirage branch is identified (SM4 probe), and SM1 run or consciously skipped.
+- [ ] The placeholder-image decision (08) is made — rep photo as product image, or accept the
+      generic placeholder during the generating window.
+- [ ] Stage 10's matrix rows 15–24 are in `../next-phase/web-capability-matrix.md`.
+- [ ] The web URL strategy is confirmed and the `/rep/activate?code=` link matches it.
+- [ ] Deep-link option A or B is chosen and recorded (stage 10, note J).
+- [ ] `make verify` passes — including the web build.
 - [ ] The R3 fix-up script exists, or the escalation path is documented for support.
 - [ ] The AGENTS.md envelope carve-out (stage 3, step 1) is written.
 - [ ] Q12 in `../next-phase/06-open-questions.md` is annotated with the CSV answer.

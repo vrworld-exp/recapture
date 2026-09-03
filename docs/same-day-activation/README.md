@@ -17,9 +17,18 @@ stage says so and gives the reason.
 ## Read this first
 
 [`00-preflight-and-corrections.md`](00-preflight-and-corrections.md) — the plan was re-verified
-against the working tree before this pack was written. **Five of its statements are stale or wrong**,
-including one that would silently corrupt `publishedRevision`. Read the corrections before opening
-any stage file; the stages already incorporate them.
+against the working tree before this pack was written. **Seven of its statements are stale or
+wrong**, including two correctness hazards: one would silently corrupt `publishedRevision`, the
+other would make every scanned standee an infinite redirect loop. Read the corrections before
+opening any stage file; the stages already incorporate them.
+
+[`08-does-this-touch-mirage.md`](stage-08-does-this-touch-mirage.md) — **no**, zero code changes required
+in `mirage-be` or `mirage-fe`, verified rather than assumed. Three mechanisms depend on Mirage
+behaving a particular way; all three were checked against both the `production` and
+`feature/recap-phase-2` branches.
+
+[`09-mirage-prompts.md`](stage-09-mirage-prompts.md) — the runnable proof of that claim (**SM4**, a
+two-minute probe), plus one contingency and two optional Mirage prompts. **None is required.**
 
 ---
 
@@ -33,9 +42,13 @@ any stage file; the stages already incorporate them.
 | 4 | [Delegation + rep activation](stage-04-delegation-and-activation.md) | BE | 1, 2, 3 | L | `SALES_REP` gate |
 | 5 | [Pending models + asset promotion](stage-05-pending-models-and-promotion.md) | BE | — | L | `modelStatus` default `NONE` |
 | 6 | [Flutter rep app](stage-06-flutter-rep-app.md) | FE | 1, 4, 5 | L | `isSalesRep` gate |
-| 7 | [Verification + rollout](stage-07-verification-and-rollout.md) | CROSS | 1–6 | M | — |
+| 10 | [Web parity for the rep surface](stage-10-web-parity.md) | FE | 6 | M | capability flags |
+| 7 | [Verification + rollout](stage-07-verification-and-rollout.md) | CROSS | 1–6, 10 | M | — |
 
-Sizes: `S` ≈ ½ day · `M` ≈ 1 day · `L` ≈ 2 days. **~9 engineering days** before review and QA.
+Sizes: `S` ≈ ½ day · `M` ≈ 1 day · `L` ≈ 2 days. **~10 engineering days** before review and QA.
+
+Stage 10 is numbered out of order because 8 and 9 are the Mirage reference pair, not build steps.
+It runs **after 6 and before 7**.
 
 ### Dependency graph
 
@@ -106,6 +119,7 @@ own "Done when" block is green.
 - [ ] Stage 4 — Delegation + rep activation
 - [ ] Stage 5 — Pending models + asset promotion
 - [ ] Stage 6 — Flutter rep app
+- [ ] Stage 10 — Web parity for the rep surface
 - [ ] Stage 7 — Verification + rollout
 
 ---

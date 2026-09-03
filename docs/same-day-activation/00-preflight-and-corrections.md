@@ -1,8 +1,9 @@
 # 00 — Preflight and Corrections to the Plan
 
 `../next-phase/07-same-day-activation.md` was re-verified line by line against the working tree
-before this pack was written. It is substantially correct. **Five statements are stale or wrong**,
-and one of them is a correctness hazard that would silently mark unpublished products as live.
+before this pack was written. It is substantially correct. **Seven statements are stale or wrong**,
+and two of them are correctness hazards: one would silently mark unpublished products as live
+(**C1**), the other would make every scanned standee an infinite redirect loop (**C6**).
 
 Every stage file in this folder already incorporates these corrections. This page exists so the
 divergence from the plan is visible rather than silent.
@@ -106,6 +107,79 @@ nothing does — insert in ladder order so the enum reads as the ladder it mirro
 does, append `salesRep` last and add an explicit `rank` getter instead of relying on `index`.
 
 > Stage 1 makes the grep an explicit step, not an assumption.
+
+---
+
+## C6 — ⚠ Redirecting to `publicUrl` is an infinite self-redirect
+
+**Plan says** (Part 1, resolver table): *"`ACTIVE` | record scan, `302` → `catalog.publicUrl` (the
+Mirage menu)"*.
+
+**Those two things stop being the same the moment Part 1 lands.** The plan's own key insight is
+that activation writes `{PUBLIC_RESOLVER_BASE_URL}/r/{code}` **into** `catalog.publicUrl` — that is
+precisely what makes `catalogQrService` render the standee's code with zero changes. So for every
+rep-activated catalog:
+
+```
+GET /r/ABCD2345  →  302 → catalog.publicUrl
+                        = {PUBLIC_RESOLVER_BASE_URL}/r/ABCD2345
+                        = the request that just arrived
+```
+
+The browser follows it until it hits its redirect limit and shows an error page. **Every standee in
+the field is a dead link** — the one outcome the brief forbids.
+
+The parenthetical "(the Mirage menu)" is the giveaway: the plan means the Mirage menu, and before
+Part 1 `publicUrl` *was* the Mirage menu. It stops being that under the new scheme.
+
+**Correction.** The resolver derives its target from `catalog.mirageRestaurantId`:
+
+```ts
+`${env.MIRAGE_PUBLIC_BASE_URL}/${catalog.mirageRestaurantId}`
+```
+
+which is exactly `mintPublicUrl` (`src/services/catalogProvisioningService.ts:101-103`). Export
+that helper and call it rather than writing the format string twice.
+
+After Part 1 the two fields have distinct jobs, and the naming is unhelpfully close:
+
+| Field | Holds | Read by |
+|---|---|---|
+| `catalog.publicUrl` | the **standee** URL, `…/r/{code}` | `catalogQrService` — what the QR renders |
+| `catalog.mirageRestaurantId` | the Mirage restaurant id | the resolver — where a scan lands |
+
+A catalog with no `mirageRestaurantId` (activated, not yet published) renders the "not live yet"
+page. That is the normal state for the first minutes of a rep visit, not an error.
+
+> Stage 3 builds it this way and carries a test asserting the `Location` header contains no `/r/`.
+
+---
+
+## C7 — `catalog.types.ts:83` is stale about `imgOnly`
+
+**`recapture-api/src/models/types/catalog.types.ts:83` says:** *"M9 (`update-item`) cannot unset
+`imgOnly`, so a conversion has to be published as DELETE + CREATE and mints a new Mirage item id."*
+
+**That is no longer true, and stage 5 depends on it not being true.** Verified in `mirage-be`
+(the main repo, not the phase-2 fork) at `src/Controllers/adminController.js:1990-1995`:
+
+```js
+// // // imgOnly stays DERIVED, exactly as on create. This is what lets an
+// // // image-only product become a real 3d product: uploading an `object`
+// // // now clears the flag instead of leaving the public page convinced
+// // // there is no model to show.
+findProduct.imgOnly = Boolean(findProduct.image) && !findProduct.model?.src;
+```
+
+`src/services/mirage/mirageClient.ts:87` and `:786-790` already record the corrected behaviour and
+cite the same handler lines. Only `catalog.types.ts:83` was left behind.
+
+This matters because it is the mechanism stage 5 rides on: a dish published while its model is
+generating becomes a real 3D product **on the same Mirage item id**, keeping its analytics history,
+rather than being deleted and recreated.
+
+> **Fix the stale comment as part of stage 5.** A future reader who believes it will build the
+> DELETE + CREATE dance that C7 makes unnecessary.
 
 ---
 

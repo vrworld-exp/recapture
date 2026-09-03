@@ -78,6 +78,12 @@ export type ProductModelStatus = (typeof PRODUCT_MODEL_STATUSES)[number];
 `required: true, default: 'NONE'`. Every pre-existing document materialises as `NONE` on read, so
 there is no migration — the same reasoning as `User.role`'s default.
 
+**While you are in this file, fix the stale comment at `catalog.types.ts:83`** — it claims
+`update-item` cannot unset `imgOnly` and that a conversion needs DELETE + CREATE. `mirage-be`
+re-derives the flag on update (`adminController.js:1995`), which is exactly what lets this stage
+upgrade a dish in place and keep its Mirage item id. See **C7**. A future reader who believes the
+old comment will build a DELETE + CREATE path this stage does not need.
+
 **Backfill, once, deliberately:** existing `THREE_D` products with `assets.glbUrl` set are `READY`,
 not `NONE`. Either run a one-off script or — better — derive it at read time in `toProductDto` for
 documents where the field is absent. Pick one and write down which; a half-backfilled field is

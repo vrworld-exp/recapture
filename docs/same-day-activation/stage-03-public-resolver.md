@@ -91,10 +91,25 @@ Copy per state:
 
 | Kind | Copy |
 |---|---|
-| `NOT_YET_LIVE` | "This menu isn't live yet." Plus a line about what Mirage Menu is — an `UNASSIGNED` code is a demo surface, and the brief wants it to sell |
+| `NOT_YET_LIVE` | "This menu isn't live yet." Plus a line about what Mirage Menu is — an `UNASSIGNED` code is a demo surface, and the brief wants it to sell. **Also carries the rep activation link** — see below |
 | `REPLACED` | "This code has been replaced." Ask the diner for a fresh standee |
 | `UNKNOWN` | Same page as `NOT_YET_LIVE`. **Deliberate** — see step 4 |
 | `ERROR` | "Something went wrong. Try again in a moment." No detail, no request id displayed |
+
+**The rep activation link on `NOT_YET_LIVE`** — small, secondary, below the diner-facing copy:
+
+> *Are you a Mirage rep? **Activate this code.***
+
+pointing at `{WEB_APP_BASE_URL}/rep/activate?code={code}`. This is the **only** place the code is
+interpolated into the page, so it needs the escaper the "escape nothing" rule otherwise makes
+unnecessary — or, better, build the href from the already-normalised code, which is alphabet-
+restricted by construction and cannot carry markup.
+
+Why it earns its place: the rep's **OS camera** already scans the standee and lands here, so this
+link gives one-tap activation on any device with no in-app QR scanner at all. It is what lets
+[stage 10](stage-10-web-parity.md) treat the missing web scanner as a non-issue rather than a gap.
+`WEB_APP_BASE_URL` is a new optional env var — when unset, render the page without the link rather
+than with a broken one.
 
 ### 3. The resolver service
 
@@ -115,9 +130,12 @@ Order of operations, and each step's reason:
 2. `QrCode.findOne({ code, deletedAt: null })`. Missing returns `FALLBACK: UNKNOWN`.
 3. `state === 'RETIRED'` returns `FALLBACK: REPLACED`.
 4. `state === 'UNASSIGNED'`, or `ACTIVE` with no `catalogId`, returns `FALLBACK: NOT_YET_LIVE`.
-5. Load the catalog. **No `publicUrl` returns `FALLBACK: NOT_YET_LIVE`**, not an error — an
-   activated catalog mid-provisioning is a normal transient state, not a failure.
-6. Record the scan (step 5 below), then `REDIRECT` to `catalog.publicUrl`.
+5. Load the catalog. **No `mirageRestaurantId` returns `FALLBACK: NOT_YET_LIVE`**, not an error —
+   a catalog activated but not yet published is the normal state for the first minutes of a rep
+   visit, and it is exactly what the "not live yet" page is for.
+6. Record the scan (step 5 below), then `REDIRECT` to
+   `${env.MIRAGE_PUBLIC_BASE_URL}/${catalog.mirageRestaurantId}` — **not** to `publicUrl`. See the
+   box above.
 
 ### 4. The route
 
@@ -130,10 +148,30 @@ GET /r/:code
 
 | Code state | Response |
 |---|---|
-| `ACTIVE` | record scan, `302` → `catalog.publicUrl` |
+| `ACTIVE`, catalog published | record scan, `302` → the **Mirage menu URL** (see the box below) |
+| `ACTIVE`, not yet published | `200` HTML — "this menu isn't live yet" |
 | `UNASSIGNED` | `200` HTML — "this menu isn't live yet" |
 | `RETIRED` | `200` HTML — "this code has been replaced" |
 | unknown | `200` HTML fallback, **not** a `404` JSON body |
+
+> ### ⚠ Do NOT redirect to `catalog.publicUrl`
+>
+> The source plan's table says *"`302` → `catalog.publicUrl` (the Mirage menu)"*. Once Part 1
+> lands, **those are no longer the same thing** — activation writes
+> `{PUBLIC_RESOLVER_BASE_URL}/r/{code}` *into* `publicUrl`, so redirecting there is an infinite
+> self-redirect. See **C6** in [`00-preflight-and-corrections.md`](00-preflight-and-corrections.md).
+>
+> The redirect target is derived from `catalog.mirageRestaurantId`:
+> `${env.MIRAGE_PUBLIC_BASE_URL}/${catalog.mirageRestaurantId}` — the same expression
+> `mintPublicUrl` uses (`src/services/catalogProvisioningService.ts:101-103`). Export that helper
+> and call it; do not write a second copy of the format string.
+>
+> After Part 1, the two fields have distinct jobs and the naming is unfortunately close:
+>
+> | Field | Holds | Read by |
+> |---|---|---|
+> | `catalog.publicUrl` | the **standee** URL, `…/r/{code}` | `catalogQrService` — what the QR renders |
+> | `catalog.mirageRestaurantId` | the Mirage id | this resolver — where a scan actually lands |
 
 **Why unknown is `200` and not `404`.** Two reasons, both load-bearing:
 
@@ -209,8 +247,14 @@ identifies one diner's presence there. Neither belongs in an analytics prop.
 
 **New file:** `recapture-api/tests/qr-resolver.test.ts`
 
-- **All four states.** `ACTIVE` → `302` with `Location` exactly equal to `catalog.publicUrl`;
-  `UNASSIGNED`, `RETIRED` and unknown → `200`.
+- **All four states.** `ACTIVE` + published → `302`; `UNASSIGNED`, `RETIRED` and unknown → `200`.
+- **⚠ No self-redirect.** Assert the `Location` header is **not** the request URL, and that it does
+  **not** contain `/r/`. Then assert it equals
+  `${MIRAGE_PUBLIC_BASE_URL}/${mirageRestaurantId}` exactly. Without this test the C6 loop is
+  invisible in unit tests and only shows up as a browser redirect-limit error on a phone in a
+  restaurant.
+- **An activated but unpublished catalog** (no `mirageRestaurantId`) renders `NOT_YET_LIVE`,
+  never a `302` to a broken URL.
 - **Never JSON.** For all three HTML outcomes assert `Content-Type` starts with `text/html` **and**
   that the body does not parse as JSON. Do this as an explicit assertion, not as a snapshot — this
   is the brief's non-negotiable and it should fail loudly.
@@ -236,6 +280,8 @@ identifies one diner's presence there. Neither belongs in an analytics prop.
 - [ ] `app.use('/r', publicRouter)` is mounted before `notFound`.
 - [ ] The AGENTS.md carve-out subsection is written.
 - [ ] All four code states return the documented response.
+- [ ] The redirect target is derived from `mirageRestaurantId`, **never** from `publicUrl`, and a
+      test asserts the `Location` contains no `/r/` (C6).
 - [ ] A forced internal error renders HTML, not JSON — proven by a test.
 - [ ] Unknown and unassigned are byte-identical responses.
 - [ ] No fallback page makes an external request (grep the rendered HTML for `http`).
