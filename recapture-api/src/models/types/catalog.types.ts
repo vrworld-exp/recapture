@@ -45,9 +45,13 @@ export type PublicUrlScheme = (typeof PUBLIC_URL_SCHEMES)[number];
 /**
  * Public social handles/links for the business.
  *
- * ReCapture-only: Mirage's restaurant schema has no social fields at all
- * (mirage-be/src/Models/restaurantModel.js:32-84), so these are stored, shown
- * in the app, and marked in the UI as not reaching the public page.
+ * PUBLISHED to Mirage. Its restaurant schema gained `socialLinks` in the phase-2
+ * rework (mirage-be/src/Models/restaurantModel.js:82-91) and the public page
+ * renders them in its contact sheet, so these reach customers on the next
+ * publish — see `mirageLinks` in catalogProvisioningService.
+ *
+ * Mirage also holds `x` and `linkedin`; ReCapture has no field for either and
+ * the publish path leaves them untouched rather than clearing them.
  */
 export interface CatalogSocials {
   instagram?: string;
@@ -59,9 +63,10 @@ export interface CatalogSocials {
 /**
  * Business contact block.
  *
- * Only `phone` has a Mirage home (`restaurant.phone`, which the create endpoint
- * prefixes with `+91`). `email`, `address`, `website` and `socials` are
- * ReCapture-only — Mirage stores a single free-text `location` and nothing else.
+ * `phone` → `restaurant.phone` (the create endpoint prefixes `+91`),
+ * `address` → the free-text `restaurant.location`, and `website`/`socials` →
+ * `restaurant.website`/`restaurant.socialLinks`. `email` is the only
+ * ReCapture-only field left: Mirage has nowhere to put it.
  */
 export interface CatalogContact {
   phone?: string;

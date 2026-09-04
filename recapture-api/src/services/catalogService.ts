@@ -263,20 +263,33 @@ export async function updateCatalog(
  * The profile fields that actually reach the published public catalog, as dotted
  * paths into {@link BusinessProfileDto}.
  *
- * Mirage's `update-restaurant` (M3) carries only name / location / phoneNo /
- * icon / description — so everything else here is ReCapture-only and the profile
- * screen marks it as such (feature 59, T-023). This list is the ONE source of
- * truth for that marking: hardcoding it in the client would drift the moment the
- * publish worker learns to carry another field.
+ * Mirage's `update-restaurant` (M3) carries name / location / phoneNo / icon /
+ * description AND, since the phase-2 rework of its restaurant schema,
+ * `website` and `socialLinks` (restaurantModel.js:75-105) — which the public
+ * page renders in its contact sheet (mirage-fe BusinessLinks.tsx). Anything not
+ * listed here is ReCapture-only and the profile screen marks it as such
+ * (feature 59, T-023). This list is the ONE source of truth for that marking:
+ * hardcoding it in the client would drift the moment the publish worker learns
+ * to carry another field.
+ *
+ * Each social key is listed SEPARATELY rather than as a `contact.socials`
+ * prefix, because `BusinessProfile.isPublic` matches the dotted path exactly and
+ * the profile screen labels one field at a time.
  *
  * `name` → restaurant name · `contact.address` → location · `contact.phone` →
- * phoneNo · `logoUrl` → icon.
+ * phoneNo · `logoUrl` → icon · `contact.website` → website ·
+ * `contact.socials.*` → socialLinks.
  */
 export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'name',
   'contact.phone',
   'contact.address',
   'logoUrl',
+  'contact.website',
+  'contact.socials.instagram',
+  'contact.socials.facebook',
+  'contact.socials.youtube',
+  'contact.socials.whatsapp',
 ];
 
 /**

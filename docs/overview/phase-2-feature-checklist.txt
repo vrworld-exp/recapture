@@ -1,0 +1,310 @@
+================================================================================
+RECAPTURE PHASE 2 -- FEATURE CHECKLIST
+One line per feature. 71 features. Scannable, quotable, pasteable.
+================================================================================
+
+This is the COMPACT companion to docs/phase-2-user-journey.md (and its .txt
+twin), which tells the same story as a narrative. Same source of truth, two
+shapes:
+
+    phase-2-user-journey.md/.txt   Why it exists, how one person moves through
+                                   it, how the features chain together.
+    phase-2-feature-checklist.txt  THIS FILE. What exists, one line each, with
+                                   status. For a slide, a QA sheet, a status
+                                   mail, a demo script.
+
+STATUS KEY
+    [x]   Built and working end to end.
+    [~]   Built, but with a limit the user can hit. The limit is named.
+    [ ]   Designed, not built.
+
+
+================================================================================
+THE 30-SECOND VERSION
+================================================================================
+
+Phase 1: photograph an object, get a 3D model.
+Phase 2: turn those models into a public storefront with a permanent QR code.
+
+    photograph  ->  pick the model  ->  build the catalog  ->  preview
+                                                                  |
+                            analytics  <-  QR code  <-  PUBLISH  <-+
+
+Four rules the whole design rests on:
+
+    1. Nothing is live until Publish is pressed.
+    2. The QR code never changes.
+    3. A half-finished publish says exactly which half.
+    4. No technical error ever reaches the screen.
+
+
+================================================================================
+SCORECARD
+================================================================================
+
+    Group                          Features   Built   Limited   Not built
+    ---------------------------------------------------------------------
+    A  Getting in                        3       3         0           0
+    B  Capturing in 3D                  10      10         0           0
+    C  Building the catalog             31      27         4           0
+    D  Checking before going live        3       3         0           0
+    E  Going live                       11      11         0           0
+    F  Seeing what happened              9       9         0           0
+    G  The app telling the truth         4       4         0           0
+    ---------------------------------------------------------------------
+    TOTAL                               71      67         4           0
+
+    Plus: same-day rep activation -- 7 stages, 0 built. See the end of this
+    file.
+
+
+================================================================================
+A. GETTING IN                                                    3 features
+================================================================================
+
+[x] A1   Phone sign-in -- number, one-time code, in. No password ever.
+[x] A2   Stays signed in across weeks and app restarts.
+[x] A3   Personal profile -- display name, photo, masked number, sign out.
+
+
+================================================================================
+B. CAPTURING A PRODUCT IN 3D                                    10 features
+================================================================================
+
+Pre-existing, but Phase 2 is what gives it a purpose.
+
+[x] B1   Create a capture project and choose how thorough it is.
+[x] B2   Quick capture -- one circle, 6 photos, about a minute. THE MODE A
+         REAL BUSINESS USES.
+[x] B3   Full capture -- 48 photos across rings, app auto-takes shots.
+[x] B4   Live coaching -- rejects blurry, dark and unsteady shots as they
+         happen; corrects the user's tilt.
+[x] B5   Review grid -- retake any single photo before sending.
+[x] B6   Background upload -- survives app switching and signal loss.
+[x] B7   "We're building it" progress screen; user can leave and return.
+[x] B8   Model history -- one capture can yield several models; ALL of them
+         are visible, not just the newest.
+[x] B9   Optimize -- one tap makes a heavy model load fast; appears as its
+         own entry beside the original.
+[x] B10  3D and AR preview of any model.
+
+
+================================================================================
+C. BUILDING THE CATALOG                                         31 features
+================================================================================
+
+Everything here is a DRAFT. No customer sees any of it.
+
+C1. THE CATALOG ITSELF                                           4 features
+
+[x] C1.1  One catalog per account. Created once, named once.
+[x] C1.2  Logo and cover image upload.
+[x] C1.3  Draft / Published / Offline status, visible at a glance.
+[x] C1.4  Delete the catalog -- type the name to confirm. Wipes the public
+          page. THE ONLY ACTION THAT GIVES UP THE QR CODE.
+
+C2. BUSINESS PROFILE                                             2 features
+
+[x] C2.1  Business name, description, phone, address -- the public branding.
+[~] C2.2  Email, website, social links. LIMIT: stored and shown in the app,
+          but they do not reach the public page. The app says so on the
+          field.
+
+C3. CATEGORIES                                                   5 features
+
+[x] C3.1  Create a category.
+[x] C3.2  Rename a category.
+[x] C3.3  Delete a category.
+[x] C3.4  Drag to reorder sections.
+[x] C3.5  Uncategorized bucket -- no product is ever rejected for having no
+          category.
+
+C4. ADDING PRODUCTS                                              8 features
+
+[x] C4.1  Add from a finished capture -- and pick EXACTLY WHICH MODEL from
+          that capture's history, previewing each first.
+[x] C4.2  Add as photo-only -- a picture, a name, a price. No AR. A complete
+          product.
+[x] C4.3  Name, price (optional), description.
+[x] C4.4  Category assignment.
+[~] C4.5  Tags. LIMIT: private organising tool; customers never see them.
+[~] C4.6  In stock / Out of stock. LIMIT: filters the user's own list only;
+          the public page does not show it. The app says so at the toggle.
+[x] C4.7  Featured -- pushes a best-seller to the front.
+[x] C4.8  Automatic thumbnail for 3D products. User uploads nothing.
+
+C5. MANAGING PRODUCTS                                           12 features
+
+[x] C5.1  Product grid -- the screen the user lives in.
+[x] C5.2  Search by name.
+[x] C5.3  Filter by category, type and status.
+[~] C5.4  Reorder products. LIMIT: the order is reliable inside the app;
+          pushing that exact order to the public page is only partial.
+[x] C5.5  Edit any field -- name, price, description, category, tags,
+          availability, featured.
+[x] C5.6  Change which model a product uses -- re-point it at a different
+          model after seeing how it looks.
+[x] C5.7  Replace the photo.
+[x] C5.8  Duplicate a product; the copy is auto-renamed so it can publish.
+[x] C5.9  Archive -- out of the catalog, not destroyed.
+[x] C5.10 Restore an archived product.
+[x] C5.11 Delete permanently -- type the product name to confirm.
+[x] C5.12 Multi-select -- archive, delete or re-categorise a batch at once.
+
+
+================================================================================
+D. CHECKING BEFORE GOING LIVE                                    3 features
+================================================================================
+
+[x] D1   Preview -- the draft laid out the way a customer will see it.
+[x] D2   Publish checklist -- EVERY blocking problem listed at once, each as
+         a plain sentence. Not one, fix, retry, next one.
+[x] D3   One-tap fixes attached to checklist rows where a fix exists.
+
+THE REAL CHECKLIST MESSAGES, VERBATIM:
+
+    "Add at least one product before publishing."
+    "Give your catalog a name before publishing."
+    "'Paneer Tikka' has no 3D model yet."
+    "'Paneer Tikka' is still generating its preview image. Try again shortly."
+    "More than one product is called 'Paneer Tikka'. Rename one of them."
+    "'Paneer Tikka' is filed under a category that is no longer in your
+     catalog. Pick one for it, or move it to Uncategorized."
+
+
+================================================================================
+E. GOING LIVE                                                   11 features
+================================================================================
+
+[x] E1   Publish -- one button, one deliberate action, runs in the
+         background. The app can be closed.
+[x] E2   Live progress -- products go green one by one.
+[x] E3   Per-product status: Synced / Pending / Failed / Never published,
+         each failure with a plain-English reason.
+[x] E4   Retry only the failures. 8 of 10 succeeded means retry pushes 2.
+[x] E5   QR code -- view, download as PNG or PDF, share.
+[x] E6   THE QR NEVER CHANGES. Not on rename, not on republish, not on going
+         offline. A hard guarantee, not a best effort.
+[x] E7   The public link -- copy, share, open.
+[x] E8   "Draft changes not yet live" badge -- appears on the first edit
+         after publishing, clears on the next successful publish.
+[x] E9   Last published time.
+[x] E10  Take it offline -- removes products from the public page, KEEPS THE
+         QR WORKING. Going back live is one Publish away.
+[x] E11  Activity history -- what was published when, and what failed.
+
+
+================================================================================
+F. SEEING WHAT HAPPENED                                          9 features
+================================================================================
+
+Customers scanning the QR are measured automatically. The user turned nothing
+on; measurement is a property of having published.
+
+[x] F1   Page views -- how many times the catalog was opened.
+[x] F2   Sessions and visitors -- how many separate people, not just hits.
+[x] F3   Product views -- which products got opened.
+[x] F4   AR launches -- how many customers placed a product in their room.
+[x] F5   3D model loads -- whether models are loading for people.
+[x] F6   Contact clicks and menu searches.
+[x] F7   Trend over time -- a chart by day.
+[x] F8   Top products -- ranked, and 3D versus photo-only compared.
+[x] F9   Comparison against the previous period, not just a raw number.
+
+
+================================================================================
+G. THE APP TELLING THE TRUTH                                     4 features
+================================================================================
+
+[x] G1   A confirmation toast after every add, edit, archive, delete and
+         publish.
+[x] G2   Readable errors -- no raw upstream technical message ever reaches
+         the screen. Every failure becomes a sentence with a next step.
+[x] G3   Typed confirmation for destructive actions -- deleting a catalog or
+         a product means typing its name.
+[x] G4   Ships to Android and the browser together, feature for feature.
+
+
+================================================================================
+THE FOUR THINGS TO SAY IN A DEMO
+================================================================================
+
+  1. "A capture is not a product."
+     One capture can produce several 3D models. The user sees all of them and
+     picks the one that actually looks right. Most tools hide this and pick
+     for you.
+
+  2. "Nothing is live until you press Publish."
+     Edit a live catalog all day. Customers keep seeing the last published
+     snapshot. There is no way to break the public page mid-edit.
+
+  3. "The QR code is permanent."
+     Print it on a standee on day one. Change every price, rename the
+     business, republish fifty times, take the catalog offline and bring it
+     back. The sticker keeps working.
+
+  4. "A half-finished publish tells you which half."
+     Ten products, two fail, you see exactly which two and why, and retry
+     pushes those two only.
+
+
+================================================================================
+THE SIX THINGS NOT TO PROMISE IN A DEMO
+================================================================================
+
+Each is a limit of the public catalog platform, not of the app.
+
+  1. Out-of-stock does not show to customers. It filters the owner's list.
+  2. Tags are not visible to customers.
+  3. Website and social links do not appear on the public page.
+  4. Drag order inside the app does not fully carry to the public page.
+  5. iPhone AR room placement is not served yet; iPhone customers get the 3D
+     viewer instead.
+  6. Converting a photo-only product to 3D restarts that product's analytics
+     history.
+
+
+================================================================================
+NEXT: SAME-DAY REP ACTIVATION -- DESIGNED, NOT BUILT
+================================================================================
+
+Today the business owner does every step themselves. The next phase adds a
+SALES REP who walks in with a box of pre-printed QR standees, does the whole
+job on the owner's behalf in one visit, sticks a standee on the table, and
+leaves with the catalog live.
+
+From the owner's side the entire journey collapses into: "someone came, took
+photos of my food, and left me a QR code that works."
+
+Two genuinely new mechanisms make it possible:
+
+[ ] Pre-printed QR codes.
+    Standees are printed BEFORE anyone knows which restaurant gets them. An
+    unassigned scan shows a "not live yet" page. Activation binds the code to
+    a catalog on the spot. This is why the QR must resolve through a redirect
+    rather than pointing straight at the public page.
+
+[ ] Publishing before the models exist.
+    A dish goes live as a photo the same afternoon and quietly becomes a 3D
+    product hours later when generation finishes -- on the SAME public entry,
+    so it keeps the analytics history it built up as a photo.
+
+Seven build stages, none started:
+
+    [ ] 1  Foundations -- rep role, config, client role fix
+    [ ] 2  QR inventory + admin batch minting
+    [ ] 3  Public resolver for scanned codes
+    [ ] 4  Delegation + rep activation
+    [ ] 5  Pending models + asset promotion
+    [ ] 6  The rep app
+    [ ] 7  Verification + rollout
+
+Full plan: docs/same-day-activation/ (read 00-preflight-and-corrections.md
+first).
+
+
+================================================================================
+Grounded against the working tree on 2026-09-03. Client batches F1 through F12
+are complete. Companion documents: docs/phase-2-user-journey.md and
+docs/phase-2-user-journey.txt.
+================================================================================
