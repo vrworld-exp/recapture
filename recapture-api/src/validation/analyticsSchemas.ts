@@ -122,6 +122,11 @@ export const AnalyticsEvent = {
   // scans land on a live menu versus a holding page, and whether the error
   // outcome is ever non-zero.
   QR_CODE_SCANNED: 'qr_code_scanned',
+  // ── Rep activation (POST /rep/activations) ────────────────────────────────
+  // The hashed REP and the outcome. Never the code, never the restaurant's
+  // phone: the first is a public identifier for one restaurant's menu, the
+  // second is a person.
+  QR_CODE_ACTIVATED: 'qr_code_activated',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -841,6 +846,22 @@ export const QR_SCAN_OUTCOMES = [
  */
 const qrCodeScannedProps = z.object({ outcome: z.enum(QR_SCAN_OUTCOMES) }).strict();
 
+/** How a rep's activation attempt ended. */
+export const QR_ACTIVATION_OUTCOMES = ['ACTIVATED', 'ALREADY_ACTIVE', 'CODE_UNAVAILABLE'] as const;
+
+/**
+ * One activation attempt. The rep is hashed per the house rule; the restaurant
+ * appears nowhere, because "which restaurant did a rep sign up" is answerable
+ * from the CatalogDelegation ledger by someone with a reason to ask, and does
+ * not belong in an analytics stream.
+ */
+const qrCodeActivatedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    outcome: z.enum(QR_ACTIVATION_OUTCOMES),
+  })
+  .strict();
+
 /**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
@@ -901,6 +922,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
   [AnalyticsEvent.QR_CODE_SCANNED]: qrCodeScannedProps,
+  [AnalyticsEvent.QR_CODE_ACTIVATED]: qrCodeActivatedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

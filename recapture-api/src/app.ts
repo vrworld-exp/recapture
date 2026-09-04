@@ -14,6 +14,7 @@ import catalogRouter from '@/routes/catalog';
 import remoteConfigRouter from '@/routes/remoteConfig';
 import adminRouter from '@/routes/admin';
 import publicRouter from '@/routes/public';
+import repRouter from '@/routes/rep';
 
 /** `flutter run -d chrome` binds a fresh random port each launch. */
 const LOCALHOST_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
@@ -69,6 +70,11 @@ export function createApp(): express.Express {
   app.use('/remote-config', remoteConfigRouter);
   // Staff-only (requireAuth + requireRole ≥ MODEL_ARTIST inside the router).
   app.use('/admin', adminRouter);
+  // Field sales (requireAuth + requireRole ≥ SALES_REP inside the router).
+  // Acting-on-behalf-of writes: every catalog-scoped route resolves through a
+  // CatalogDelegation grant. It MIRRORS /catalog rather than replacing it —
+  // /catalog and /projects are unchanged.
+  app.use('/rep', repRouter);
   // The printed standee (no JWT, no envelope). THE ONE ROUTER THAT ANSWERS IN
   // HTML: its client is a phone camera opening a browser, so it returns 302s
   // and text/html and carries its own terminal error handler so a thrown error

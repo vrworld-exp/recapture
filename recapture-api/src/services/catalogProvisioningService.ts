@@ -332,13 +332,32 @@ type PersistResult =
  * publish this user's products onto someone else's public page.
  */
 async function persistMapping(
-  catalogId: Types.ObjectId,
+  catalog: ICatalog,
   mirageRestaurantId: string
 ): Promise<PersistResult> {
+  const catalogId = catalog._id as Types.ObjectId;
+
+  // A REP-ACTIVATED CATALOG ARRIVES HERE WITH publicUrl ALREADY SET — written
+  // at activation, pointing at the printed standee, before Mirage existed for
+  // this restaurant. Minting over it would break every code already in the
+  // field and assertMappingImmutable would (correctly) throw on the next
+  // publish. Mirage provisioning owns `mirageRestaurantId`; it does NOT own the
+  // public URL.
+  //
+  // Note what is NOT done here: the guard below still matches only on
+  // `mirageRestaurantId: null`. Widening it to `publicUrl: null` as well would
+  // make activation's own URL cause provisioning to skip the Mirage mapping
+  // entirely — the catalog would never be published at all.
+  const preserved = catalog.publicUrl;
+  const publicUrl = preserved ?? mintPublicUrl(mirageRestaurantId);
+  const urlFields = preserved
+    ? {}
+    : { publicUrl, publicUrlScheme: PUBLIC_URL_SCHEME };
+
   const mapping: CatalogMappingDto = {
     mirageRestaurantId,
-    publicUrl: mintPublicUrl(mirageRestaurantId),
-    publicUrlScheme: PUBLIC_URL_SCHEME,
+    publicUrl,
+    publicUrlScheme: catalog.publicUrlScheme ?? PUBLIC_URL_SCHEME,
   };
 
   try {
@@ -348,8 +367,7 @@ async function persistMapping(
         $set: {
           mirageRestaurantId: mapping.mirageRestaurantId,
           mirageProvisionedAt: new Date(),
-          publicUrl: mapping.publicUrl,
-          publicUrlScheme: mapping.publicUrlScheme,
+          ...urlFields,
         },
       },
       { new: true, runValidators: true }
@@ -437,7 +455,7 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
   // (1) Adopt an exact name match.
   const exact = existing.find((r) => normalized(r.name) === normalized(catalog.name));
   if (exact) {
-    return finish(catalog, await persistMapping(catalogId, exact.id), existing, {
+    return finish(catalog, await persistMapping(catalog, exact.id), existing, {
       adoptedExisting: true,
     });
   }
@@ -473,14 +491,14 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
       const nowExact = after.find((r) => normalized(r.name) === normalized(catalog.name));
       if (!nowExact) return nameTaken(catalog, after);
 
-      return finish(catalog, await persistMapping(catalogId, nowExact.id), after, {
+      return finish(catalog, await persistMapping(catalog, nowExact.id), after, {
         adoptedExisting: true,
       });
     }
     throw err;
   }
 
-  return finish(catalog, await persistMapping(catalogId, created.id), existing, {
+  return finish(catalog, await persistMapping(catalog, created.id), existing, {
     adoptedExisting: false,
   });
 }

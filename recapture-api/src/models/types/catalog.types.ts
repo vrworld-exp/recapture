@@ -31,15 +31,26 @@ export type CatalogStatus = (typeof CATALOG_STATUSES)[number];
  * How {@link ICatalog.publicUrl} was derived, recorded ON the catalog so a
  * future scheme change cannot silently rewrite already-issued URLs — a
  * grandfathered catalog is visibly on the old scheme instead of quietly
- * repointed. Today there is exactly one scheme:
+ * repointed. There are two:
  *
  *   MIRAGE_OBJECT_ID — `{MIRAGE_PUBLIC_BASE_URL}/{mirageRestaurantId}`.
  *   Every public Mirage resolver falls back to `findById` when the name lookup
  *   misses (mirage-be/src/Controllers/itemController.js:472-478), and an
  *   ObjectId is immutable where a name is not. That is what makes "the QR never
  *   breaks" a property of the URL scheme rather than a rule people remember.
+ *
+ *   RECAPTURE_SHORT_CODE — `{PUBLIC_RESOLVER_BASE_URL}/r/{code}`, written at
+ *   REP ACTIVATION, before Mirage has ever heard of this restaurant. The
+ *   indirection is the point: the printed code is meaningless and permanent,
+ *   and remapping happens on the QrCode row rather than on this URL — so
+ *   `publicUrl` stays as frozen under this scheme as under the other one.
+ *
+ * This enum being multi-member is exactly why it was written as an enum rather
+ * than inferred from the string: catalogs provisioned before same-day
+ * activation keep MIRAGE_OBJECT_ID and their printed QRs keep working, visibly
+ * grandfathered instead of quietly repointed.
  */
-export const PUBLIC_URL_SCHEMES = ['MIRAGE_OBJECT_ID'] as const;
+export const PUBLIC_URL_SCHEMES = ['MIRAGE_OBJECT_ID', 'RECAPTURE_SHORT_CODE'] as const;
 export type PublicUrlScheme = (typeof PUBLIC_URL_SCHEMES)[number];
 
 /**

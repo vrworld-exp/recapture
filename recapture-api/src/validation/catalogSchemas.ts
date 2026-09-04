@@ -77,7 +77,13 @@ const socialsSchema = z
   })
   .strict();
 
-const contactSchema = z
+/**
+ * Exported so the rep activation body (validation/repSchemas.ts) reuses this
+ * exact schema rather than declaring a parallel one. A rep-created catalog must
+ * satisfy the same rules as an owner-created one, and two schemas drift the
+ * first time either set of bounds changes.
+ */
+export const contactSchema = z
   .object({
     phone: z.string().trim().max(32).optional(),
     email: z.string().trim().max(254).optional(),
@@ -88,14 +94,24 @@ const contactSchema = z
   .strict();
 
 /**
+ * The catalog NAME field, exported for the same reason `contactSchema` is: rep
+ * activation names a catalog, and it must slug, bound and reject exactly as
+ * `POST /catalog` does.
+ */
+export const catalogNameField = slugName(CATALOG_NAME_MAX, 'Catalog name');
+
+/** The business-name field, on the same reuse rule. */
+export const businessNameField = z.string().trim().min(1).max(BUSINESS_NAME_MAX);
+
+/**
  * POST /catalog. Only `name` is required — a business can start with a name and
  * fill branding in later, and forcing the whole profile up front is what makes
  * people abandon setup.
  */
 export const createCatalogSchema = z
   .object({
-    name: slugName(CATALOG_NAME_MAX, 'Catalog name'),
-    businessName: z.string().trim().min(1).max(BUSINESS_NAME_MAX).optional(),
+    name: catalogNameField,
+    businessName: businessNameField.optional(),
     contact: contactSchema.optional(),
   })
   .strict();

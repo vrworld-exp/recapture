@@ -1,0 +1,322 @@
+// src/routes/rep.ts
+//
+// The field surface (mounted at /rep): a SALES_REP turns a printed standee into
+// a live catalog and authors on the restaurant's behalf.
+//
+// THIS ROUTER MIRRORS THE OWNER ROUTES; IT NEVER MODIFIES THEM. `/catalog` and
+// `/projects` are untouched by this stage — no second, weaker door into owner
+// data. Where a rep does something an owner can already do, this router
+// AUTHORIZES and then delegates to the owner service with the restaurant's own
+// userId. The moment a route here grows its own product logic, the two
+// implementations start drifting and the rep path becomes the one nobody tests.
+//
+// ONE GATE, ONE FUNCTION: every catalog-scoped route resolves its catalog
+// through `resolveDelegatedCatalog` and through nothing else. A `null` from it
+// is answered with the SAME 404 a nonexistent catalog gives — a rep must not be
+// able to probe for catalogs they do not hold. Grep this file for
+// `resolveDelegatedCatalog`: if a catalog is ever obtained another way, that is
+// the bug.
+//
+// Standard envelope throughout (unlike routes/public.ts, whose carve-out is
+// documented in AGENTS.md and applies to that router alone).
+import { Router, type Response } from 'express';
+import { Types } from 'mongoose';
+
+import { asyncHandler } from '@/utils/asyncHandler';
+import { requireAuth } from '@/middleware/auth';
+import { requireRole } from '@/middleware/requireRole';
+import { hashIdentifier } from '@/utils/otp';
+import { track, AnalyticsEvent } from '@/utils/analytics';
+import { QrCode } from '@/models/QrCode';
+import { qrCodeParam } from '@/validation/qrSchemas';
+import { createProductSchema } from '@/validation/catalogSchemas';
+import { repActivationSchema, attachQrCodeSchema } from '@/validation/repSchemas';
+import {
+  activate,
+  attachCodeToCatalog,
+  retireCode,
+} from '@/services/activationService';
+import {
+  listDelegatedCatalogs,
+  resolveDelegatedCatalog,
+} from '@/services/catalogDelegationService';
+import { createProduct } from '@/services/catalogProductsService';
+
+const router = Router();
+
+// Router-level gates, mirroring admin.ts. requireRole re-reads the role from the
+// DB on every request, so a revoked rep loses /rep at once rather than at token
+// expiry. Role comparison is inclusive upward: MODEL_ARTIST and ADMIN pass here
+// too, which is accepted rather than overlooked — both are script-granted, and
+// every acting-on-behalf-of write leaves a CatalogDelegation row behind.
+router.use(requireAuth);
+router.use(requireRole('SALES_REP'));
+
+function fail(res: Response, status: number, code: string, message: string): void {
+  res.status(status).json({ status: 'error', code, message });
+}
+
+/** The one answer for "no such catalog" AND "not delegated to you". */
+function notDelegated(res: Response): void {
+  fail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
+}
+
+function invalidCode(res: Response): void {
+  fail(res, 400, 'INVALID_REQUEST', 'Invalid QR code.');
+}
+
+/**
+ * GET /rep/codes/:code — the preflight the rep's scanner calls before showing
+ * the activation form.
+ *
+ * Purely advisory: the state can change between this call and the activation,
+ * and the conditional claim in activationService is what actually decides. This
+ * exists so a rep sees "already in use" before typing a restaurant's details,
+ * not so the client can skip the 409.
+ *
+ * No enumeration concern — the whole router is behind requireRole('SALES_REP'),
+ * and a rep holding a physical standee already knows the code exists.
+ */
+router.get(
+  '/codes/:code',
+  asyncHandler(async (req, res) => {
+    const parsed = qrCodeParam.safeParse(req.params.code);
+    if (!parsed.success) return invalidCode(res);
+
+    const qrCode = await QrCode.findOne({ code: parsed.data, deletedAt: null }).exec();
+    if (!qrCode) {
+      return fail(res, 404, 'CODE_NOT_FOUND', 'That code is not one of ours.');
+    }
+
+    res.status(200).json({
+      status: 'success',
+      code: qrCode.code,
+      state: qrCode.state,
+      available: qrCode.state === 'UNASSIGNED',
+    });
+  })
+);
+
+/**
+ * POST /rep/activations — the whole stage in one call.
+ *
+ * 201 on a fresh activation, 200 on an idempotent re-run of one that already
+ * succeeded, 409 when the standee belongs to someone else.
+ */
+router.post(
+  '/activations',
+  asyncHandler(async (req, res) => {
+    const parsed = repActivationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const result = await activate({ repUserId, ...parsed.data });
+
+    switch (result.outcome) {
+      case 'RESOLVER_NOT_CONFIGURED':
+        // 409, matching the batch-export route's answer to the same missing
+        // variable. Activating against a guessed host would freeze a broken URL
+        // onto the catalog permanently.
+        return fail(
+          res,
+          409,
+          'RESOLVER_NOT_CONFIGURED',
+          'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment.'
+        );
+      case 'RATE_LIMITED':
+        res.status(429).json({
+          status: 'error',
+          code: 'RATE_LIMITED',
+          message: 'Too many activations. Try again shortly.',
+          retryAfter: result.retryAfter,
+        });
+        return;
+      case 'CODE_NOT_FOUND':
+        return fail(res, 404, 'CODE_NOT_FOUND', 'That code is not one of ours.');
+      case 'CODE_UNAVAILABLE':
+        return fail(
+          res,
+          409,
+          'CODE_UNAVAILABLE',
+          'That code is already in use or has been retired.'
+        );
+      case 'ACTIVATED':
+      case 'ALREADY_ACTIVE':
+        break;
+    }
+
+    res.status(result.outcome === 'ACTIVATED' ? 201 : 200).json({
+      status: 'success',
+      outcome: result.outcome,
+      catalogId: String(result.catalog._id),
+      publicUrl: result.publicUrl,
+    });
+  })
+);
+
+/** GET /rep/catalogs — the restaurants this rep may currently act on. */
+router.get(
+  '/catalogs',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalogs = await listDelegatedCatalogs(repUserId);
+    res.status(200).json({ status: 'success', catalogs });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/products — dish authoring on the restaurant's behalf.
+ *
+ * DELEGATES to the owner service with the RESTAURANT's userId, so the product
+ * that comes out is owned by the restaurant, filed under the restaurant's
+ * catalog, and identical in every field to one the owner would have created.
+ * The rep's identity is not on the row at all — the audit trail is the
+ * CatalogDelegation grant, not a second owner column nothing else understands.
+ */
+router.post(
+  '/catalogs/:id/products',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = createProductSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const result = await createProduct(String(catalog.userId), parsed.data);
+
+    switch (result.outcome) {
+      case 'NO_CATALOG':
+        return notDelegated(res);
+      case 'CATEGORY_NOT_FOUND':
+        return fail(res, 404, 'CATEGORY_NOT_FOUND', 'That category does not exist.');
+      case 'MODEL_NOT_FOUND':
+        return fail(res, 404, 'MODEL_NOT_FOUND', 'That 3D model was not found.');
+      case 'MODEL_NOT_READY':
+        return fail(res, 409, 'MODEL_NOT_READY', 'That 3D model is not finished yet.');
+      case 'DUPLICATE_NAME':
+        return fail(res, 409, 'DUPLICATE_NAME', 'A product with that name already exists.');
+      case 'INVALID_KEY':
+      case 'FORBIDDEN':
+      case 'OBJECT_NOT_FOUND':
+      case 'TOO_LARGE':
+        return fail(res, 400, result.outcome, 'That image could not be attached.');
+      case 'CREATED':
+        break;
+    }
+
+    track(AnalyticsEvent.CATALOG_PRODUCT_CREATED, {
+      // The hashed REP — they made the request. The restaurant is identified by
+      // catalog_id, which is not personal data.
+      user_id_hash: hashIdentifier(req.user!.userId),
+      product_id: result.product.id,
+      product_type: result.product.type,
+      has_category: result.product.categoryId !== null,
+    });
+
+    res.status(201).json({ status: 'success', product: result.product });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/qr-codes — attach a replacement standee.
+ *
+ * Leaves `publicUrl` alone (see attachCodeToCatalog). Retiring the code being
+ * replaced is a SEPARATE call: "print a spare" and "kill the lost one" are two
+ * decisions, and a rep often wants only the first.
+ */
+router.post(
+  '/catalogs/:id/qr-codes',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = attachQrCodeSchema.safeParse(req.body);
+    if (!parsed.success) return invalidCode(res);
+
+    const result = await attachCodeToCatalog({
+      repUserId,
+      catalog,
+      code: parsed.data.code,
+    });
+
+    switch (result.outcome) {
+      case 'CODE_NOT_FOUND':
+        return fail(res, 404, 'CODE_NOT_FOUND', 'That code is not one of ours.');
+      case 'CODE_UNAVAILABLE':
+        return fail(
+          res,
+          409,
+          'CODE_UNAVAILABLE',
+          'That code is already in use or has been retired.'
+        );
+      case 'SOURCE_CATALOG_PUBLISHED':
+        return fail(
+          res,
+          409,
+          'SOURCE_CATALOG_PUBLISHED',
+          'That code is live on a catalog that has already been published. ' +
+            'Retire it there first, then use a fresh code.'
+        );
+      case 'ATTACHED':
+      case 'ALREADY_ATTACHED':
+        break;
+    }
+
+    res.status(result.outcome === 'ATTACHED' ? 201 : 200).json({
+      status: 'success',
+      outcome: result.outcome,
+      code: result.code,
+      // Unchanged, and echoed back so the client can SEE it is unchanged.
+      publicUrl: catalog.publicUrl ?? null,
+    });
+  })
+);
+
+/**
+ * POST /rep/qr-codes/:code/retire — take one standee out of service.
+ *
+ * Authorized through the code's OWN catalog: a rep may retire only a code that
+ * points at a catalog they hold. The delegation gate is the same one every
+ * other route here uses; the only difference is that the catalog id comes from
+ * the code rather than from the URL.
+ */
+router.post(
+  '/qr-codes/:code/retire',
+  asyncHandler(async (req, res) => {
+    const parsed = qrCodeParam.safeParse(req.params.code);
+    if (!parsed.success) return invalidCode(res);
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const qrCode = await QrCode.findOne({ code: parsed.data, deletedAt: null }).exec();
+    // An unbound code has no catalog to check a delegation against, so there is
+    // nothing this rep could be authorised for — the same 404 as a code that
+    // does not exist, rather than a hint that it does.
+    if (!qrCode?.catalogId) {
+      return fail(res, 404, 'CODE_NOT_FOUND', 'That code is not one of ours.');
+    }
+
+    const catalog = await resolveDelegatedCatalog(repUserId, String(qrCode.catalogId));
+    if (!catalog) return notDelegated(res);
+
+    const result = await retireCode(qrCode);
+    res.status(200).json({ status: 'success', outcome: result.outcome, code: qrCode.code });
+  })
+);
+
+export default router;
