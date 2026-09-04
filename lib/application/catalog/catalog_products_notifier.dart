@@ -10,6 +10,7 @@ import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
 import '../../domain/entities/product_type.dart';
 import '../auth/auth_notifier.dart';
+import '../common/pending_poll_loop.dart';
 
 /// The category filter value that means "products with no category".
 ///
@@ -217,6 +218,13 @@ class CatalogProductsState {
 class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
   Timer? _debounce;
 
+  /// Watches dishes whose 3D model is still generating, so a card flips from
+  /// "3D generating" to "AR ready" while the rep is still looking at it.
+  ///
+  /// The SHARED cadence, not a second one — see PendingPollLoop. Created lazily
+  /// because a grid with nothing pending must never schedule a tick at all.
+  PendingPollLoop? _modelPoll;
+
   /// Bumped by anything that invalidates in-flight work (a filter change, a new
   /// search, a refresh). A response carrying an older stamp is stale.
   int _generation = 0;
@@ -246,6 +254,9 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
     ref.onDispose(() {
       _disposed = true;
       _debounce?.cancel();
+      // The loop dies with the screen. Without this it would keep polling on
+      // behalf of a route nobody is looking at.
+      _modelPoll?.stop();
     });
 
     // Signed out: an empty grid that is NOT loading, so nothing is requested
@@ -347,6 +358,10 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
         nextCursor: page.nextCursor,
         isLoading: false,
       );
+      // A fresh load is a fresh wait: reset the cadence so a dish that just
+      // started generating is checked in 3s, not at whatever interval a
+      // previous wait had backed off to.
+      _restartModelPolling();
     } on CatalogFailure catch (failure) {
       if (_isStale(generation)) return;
       // A failed background refresh keeps what is on screen and reports itself
@@ -398,6 +413,9 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
         nextCursor: page.nextCursor,
         isAppending: false,
       );
+      // A later page can carry the first pending dish, so the loop has to be
+      // re-evaluated on an append and not only on a first load.
+      _scheduleModelPolling();
     } on CatalogFailure catch (failure) {
       if (_isStale(generation)) return;
       // Items untouched — the footer shows a retry, the grid keeps its pages.
@@ -667,6 +685,73 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
       // wholesale, so a failure means NOTHING moved.
       if (!_disposed) state = state.copyWith(items: previous);
       rethrow;
+    }
+  }
+
+  // ── Watching a model finish ───────────────────────────────────────────────
+
+  /// Whether any loaded dish is still waiting on a 3D model.
+  ///
+  /// The loop's ONLY stop condition, and the same getter the badge reads — so
+  /// "the badge says generating" and "the loop is running" can never disagree.
+  bool get _hasPendingModels => state.items.any((p) => p.isModelPending);
+
+  /// Whether the grid is currently watching for a model to finish. Exposed for
+  /// the tests that assert the loop starts, stops, and honours its cap.
+  bool get isPollingModels => _modelPoll?.isRunning ?? false;
+
+  void _restartModelPolling() {
+    _modelPoll?.reset();
+    _scheduleModelPolling();
+  }
+
+  void _scheduleModelPolling() {
+    if (_disposed) return;
+    if (!_hasPendingModels) {
+      _modelPoll?.stop();
+      return;
+    }
+    (_modelPoll ??= PendingPollLoop(poll: _pollModels))
+        .scheduleIfPending(isPending: true);
+  }
+
+  /// One poll. Re-reads page 1 — where a rep's newly added dish is — and
+  /// answers whether anything is still pending.
+  ///
+  /// NEVER THROWS, and never blanks the grid: a dropped request on restaurant
+  /// wifi leaves the loaded items exactly as they are and the next tick tries
+  /// again. A permanent failure runs out the loop's own cap rather than
+  /// reporting an error for something the rep did not ask for.
+  Future<bool> _pollModels() async {
+    if (_disposed) return false;
+    final generation = _generation;
+    final query = state.query;
+
+    try {
+      final page = await _repo.list(
+        limit: kProductPageSize,
+        categoryId: query.categoryId,
+        type: query.type,
+        availability: query.availability,
+        query: query.searchTerm,
+        includeArchived: query.includeArchived,
+      );
+      if (_isStale(generation)) return false;
+
+      // Merged rather than replaced: pages past the first are still on screen,
+      // and a poll that dropped them would undo the user's scrolling.
+      final refreshed = {for (final item in page.items) item.id: item};
+      state = state.copyWith(
+        items: [
+          for (final item in state.items) refreshed[item.id] ?? item,
+          for (final item in page.items)
+            if (!state.items.any((existing) => existing.id == item.id)) item,
+        ],
+      );
+      return _hasPendingModels;
+    } on CatalogFailure {
+      // Last-good-state. Keep waiting against what is already on screen.
+      return !_disposed && _hasPendingModels;
     }
   }
 

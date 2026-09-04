@@ -40,7 +40,7 @@ import {
   listDelegatedCatalogs,
   resolveDelegatedCatalog,
 } from '@/services/catalogDelegationService';
-import { createProduct } from '@/services/catalogProductsService';
+import { createProduct, listProducts } from '@/services/catalogProductsService';
 
 const router = Router();
 
@@ -51,6 +51,12 @@ const router = Router();
 // every acting-on-behalf-of write leaves a CatalogDelegation row behind.
 router.use(requireAuth);
 router.use(requireRole('SALES_REP'));
+
+/**
+ * How many dishes a rep's detail screen loads. Generous enough to be the whole
+ * list during a visit — a rep adds dishes one at a time at a table, not fifty.
+ */
+const REP_PRODUCT_PAGE_SIZE = 100;
 
 function fail(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ status: 'error', code, message });
@@ -168,6 +174,37 @@ router.get(
     const repUserId = new Types.ObjectId(req.user!.userId);
     const catalogs = await listDelegatedCatalogs(repUserId);
     res.status(200).json({ status: 'success', catalogs });
+  })
+);
+
+/**
+ * GET /rep/catalogs/:id/products — the dishes on a delegated catalog.
+ *
+ * The rep's detail screen needs to SHOW what it is adding to, and to watch a
+ * dish flip from "3D generating" to "AR ready" — neither is possible without
+ * this. Delegates to the owner service with the RESTAURANT's userId, exactly
+ * as the create route below does, so the rows a rep reads are the rows the
+ * owner reads, through the same code.
+ *
+ * No filters and no cursor: a rep's list is a working set of a few dishes
+ * during one visit, not the owner's catalog manager. The owner surface keeps
+ * its paging; adding a second parameterised list here would be two query
+ * builders to keep in step for a screen that does not need one.
+ */
+router.get(
+  '/catalogs/:id/products',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const result = await listProducts(String(catalog.userId), {
+      limit: REP_PRODUCT_PAGE_SIZE,
+      includeArchived: false,
+    });
+    if (result.outcome === 'NO_CATALOG') return notDelegated(res);
+
+    res.status(200).json({ status: 'success', items: result.items });
   })
 );
 

@@ -1,3 +1,4 @@
+✅✅✅✅
 # Stage 6 — The Flutter Rep App
 
 **Side:** client (Android/iOS **and** web) · **Size:** L (≈ 2 days) · **Depends on:** stages 1, 4, 5

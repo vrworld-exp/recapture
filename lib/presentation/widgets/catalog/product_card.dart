@@ -10,6 +10,7 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
+import '../../../domain/entities/product_model_status.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../../utils/price_format.dart';
 import '../app_status_pill.dart';
@@ -98,6 +99,14 @@ class ProductCard extends StatelessWidget {
                     top: AppSpacing.sm,
                     right: AppSpacing.sm,
                     child: _FeaturedMarker(),
+                  ),
+                // Under the type badge, so "3D" and "what state that 3D is in"
+                // read as one column rather than competing corners.
+                if (product.modelStatus != ProductModelStatus.none)
+                  Positioned(
+                    top: AppSpacing.sm + 20,
+                    left: AppSpacing.sm,
+                    child: _ModelStatusBadge(status: product.modelStatus),
                   ),
                 // The pill sits ON the image so it survives a narrow column,
                 // where the text block below is already fighting for two lines.
@@ -347,6 +356,75 @@ class _TypeBadge extends StatelessWidget {
               fontWeight: FontWeight.w500,
               height: 1.0,
               color: threeD ? AppColors.royalGold : AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Where this dish's 3D model has got to.
+///
+/// ⚠ THE `failed` COPY IS NOT AN ERROR, AND THAT IS DELIBERATE. The dish is on
+/// the menu with its name, its price and its photo; only the AR button is
+/// missing. A red error next to a dish a rep just photographed reads as "your
+/// capture was rejected" — and a rep who believes that re-shoots it, spending
+/// generation credits a second time on a model that was never the problem. So
+/// it reads as a fact about the model, in the muted palette, not as a fault.
+///
+/// [ProductModelStatus.none] renders nothing at all — an image-only dish has no
+/// model to have a state, and a badge saying so would be noise on every card in
+/// a photo-only catalog.
+class _ModelStatusBadge extends StatelessWidget {
+  const _ModelStatusBadge({required this.status});
+
+  final ProductModelStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, icon, color) = switch (status) {
+      ProductModelStatus.queued ||
+      ProductModelStatus.processing =>
+        ('3D generating…', Icons.hourglass_top, AppColors.textSecondary),
+      ProductModelStatus.ready =>
+        ('AR ready', Icons.view_in_ar, AppColors.royalGold),
+      ProductModelStatus.failed =>
+        ('3D unavailable', Icons.block_outlined, AppColors.textMuted),
+      ProductModelStatus.none => ('', Icons.circle, AppColors.textMuted),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: 2,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.bgPrimary.withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The pending states get the existing progress affordance rather than
+          // a static glyph: a dish that is being worked on should look like it.
+          if (status.isPending)
+            SizedBox(
+              width: 9,
+              height: 9,
+              child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
+            )
+          else
+            Icon(icon, size: 11, color: color),
+          const SizedBox(width: AppSpacing.xs),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: AppTypography.sizeLabel,
+              fontWeight: FontWeight.w500,
+              height: 1.0,
+              color: color,
             ),
           ),
         ],

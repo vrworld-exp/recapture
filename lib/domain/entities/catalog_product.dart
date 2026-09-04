@@ -1,6 +1,7 @@
 // lib/domain/entities/catalog_product.dart
 import 'catalog_json.dart';
 import 'product_availability.dart';
+import 'product_model_status.dart';
 import 'product_sync_status.dart';
 import 'product_type.dart';
 
@@ -38,6 +39,7 @@ class CatalogProduct {
     this.thumbnailUrl,
     this.sourceProjectId,
     this.sourceModelId,
+    this.modelStatus = ProductModelStatus.none,
     this.syncStatus = ProductSyncStatus.never,
     this.syncError,
     this.isArchived = false,
@@ -94,6 +96,14 @@ class CatalogProduct {
   final String? sourceProjectId;
   final String? sourceModelId;
 
+  /// Whether this dish can launch AR right now — the RUNTIME fact, next to
+  /// [type]'s authored intent.
+  ///
+  /// Defaults to [ProductModelStatus.none] so a backend that predates the field
+  /// leaves the app working: the dish renders, and only the AR affordance is
+  /// missing. See [isArReady] — never gate AR on [type].
+  final ProductModelStatus modelStatus;
+
   final ProductSyncStatus syncStatus;
 
   /// OUR message for the last sync failure — the backend never passes Mirage's
@@ -109,6 +119,20 @@ class CatalogProduct {
 
   /// Whether this product can be opened in the 3D viewer / AR right now.
   bool get canViewInThreeD => type.supportsThreeD && (glbUrl?.isNotEmpty ?? false);
+
+  /// AR is available.
+  ///
+  /// THE ONLY GATE. Never check `type == threeD` for this: a THREE_D product
+  /// whose model is still generating is a valid, publishable menu item with no
+  /// AR button, and a dish whose REPLACEMENT model is generating still carries
+  /// the previous model's URLs — so neither `type` nor `glbUrl` alone answers
+  /// the question this getter does.
+  bool get isArReady =>
+      modelStatus == ProductModelStatus.ready && (glbUrl?.isNotEmpty ?? false);
+
+  /// Something is coming. Drives both the badge and the poll loop's stop
+  /// condition, so the two can never disagree about what "still waiting" means.
+  bool get isModelPending => modelStatus.isPending;
 
   /// Uncategorized (feature 26).
   bool get isUncategorized => categoryId == null;
@@ -137,6 +161,12 @@ class CatalogProduct {
         thumbnailUrl: catalogText(map['thumbnailUrl']),
         sourceProjectId: catalogText(map['sourceProjectId']),
         sourceModelId: catalogText(map['sourceModelId']),
+        // Field by field, never a spread. A field the parser forgets reads back
+        // as the default, and the AR button then silently never appears —
+        // which nothing on screen would report.
+        modelStatus: ProductModelStatusX.fromApiValue(
+          map['modelStatus']?.toString(),
+        ),
         syncStatus:
             ProductSyncStatusX.fromApiValue((map['syncStatus'] ?? '').toString()),
         syncError: catalogText(map['syncError']),
@@ -164,6 +194,7 @@ class CatalogProduct {
         'thumbnailUrl': thumbnailUrl,
         'sourceProjectId': sourceProjectId,
         'sourceModelId': sourceModelId,
+        'modelStatus': modelStatus.apiValue,
         'syncStatus': syncStatus.apiValue,
         'syncError': syncError,
         'isArchived': isArchived,
@@ -186,6 +217,7 @@ class CatalogProduct {
     ProductAvailability? availability,
     bool? featured,
     int? position,
+    ProductModelStatus? modelStatus,
     ProductSyncStatus? syncStatus,
     String? syncError,
     bool? isArchived,
@@ -210,6 +242,7 @@ class CatalogProduct {
         thumbnailUrl: thumbnailUrl,
         sourceProjectId: sourceProjectId,
         sourceModelId: sourceModelId,
+        modelStatus: modelStatus ?? this.modelStatus,
         syncStatus: syncStatus ?? this.syncStatus,
         syncError: syncError ?? this.syncError,
         isArchived: isArchived ?? this.isArchived,

@@ -21,6 +21,7 @@ import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/catalog_status.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
 import 'package:recapture/domain/entities/product_sync_status.dart';
+import 'package:recapture/domain/entities/product_model_status.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 
 /// Exactly what `toCatalogDto()` emits.
@@ -64,6 +65,7 @@ Map<String, dynamic> productGolden() => {
       'thumbnailUrl': 'https://cdn.example.com/preview.jpg',
       'sourceProjectId': '6a83dd464aea89d1d2d28d80',
       'sourceModelId': '6a83dd464aea89d1d2d28d90',
+      'modelStatus': 'READY',
       'syncStatus': 'SYNCED',
       'syncError': null,
       'isArchived': false,
@@ -320,6 +322,71 @@ void main() {
       expect(product.featured, isFalse);
       expect(product.syncStatus, ProductSyncStatus.unknown);
       expect(product.position, 0);
+    });
+
+    // ── modelStatus (stage 5/6: a dish on the menu before its model) ────────
+
+    test('parses modelStatus, and AR is gated on it rather than on type', () {
+      final ready = CatalogProduct.fromMap(productGolden());
+      expect(ready.modelStatus, ProductModelStatus.ready);
+      expect(ready.isArReady, isTrue);
+      expect(ready.isModelPending, isFalse);
+
+      // A THREE_D dish whose model is still generating: a real, publishable
+      // menu item with NO AR button. Gating on `type` would show one.
+      final pending = CatalogProduct.fromMap(
+        productGolden()
+          ..['modelStatus'] = 'PROCESSING'
+          ..['glbUrl'] = null,
+      );
+      expect(pending.type, ProductType.threeD);
+      expect(pending.isArReady, isFalse);
+      expect(pending.isModelPending, isTrue);
+
+      // FAILED is not pending and not ready — the dish stays on the menu in 2D.
+      final failed =
+          CatalogProduct.fromMap(productGolden()..['modelStatus'] = 'FAILED');
+      expect(failed.isModelPending, isFalse);
+      expect(failed.isArReady, isFalse);
+    });
+
+    test('an ABSENT modelStatus parses as none rather than throwing', () {
+      // THE TEST THAT LETS THE CLIENT ROLL OUT BEFORE OR AFTER THE BACKEND. A
+      // server that predates the field sends no `modelStatus`, and the grid has
+      // to render anyway — with no AR button, which is the fail-closed answer.
+      final map = productGolden()..remove('modelStatus');
+      final product = CatalogProduct.fromMap(map);
+
+      expect(product.modelStatus, ProductModelStatus.none);
+      expect(product.isArReady, isFalse);
+      expect(product.isModelPending, isFalse);
+      // And the rest of the row is untouched — one missing field must not cost
+      // the dish its name or its price.
+      expect(product.name, 'Walnut Chair');
+      expect(product.glbUrl, 'https://cdn.example.com/model.glb');
+    });
+
+    test('an unrecognised modelStatus fails closed', () {
+      final product = CatalogProduct.fromMap(
+        productGolden()..['modelStatus'] = 'RENDERING_IN_THE_CLOUD',
+      );
+      // A client one deploy behind ignores a status it does not know rather
+      // than crashing the grid — and promises no AR it cannot show.
+      expect(product.modelStatus, ProductModelStatus.none);
+      expect(product.isArReady, isFalse);
+    });
+
+    test('copyWith carries modelStatus, so a promotion lands in place', () {
+      final pending = CatalogProduct.fromMap(
+        productGolden()..['modelStatus'] = 'PROCESSING',
+      );
+      final promoted =
+          pending.copyWith(modelStatus: ProductModelStatus.ready);
+
+      expect(promoted.modelStatus, ProductModelStatus.ready);
+      // Omitted → unchanged, like every other field on this copyWith.
+      expect(pending.copyWith(featured: true).modelStatus,
+          ProductModelStatus.processing);
     });
 
     test('copyWith distinguishes "move to Uncategorized" from "leave it alone"',

@@ -7,6 +7,7 @@ import '../../application/capture/analytics/capture_level_session.dart';
 import '../../application/capture/capture_flow_variant_provider.dart';
 import '../../application/capture/capture_mode_provider.dart';
 import '../../application/capture/completion_gate_provider.dart';
+import '../../application/auth/user_role_notifier.dart';
 import '../../application/config/config_notifier.dart';
 import '../../domain/entities/capture_config.dart';
 import '../../domain/capture/capture_flow_variant.dart';
@@ -19,6 +20,9 @@ import '../../presentation/screens/auth/splash_screen.dart';
 import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
+import '../../presentation/screens/rep/rep_activation_screen.dart';
+import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
+import '../../presentation/screens/rep/rep_catalogs_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
@@ -123,6 +127,20 @@ abstract final class AppRoutes {
   /// Customer-facing analytics for the published catalog (feature 66).
   static const catalogAnalytics = '/catalog/analytics';
 
+  // ── Rep (the field surface, /rep) ─────────────────────────────────────────
+  // Gated on isSalesRep in the router's redirect below, not inside the screens:
+  // a USER who deep-links here must land somewhere real, never on a screen that
+  // renders and then answers 403.
+
+  /// The rep's home — the restaurants they may currently act on.
+  static const repCatalogs = '/rep/catalogs';
+
+  /// Activate one standee: code → preflight → details → confirm → live.
+  static const repActivate = '/rep/activate';
+
+  /// One delegated restaurant's dishes. `:id` = the catalog id.
+  static const repCatalogDetail = '/rep/catalogs/:id';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -174,6 +192,9 @@ abstract final class AppRouteNames {
   static const productModel = 'productModel';
   static const businessProfile = 'businessProfile';
   static const catalogAnalytics = 'catalogAnalytics';
+  static const repCatalogs = 'repCatalogs';
+  static const repActivate = 'repActivate';
+  static const repCatalogDetail = 'repCatalogDetail';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const modelViewer = 'modelViewer';
@@ -234,6 +255,14 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       if (!loggedIn && !goingToAuth) return AppRoutes.auth;
       // Keep signed-in users out of the auth flow.
       if (loggedIn && goingToAuth) return AppRoutes.projects;
+
+      // The /rep subtree is role-gated HERE rather than inside each screen. A
+      // USER who deep-links to /rep must land on their own Projects hub, not on
+      // a rep screen that renders, fires a request and answers 403 — which
+      // looks like a broken app rather than a surface they do not have.
+      // Inclusive upward, mirroring the backend: MODEL_ARTIST and ADMIN pass.
+      final repRedirect = repRedirectFor(loc, canUseRepSurface: _canUseRep(ref));
+      if (repRedirect != null) return repRedirect;
       return null;
     },
     errorBuilder: (context, state) => RouteErrorScreen(
@@ -406,6 +435,26 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       // Staff-only per-project Preview gallery. Reached via push (hardware back
       // pops to Projects); FlowBackScope + the screen's AppBar arrow both funnel
       // through navigateBack so a go()-replaced entry can't exit the app either.
+      // ── Rep ───────────────────────────────────────────────────────────────
+      // STATIC before the `:id` route, the same rule the catalog group follows:
+      // a literal segment must never be matchable as an id.
+      GoRoute(
+        path: AppRoutes.repActivate,
+        name: AppRouteNames.repActivate,
+        builder: (_, __) => const RepActivationScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogs,
+        name: AppRouteNames.repCatalogs,
+        builder: (_, __) => const RepCatalogsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogDetail,
+        name: AppRouteNames.repCatalogDetail,
+        builder: (context, state) => RepCatalogDetailScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
       GoRoute(
         path: AppRoutes.previewGallery,
         name: AppRouteNames.previewGallery,
@@ -778,3 +827,34 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   ref.onDispose(router.dispose);
   return router;
 });
+
+/// THE `/rep` GATE, as a pure function — the same shape as
+/// [levelCRedirectForVariant], and for the same reason: a redirect embedded in
+/// the GoRouter callback cannot be unit-tested (neither a BuildContext nor a
+/// GoRouterState is constructible in a `flutter test`), so the DECISION lives
+/// here and the callback is a two-line adapter over it.
+///
+/// Returns the location to redirect to, or null to allow.
+///
+/// The subtree test is a PREFIX, not a set of literals: `/rep/catalogs/:id` is
+/// a real destination, and a set would let exactly that one through ungated —
+/// the single route where a `USER` would actually reach somebody else's
+/// restaurant.
+String? repRedirectFor(
+  String location, {
+  required bool canUseRepSurface,
+}) {
+  final isRep = location == '/rep' || location.startsWith('/rep/');
+  if (!isRep || canUseRepSurface) return null;
+  // Their own hub, not an error page: a surface you do not have should be
+  // invisible, not broken.
+  return AppRoutes.projects;
+}
+
+/// Whether this session may use `/rep`.
+///
+/// A null [ref] means the router was built standalone (the test routers that do
+/// not run a ProviderScope), and those get the permissive answer for the same
+/// reason the capture guards do: a gate that cannot read its input must not
+/// silently redirect every route it guards. Real app startup always passes one.
+bool _canUseRep(Ref? ref) => ref == null || ref.read(isSalesRepProvider);
