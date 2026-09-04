@@ -988,29 +988,29 @@ class _DragHandle extends StatelessWidget {
       onDragEnd: (_) => onDragEnd(),
       child: MouseRegion(
         cursor: SystemMouseCursors.grab,
-        child: Tooltip(
-          message: 'Drag to reorder',
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Center(
-              child: Container(
-                width: size - 6,
-                height: size - 6,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.surface2,
-                  borderRadius: BorderRadius.circular(AppRadius.xs),
-                  border: Border.all(
-                    color: AppColors.royalGold.withValues(alpha: 0.25),
-                    width: 0.5,
-                  ),
+        // No Tooltip: on touch the tooltip's trigger IS a long-press, so
+        // pressing the handle to start a drag popped "Drag to reorder" over
+        // the grid mid-gesture. How to drag is taught outside the widget.
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Center(
+            child: Container(
+              width: size - 6,
+              height: size - 6,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.surface2,
+                borderRadius: BorderRadius.circular(AppRadius.xs),
+                border: Border.all(
+                  color: AppColors.royalGold.withValues(alpha: 0.25),
+                  width: 0.5,
                 ),
-                child: Icon(
-                  Icons.drag_indicator,
-                  size: touch ? 18 : 16,
-                  color: AppColors.textSecondary,
-                ),
+              ),
+              child: Icon(
+                Icons.drag_indicator,
+                size: touch ? 18 : 16,
+                color: AppColors.textSecondary,
               ),
             ),
           ),
