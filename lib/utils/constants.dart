@@ -38,8 +38,33 @@ abstract final class AppConfig {
     return url;
   }
 
+  /// Bounds only the TCP/TLS handshake, so a genuinely offline device still
+  /// fails fast (and `CatalogFailure.fromDio` still reports it as OFFLINE)
+  /// regardless of how generous [receiveTimeout] is.
   static const Duration connectTimeout = Duration(seconds: 15);
-  static const Duration receiveTimeout = Duration(seconds: 30);
+
+  /// Long enough to outlast a Render cold start.
+  ///
+  /// The sleeping dev instance takes ~60s to answer its first request, which
+  /// [BackendWarmupService] already documents and allows for. But that warm-up
+  /// is FIRE-AND-FORGET — it wakes the backend without holding the first real
+  /// request back, so that request routinely lands while the instance is still
+  /// booting. Render accepts the connection immediately and then holds it open
+  /// while it boots, so the wait shows up here, on the response, never on
+  /// [connectTimeout].
+  ///
+  /// This was 30s — shorter than the cold start the app itself documents — and
+  /// every request issued during a cold start died at 30s with a
+  /// `receiveTimeout`, which the UI reports as "you're offline".
+  ///
+  /// The catalog screen is where that surfaced, because it is the ONE surface
+  /// with no disk cache to fall back on (see `CatalogNotifier` — catalog state
+  /// is deliberately server-truth only). Projects, which caches to Hive, rode
+  /// out the same failure showing stale rows and looked healthy.
+  ///
+  /// Keep this >= the cold start; it costs nothing when the backend is warm,
+  /// because it is a ceiling and not a delay.
+  static const Duration receiveTimeout = Duration(seconds: 75);
 
   static const String boxSession = 'session';
   static const String boxProjects = 'projects';

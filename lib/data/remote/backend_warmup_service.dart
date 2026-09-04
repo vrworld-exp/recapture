@@ -24,7 +24,15 @@ class BackendWarmupService {
               // Generous: a Render cold start can take ~60s to answer, and
               // holding the request open until it does means the process is
               // fully up when the first real call goes out.
-              receiveTimeout: const Duration(seconds: 75),
+              //
+              // SHARED with the app-wide client rather than a second literal:
+              // this ping and the first real request race the same cold start,
+              // so a warm-up that waits longer than the request it is warming
+              // up for protects nothing. They drifted once already — the
+              // app-wide client was left at 30s while this said 75s — and the
+              // requests that lost that race are what made the catalog screen
+              // report "you're offline" on a backend that was merely asleep.
+              receiveTimeout: AppConfig.receiveTimeout,
             )),
         _now = now ?? DateTime.now;
 
