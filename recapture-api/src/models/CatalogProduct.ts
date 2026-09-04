@@ -18,10 +18,12 @@
 import { Schema, model, Document, Types } from 'mongoose';
 import {
   PRODUCT_AVAILABILITIES,
+  PRODUCT_MODEL_STATUSES,
   PRODUCT_TYPES,
   SYNC_STATUSES,
   type ProductAssets,
   type ProductAvailability,
+  type ProductModelStatus,
   type ProductPublishedSnapshot,
   type ProductType,
   type SyncError,
@@ -34,6 +36,19 @@ export interface ICatalogProduct extends Document {
   /** Denormalised owner — every ownership check is then one query, no join. */
   userId: Types.ObjectId;
   type: ProductType;
+  /**
+   * Does this product have a usable 3D model right now — the runtime fact, next
+   * to `type`'s authored intent.
+   *
+   * AUTHORING-ADJACENT BUT NOT AUTHORED: the product services set it when a
+   * model is linked, and the MESHY WORKER moves it as generation progresses. It
+   * is deliberately NOT in PRODUCT_DIFF_FIELDS — Mirage has no such concept, so
+   * a status change on its own has nothing to send and must not plan a publish.
+   *
+   * Read it through `effectiveModelStatus`, never raw: documents predating the
+   * field materialise as NONE and are derived back to READY from their glbUrl.
+   */
+  modelStatus: ProductModelStatus;
   name: string;
   description?: string;
   /**
@@ -119,6 +134,15 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
     catalogId: { type: Schema.Types.ObjectId, ref: 'Catalog', required: true },
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     type: { type: String, enum: PRODUCT_TYPES, required: true },
+    // Every pre-existing document materialises as NONE on read through this
+    // default, so there is no migration — the same reasoning as User.role's.
+    // `effectiveModelStatus` is what turns a legacy NONE back into READY.
+    modelStatus: {
+      type: String,
+      enum: PRODUCT_MODEL_STATUSES,
+      required: true,
+      default: 'NONE',
+    },
     name: { type: String, required: true, trim: true, maxlength: 120 },
     description: { type: String, trim: true, maxlength: 2000 },
     price: { type: Number, min: 0 },
@@ -169,6 +193,12 @@ CatalogProductSchema.index({ catalogId: 1, syncStatus: 1 });
 // per-restaurant item-name constraint (adminController.js:888-897) so the
 // collision is caught while the user is still looking at the product.
 CatalogProductSchema.index({ catalogId: 1, name: 1 });
+
+// "Which products are waiting on this model" — the promotion query, run once
+// per finished generation and once more each time the worker moves a model's
+// status. Compound with `modelStatus` because the filter on it is what makes a
+// re-promotion a no-op rather than a second write.
+CatalogProductSchema.index({ sourceModelId: 1, modelStatus: 1 });
 
 // Reverse lookup Mirage id → product. Used by the analytics proxy to partition
 // top-products rows into 3D vs image-only, and by reconciliation. Sparse: only

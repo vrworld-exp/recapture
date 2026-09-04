@@ -33,6 +33,7 @@ import { ProjectModel } from '@/models/ProjectModel';
 import { Catalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { RateWindow } from '@/models/RateWindow';
+import { promoteModelToProducts } from '@/services/catalogModelPromotionService';
 
 const app = createApp();
 let mongod: MongoMemoryServer;
@@ -128,6 +129,26 @@ async function makeSucceededModel(userId: string, name = 'Chair capture'): Promi
         preview: `https://cdn.example.com/${name}.jpg`,
       },
     },
+  });
+  return model.id as string;
+}
+
+/** A model that has not finished generating — linkable, but with no artifacts. */
+async function makePendingModel(userId: string, name = 'Pending capture'): Promise<string> {
+  const project = await Project.create({
+    userId: new Types.ObjectId(userId),
+    name,
+    objectSize: 'MEDIUM',
+    mode: 'GUIDED',
+  });
+  const model = await ProjectModel.create({
+    projectId: project._id,
+    jobId: new Types.ObjectId(),
+    source: 'meshy',
+    status: 'PROCESSING',
+    selectedKeys: ['a.jpg', 'b.jpg', 'c.jpg'],
+    createdByUserId: new Types.ObjectId(),
+    createdByRole: 'ADMIN',
   });
   return model.id as string;
 }
@@ -559,5 +580,83 @@ describe('catalog branding (feature 2)', () => {
       .set(auth)
       .send({ slot: 'banner', contentType: 'image/png' })
       .expect(400);
+  });
+});
+
+// ── Replacing a live model with one that is still generating (stage 5) ──────
+
+describe('replacing a READY model with a pending one', () => {
+  it('KEEPS the current assets until the replacement is promoted', async () => {
+    // ⚠ THE DECISION, PINNED. A dish whose replacement model is generating goes
+    // on rendering the model it already has, and keeps its AR button. Clearing
+    // the assets now would strip a live dish of AR mid-service for however long
+    // Meshy takes — and, because the publish gates read `assets.glbUrl`, would
+    // un-publish it for the duration too. Nobody is served better by a blank
+    // card than by the model that is still perfectly good.
+    const { auth, id: userId } = await makeUser();
+    await createCatalogFor(auth);
+    const ready = await makeSucceededModel(userId, 'first');
+
+    const created = await request(app)
+      .post('/catalog/products')
+      .set(auth)
+      .send({ type: 'THREE_D', name: 'Chair', sourceModelId: ready })
+      .expect(201);
+    expect(created.body.product.modelStatus).toBe('READY');
+    const originalGlb = created.body.product.glbUrl;
+
+    const pending = await makePendingModel(userId);
+    const res = await request(app)
+      .patch(`/catalog/products/${created.body.product.id}`)
+      .set(auth)
+      .send({ sourceModelId: pending })
+      .expect(200);
+
+    // The link moves and the status moves — so a client can say "a new model is
+    // generating" — but the dish loses nothing.
+    expect(res.body.product.sourceModelId).toBe(pending);
+    expect(res.body.product.modelStatus).toBe('PROCESSING');
+    expect(res.body.product.glbUrl).toBe(originalGlb);
+
+    const row = await CatalogProduct.findById(created.body.product.id).exec();
+    expect(row!.assets?.glbUrl).toBe(originalGlb);
+  });
+
+  it('swaps the assets in one write when the replacement is promoted', async () => {
+    const { auth, id: userId } = await makeUser();
+    await createCatalogFor(auth);
+    const ready = await makeSucceededModel(userId, 'first');
+    const created = await request(app)
+      .post('/catalog/products')
+      .set(auth)
+      .send({ type: 'THREE_D', name: 'Chair', sourceModelId: ready })
+      .expect(201);
+
+    const pending = await makePendingModel(userId);
+    await request(app)
+      .patch(`/catalog/products/${created.body.product.id}`)
+      .set(auth)
+      .send({ sourceModelId: pending })
+      .expect(200);
+
+    // The generation finishes.
+    await ProjectModel.updateOne(
+      { _id: new Types.ObjectId(pending) },
+      {
+        $set: {
+          status: 'SUCCEEDED',
+          artifacts: {
+            glbKey: 'dev/x/y/models/second/model.glb',
+            cdnUrls: { glb: 'https://cdn.example.com/second.glb' },
+          },
+        },
+      }
+    ).exec();
+    await promoteModelToProducts(new Types.ObjectId(pending));
+
+    const row = await CatalogProduct.findById(created.body.product.id).exec();
+    expect(row!.assets?.glbUrl).toBe('https://cdn.example.com/second.glb');
+    expect(row!.modelStatus).toBe('READY');
+    expect(row!.syncStatus).toBe('PENDING');
   });
 });

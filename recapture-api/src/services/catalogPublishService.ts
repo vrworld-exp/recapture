@@ -31,6 +31,7 @@ import { Job } from '@/models/Job';
 import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
 import { MIRAGE_CATALOG_PUBLISH_JOB_TYPE } from '@/models/types/job.types';
+import { effectiveModelStatus, isModelPending } from '@/models/types/catalog.types';
 import type {
   PublishMode,
   PublishRunState,
@@ -278,7 +279,33 @@ async function gateCatalogCategories(
 
 /** The products a FULL publish would actually push. */
 function publishableProducts(products: readonly ICatalogProduct[]): ICatalogProduct[] {
-  return products.filter((product) => !product.deletedAt && !product.archivedAt);
+  return products.filter(
+    (product) => !product.deletedAt && !product.archivedAt && !isAwaitingFirstModel(product)
+  );
+}
+
+/**
+ * A THREE_D product linked to a model that is still generating, which has never
+ * had assets of its own.
+ *
+ * EXCLUDED FROM PUBLISHING ENTIRELY — from the gates and from the plan — and
+ * that exclusion is what makes "the 2D menu is live now, AR arrives per dish"
+ * true. Without it a single dish waiting on Meshy would trip
+ * PRODUCT_ASSET_MISSING, PRODUCT_THUMBNAIL_MISSING and PRODUCT_MODEL_NOT_READY
+ * and block the publish of the WHOLE catalog until generation finished. There
+ * is also nothing to send: a 3D item with no model is not a menu item Mirage
+ * could render.
+ *
+ * It joins the menu by itself when catalogModelPromotionService writes its
+ * assets and the follow-up run publishes it.
+ *
+ * ⚠ THE `glbUrl` HALF IS LOAD-BEARING. A product whose REPLACEMENT model is
+ * generating still carries its previous model's URLs (see updateProduct's
+ * OK_PENDING branch) and is an ordinary publishable product — it renders the
+ * old model perfectly well. Only a dish that has never had one is skipped.
+ */
+function isAwaitingFirstModel(product: ICatalogProduct): boolean {
+  return isModelPending(effectiveModelStatus(product)) && !product.assets?.glbUrl;
 }
 
 /**

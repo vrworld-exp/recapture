@@ -23,6 +23,7 @@
 // retry/backoff; NonRetryableJobError → terminal FAILED with no retry, so a
 // quota failure can never retry-burn credits.
 import axios from 'axios';
+import { Types } from 'mongoose';
 import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
 import { Job } from '@/models/Job';
@@ -40,6 +41,11 @@ import {
   reportProgress,
   setStatus,
 } from '@/worker/processors/modelRecordState';
+import {
+  markModelFailedOnProducts,
+  promoteModelToProducts,
+  syncPendingModelStatus,
+} from '@/services/catalogModelPromotionService';
 import { enterStage, recordStageProgress } from '@/worker/stageTransitions';
 import { log } from '@/worker/workerLog';
 import { NonRetryableJobError, type JobProcessor, type WorkerJob } from '@/worker/workerTypes';
@@ -90,6 +96,20 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
   await setStatus(record, 'PROCESSING');
   await reportProgress(record, 'PREPARING', 0);
 
+  // Keep the menu rows in step with the record. A dish linked while this model
+  // was QUEUED would otherwise read QUEUED for the whole generation, and a
+  // client polling it has nothing to show. Non-fatal for the same reason
+  // promotion is — see the comment on that call below.
+  try {
+    await syncPendingModelStatus(record._id as Types.ObjectId, 'PROCESSING');
+  } catch (err: unknown) {
+    log('warn', 'Could not move linked products to PROCESSING; model is unaffected', {
+      jobId: job._id,
+      modelId,
+      err: String(err),
+    });
+  }
+
   try {
     const task = await submitOrResume(job, record, rawBucket, rawPrefix, claimedBy);
     await reportProgress(record, 'FINALIZING', 100);
@@ -101,6 +121,21 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
     await record.save();
     await clearProgress(record);
 
+    // LAST, AND NON-FATAL — the try/catch IS THE CONTRACT, not defensiveness.
+    // Credits are already spent and the record above is complete and correct; a
+    // promotion that fails costs a dish its AR button until the next promotion
+    // or an owner edit, while a THROWN promotion failure would fail the whole
+    // job and let the retry pay Meshy again. One of those is recoverable.
+    try {
+      await promoteModelToProducts(record._id as Types.ObjectId);
+    } catch (err: unknown) {
+      log('warn', 'Model promotion failed; model is unaffected', {
+        jobId: job._id,
+        modelId,
+        err: String(err),
+      });
+    }
+
     log('info', 'Meshy model generated', {
       jobId: job._id,
       modelId,
@@ -110,6 +145,24 @@ export const meshyModelProcessor: JobProcessor = async (job) => {
     return { source: 'meshy', modelId, artifacts: artifacts.cdnUrls };
   } catch (err: unknown) {
     await failRecordIfTerminal(job, record, err, 'PROCESSING_FAILED', 'Model generation failed.');
+
+    // Same contract on the way down: linked dishes must reach FAILED rather
+    // than sitting on PROCESSING forever, but a bookkeeping write must not
+    // replace the real error the worker needs to classify for retry/backoff.
+    // Only fires when the record actually went terminal — a retryable failure
+    // leaves the products PROCESSING, which is still the truth.
+    try {
+      if (record.status === 'FAILED') {
+        await markModelFailedOnProducts(record._id as Types.ObjectId);
+      }
+    } catch (markErr: unknown) {
+      log('warn', 'Could not mark linked products FAILED', {
+        jobId: job._id,
+        modelId,
+        err: String(markErr),
+      });
+    }
+
     throw err;
   }
 };

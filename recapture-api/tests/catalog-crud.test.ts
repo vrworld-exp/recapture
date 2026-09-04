@@ -405,7 +405,12 @@ describe('catalog products', () => {
       .expect(400);
   });
 
-  it('refuses a model that is not finished', async () => {
+  // ⚠ CONTRACT CHANGE (stage 5, pending models). A PROCESSING model used to be
+  // refused here; it is now LINKABLE, so the dish reaches the menu in 2D and
+  // gains its AR button by itself when promotion writes the assets. A FAILED
+  // model is still refused — nothing is coming for it, so linking one would
+  // produce a product that waits forever.
+  it('LINKS a model that is still generating, with no assets yet', async () => {
     const { id, auth } = await makeUser();
     await createCatalogFor(auth);
 
@@ -429,6 +434,36 @@ describe('catalog products', () => {
       .post('/catalog/products')
       .set(auth)
       .send({ type: 'THREE_D', name: 'Chair', sourceModelId: pending.id })
+      .expect(201);
+    expect(res.body.product.modelStatus).toBe('PROCESSING');
+    expect(res.body.product.glbUrl).toBeNull();
+    expect(res.body.product.sourceModelId).toBe(pending.id);
+  });
+
+  it('refuses a model whose generation FAILED', async () => {
+    const { id, auth } = await makeUser();
+    await createCatalogFor(auth);
+
+    const project = await Project.create({
+      userId: new Types.ObjectId(id),
+      name: 'p',
+      objectSize: 'SMALL',
+      mode: 'GUIDED',
+    });
+    const failed = await ProjectModel.create({
+      projectId: project._id,
+      jobId: new Types.ObjectId(),
+      source: 'meshy',
+      status: 'FAILED',
+      selectedKeys: [],
+      createdByUserId: new Types.ObjectId(),
+      createdByRole: 'ADMIN',
+    });
+
+    const res = await request(app)
+      .post('/catalog/products')
+      .set(auth)
+      .send({ type: 'THREE_D', name: 'Chair', sourceModelId: failed.id })
       .expect(409);
     expect(res.body.code).toBe('MODEL_NOT_READY');
   });
