@@ -1,3 +1,5 @@
+✅✅✅✅✅✅✅✅
+
 # Stage 2 — QR Inventory and Admin Batch Minting
 
 **Side:** backend · **Size:** M (≈ 1 day) · **Depends on:** stage 1

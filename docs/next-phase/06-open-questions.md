@@ -102,6 +102,18 @@ rather than a TTL. What is N?
 Feature 33 says PNG and PDF. Print sizing (and whether the PDF should be a print-ready sticker sheet
 vs a single code) is a product decision I cannot take from the code.
 
+> **Partially answered — 2026-09-04 (same-day activation, stage 2).** The sticker-sheet half of
+> this question is now closed: bulk standees are produced by a PRINT VENDOR, not by us.
+> `POST /admin/qr-batches` mints the codes and
+> `GET /admin/qr-batches/:batchId/export` hands the vendor a CSV of `code,url` rows, which they
+> lay out and print at scale. So **no print-ready sticker-sheet renderer is needed** — there is
+> nothing for it to do that the vendor is not already doing better.
+>
+> Still open: size, error-correction level and logo embedding for the SINGLE-code PNG/PDF that
+> `catalogQrService` renders for a business owner downloading their own code (feature 33). Those
+> remain product decisions. Note the current defaults are already load-bearing — `QR_ERROR_CORRECTION`
+> is `M` and the quiet zone is 4 modules, and changing either changes every code already issued.
+
 **Q13. Residual QR risk: should we defend against a restaurant whose name contains a 24-hex string?**
 Mirage's public resolver tries the **name regex first** and only falls back to `findById`
 (`itemController.js:472-478`), so a restaurant literally named like an ObjectId would shadow the

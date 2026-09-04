@@ -515,8 +515,9 @@ class _IdentityBlock extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    // Staff-only: a plain USER must see no role text at all.
-    final isStaff = ref.watch(isStaffProvider);
+    // Roled accounts only: a plain USER must see no role text at all.
+    // SALES_REP and up (inclusive) show the row.
+    final hasRoleBadge = ref.watch(isSalesRepProvider);
     final uploading = ref.watch(avatarUploadingProvider);
 
     return Column(
@@ -606,7 +607,7 @@ class _IdentityBlock extends ConsumerWidget {
                 label: 'Member since',
                 value: _formatMemberSince(profile.createdAt),
               ),
-              if (isStaff) ...[
+              if (hasRoleBadge) ...[
                 const SizedBox(height: AppSpacing.md),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -761,7 +762,7 @@ class _Avatar extends StatelessWidget {
   }
 }
 
-/// Staff-only role badge. Styled like [AppStatusPill] but standalone: that
+/// Role badge for SALES_REP and above. Styled like [AppStatusPill] but standalone: that
 /// widget is typed on `ProjectStatus` and derives its label/colour from the
 /// project-status extension, so it cannot express a user role.
 class _RolePill extends StatelessWidget {
@@ -774,11 +775,11 @@ class _RolePill extends StatelessWidget {
     final label = switch (role) {
       UserRole.admin => 'Admin',
       UserRole.modelArtist => 'Model artist',
-      // Unreachable today — the pill is rendered under an isStaff gate and a
-      // SALES_REP is not staff. Present because the switch must stay TOTAL:
-      // leaving it out is a compile error, and a wildcard would hide the next
-      // role added.
       UserRole.salesRep => 'Sales rep',
+      // Unreachable today — the pill is rendered under a SALES_REP-and-up gate
+      // so a plain USER never reaches it. Present because the switch must stay
+      // TOTAL: leaving it out is a compile error, and a wildcard would hide the
+      // next role added.
       UserRole.user => 'User',
     };
     const color = AppColors.royalGold;

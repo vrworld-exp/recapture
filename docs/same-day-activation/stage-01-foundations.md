@@ -1,5 +1,4 @@
-✅✅✅✅✅✅✅✅✅✅✅/2 
-
+✅✅✅✅✅
 # Stage 1 — Foundations
 
 **Side:** backend + client · **Size:** S (≈ ½ day) · **Depends on:** nothing

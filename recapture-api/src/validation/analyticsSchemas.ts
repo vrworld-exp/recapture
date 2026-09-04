@@ -109,6 +109,11 @@ export const AnalyticsEvent = {
   CATALOG_PUBLISH_REQUESTED: 'catalog_publish_requested',
   CATALOG_UNPUBLISH_REQUESTED: 'catalog_unpublish_requested',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
+  // ── Pre-printed standee inventory ─────────────────────────────────────────
+  // The MINT, not the code. A code value is a public identifier for a specific
+  // restaurant's menu, so it never becomes an analytics property — only the
+  // size of the run and a hashed actor.
+  QR_BATCH_MINTED: 'qr_batch_minted',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -792,6 +797,19 @@ const catalogQrRenderedProps = z
   .strict();
 
 /**
+ * The MINT, never the code. `batch_size` is the whole point of the event — it
+ * answers "how much inventory did we just commit to printing" — and a code
+ * value would be a public identifier for one restaurant's menu, so none appears
+ * here. Actor is hashed per the house rule.
+ */
+const qrBatchMintedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    batch_size: z.number().int().positive(),
+  })
+  .strict();
+
+/**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
  * is a compile error.
@@ -849,6 +867,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_PUBLISH_REQUESTED]: catalogPublishRequestedProps,
   [AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED]: catalogUnpublishRequestedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
+  [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

@@ -117,6 +117,12 @@ final userRoleProvider =
 /// True when the signed-in user may see staff-only surfaces (Live projects).
 final isStaffProvider = Provider<bool>((ref) => ref.watch(userRoleProvider).isStaff);
 
+/// True from SALES_REP upward (inclusive: MODEL_ARTIST and ADMIN pass too) —
+/// gates surfaces that any role above a plain USER may see, such as the
+/// profile Role row. Fails closed on a failed role fetch.
+final isSalesRepProvider =
+    Provider<bool>((ref) => ref.watch(userRoleProvider).isSalesRep);
+
 /// True only for ADMIN — gates destructive staff actions (photo soft-delete),
 /// mirroring the backend's ADMIN-only delete route. Fails closed.
 final isAdminProvider = Provider<bool>((ref) => ref.watch(userRoleProvider).isAdmin);
