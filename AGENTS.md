@@ -101,6 +101,16 @@ do not remove it).
   no-record / expired / wrong-code / locked into one identical `401`; the
   distinction lives only in analytics. Apply the same to not-found vs not-owned
   (return the same status; never leak existence).
+- **Envelope carve-out — the public router only.** Every route in this API
+  returns the JSON envelope. `src/routes/public.ts` (`GET /r/:code`, the printed
+  standee) is the single exception: its client is a phone camera opening a
+  browser, so it returns `302` redirects and `text/html`, never
+  `{status, code, message}`. It therefore carries its **own terminal error
+  handler**, mounted inside the router, so a thrown error renders the fallback
+  page instead of falling through to `errorHandler.ts` and showing a diner a
+  JSON blob. **No other router may copy this** — the carve-out is justified by
+  the client, not by the route being public (`/remote-config` is public and
+  still uses the envelope).
 - **KNOWN INCONSISTENCY:** `middleware/auth.ts` (`requireAuth`) still returns the
   legacy `{ error: "..." }` shape, not the standard envelope. New code must use
   the envelope; standardize `requireAuth` when convenient (don't silently depend

@@ -1,3 +1,4 @@
+✅✅✅✅✅✅✅✅
 # Stage 3 — The Public Resolver `/r/:code`
 
 **Side:** backend · **Size:** M (≈ 1 day) · **Depends on:** stages 1, 2

@@ -23,6 +23,18 @@ export interface IQrCode extends Document {
    * is the denormalised head of it so the resolver is one indexed read.
    */
   catalogId?: Types.ObjectId;
+  /**
+   * The OPEN QrCodeAssignment row — the denormalised head of the ledger, in the
+   * same spirit as `catalogId` above.
+   *
+   * STAGE-3 AMENDMENT to this stage-2 model. It exists so the public resolver's
+   * hot path stays at exactly two reads (this code, then its catalog): the scan
+   * rollup is bucketed by assignment, and querying the ledger for the open row
+   * on every scan would add a third read to the one endpoint whose traffic is
+   * unbounded and public. Activation opens the row and sets this field
+   * together; retiring or repointing closes the row and moves this pointer.
+   */
+  currentAssignmentId?: Types.ObjectId;
   activatedAt?: Date;
   /** The rep who activated it, for audit. */
   activatedByUserId?: Types.ObjectId;
@@ -48,6 +60,7 @@ const QrCodeSchema = new Schema<IQrCode>(
     batchId: { type: Schema.Types.ObjectId, ref: 'QrBatch', required: true },
     state: { type: String, enum: QR_CODE_STATES, required: true, default: 'UNASSIGNED' },
     catalogId: { type: Schema.Types.ObjectId, ref: 'Catalog' },
+    currentAssignmentId: { type: Schema.Types.ObjectId, ref: 'QrCodeAssignment' },
     activatedAt: { type: Date },
     activatedByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date, default: null },

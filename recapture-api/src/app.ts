@@ -13,6 +13,7 @@ import jobsRouter from '@/routes/jobs';
 import catalogRouter from '@/routes/catalog';
 import remoteConfigRouter from '@/routes/remoteConfig';
 import adminRouter from '@/routes/admin';
+import publicRouter from '@/routes/public';
 
 /** `flutter run -d chrome` binds a fresh random port each launch. */
 const LOCALHOST_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
@@ -68,6 +69,12 @@ export function createApp(): express.Express {
   app.use('/remote-config', remoteConfigRouter);
   // Staff-only (requireAuth + requireRole ≥ MODEL_ARTIST inside the router).
   app.use('/admin', adminRouter);
+  // The printed standee (no JWT, no envelope). THE ONE ROUTER THAT ANSWERS IN
+  // HTML: its client is a phone camera opening a browser, so it returns 302s
+  // and text/html and carries its own terminal error handler so a thrown error
+  // never reaches errorHandler's JSON. See AGENTS.md, "Envelope carve-out".
+  // Must stay ABOVE notFound, or every standee in the field is a dead link.
+  app.use('/r', publicRouter);
 
   // 404 + error handling — MUST be last
   app.use(notFound);

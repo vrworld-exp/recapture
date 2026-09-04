@@ -91,15 +91,23 @@ function assertPublicUrlConfigured(): void {
 }
 
 /**
- * The public catalog URL for a Mirage restaurant id.
+ * The Mirage menu URL for a Mirage restaurant id.
  *
- * PRIVATE ON PURPOSE, and called from exactly one place: {@link persistMapping},
- * at the moment the mapping is first written. Every read — the QR renderer, the
- * share sheet, the catalog DTO — returns the STORED string. A second caller of
- * this function would be the first step toward a recomputed URL, which §8 says
- * should fail code review on that basis alone.
+ * THERE ARE EXACTLY TWO CALLERS AND THE LIST IS CLOSED:
+ *
+ *  1. {@link persistMapping}, at the moment the mapping is first written. Every
+ *     read of a catalog's own URL — the QR renderer, the share sheet, the
+ *     catalog DTO — returns the STORED string, never a recomputed one. §8 says
+ *     a third caller of that kind should fail code review on that basis alone.
+ *  2. The public resolver (services/qrResolverService.ts), which needs WHERE
+ *     THE MENU LIVES rather than what the catalog's stored URL says. Under the
+ *     same-day-activation scheme those stopped being the same string:
+ *     activation writes `{PUBLIC_RESOLVER_BASE_URL}/r/{code}` into
+ *     `publicUrl`, so a resolver redirecting there would redirect to itself
+ *     forever. It is exported for that one caller so the format string exists
+ *     in exactly one place — a second copy is how the two drift apart.
  */
-function mintPublicUrl(mirageRestaurantId: string): string {
+export function mintPublicUrl(mirageRestaurantId: string): string {
   return `${env.MIRAGE_PUBLIC_BASE_URL}/${mirageRestaurantId}`;
 }
 
