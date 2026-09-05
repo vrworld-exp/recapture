@@ -19,12 +19,21 @@
 // platform — a failure mode no unit test would otherwise catch, because both
 // halves compile and analyze perfectly. Hence this file.
 //
+// THE THIRD WAY TO BREAK IT is to render a model through some OTHER viewer.
+// Both configured pages belong to [ModelRenderView]; a bare `ModelViewer`
+// dropped into a new surface builds its own page with neither of them. The
+// catalog preview is the first surface outside `projects/` to show a model, so
+// the last group here pins its 3D path to [ModelRenderView] — every optimized
+// GLB in the preview depends on it, and nothing else in the build would say so.
+//
 // NOTE: passing here is NOT proof the models render. That acceptance is visual
 // and belongs on a real device and a real web build.
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/presentation/screens/projects/model_render_view.dart';
+import 'package:recapture/presentation/widgets/catalog/preview_product_card.dart';
 
 void main() {
   group('meshopt decoder location', () {
@@ -76,6 +85,27 @@ void main() {
       );
     });
 
+    test('the catalog preview renders 3D through the SAME viewer', () {
+      // Structural, not textual: the card is asked what it would build, and the
+      // answer has to be the widget that carries both decoder configurations.
+      // It cannot be checked by pumping the card — the real viewer drives a
+      // WebView with no platform implementation in a widget test.
+      final card = PreviewProductCard(
+        product: _previewProduct,
+        height: 300,
+        isThreeDActive: true,
+      );
+
+      final media = card.debugMedia();
+      expect(
+        media,
+        isA<ModelRenderView>(),
+        reason: 'Without this the preview would fail EVERY optimized model.',
+      );
+      expect((media as ModelRenderView).glbUrl, _previewProduct.glbUrl);
+      expect(media.usdzUrl, _previewProduct.usdzUrl);
+    });
+
     test('the value is a self-contained trigger, not a fetched file', () {
       // The decoder is BUNDLED inside model-viewer.min.js; the URL only has to
       // load successfully. A relative path would be fatal on mobile: the
@@ -87,3 +117,13 @@ void main() {
     });
   });
 }
+
+/// A 3D catalog product, as the preview would hand one to the card.
+final _previewProduct = CatalogProduct.fromMap(const {
+  'id': 'p1',
+  'type': 'THREE_D',
+  'name': 'Walnut Chair',
+  'glbUrl': 'https://cdn.example.com/optimized.glb',
+  'usdzUrl': 'https://cdn.example.com/model.usdz',
+  'thumbnailUrl': 'https://cdn.example.com/preview.jpg',
+});

@@ -13,6 +13,7 @@ import {
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'stream';
 import { s3Client } from '@/config/s3';
 
 /**
@@ -33,7 +34,20 @@ export async function objectExists(bucket: string, key: string): Promise<boolean
 /** Result of HEADing an object: absent (404) or its metadata. */
 export type HeadResult =
   | { outcome: 'absent' }
-  | { outcome: 'ok'; contentLength: number; contentType: string };
+  | {
+      outcome: 'ok';
+      contentLength: number;
+      contentType: string;
+      /**
+       * S3's object version fingerprint, quotes included. It CHANGES when a key
+       * is overwritten in place, which is the one asset change a URL comparison
+       * cannot see — so it is what the publish asset layer records to answer
+       * "are these the same bytes we pushed last time?" exactly. Absent on a
+       * response that omits it; a caller must degrade to size, never assume
+       * "unchanged".
+       */
+      etag?: string;
+    };
 
 /**
  * HEADs one object and returns its size + content type, or 'absent' for a 404.
@@ -53,6 +67,7 @@ export async function headObject(bucket: string, key: string): Promise<HeadResul
       outcome: 'ok',
       contentLength: result.ContentLength ?? 0,
       contentType: result.ContentType ?? 'application/octet-stream',
+      ...(result.ETag ? { etag: result.ETag } : {}),
     };
   } catch (err) {
     if (isNotFound(err)) return { outcome: 'absent' };
@@ -228,6 +243,36 @@ export async function getObjectBytes(bucket: string, key: string): Promise<Fetch
     return {
       outcome: 'ok',
       body: Buffer.from(bytes ?? new Uint8Array()),
+      contentType: result.ContentType ?? 'application/octet-stream',
+    };
+  } catch (err) {
+    if (isNotFound(err)) return { outcome: 'absent' };
+    throw err;
+  }
+}
+
+/**
+ * Opens (bucket, key) as a STREAM.
+ *
+ * The counterpart to {@link getObjectBytes}, and the one to reach for when the
+ * object can be model-sized: a 90 MiB GLB read with `transformToByteArray`
+ * exists twice in this process before it is used, which a 512 MB instance
+ * running two publishes does not survive. Returns 'absent' for a 404 on the
+ * same fail-soft contract as the rest of this module; anything else rethrows.
+ *
+ * ⚠ The caller OWNS the stream. It must be consumed or destroyed — an abandoned
+ * S3 body holds a socket from the SDK's connection pool until it times out.
+ */
+export async function getObjectStream(
+  bucket: string,
+  key: string
+): Promise<{ outcome: 'absent' } | { outcome: 'ok'; body: Readable; contentType: string }> {
+  try {
+    const result = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    if (!result.Body) return { outcome: 'absent' };
+    return {
+      outcome: 'ok',
+      body: result.Body as Readable,
       contentType: result.ContentType ?? 'application/octet-stream',
     };
   } catch (err) {

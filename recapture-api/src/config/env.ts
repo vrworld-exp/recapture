@@ -304,6 +304,159 @@ const envSchema = z.object({
   /** The same ceiling for MODEL_ARTIST/ADMIN actors: higher, never exempt. */
   MANUAL_MODEL_MAX_PER_STAFF_PER_DAY: z.coerce.number().int().positive().default(25),
 
+  // ── Mirage catalog publishing (docs/next-phase/03-architecture-proposal.md) ─
+  /**
+   * Origin of the Mirage backend, WITHOUT the `/api/v1` prefix — the adapter
+   * (src/services/mirage/) appends it. Trailing slashes are stripped so a
+   * copy-pasted value cannot produce `//api/v1`.
+   *
+   * Optional in this shared schema for the same reason MESHY_API_KEY is: only
+   * the publish worker and the analytics proxy ever talk to Mirage, so a
+   * deployment that does neither must not fail to boot over it. Presence is
+   * enforced at the call site by assertMirageConfigured().
+   */
+  MIRAGE_BASE_URL: z
+    .string()
+    .url()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/+$/, '') : v)),
+  /**
+   * Mirage's static `apikey` header (Middlewares/apiKeyValidator.js). Treated as
+   * a SECRET here even though Mirage itself ships it in its public web bundle —
+   * ReCapture does not get to make someone else's leak worse, and it must never
+   * reach the Flutter client.
+   */
+  MIRAGE_API_KEY: z.string().min(1).optional(),
+  /**
+   * A pre-minted admin JWT for Mirage's `token` header.
+   *
+   * PREFERRED over the id/password pair below, because Mirage SIGNS login tokens
+   * with `process.env.JWT_SECRET` (Controllers/userController.js:115) but
+   * VERIFIES them with `process.env.JWT_SECRET_KEY` (Middlewares/middleware.js:40)
+   * — two different variable names. If the deployed Mirage sets only one of
+   * them, a token we mint by logging in will not verify, while a token minted in
+   * that environment already does. Q2 in docs/next-phase/06-open-questions.md.
+   */
+  MIRAGE_ADMIN_TOKEN: z.string().min(1).optional(),
+  /**
+   * Fallback credential: Mirage's `POST /api/v1/login-user` takes `{ id,
+   * password }` where `id` is the admin user's 24-character Mongo ObjectId —
+   * NOT an email (Controllers/userController.js:93-101). The adapter logs in and
+   * caches the token when no MIRAGE_ADMIN_TOKEN is configured.
+   */
+  MIRAGE_ADMIN_USER_ID: z.string().regex(/^[a-f0-9]{24}$/i).optional(),
+  MIRAGE_ADMIN_PASSWORD: z.string().min(1).optional(),
+  /**
+   * How long a login-derived admin token is reused before being re-minted
+   * (seconds). Mirage's own `JWT_EXPIRE` defaults to `1d`, so this stays well
+   * inside it — an expired token surfaces as a 403 "jwt expired", which the
+   * adapter classifies as `auth` and retries exactly once.
+   */
+  MIRAGE_ADMIN_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(43_200),
+  /**
+   * Public origin of the Mirage catalog site — the host a QR encodes. The
+   * public URL is `{this}/{mirageRestaurantId}`, minted ONCE at provisioning and
+   * then frozen (see models/Catalog.ts). Changing this variable does NOT
+   * repoint already-issued URLs, by design: they are stored, not computed.
+   */
+  MIRAGE_PUBLIC_BASE_URL: z
+    .string()
+    .url()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/+$/, '') : v)),
+  /**
+   * The S3 bucket and CDN host Mirage should write ITS copy of our assets to.
+   *
+   * These are not our buckets and not a ReCapture concern in the usual sense —
+   * Mirage reads both FROM THE REQUEST BODY on every write
+   * (Controllers/adminController.js:200-201, 530, 798-799, 1045-1046) and bakes
+   * the CDN host into the URL it stores. There is no allow-list and no default
+   * on its side: omit them and Mirage persists a customer-facing URL that
+   * literally starts with the string "undefined". Hence a default here, taken
+   * from the values Mirage hardcodes for its own stock upload path
+   * (adminController.js:115-116). Q4.
+   */
+  MIRAGE_ASSET_BUCKET: z.string().min(1).default('maya-restaurants'),
+  MIRAGE_ASSET_CDN_URL: z
+    .string()
+    .url()
+    .default('https://d1ubv1fp33ooxl.cloudfront.net')
+    .transform((v) => v.replace(/\/+$/, '')),
+  /**
+   * Per-request timeout against Mirage (ms). Deliberately long: a write is a
+   * multipart upload of a whole model, and Mirage buffers the entire file in
+   * memory (libs/s3.js readFileSync) on an instance that self-pings every 30 s
+   * to stay awake on a sleeping tier — the first call after idle is slow.
+   */
+  MIRAGE_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /**
+   * Largest asset ReCapture will stream into Mirage (bytes). 90 MiB sits under
+   * Mirage's 100 MB multer cap (libs/multer.js) so an oversize model is refused
+   * by OUR preflight — with a code the user can act on — instead of dying inside
+   * a multipart request as an unclassifiable 413.
+   */
+  MIRAGE_MAX_ASSET_BYTES: z.coerce.number().int().positive().default(94_371_840), // 90 MiB
+  /**
+   * How a product's assets reach Mirage.
+   *
+   *   bytes — read the object out of S3 as a STREAM and pipe it into the
+   *           multipart request. Works against Mirage as it exists today, and
+   *           costs one round trip of the whole file through this process.
+   *   url   — send the ReCapture CloudFront URL and let Mirage fetch it
+   *           server-side. Vastly cheaper (a 90 MiB model becomes a message),
+   *           but it requires Mirage prompt M1: the current create-item and
+   *           update-item handlers read files from `req.files` only and ignore a
+   *           URL in the body entirely, so switching this on before M1 lands
+   *           publishes products with NO assets.
+   *
+   * Defaults to `bytes` for exactly that reason — the safe mode is the one that
+   * works against the Mirage that is deployed, not the one that is planned.
+   */
+  MIRAGE_ASSET_TRANSFER_MODE: z.enum(['bytes', 'url']).default('bytes'),
+  /** Max publish runs one user may request per window. */
+  PUBLISH_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
+  /** Sliding window for the publish cap (seconds). */
+  PUBLISH_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * Retries allowed per publish window. Tighter than PUBLISH_MAX_PER_WINDOW on
+   * purpose: Retry is one tap sitting next to a list of failures, and a user
+   * whose product keeps failing will tap it repeatedly — each tap being another
+   * job against a Mirage that has to wake up.
+   */
+  PUBLISH_RETRY_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  /**
+   * QR renders per window. Rendering is cheap but not free — a 2048 px PNG is
+   * a real sharp resize — and the response is highly cacheable, so a client
+   * hitting this hard is a client ignoring the ETag.
+   */
+  CATALOG_QR_MAX_PER_WINDOW: z.coerce.number().int().positive().default(60),
+  CATALOG_QR_WINDOW_SECONDS: z.coerce.number().int().positive().default(600),
+  /**
+   * Publish runs retained per catalog for the activity log (feature 55).
+   *
+   * A COUNT, not a TTL. Expiring on age would leave a business that publishes
+   * twice a year with an empty history screen while one publishing hourly still
+   * accumulated a month of noise; "the last N" is what a history list means to
+   * a person. Pruned on write, so the bound holds continuously.
+   */
+  CATALOG_ACTIVITY_RETAINED_RUNS: z.coerce.number().int().positive().default(50),
+  /**
+   * Hard ceiling on a stored product image, in bytes. Enforced at COMMIT time
+   * (presigning cannot enforce a size) exactly as AVATAR_MAX_BYTES is. Larger
+   * than an avatar because this one is catalog content a customer zooms into.
+   */
+  CATALOG_PRODUCT_IMAGE_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880), // 5 MiB
+  /** Presigned-PUT TTL for a product-image upload slot (seconds). */
+  PRODUCT_IMAGE_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /**
+   * Presigned product-image slots per user per window. Higher than the avatar
+   * cap: a business setting up a catalog uploads a photo per product, and the
+   * whole first session is legitimately dozens of them.
+   */
+  PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(120),
+  /** Sliding window for the product-image slot cap (seconds). */
+  PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // ── Background worker (src/worker — separate process, `npm run worker`) ─────
   /**
    * Run the worker loop INSIDE the API process (src/index.ts), instead of as a

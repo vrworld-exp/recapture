@@ -230,6 +230,39 @@ presigned URL — actor/project/job identifiers are hashed.
   below the route's minimum (403). Unauthenticated 401s emit nothing.
 - **Props:** `actor_id_hash` (string), `route` (string, e.g. `GET /admin/projects`)
 
+## Catalog publish runs
+
+Emitted by the publish **worker** (`worker/processors/mirageCatalogPublishProcessor.ts`),
+not by the endpoint that enqueues the run — the endpoint returns `202` long
+before the outcome exists.
+
+⚠ None of these carry catalog CONTENT. No product name, no category name, no
+business name, no phone/email. `targetName` is recorded on the run's
+`entries[]` (which the owner reads back through the activity log) and stops
+there.
+
+### `catalog_publish_started`
+- **When:** a run flips QUEUED → RUNNING and its plan has been built.
+- **Props:** `user_id_hash` (string), `catalog_id` (string), `run_id` (string),
+  `mode` (`FULL`|`RETRY_FAILED`|`UNPUBLISH`), `planned_total` (int ≥ 0)
+
+### `catalog_publish_finished`
+- **When:** the run reaches a terminal state — including the terminal-failure
+  path where the processor threw.
+- **Props:** `user_id_hash`, `catalog_id`, `run_id`, `mode`,
+  `state` (`SUCCEEDED`|`PARTIAL`|`FAILED`), `total`, `synced`, `failed`,
+  `skipped` (ints ≥ 0)
+
+### `catalog_publish_target_failed`
+- **When:** one target inside a still-continuing run failed. Fires once per
+  failed target, so a PARTIAL run emits several.
+- **Props:** `user_id_hash`, `catalog_id`, `run_id`,
+  `target` (`RESTAURANT`|`CATEGORY`|`PRODUCT`),
+  `action` (`CREATE`|`UPDATE`|`DELETE`|`SKIP`), `failure_reason` (string)
+- **Note:** the ReCapture `UPPER_SNAKE` code travels as `failure_reason`, NOT
+  `code`. The emitter strips any property whose NAME contains `code` as a
+  suspected OTP/secret leak, so a prop called `code` would be dropped silently.
+
 ## QA
 
 Run `npx tsx scripts/analytics-qa.ts` (see the script header for the dev/prod

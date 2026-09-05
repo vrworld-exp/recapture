@@ -42,6 +42,14 @@ export const MODEL_OPTIMIZATION_JOB_TYPE = 'MODEL_OPTIMIZATION';
  * hard-delete's prefix sweep purge its objects from both buckets for free.
  */
 export const PHOTO_UPLOAD_JOB_TYPE = 'PHOTO_UPLOAD';
+/**
+ * Projecting one catalog onto Mirage. Carries
+ * `payload.{catalogId, publishRunId, mode, productIds?}` — no upload, no
+ * project. Unlike the four above it does not act on a ProjectModel at all: its
+ * unit of work is a CatalogPublishRun, and the run document (not the job) is
+ * what the publish screen reads.
+ */
+export const MIRAGE_CATALOG_PUBLISH_JOB_TYPE = 'MIRAGE_CATALOG_PUBLISH';
 
 /**
  * Job processing lifecycle states.

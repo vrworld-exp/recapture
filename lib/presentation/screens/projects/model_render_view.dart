@@ -48,13 +48,48 @@ import 'model_viewer_load_probe.dart' as load_probe;
 enum _RenderPhase { loading, ready, failed }
 
 class ModelRenderView extends StatefulWidget {
-  const ModelRenderView({
+  /// The generated-model entry point: a [ProjectModelView] straight out of a
+  /// project's history.
+  ModelRenderView({
     super.key,
-    required this.model,
+    required ProjectModelView model,
     @visibleForTesting this.viewerOverride,
+    this.showArCtaWhenUnavailable = true,
+  })  : glbUrl = model.glbUrl,
+        usdzUrl = model.usdzUrl;
+
+  /// The CATALOG entry point: a product carries its asset URLs directly, frozen
+  /// at create time from the source capture, and has no `ProjectModelView` to
+  /// hand over. Manufacturing a fake one to satisfy the constructor above would
+  /// invent a `source` and a `status` the product does not have.
+  const ModelRenderView.forUrls({
+    super.key,
+    required this.glbUrl,
+    this.usdzUrl,
+    @visibleForTesting this.viewerOverride,
+    this.showArCtaWhenUnavailable = true,
   });
 
-  final ProjectModelView model;
+  /// The GLB to render. Null renders nothing — every caller gates on having one.
+  final String? glbUrl;
+
+  /// The USDZ for iOS AR Quick Look, when the pipeline produced one.
+  final String? usdzUrl;
+
+  /// Whether the AR CTA is still shown, muted, when the page reports no AR
+  /// support.
+  ///
+  /// True on the full-screen viewer (product call 2026-07-18: an invisible AR
+  /// entry point read as "there is no AR", so it stays visible and the tap
+  /// explains). FALSE in the catalog preview, where the CTA is one chip inside
+  /// a card that is imitating the public page — a permanently muted chip on
+  /// every card of a desktop browser is chrome, not information, and the
+  /// preview is not the place to teach what AR is.
+  ///
+  /// Note this is decided by the PAGE's own `canActivateAR`, never by `kIsWeb`:
+  /// a phone browser genuinely can launch Scene Viewer / Quick Look, and a
+  /// blanket web branch would take AR away from exactly the users who have it.
+  final bool showArCtaWhenUnavailable;
 
   /// Test-only stand-in for the real [ModelViewer], which drives a WebView
   /// with no platform implementation in widget tests. The surrounding
@@ -381,7 +416,7 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
 
   Widget _viewer(String glbUrl) {
     if (widget.viewerOverride case final override?) return override;
-    final usdzUrl = widget.model.usdzUrl;
+    final usdzUrl = widget.usdzUrl;
     return ModelViewer(
       key: ValueKey('model_viewer_$_attempt'),
       src: srcFor(glbUrl),
@@ -432,7 +467,7 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
 
   @override
   Widget build(BuildContext context) {
-    final glbUrl = widget.model.glbUrl;
+    final glbUrl = widget.glbUrl;
     // Defensive: every caller gates on isViewable before rendering.
     if (glbUrl == null) return const SizedBox.shrink();
     if (_phase == _RenderPhase.failed) {
@@ -475,7 +510,8 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
               ),
             ),
           ),
-        if (_phase == _RenderPhase.ready)
+        if (_phase == _RenderPhase.ready &&
+            (_arAvailable || widget.showArCtaWhenUnavailable))
           Positioned(
             left: 0,
             right: 0,

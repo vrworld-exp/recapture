@@ -31,15 +31,20 @@ const _maxInterval = Duration(seconds: 10);
 const _maxPolls = 120;
 
 class OwnerModelHistoryNotifier
-    extends FamilyAsyncNotifier<List<ProjectModelView>, String> {
+    extends AutoDisposeFamilyAsyncNotifier<List<ProjectModelView>, String> {
   Timer? _timer;
   int _polls = 0;
   Duration _interval = _initialInterval;
 
   @override
   Future<List<ProjectModelView>> build(String projectId) async {
-    // Auto-disposed with the screen; the loop must die with it rather than
-    // polling on behalf of a route nobody is looking at.
+    // AUTO-DISPOSE IS LOAD-BEARING, not an optimization. `ref.onDispose` is
+    // what stops the timer, and on a keep-alive family it would never run: the
+    // notifier outlives every screen that watched it and keeps polling a route
+    // nobody is looking at. That is reachable from the product form, where the
+    // user can pick a capture with a regenerate in flight and then switch the
+    // product to a photo — the picker unmounts, and without this the poll loop
+    // would carry on regardless.
     ref.onDispose(_stop);
     final models =
         await ref.read(liveProjectsRepositoryProvider).listOwnerModels(projectId);
@@ -110,8 +115,9 @@ class OwnerModelHistoryNotifier
 }
 
 /// An OWNER's model history for one of their own projects, with live polling.
-/// Auto-disposed with the screen (the poll loop stops with it).
-final ownerModelHistoryProvider = AsyncNotifierProvider.family<
+/// Auto-disposed with the last widget watching it — see [build] for why that is
+/// a correctness property here and not a memory tweak.
+final ownerModelHistoryProvider = AsyncNotifierProvider.autoDispose.family<
     OwnerModelHistoryNotifier, List<ProjectModelView>, String>(
   OwnerModelHistoryNotifier.new,
 );

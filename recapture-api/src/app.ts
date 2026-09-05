@@ -10,6 +10,7 @@ import healthRouter from '@/routes/health';
 import authRouter from '@/routes/auth';
 import projectsRouter from '@/routes/projects';
 import jobsRouter from '@/routes/jobs';
+import catalogRouter from '@/routes/catalog';
 import remoteConfigRouter from '@/routes/remoteConfig';
 import adminRouter from '@/routes/admin';
 
@@ -37,6 +38,12 @@ const corsOptions: CorsOptions = {
     callback(null, isAllowedOrigin(origin));
   },
   credentials: false,
+  // A browser cannot READ a response header unless it is exposed, even on an
+  // allowed origin. The web client needs both: `Content-Disposition` to name
+  // the downloaded QR file, and `ETag` to send back as `If-None-Match` and skip
+  // a re-render. Without this the QR endpoint works but the download is called
+  // "qr" with no extension and the cache never hits.
+  exposedHeaders: ['Content-Disposition', 'ETag'],
 };
 
 export function createApp(): express.Express {
@@ -54,6 +61,9 @@ export function createApp(): express.Express {
   app.use('/auth', authRouter);
   app.use('/projects', projectsRouter);
   app.use('/jobs', jobsRouter);
+  // Catalog authoring (requireAuth inside the router). Owner-scoped: every
+  // route resolves the caller's single catalog from the token.
+  app.use('/catalog', catalogRouter);
   // Public (no JWT) — consumed at client startup, possibly pre-login.
   app.use('/remote-config', remoteConfigRouter);
   // Staff-only (requireAuth + requireRole ≥ MODEL_ARTIST inside the router).
