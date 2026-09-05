@@ -25,8 +25,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
-import '../../../application/rep/qr_scan_capability.dart';
 import '../../../application/rep/rep_activation_notifier.dart';
+import '../../../application/rep/rep_capabilities.dart';
 import '../../../application/rep/rep_catalogs_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/rep_repository.dart';
@@ -39,7 +39,17 @@ import '../../widgets/app_text_field.dart';
 import '../../widgets/country_code_picker.dart';
 
 class RepActivationScreen extends ConsumerStatefulWidget {
-  const RepActivationScreen({super.key});
+  const RepActivationScreen({super.key, this.initialCode});
+
+  /// A code carried in from the deep link `?code=` — the rep scanned the
+  /// standee with their OS camera, landed on the resolver's "not live yet"
+  /// page, and tapped through.
+  ///
+  /// A PREFILL, NOT A COMMAND. It fills the field and nothing else: the rep
+  /// still taps Continue, the preflight still runs, and the value is still
+  /// editable. A link that activated on arrival would let a mis-scan start a
+  /// one-shot, irreversible action with no human in the loop.
+  final String? initialCode;
 
   @override
   ConsumerState<RepActivationScreen> createState() =>
@@ -55,6 +65,19 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
   String? _codeError;
   String? _nameError;
   String? _phoneError;
+
+  @override
+  void initState() {
+    super.initState();
+    // Normalised on the way in, so a full scanned URL prefills as the bare code
+    // — the same string the sticker shows. An unparseable value is dropped
+    // rather than shown: it could only produce an error the rep did not cause.
+    final incoming = widget.initialCode;
+    if (incoming != null) {
+      final normalized = QrCodeInput.normalize(incoming);
+      if (normalized != null) _codeController.text = normalized;
+    }
+  }
 
   @override
   void dispose() {
@@ -146,7 +169,7 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
   // ── 1. The code ───────────────────────────────────────────────────────────
 
   Widget _codeStep(RepActivationState state) {
-    final canScan = ref.watch(qrScanCapabilityProvider).canScan;
+    final canScan = ref.watch(repCapabilitiesProvider).canScan;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -162,7 +185,7 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
         // HIDDEN, not disabled, where the build cannot scan — a disabled button
         // in a browser is a promise the platform can never keep. The capability
         // comes from a provider rather than kIsWeb so one test asserts both
-        // renderings; see qr_scan_capability.dart.
+        // renderings; see rep_capabilities.dart.
         if (canScan) ...[
           AppButton.secondary(
             key: const ValueKey('rep_scan_button'),

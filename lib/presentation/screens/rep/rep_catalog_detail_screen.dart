@@ -17,7 +17,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
@@ -42,16 +41,20 @@ class RepCatalogDetailScreen extends ConsumerWidget {
       floatingActionButton: FloatingActionButton.extended(
         key: const ValueKey('rep_add_dish_fab'),
         onPressed: () async {
-          // The UNMODIFIED capture entry point. It returns when the flow is
-          // done; the refresh is what makes the new "3D generating…" row appear
+          // The SOURCE PICKER, not the camera. Going straight to capture was
+          // the mobile-only assumption stage 10 removed: a rep on a laptop has
+          // no capture pipeline at all, and even on a phone "from a finished
+          // capture" and "photo" are ordinary ways to add a dish.
+          //
+          // The refresh is what makes a new "3D generating…" row appear
           // immediately rather than up to one poll interval later.
-          await context.push(AppRoutes.preCapture);
+          await context.push('/rep/catalogs/$catalogId/dishes/new');
           if (!context.mounted) return;
           await ref
               .read(repCatalogProductsProvider(catalogId).notifier)
               .refresh();
         },
-        icon: const Icon(Icons.add_a_photo_outlined),
+        icon: const Icon(Icons.add),
         label: const Text('Add a dish'),
       ),
       body: SafeArea(

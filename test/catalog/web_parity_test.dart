@@ -31,17 +31,31 @@ import 'package:recapture/presentation/widgets/catalog/publish_link_actions.dart
 
 import 'publish_fakes.dart';
 
-// ── The catalog tree ────────────────────────────────────────────────────────
+// ── The web-compiled tree ───────────────────────────────────────────────────
 
-/// Every directory that is "the catalog surface" for the purposes of these
-/// guards. Listed rather than globbed over `lib/`, so the failure message names
-/// a directory the reader recognises instead of pointing at the capture
-/// pipeline, which has its own platform rules and its own gates.
+/// Every directory that must compile for the web target. Listed rather than
+/// globbed over `lib/`, so the failure message names a directory the reader
+/// recognises instead of pointing at the capture pipeline, which has its own
+/// platform rules and its own gates.
+///
+/// THE REP DIRECTORIES ARE HERE FOR THE SAME REASON THE CATALOG ONES ARE
+/// (stage 10). A rep authors from a browser as well as a phone, so every rule
+/// below applies to that surface identically — and the rep tree is the one that
+/// is *tempted* by `dart:io`, because it sits next to the capture flow, which
+/// is native-only by nature.
 const List<String> _catalogDirs = [
   'lib/application/catalog',
   'lib/domain/catalog',
   'lib/presentation/screens/catalog',
   'lib/presentation/widgets/catalog',
+  'lib/application/rep',
+  'lib/domain/rep',
+  'lib/presentation/screens/rep',
+];
+
+/// Single files outside those directories that the same rules cover.
+const List<String> _extraSources = [
+  'lib/data/repositories/rep_repository.dart',
 ];
 
 /// Files allowed to import `dart:io`: the native half of a conditional-import
@@ -56,6 +70,7 @@ List<File> _catalogSources() => [
             .listSync(recursive: true)
             .whereType<File>()
             .where((f) => f.path.endsWith('.dart')),
+      for (final path in _extraSources) File(path),
     ];
 
 /// Source with comments removed, so a guard cannot be tripped by prose ABOUT
@@ -140,6 +155,7 @@ void main() {
       const seams = [
         'lib/application/catalog/qr_delivery',
         'lib/application/catalog/catalog_link_delivery',
+        'lib/application/rep/rep_capabilities',
       ];
 
       for (final seam in seams) {
@@ -160,20 +176,29 @@ void main() {
       // a name present in one variant and absent in the other is not a type
       // error anywhere — it is an undefined-identifier failure on ONE target
       // only, found by whoever builds that target next.
-      const flags = ['kCanShareLink', 'kCanOpenLink'];
+      const seamFlags = {
+        'lib/application/catalog/catalog_link_delivery': [
+          'kCanShareLink',
+          'kCanOpenLink',
+        ],
+        'lib/application/rep/rep_capabilities': [
+          'kCanScanQrCode',
+          'kCanCaptureDish',
+        ],
+      };
 
-      for (final variant in ['_stub', '_io', '_web']) {
-        final source = File(
-          'lib/application/catalog/catalog_link_delivery$variant.dart',
-        ).readAsStringSync();
+      for (final entry in seamFlags.entries) {
+        for (final variant in ['_stub', '_io', '_web']) {
+          final source = File('${entry.key}$variant.dart').readAsStringSync();
 
-        for (final flag in flags) {
-          expect(
-            source.contains('const bool $flag'),
-            isTrue,
-            reason: '$flag is not declared in catalog_link_delivery$variant '
-                '.dart, so that target will not compile.',
-          );
+          for (final flag in entry.value) {
+            expect(
+              source.contains('const bool $flag'),
+              isTrue,
+              reason: '$flag is not declared in ${entry.key}$variant'
+                  '.dart, so that target will not compile.',
+            );
+          }
         }
       }
     });

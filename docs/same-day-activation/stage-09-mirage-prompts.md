@@ -1,4 +1,4 @@
-✅✅✅✅/2
+✅✅✅✅
 # 09 — Mirage Prompts (SM1 … SM4)
 
 Ready-to-paste prompts for the Mirage side of same-day activation.
@@ -16,7 +16,7 @@ Ready-to-paste prompts for the Mirage side of same-day activation.
 | | Prompt | Repo | When to run | Size |
 |---|---|---|---|---|
 | **SM4** | Probe: which Mirage am I talking to? | none (curl) | **Always, before rollout** | 10 min |
-| **SM1** | Derive `imgOnly` on update-item | `mirage-be` | Only if SM4 says `production` | S |
+| **SM1** | Derive `imgOnly` on update-item | `mirage-be` | ⚠ **Expected obsolete** — only if SM4 finds an OLD deploy | S |
 | **SM2** | Self-host the default product image | `mirage-be` | Recommended, independent | S |
 | **SM3** | "3D coming soon" on the public menu | `mirage-be` + `mirage-fe` | Only if the product decision is taken | M |
 
@@ -37,12 +37,14 @@ Standing facts, verified in the tree — do not re-derive, and do not "fix" them
   ReCapture does not drive.
 - `imgOnly` means "this product has a picture but no 3D model". It is DERIVED,
   never taken from the caller.
-    - feature/recap-phase-2: derived on create (adminController.js:1580) AND on
-      update (adminController.js:1995).
-    - production: set on create only (`if (imageUrl && !objectUrl)`), never
-      re-derived on update.
-- `updateItem` attaches a model on both branches:
-  `if (objectUrl) findProduct.model.src = objectUrl;` (production:1174).
+    - Derived on create (adminController.js:1580, `bodyData.imgOnly =
+      Boolean(imageUrl) && !objectUrl;`) AND on update (adminController.js:1995).
+    - TRUE ON `production` TOO, since `02498d3` (2026-09-03) merged `development`
+      into it. This bullet previously said production derived on create only; that
+      was correct when written and is no longer.
+- `updateItem` attaches a model on both branches, at the SAME line:
+  `if (objectUrl) findProduct.model.src = objectUrl;` (adminController.js:1982 —
+  NOT :1174, which is a stale reference this pack carried).
 - mirage-fe derives the AR button from the model URL, NOT from imgOnly:
   `arAvailable: !!(item.model && item.model.src)` (mirage-fe/src/api/menu.ts:116).
   `imgOnly` appears in mirage-fe once, as an unused optional type field
@@ -98,21 +100,34 @@ Do NOT change any Mirage code in this prompt.
 
 | Outcome | Meaning | Action |
 |---|---|---|
-| `imgOnly: false`, `model.src` set | `feature/recap-phase-2`+ | Nothing. Skip SM1 |
-| `imgOnly: true`, `model.src` set | `production` | SM1 is available; cosmetic only |
+| `imgOnly: false`, `model.src` set | Carries `3d89cd8` — **either branch**, expected | Nothing. Skip SM1 |
+| `imgOnly: true`, `model.src` set | A deploy predating `02498d3` (2026-09-03) | SM1 is available; cosmetic only. Redeploying is the better fix |
 | `model.src` empty | **Unknown state** | Stop. Escalate before rollout |
+
+Row 1 is now the expected answer on **both** branches. Row 2 no longer means "you are on
+`production`" — it means the running build is older than the merge that brought the fix onto
+`production`, so the first thing to check is the deploy, not the branch.
 
 ---
 
 ## SM1 — Derive `imgOnly` on update-item (contingency)
 
-**Run only if SM4 reported `production`.** The consequence of skipping it is cosmetic: a promoted
-dish keeps `imgOnly: true`, which skews the public menu's `.sort({imgOnly: 1})` ordering. **AR is
-unaffected** — the front end reads `model.src`.
+> **⚠ EXPECTED OBSOLETE — 2026-09-05.** This prompt was written for a `production` that lacked the
+> update-side derivation. **It has it now**, at `adminController.js:1995`, brought in by `02498d3`
+> (2026-09-03). Verified with `git show production:src/Controllers/adminController.js`.
+>
+> So SM1 is reachable only in one narrow case: SM4 probes a **running environment whose deploy
+> predates that merge**. If that happens, **redeploying is the better fix than patching** — the
+> deploy is behind on more than this one line. Treat the prompt below as the fallback for when a
+> redeploy genuinely is not on the table.
 
-The change already exists on `feature/recap-phase-2`. Prefer porting that branch over hand-patching
-production; this prompt is the minimal standalone version for when a full port-back is not on the
-table.
+**Run only if SM4 reports `imgOnly: true`** (see the reading table above). The consequence of
+skipping it is cosmetic: a promoted dish keeps `imgOnly: true`, which skews the public menu's
+`.sort({imgOnly: 1})` ordering. **AR is unaffected** — the front end reads `model.src`.
+
+The change already exists on **both** `feature/recap-phase-2` and `production`. Prefer deploying
+what is already on the branch over hand-patching; this prompt is the minimal standalone version for
+when neither a redeploy nor a full port-back is on the table.
 
 ```
 Task: make `imgOnly` a derived field on update-item, matching how create-item
@@ -276,4 +291,4 @@ Verification:
 | Scan counting in Mirage analytics | Scans are counted in `QrScanDaily` before the redirect. Mirage's own page-view analytics continue to work unchanged and independently |
 | A `SALES_REP` concept in Mirage | Reps never authenticate to Mirage. The publish worker is the only writer and uses the existing admin credentials |
 | Changing `clientType`'s one-way flip to "BOTH" | Pre-existing behaviour, triggered by any image-only item. Out of scope; file separately if it matters |
-| Porting `feature/recap-phase-2` → `production` | **Real, pre-existing, and larger than this feature.** It belongs to `../next-phase/prompts/03-mirage-prompts.md`, which already documents the cherry-pick and the one manual `CONSTANT.js` step. Do not fold it into this pack |
+| Porting `feature/recap-phase-2` → `production` | ⚠ **Largely already done, 2026-09-03.** `02498d3` merged `development` into `production`, bringing `3d89cd8` — so `production` now carries the derived `imgOnly`, `sortPosition`, `availability`, `socialLinks` and `isPublished`. `../next-phase/prompts/03-mirage-prompts.md` still describes the old gap and is stale on this point. Re-scope it against the current branch before running anything there; either way it is not this pack's work |

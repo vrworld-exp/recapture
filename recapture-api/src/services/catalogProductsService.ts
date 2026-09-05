@@ -269,6 +269,17 @@ export type CreateProductResult =
   | { outcome: 'TOO_LARGE' }
   | { outcome: 'CREATED'; product: ProductDto };
 
+/** Non-owner inputs to a create. Empty for every owner-driven call. */
+export interface CreateProductOptions {
+  /**
+   * A SECOND user whose projects may supply `sourceModelId` — the rep who shot
+   * the dish. Set ONLY by the `/rep` route, and only after
+   * `resolveDelegatedCatalog` has proven the delegation. See
+   * {@link resolveOwnedModel} for why the widening is safe.
+   */
+  capturedByUserId?: string;
+}
+
 /**
  * Creates a product (features 6, 7, 11, 13).
  *
@@ -279,7 +290,8 @@ export type CreateProductResult =
  */
 export async function createProduct(
   userId: string,
-  input: CreateProductInput
+  input: CreateProductInput,
+  options: CreateProductOptions = {}
 ): Promise<CreateProductResult> {
   const catalog = await findOwnedCatalog(userId);
   if (!catalog) return { outcome: 'NO_CATALOG' };
@@ -306,7 +318,13 @@ export async function createProduct(
 
   if (input.type === 'THREE_D') {
     // `sourceModelId` is guaranteed present by the schema's superRefine.
-    const resolved = await resolveOwnedModel(ownerId, input.sourceModelId as string);
+    const resolved = await resolveOwnedModel(
+      ownerId,
+      input.sourceModelId as string,
+      options.capturedByUserId
+        ? new Types.ObjectId(options.capturedByUserId)
+        : undefined
+    );
     // Switched rather than compared to 'OK', so adding a fifth outcome to the
     // union is a compile error here instead of a silent fall-through. Do NOT
     // add a `default` case.
@@ -409,6 +427,20 @@ type ResolveModelResult =
  * trusting the model row: models carry no owner of their own. A model belonging
  * to someone else returns the same MODEL_NOT_FOUND as one that does not exist.
  *
+ * [capturedBy] WIDENS that ownership by exactly one id, and exists for one
+ * caller: a SALES_REP authoring a dish on a restaurant's behalf. The rep shoots
+ * the dish on their own phone, so the Project is theirs — `/projects` has no
+ * delegation and deliberately none was added — while the catalog belongs to the
+ * restaurant. Without this the two never meet and every rep-captured dish is
+ * MODEL_NOT_FOUND.
+ *
+ * Safe because the model's artifact URLs are COPIED onto the product below and
+ * frozen there: the restaurant's dish does not keep reading from the rep's
+ * project, and `catalogModelPromotionService` matches on `sourceModelId` alone
+ * with no ownership test, so a later promotion works unchanged. The caller is
+ * responsible for having already proven the delegation — this function widens
+ * ownership, it does not authorise anything.
+ *
  * Queries the two collections directly rather than going through
  * projectModelsService, which imports adminProjectsService → projectsService;
  * routing through it would pull an import cycle into the catalog feature. Same
@@ -416,14 +448,16 @@ type ResolveModelResult =
  */
 async function resolveOwnedModel(
   ownerId: Types.ObjectId,
-  modelId: string
+  modelId: string,
+  capturedBy?: Types.ObjectId
 ): Promise<ResolveModelResult> {
   const model = await ProjectModel.findById(new Types.ObjectId(modelId)).exec();
   if (!model) return { outcome: 'MODEL_NOT_FOUND' };
 
+  const owners = capturedBy ? [ownerId, capturedBy] : [ownerId];
   const project = await Project.findOne({
     _id: model.projectId,
-    userId: ownerId,
+    userId: { $in: owners },
     deletedAt: null,
   })
     .select('_id')

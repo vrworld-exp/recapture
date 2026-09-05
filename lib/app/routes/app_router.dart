@@ -21,6 +21,7 @@ import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
+import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
 import '../../presentation/screens/rep/rep_catalogs_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
@@ -141,6 +142,13 @@ abstract final class AppRoutes {
   /// One delegated restaurant's dishes. `:id` = the catalog id.
   static const repCatalogDetail = '/rep/catalogs/:id';
 
+  /// Authoring one dish on a delegated catalog. `:id` = the catalog id.
+  ///
+  /// A CHILD PATH rather than a query on the detail route: the screen is a
+  /// separate destination with its own back behaviour, and `dishes/new` cannot
+  /// be swallowed as an id because the segment before it is literal.
+  static const repAddDish = '/rep/catalogs/:id/dishes/new';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -195,6 +203,7 @@ abstract final class AppRouteNames {
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repCatalogDetail = 'repCatalogDetail';
+  static const repAddDish = 'repAddDish';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const modelViewer = 'modelViewer';
@@ -441,7 +450,14 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.repActivate,
         name: AppRouteNames.repActivate,
-        builder: (_, __) => const RepActivationScreen(),
+        // `?code=` is the deep link from stage 3's "not live yet" page — the
+        // rep's OS camera scans the standee, lands there, and one tap brings
+        // them here with the code already filled in. Absent on a normal open,
+        // which is why the screen treats it as a prefill and never as a
+        // command: it still preflights, and the rep can still edit it.
+        builder: (_, state) => RepActivationScreen(
+          initialCode: state.uri.queryParameters['code'],
+        ),
       ),
       GoRoute(
         path: AppRoutes.repCatalogs,
@@ -452,6 +468,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.repCatalogDetail,
         name: AppRouteNames.repCatalogDetail,
         builder: (context, state) => RepCatalogDetailScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repAddDish,
+        name: AppRouteNames.repAddDish,
+        builder: (context, state) => RepAddDishScreen(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),

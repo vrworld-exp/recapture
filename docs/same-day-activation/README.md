@@ -119,7 +119,7 @@ own "Done when" block is green.
 - [x] Stage 4 — Delegation + rep activation ⚠ device check outstanding
 - [x] Stage 5 — Pending models + asset promotion
 - [x] Stage 6 — Flutter rep app ⚠ device check outstanding
-- [ ] Stage 10 — Web parity for the rep surface — **not started**
+- [x] Stage 10 — Web parity for the rep surface ⚠ side-by-side check outstanding
 - [ ] Stage 7 — Verification + rollout — code half green; see below
 
 > **Ticked 2026-09-05.** Every *automated* row in stages 1–6's "Done when" blocks was re-verified
@@ -136,6 +136,18 @@ own "Done when" block is green.
 > physical phone — scan a printed standee with the native camera, activate against a real code,
 > capture a dish and watch the badge flip. None has been done. They are the same work as
 > [stage 7](stage-07-verification-and-rollout.md)'s device pass, so they close there, together.
+>
+> **Stage 10 ticked 2026-09-05**, and it turned up a defect it did not cause: the rep
+> capture→dish path did not connect at all, on EITHER target. A rep's capture makes a Project owned
+> by the rep, while `POST /rep/catalogs/:id/products` resolved `sourceModelId` against the
+> RESTAURANT — so every rep-captured dish was `MODEL_NOT_FOUND`, and image-only had no rep-scoped
+> upload route at all. That is a stage 4/6 gap; it is fixed now (`resolveOwnedModel` takes a
+> `capturedBy`, and `/rep` gained the two image-upload spellings). Stage 6's manual row would have
+> caught it, which is the argument for the ⚠ markers above.
+>
+> Stage 10's remaining ⚠ is the side-by-side run: the same activation on a phone and in Chrome.
+> One deliberate skip — **no admin CSV export UI was built** (matrix note I): the endpoint exists,
+> batch minting is a handful of ADMIN actions a year, and an unused admin screen is worse than none.
 >
 > **Two known non-green things**, neither caused by this pack: `npm test` is 1301/1308 — the 7
 > failures are all in `admin-model-variants.test.ts`, which expects a `variant` field removed from

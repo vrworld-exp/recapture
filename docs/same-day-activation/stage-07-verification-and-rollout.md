@@ -258,12 +258,14 @@ wrong host is unrecoverable at scale.
 - [ ] R4b: the deployed Mirage branch is identified (SM4 probe), and SM1 run or consciously skipped.
 - [ ] The placeholder-image decision (08) is made — rep photo as product image, or accept the
       generic placeholder during the generating window.
-- [ ] Stage 10's matrix rows 15–24 are in `../next-phase/web-capability-matrix.md`.
-- [ ] The web URL strategy is confirmed and the `/rep/activate?code=` link matches it.
-- [ ] Deep-link option A or B is chosen and recorded (stage 10, note J).
-- [ ] `make verify` passes — including the web build.
-- [ ] The R3 fix-up script exists, or the escalation path is documented for support.
-- [ ] The AGENTS.md envelope carve-out (stage 3, step 1) is written.
-- [ ] Q12 in `../next-phase/06-open-questions.md` is annotated with the CSV answer.
+- [x] Stage 10's matrix rows 15–24 are in `../next-phase/web-capability-matrix.md`, with notes G–J.
+- [x] The web URL strategy is confirmed — **hash** (`usePathUrlStrategy` appears nowhere), so the
+      link is `{WEB_APP_BASE_URL}/#/rep/activate?code=`. Note F corrected: no hosting rewrite needed.
+- [x] Deep-link **option A** chosen and recorded (note J), with the mobile `autoVerify` gap written
+      down rather than left implied.
+- [x] `make verify` passes — analyze, test, web build and APK, re-run after stage 10.
+- [x] The R3 fix-up script exists — `recapture-api/scripts/repoint-catalog-owner.ts`.
+- [x] The AGENTS.md envelope carve-out (stage 3, step 1) is written — `AGENTS.md:104-113`.
+- [x] Q12 in `../next-phase/06-open-questions.md` is annotated with the CSV answer.
 - [ ] `../README.md`'s status board is fully ticked.
    

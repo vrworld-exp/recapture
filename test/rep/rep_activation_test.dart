@@ -17,13 +17,17 @@
 //
 // Hermetic: the repository is a fake, so there is no Dio, no network and no
 // platform channel anywhere in here.
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:recapture/application/rep/qr_scan_capability.dart';
+import 'package:recapture/application/rep/rep_capabilities.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
+import 'package:recapture/data/repositories/catalog_products_repository.dart'
+    show ProductImageSlot;
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
+import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/domain/entities/qr_code_preflight.dart';
 import 'package:recapture/domain/entities/rep_activation.dart';
 import 'package:recapture/domain/rep/qr_code_input.dart';
@@ -64,6 +68,33 @@ class _FakeRepRepository implements RepRepository {
   Future<List<CatalogProduct>> products(String catalogId) async => const [];
 
   @override
+  Future<CatalogProduct> createProduct(
+    String catalogId, {
+    required ProductType type,
+    required String name,
+    String? description,
+    double? price,
+    String? sourceModelId,
+    String? imageKey,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<String> uploadImageBytes(
+    String catalogId,
+    Uint8List bytes, {
+    required String contentType,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<ProductImageSlot> createImageSlot(
+    String catalogId, {
+    required String contentType,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
   Future<void> attachCode(String catalogId, String code) async {}
 
   @override
@@ -73,8 +104,9 @@ class _FakeRepRepository implements RepRepository {
 Widget _app(_FakeRepRepository repo, {bool canScan = false}) => ProviderScope(
       overrides: [
         repRepositoryProvider.overrideWithValue(repo),
-        qrScanCapabilityProvider
-            .overrideWithValue(QrScanCapability(canScan: canScan)),
+        repCapabilitiesProvider.overrideWithValue(
+          RepCapabilities(canScan: canScan, canCaptureDish: canScan),
+        ),
       ],
       child: const MaterialApp(home: RepActivationScreen()),
     );

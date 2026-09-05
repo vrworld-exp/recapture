@@ -1,9 +1,12 @@
 // lib/data/repositories/rep_repository.dart
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/catalog_product.dart';
+import '../../domain/entities/product_type.dart';
 import '../../domain/entities/qr_code_preflight.dart';
+import 'catalog_products_repository.dart' show ProductImageSlot;
 import '../../domain/entities/rep_activation.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
@@ -39,6 +42,47 @@ abstract interface class RepRepository {
   ///
   /// The catalog's public URL does NOT move — that is the whole point of the
   /// resolver — so nothing here returns a new one to show.
+  /// Authors one dish on the restaurant's behalf.
+  ///
+  /// THE OWNERSHIP HERE IS THE WHOLE TRICK, and it is worth knowing about from
+  /// the client side too. A 3D dish carries [sourceModelId] — a model from a
+  /// capture the REP shot, so the Project belongs to the rep while the catalog
+  /// belongs to the restaurant. `/rep/catalogs/:id/products` widens model
+  /// ownership by exactly the calling rep to let those meet; the product that
+  /// comes back is owned by the restaurant and identical to one the owner would
+  /// have made.
+  ///
+  /// An image-only dish carries [imageKey] instead, and the upload therefore
+  /// comes FIRST — [uploadImageBytes] or [createImageSlot], then this.
+  Future<CatalogProduct> createProduct(
+    String catalogId, {
+    required ProductType type,
+    required String name,
+    String? description,
+    double? price,
+    String? sourceModelId,
+    String? imageKey,
+  });
+
+  /// Uploads an image through the API and returns its committed key.
+  ///
+  /// The ONE upload path that works on every target. The presigned alternative
+  /// ([createImageSlot]) needs a cross-origin PUT to a bucket that serves no
+  /// CORS policy, so the browser build cannot use it — see
+  /// `catalog_products_repository.dart` for the same split on the owner side.
+  Future<String> uploadImageBytes(
+    String catalogId,
+    Uint8List bytes, {
+    required String contentType,
+  });
+
+  /// Mints a presigned PUT slot. NATIVE ONLY — kept because it keeps image
+  /// bytes off our API where the platform allows it.
+  Future<ProductImageSlot> createImageSlot(
+    String catalogId, {
+    required String contentType,
+  });
+
   Future<void> attachCode(String catalogId, String code);
 
   /// Takes one standee out of service.
@@ -128,6 +172,87 @@ class RemoteRepRepository implements RepRepository {
           for (final item in raw)
             if (item is Map<String, dynamic>) CatalogProduct.fromMap(item),
         ];
+      });
+
+  @override
+  Future<CatalogProduct> createProduct(
+    String catalogId, {
+    required ProductType type,
+    required String name,
+    String? description,
+    double? price,
+    String? sourceModelId,
+    String? imageKey,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/products',
+          data: {
+            'type': type.apiValue,
+            'name': name,
+            if (description != null) 'description': description,
+            if (price != null) 'price': price,
+            if (sourceModelId != null) 'sourceModelId': sourceModelId,
+            if (imageKey != null) 'imageKey': imageKey,
+          },
+        );
+        final product = res.data?['product'];
+        if (product is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return CatalogProduct.fromMap(product);
+      });
+
+  @override
+  Future<String> uploadImageBytes(
+    String catalogId,
+    Uint8List bytes, {
+    required String contentType,
+  }) =>
+      mapCatalogErrors(() async {
+        // The raw image IS the body — not multipart, not JSON. The app Dio is
+        // right: the endpoint is ours and needs the Bearer token.
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/products/image/bytes',
+          data: Stream.value(bytes),
+          options: Options(
+            headers: {
+              Headers.contentTypeHeader: contentType,
+              Headers.contentLengthHeader: bytes.length,
+            },
+          ),
+        );
+        final key = res.data?['key'];
+        if (key is! String || key.isEmpty) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return key;
+      });
+
+  @override
+  Future<ProductImageSlot> createImageSlot(
+    String catalogId, {
+    required String contentType,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/products/image/upload-url',
+          data: {'contentType': contentType},
+        );
+        final slot = res.data?['slot'];
+        if (slot is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return ProductImageSlot.fromMap(slot);
       });
 
   @override

@@ -19,7 +19,7 @@
 //
 // Standard envelope throughout (unlike routes/public.ts, whose carve-out is
 // documented in AGENTS.md and applies to that router alone).
-import { Router, type Response } from 'express';
+import { Router, raw, type Response } from 'express';
 import { Types } from 'mongoose';
 
 import { asyncHandler } from '@/utils/asyncHandler';
@@ -29,7 +29,11 @@ import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { QrCode } from '@/models/QrCode';
 import { qrCodeParam } from '@/validation/qrSchemas';
-import { createProductSchema } from '@/validation/catalogSchemas';
+import {
+  createProductSchema,
+  productImageBytesQuerySchema,
+  productImageUploadUrlSchema,
+} from '@/validation/catalogSchemas';
 import { repActivationSchema, attachQrCodeSchema } from '@/validation/repSchemas';
 import {
   activate,
@@ -40,7 +44,18 @@ import {
   listDelegatedCatalogs,
   resolveDelegatedCatalog,
 } from '@/services/catalogDelegationService';
-import { createProduct, listProducts } from '@/services/catalogProductsService';
+import {
+  createProduct,
+  createProductImageSlot,
+  listProducts,
+  storeProductImageBytes,
+} from '@/services/catalogProductsService';
+import {
+  PRODUCT_IMAGE_CONTENT_TYPES,
+  sniffProductImageContentType,
+} from '@/utils/productImageKeys';
+import { consumeRateWindow } from '@/utils/rateLimit';
+import { env } from '@/config/env';
 
 const router = Router();
 
@@ -234,7 +249,15 @@ router.post(
       );
     }
 
-    const result = await createProduct(String(catalog.userId), parsed.data);
+    // `capturedByUserId` is the REP, and it is the one thing that makes this
+    // work. The rep shoots the dish on their own phone, so the Project — and
+    // therefore the ProjectModel — belongs to the rep, while the catalog
+    // belongs to the restaurant. Without widening ownership by exactly this id
+    // every rep-captured dish resolves MODEL_NOT_FOUND. The delegation was
+    // proven above; this only says whose captures may be linked.
+    const result = await createProduct(String(catalog.userId), parsed.data, {
+      capturedByUserId: req.user!.userId,
+    });
 
     switch (result.outcome) {
       case 'NO_CATALOG':
@@ -266,6 +289,163 @@ router.post(
     });
 
     res.status(201).json({ status: 'success', product: result.product });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/products/image/upload-url — one presigned PUT slot for
+ * an image-only dish the rep is authoring.
+ *
+ * WITHOUT THIS, image-only dishes are impossible for a rep. The owner-facing
+ * `/catalog/products/image/upload-url` mints a key scoped to the CALLER's own
+ * catalog, so a rep calling it gets a key in their own (usually non-existent)
+ * catalog's space, which `checkCatalogImageKey` then rejects at create time.
+ * Delegating with the RESTAURANT's userId — exactly as the create route above
+ * does — mints the key inside the restaurant's catalog, which is the one the
+ * create will accept.
+ *
+ * Declared AFTER `/catalogs/:id/products` and before nothing in particular:
+ * the paths differ past the shared prefix, so no literal segment is at risk of
+ * being swallowed as an id.
+ *
+ * The returned `url` is a WRITE bearer credential for that one key until
+ * `expiresAt`: this response body is the ONLY place it may appear — never a log
+ * line, never an analytics property.
+ */
+router.post(
+  '/catalogs/:id/products/image/upload-url',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = productImageUploadUrlSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    // Keyed on the REP, not the restaurant. The rep is who can loop this, and a
+    // per-restaurant key would let one rep exhaust another restaurant's budget
+    // by activating and hammering it. Same window as the owner-facing slot.
+    const rate = await consumeRateWindow(
+      `product-image-upload:${req.user!.userId}`,
+      env.PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await createProductImageSlot(String(catalog.userId), parsed.data);
+    // NO_CATALOG cannot happen (the delegation resolved one) but is handled
+    // rather than cast away; NOT_FOUND is a productId that is not this
+    // catalog's, which reads as not-delegated for the same enumeration reason.
+    if (result.outcome !== 'OK') return notDelegated(res);
+
+    res.status(201).json({ status: 'success', slot: result.slot });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/products/image/bytes — the same upload in ONE call,
+ * for the browser build.
+ *
+ * WHY BOTH SPELLINGS. The presigned route above is the right shape for a native
+ * client and keeps image bytes off this API. It cannot work from the WEB build:
+ * the PUT is cross-origin to the artifacts bucket, which serves no CORS policy.
+ * That is the same wall that produced `/catalog/products/image/bytes`, and the
+ * rep surface hits it for the same reason — so a rep at a desk can author an
+ * image-only dish, which is stage 10's row 20.
+ *
+ * Same rate window as the slot route and deliberately the SAME key: the two are
+ * alternative spellings of one action, so alternating must not double a rep's
+ * budget.
+ *
+ * The declared Content-Type is NOT trusted — the magic bytes decide.
+ */
+router.post(
+  '/catalogs/:id/products/image/bytes',
+  raw({
+    type: [...PRODUCT_IMAGE_CONTENT_TYPES],
+    limit: env.CATALOG_PRODUCT_IMAGE_MAX_BYTES,
+  }),
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const params = productImageBytesQuerySchema.safeParse(req.query);
+    if (!params.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        params.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const body: unknown = req.body;
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      return fail(
+        res,
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'Send the image as a JPEG, PNG or WebP body.'
+      );
+    }
+    if (body.length > env.CATALOG_PRODUCT_IMAGE_MAX_BYTES) {
+      return fail(
+        res,
+        413,
+        'PAYLOAD_TOO_LARGE',
+        'That image is too large. Please choose a smaller one.'
+      );
+    }
+
+    const sniffed = sniffProductImageContentType(body);
+    if (sniffed === null) {
+      return fail(
+        res,
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'That file is not a JPEG, PNG or WebP.'
+      );
+    }
+
+    const rate = await consumeRateWindow(
+      `product-image-upload:${req.user!.userId}`,
+      env.PRODUCT_IMAGE_UPLOAD_MAX_PER_WINDOW,
+      env.PRODUCT_IMAGE_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many upload requests. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await storeProductImageBytes(String(catalog.userId), {
+      bytes: body,
+      contentType: sniffed,
+      productId: params.data.productId,
+    });
+    if (result.outcome !== 'OK') return notDelegated(res);
+
+    res.status(200).json({ status: 'success', key: result.key });
   })
 );
 

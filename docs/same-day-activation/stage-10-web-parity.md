@@ -1,3 +1,4 @@
+✅✅✅✅✅✅/2 
 # Stage 10 — Web Parity for the Rep Surface
 
 **Side:** client (Flutter web) + a little backend · **Size:** M (≈ 1 day) · **Depends on:** stage 6

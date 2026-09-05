@@ -54,7 +54,22 @@ Two properties fall out of that, and both matter more than the tidiness:
 | 11 | **Open public link in new tab** | ⛔ **button hidden** | ✅ `window.open` | `kCanOpenLink`. See note B. | `catalog_link_delivery_{io,web}.dart` |
 | 12 | **Copy public link** | ✅ | ✅ | Flutter `Clipboard` handles the secure-context fallback in-engine | `catalog_link_service.dart` |
 | 13 | **Auth token storage** | Keychain / Keystore | **browser storage, not a keychain** | See note E. | `auth_storage.dart` |
-| 14 | **Deep link to `/catalog/...` + refresh** | n/a | ⚠️ **needs a hosting rewrite** | See note F. | `app_router.dart` |
+| 14 | **Deep link to `/catalog/...` + refresh** | n/a | ✅ **works — hash strategy** | note F, CORRECTED | `app_router.dart` |
+
+### The rep surface (stage 10)
+
+| # | Capability | Android / iOS | Web | Mechanism | Seam |
+|---|---|---|---|---|---|
+| 15 | **Rep sign-in, activation, delegated catalog list** | ✅ | ✅ | Plain HTTP through `dioProvider`. No device capability at all | `rep_repository.dart` |
+| 16 | **Manual code entry / paste** | ✅ | ✅ | Same normaliser, same validator, both targets | `rep_activation_screen.dart` |
+| 17 | **In-app camera QR scan** | ⛔ **button hidden** | ⛔ **button hidden** | `kCanScanQrCode` — false on BOTH, see note G | `rep_capabilities_{io,web,stub}.dart` |
+| 18 | **Dish capture (shoot it now)** | ✅ | ⛔ **source hidden** | `kCanCaptureDish` — see note H | `rep_add_dish_screen.dart` |
+| 19 | **Dish from a finished capture** | ✅ | ✅ | `sourceModelId` from the rep's own projects; opens no camera | `model_picker_field.dart` (reused) |
+| 20 | **Dish image-only** | ✅ | ✅ | Bytes end-to-end via `POST /rep/catalogs/:id/products/image/bytes` | `rep_repository.uploadImageBytes` |
+| 21 | **Pending → ready polling** | ✅ | ✅ | Shared `PendingPollLoop`; identical on both | `rep_catalogs_notifier.dart` |
+| 22 | **Standee QR download (PNG/PDF)** | ✅ share sheet | ✅ `<a download>` blob | Row 9's seam, unchanged | `catalog_qr_service.dart` |
+| 23 | **Admin QR batch CSV export** | ⬜ no UI built | ⬜ no UI built | Endpoint exists; see note I | — |
+| 24 | **Deep link into `/rep/activate?code=`** | ⚠️ custom scheme only | ✅ | Option A — see note J | `app_router.dart` |
 
 Legend: ✅ works · ⛔ deliberately absent, affordance **hidden** not disabled · ⚠️ needs
 configuration outside the Flutter build.
@@ -141,15 +156,105 @@ the user to the deep link after login rather than dropping them on `/catalog`.
 These are gaps this matrix documents rather than closes. They are listed so they are
 tracked, not so they look finished.
 
+### F (CORRECTED, stage 10). The deep-link rewrite is NOT needed — this build is on the hash strategy
+
+This note previously said `/catalog/...` deep links need a hosting rewrite. **Verified and it does
+not.** `usePathUrlStrategy()` and `setUrlStrategy()` appear NOWHERE in `lib/`, `web/` or `test/`, so
+the app is on Flutter's default **hash** strategy: routes are `/#/catalog/...`, everything after the
+`#` is never sent to the server, and a refresh therefore always serves `index.html`. There is no
+404 to rewrite around.
+
+The cost of the hash strategy is cosmetic (a `#` in the URL). The day someone opts into the path
+strategy, note F's rewrite becomes real — and row 24's link has to change with it. That is the
+reason to write this down rather than delete the note.
+
+### G. The in-app QR scanner is absent on BOTH targets, and that is the honest answer
+
+Row 17 is the one row where mobile and web agree by *decision* rather than by platform limit.
+
+There is no QR-decoding package in `pubspec.yaml`, and the camera is a bespoke `MethodChannel`
+built for the 6-photo capture ring — not the `camera` plugin, and not a generic preview surface.
+Decoding in it is new native work on two platforms, not a flag. Adding a package needs a written
+justification the phase requires.
+
+It costs less than it sounds. **The rep's OS camera already scans the standee**: it opens
+`{PUBLIC_RESOLVER_BASE_URL}/r/{code}`, which for an unassigned code is stage 3's "not live yet"
+page, and note J puts a one-tap activation link on it. So the scanning experience exists — it just
+does not run inside our process.
+
+Keeping the flag false on both targets is what makes the parity claim honest: manual entry is what
+every target offers, identically. If a scanner is ever built, flipping one constant in
+`rep_capabilities_io.dart` is the whole client change — `rep_web_parity_test.dart` already asserts
+both renderings.
+
+### H. Dish capture is the ONE genuine functional difference between the targets
+
+Not "no camera" — `getUserMedia` exists. What a browser does not have is the rest of the pipeline:
+the exposure and stability channels, the IMU rotation feed, the permission channels, the background
+upload session. Every one is a `MethodChannel` with no web implementation, and the capture ring is
+built on all of them.
+
+So on web the source is **absent from the list**, not disabled. A rep on a laptop can activate a
+code, author the whole menu from finished captures and image-only dishes, and publish. They cannot
+photograph a dish.
+
+**The phone is the field tool; the browser is the desk tool.** Both can run a restaurant's menu;
+only the phone can shoot it.
+
+### I. The CSV export has an endpoint and deliberately no UI
+
+`GET /admin/qr-batches/:id/export` exists and returns `text/csv` behind a Bearer token, with
+`Content-Disposition` in the CORS `exposedHeaders` allowlist (`src/app.ts:46`) so a browser can read
+the filename.
+
+**No Flutter screen was built for it, on purpose.** Batch minting is an ADMIN action performed a
+handful of times, plausibly with curl or Postman, and an unused admin screen is worse than none. If
+one is ever wanted, the QR download seam (`qr_delivery_{io,web,stub}.dart`) already does the Blob
+dance correctly — widen `QrDownloadFile` to carry a MIME type and reuse it rather than writing a
+second copy.
+
+### J. Deep link into activation — option A (web now, mobile later)
+
+Stage 3's "not live yet" page carries an *Are you a Mirage rep? Activate this code* link:
+
+- **Web:** `{WEB_APP_BASE_URL}/#/rep/activate?code={code}` — the `#` is required, see note F. Same
+  browser, same session; it just works, and it is the better of the two experiences.
+- **Mobile:** the rep reads the 8 characters off the sticker and types them. Four seconds.
+
+**Option B — real App Links / Universal Links — was NOT built.** It needs `assetlinks.json` and
+`apple-app-site-association` served from `PUBLIC_RESOLVER_BASE_URL`, an associated-domains
+entitlement, and a manifest change. That host is defined by stage 3 and is not settled yet.
+
+⚠ **The manifest is currently misleading about this, and was before stage 10.**
+`AndroidManifest.xml:107-114` sets `android:autoVerify="true"` on an intent-filter whose scheme is
+the custom `recapture://app` — `autoVerify` does nothing for a non-https scheme. iOS has
+`CFBundleURLSchemes: recapture` and no `applinks:` associated domain. An https link cannot open the
+app on either platform today. **Writing this down is the point of choosing A explicitly**: a
+half-built B that silently fails is exactly the state the manifest is already in.
+
+The screen treats `?code=` as a PREFILL, never a command — it normalises the value, fills the
+field, and stops. The rep still taps Continue and the preflight still runs. A link that activated on
+arrival would let a mis-scan start a one-shot, irreversible action with no human in the loop.
+
+---
+
 | Item | Status | Why it is not closed here |
 |---|---|---|
-| Hosting rewrite for deep-link refresh (note F) | ⬜ **open** | Needs a hosting target to be chosen; it is deployment config, not app code |
 | S3 bucket CORS rule for the presigned `PUT` (note D) | ⬜ **unverified** | Infrastructure, not in this repo — must be checked against the live bucket |
 | "Browser blocked the upload" as a distinct message | ⬜ **open** | A CORS rejection reaches Dio as an opaque transport error; telling it apart from offline needs a probe, and guessing would put a wrong sentence on screen |
-| `cors.test.ts` coverage for the catalog routes | ⬜ **open** | Backend test; `recapture-api/node_modules` is not installed in this working tree |
 | Safari / iOS web clipboard + download | ⬜ **untested** | Needs a real device; `Clipboard` and `<a download>` both differ there |
 
-Closed by this pass:
+Closed by stage 10 (2026-09-05):
+
+- ✅ **Note F's hosting rewrite** — not needed. The build is on the hash strategy; see the corrected
+  note F above.
+- ✅ **`cors.test.ts` coverage** — `Content-Disposition` and `ETag` exposure are now pinned, plus the
+  preflight for the QR batch CSV export. The old blocker (no `node_modules` in the working tree) no
+  longer applies.
+- ✅ **Deep-link option** — A, chosen and recorded in note J, with the mobile gap written down
+  rather than left implied.
+
+Closed by the earlier pass:
 
 - ✅ **`make build.web.{dev,staging,prod}` and `make run.web`** — the Makefile had APK and IPA
   targets but no web one, so the target the phase ships was the only one without a command.
