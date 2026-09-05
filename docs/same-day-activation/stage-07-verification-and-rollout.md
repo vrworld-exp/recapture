@@ -174,29 +174,38 @@ Replacing a standee for the **same** catalog is always safe and is the common ca
 **AR works on every Mirage branch, including `production`** — `mirage-fe` gates the AR button on
 `arAvailable: !!(item.model && item.model.src)` (`mirage-fe/src/api/menu.ts:116`), never on
 `imgOnly`, and `production`'s `updateItem` does attach the model
-(`adminController.js:1174`, `if (objectUrl) findProduct.model.src = objectUrl`). So stage 5's
+(`adminController.js:1982`, `if (objectUrl) findProduct.model.src = objectUrl`). So stage 5's
 promotion produces a working AR dish either way. **This is not a launch blocker.**
 
-What *does* differ: `production` sets `imgOnly` once on create and never re-derives it, so a
-promoted dish stays flagged `imgOnly: true` forever. The only consumer is the menu sort
-(`itemController.js:129, 234` — `.sort({createdAt: -1, imgOnly: 1})`), so the effect is **item
-ordering on the public menu**, cosmetic. `feature/recap-phase-2` re-derives it correctly
-(`adminController.js:1995`).
+> **⚠ RESOLVED IN THE REPO, 2026-09-05 — the branch gap this item was written about is gone.**
+> `origin/production` moved on **2026-09-03** (`02498d3 "Merge branch 'development' into
+> production"`), which brought `3d89cd8` onto `production`. It now carries the re-derived `imgOnly`
+> (`adminController.js:1995`) **and** `sortPosition`, `availability`, `socialLinks` and
+> `isPublished`. Both paragraphs below described the state before that merge.
+>
+> Beware the check that looks obvious: `feature/recap-phase-2` is **not** a direct ancestor of
+> `production` — the work landed via `development` — so branch-ancestry answers NO while the
+> content is present. Verify content (`git grep <field> origin/production`), not ancestry.
 
-**The larger, pre-existing issue this uncovers:** per
-`../next-phase/prompts/03-mirage-prompts.md`, `mirage-be:production` carries **none** of the
-phase-2 work — no `sortPosition`, `availability`, `socialLinks` or `isPublished`. That degrades the
-whole ReCapture publish path, not just this feature, and it is not caused by this work.
+~~What *does* differ~~ (before `02498d3`): `production` sets `imgOnly` once on create and never
+re-derives it, so a promoted dish stays flagged `imgOnly: true` forever. The only consumer is the
+menu sort (`itemController.js:129, 234` — `.sort({createdAt: -1, imgOnly: 1})`), so the effect was
+**item ordering on the public menu**, cosmetic.
 
-**Establish which branch the target environment runs before rollout**, then pick from
-[`09-mirage-prompts.md`](stage-09-mirage-prompts.md):
+~~**The larger, pre-existing issue this uncovers:**~~ per
+`../next-phase/prompts/03-mirage-prompts.md`, `mirage-be:production` carried **none** of the
+phase-2 work. That note is now stale for the same reason; it was never caused by this work.
 
-| Deployed branch | Action |
+**Still establish which branch the target environment runs before rollout.** The findings above are
+`git`, not HTTP — they say what `origin/production` *contains*, not what is *deployed*:
+
+| Deployed content | Action |
 |---|---|
-| `feature/recap-phase-2` or later | Nothing. Everything in this pack works as designed |
-| `production` | **SM1** (optional, cosmetic) or the full port-back, which is a pre-existing task |
+| Carries `3d89cd8` (either branch, post-`02498d3`) | Nothing. Everything in this pack works as designed |
+| An older `production` deploy | **SM1** (optional, cosmetic) or the full port-back, a pre-existing task |
 
-The one-item probe in **SM4** answers "which is it" in about two minutes.
+The one-item probe in **SM4** answers "which is it" in about two minutes, and is now the *only*
+thing left in this item — SM1 is expected to be unnecessary.
 
 ## R5 — Phase 2 free-tier QR is not blocked
 

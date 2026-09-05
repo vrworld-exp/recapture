@@ -1,3 +1,4 @@
+✅✅✅✅
 # 08 — Does this touch `mirage-be` / `mirage-fe`?
 
 **Short answer: no. Zero code changes in either repo.** Verified against `phase2/mirage-be` and
@@ -45,19 +46,22 @@ menu as an image card.
 
 **Promotion upgrades it in place.** When the model lands, stage 5 copies the assets onto the
 product; the planner sees `glbUrl`/`thumbnailUrl` in `PRODUCT_DIFF_FIELDS` and plans an `UPDATE`;
-`update-item` writes `model.src` (`adminController.js:1174` on `production`, and the equivalent on
-`feature/recap-phase-2`). **Same Mirage item id**, so the dish keeps its analytics history.
+`update-item` writes `model.src` — `if (objectUrl) findProduct.model.src = objectUrl;`
+(`adminController.js:1982`, **identical on `production` and on `3d89cd8`**). **Same Mirage item
+id**, so the dish keeps its analytics history.
 
-On `feature/recap-phase-2` the flag is also re-derived —
+The flag is also re-derived —
 `findProduct.imgOnly = Boolean(findProduct.image) && !findProduct.model?.src`
-(`adminController.js:1995`), with the intent stated in the comment above it:
+(`adminController.js:1995`, **now on `production` too** — see the branch note below), with the
+intent stated in the comment above it:
 
 > *"imgOnly stays DERIVED, exactly as on create. This is what lets an image-only product become a
 > real 3d product: uploading an `object` now clears the flag."*
 
-> ⚠ `recapture-api/src/models/types/catalog.types.ts:83` still claims `update-item` cannot unset
-> `imgOnly` and that conversions need DELETE + CREATE. It is stale — see **C7**. Fix the comment in
-> stage 5; do not build a DELETE + CREATE path around it.
+> ✅ **C7 is closed.** The stale claim in `recapture-api/src/models/types/catalog.types.ts` — that
+> `update-item` cannot unset `imgOnly`, so conversions need DELETE + CREATE — was corrected in
+> stage 5. The comment now lives at `catalog.types.ts:97-105` and says the opposite, naming
+> `adminController.js:1995` as the reason. Still: do not build a DELETE + CREATE path.
 
 ### 4. `mirage-fe` — nothing to change, and it does not even read `imgOnly`
 
@@ -91,33 +95,51 @@ generated thumbnail replaces it on promotion. The photos already exist — the r
 for Meshy — but they live in the raw project key space, not the product-image key space
 (`src/utils/productImageKeys.ts`), so this is a real copy step, not a reference.
 
+**The publish side already accommodates it.** `availableSlots` (`productSync.ts:100-105`) reads
+`if (product.thumbnailUrl || product.imageKey) slots.push('image')` — an `imageKey` with no
+generated thumbnail is already enough to publish the `image` slot. So this is a copy step in the rep
+flow and *nothing else*: no planner change, no `productSync` change, no Mirage change.
+
 Decide this before the first real visit. It is roughly half a day in stage 5 or 6 and it is the
 difference between a menu that looks finished and one that looks broken.
 
 ### Which Mirage branch is deployed changes what "fine" means
 
-`phase2/mirage-be` is checked out on **`feature/recap-phase-2`** (`3d89cd8`), which carries the
-derived `imgOnly` and the rest of the phase-2 work. **`production` does not.** Verified by reading
-the branch directly, not by trusting a note:
+> **⚠ UPDATED 2026-09-05 — `production` HAS CAUGHT UP. The table below used to record a real gap
+> between the branches; it no longer exists.** `origin/production` moved on **2026-09-03** with
+> `02498d3 "Merge branch 'development' into production"`, which brought `3d89cd8` — the very commit
+> this page cites as the phase-2 checkout — onto `production`. `git merge-base --is-ancestor
+> 3d89cd8 origin/production` now answers YES.
+>
+> Note `feature/recap-phase-2` is still not a direct ancestor of `production`, so an
+> ancestry check against *that branch name* answers NO and reads like the old gap. The work
+> arrived via `development`. **Check content, not branch ancestry.**
 
-| | `production` | `feature/recap-phase-2` |
+`phase2/mirage-be` is checked out on `feature/same-day-qr-f-phase2` at **`3d89cd8`** — the same
+commit this page originally described as the `feature/recap-phase-2` checkout. Both it and
+`production` now carry the derived `imgOnly` and the rest of the phase-2 work. Verified by reading
+both branches directly, not by trusting a note:
+
+| | `production` (as of `02498d3`) | `3d89cd8` (local checkout) |
 |---|---|---|
-| `updateItem` attaches `model.src` | ✅ `adminController.js:1174` | ✅ |
-| `imgOnly` re-derived on update | ❌ set once on create, never again | ✅ `adminController.js:1995` |
+| `updateItem` attaches `model.src` | ✅ `adminController.js:1982` | ✅ `adminController.js:1982` |
+| `imgOnly` re-derived on update | ✅ `adminController.js:1995` | ✅ `adminController.js:1995` |
 | **AR on the public page after promotion** | **✅** (fe reads `model.src`) | **✅** |
-| Menu sort correct after promotion | ❌ stale flag skews `.sort({imgOnly:1})` | ✅ |
-| `sortPosition`, `availability`, `socialLinks`, `isPublished` | ❌ absent | ✅ |
+| Menu sort correct after promotion | ✅ | ✅ |
+| `sortPosition`, `availability`, `socialLinks`, `isPublished` | ✅ present | ✅ present |
 
-**This feature works on either branch.** The difference is item ordering, not AR.
+**This feature works on either branch, and now for the same reason on both.** The item-ordering
+difference the old table described is gone.
 
-The last row is the real finding, and it is **pre-existing and much larger than this feature**:
-`../next-phase/prompts/03-mirage-prompts.md` records that `mirage-be:production` carries none of the
-phase-2 work, which degrades the whole ReCapture publish path. This pack neither creates that
-problem nor depends on it being solved.
+The `adminController.js:1174` reference in the original table was to a line that has since moved;
+the `model.src` write is at **`:1982`** on both branches (`if (objectUrl) findProduct.model.src =
+objectUrl;`).
 
-Run the **SM4** probe in [`09-mirage-prompts.md`](stage-09-mirage-prompts.md) against the target
-environment to find out which branch you are actually talking to — about two minutes — then decide
-whether **SM1** is worth running.
+**A branch carrying the work is not the same as an environment running it.** Everything above is
+`git`, not HTTP — it says what `origin/production` contains, not what the target environment has
+deployed. Still run the **SM4** probe in [`09-mirage-prompts.md`](stage-09-mirage-prompts.md)
+against the actual environment — about two minutes. **SM1 is now expected to be unnecessary**;
+SM4 is what confirms that.
 
 ---
 

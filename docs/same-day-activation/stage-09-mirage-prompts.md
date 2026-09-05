@@ -1,3 +1,4 @@
+✅✅✅✅/2
 # 09 — Mirage Prompts (SM1 … SM4)
 
 Ready-to-paste prompts for the Mirage side of same-day activation.

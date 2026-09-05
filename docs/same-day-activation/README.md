@@ -113,14 +113,35 @@ many-to-one is for.
 Tick as each stage lands. Nothing here is a progress signal until it is ticked **and** the stage's
 own "Done when" block is green.
 
-- [ ] Stage 1 — Foundations
-- [ ] Stage 2 — QR inventory + admin batch minting
-- [ ] Stage 3 — Public resolver
-- [ ] Stage 4 — Delegation + rep activation
-- [ ] Stage 5 — Pending models + asset promotion
-- [ ] Stage 6 — Flutter rep app
-- [ ] Stage 10 — Web parity for the rep surface
-- [ ] Stage 7 — Verification + rollout
+- [x] Stage 1 — Foundations
+- [x] Stage 2 — QR inventory + admin batch minting
+- [x] Stage 3 — Public resolver ⚠ device check outstanding
+- [x] Stage 4 — Delegation + rep activation ⚠ device check outstanding
+- [x] Stage 5 — Pending models + asset promotion
+- [x] Stage 6 — Flutter rep app ⚠ device check outstanding
+- [ ] Stage 10 — Web parity for the rep surface — **not started**
+- [ ] Stage 7 — Verification + rollout — code half green; see below
+
+> **Ticked 2026-09-05.** Every *automated* row in stages 1–6's "Done when" blocks was re-verified
+> against the working tree, not taken on trust: role ladder and `isStaff`/`isSalesRep`, the four env
+> vars, all four QR models, `/r` mounted above `notFound`, the C6 `Location` assertion, the
+> delegation partial-unique index, `resolveDelegatedCatalog` as the only resolution path in
+> `rep.ts`, `modelStatus` defaulting to `NONE` and absent from `PRODUCT_DIFF_FIELDS`, the
+> `isSalesRep` router redirect, and both "zero diff" claims (stage 4 touches neither
+> `routes/catalog.ts` nor `routes/projects.ts`; stage 6 touches no capture file). Backend
+> `type-check` + `lint` clean; `flutter analyze` clean; `flutter test` 2750 green;
+> `flutter build web`, `apk --debug` and `apk --release` all succeed.
+>
+> **Three ⚠ rows are ticked for CODE ONLY.** Stages 3, 4 and 6 each end in a manual check on a
+> physical phone — scan a printed standee with the native camera, activate against a real code,
+> capture a dish and watch the badge flip. None has been done. They are the same work as
+> [stage 7](stage-07-verification-and-rollout.md)'s device pass, so they close there, together.
+>
+> **Two known non-green things**, neither caused by this pack: `npm test` is 1301/1308 — the 7
+> failures are all in `admin-model-variants.test.ts`, which expects a `variant` field removed from
+> `projectModelsService.ts` in `fd8ce53`, an ancestor of this pack's base commit. And the two R6
+> items (`tok.txt` tracked; a live Gmail app password in `nodeMailerTransport.ts`) are still open —
+> that password is in git history and wants rotating, not just deleting.
 
 ---
 
