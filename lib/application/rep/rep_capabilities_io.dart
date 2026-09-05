@@ -1,32 +1,31 @@
 // lib/application/rep/rep_capabilities_io.dart
 //
-// Native rep capabilities.
+// Native rep capabilities. Both true.
 //
 // CAPTURE is TRUE. The camera pipeline is this app's whole reason to exist on a
 // phone — a bespoke `MethodChannel` (see lib/platform/camera), not the `camera`
 // plugin — and the rep add-dish flow reuses it completely unmodified.
 //
-// SCAN is FALSE, on this target too, and that is a real answer rather than an
-// oversight. Read the reasoning before flipping it:
+// SCAN is TRUE as of the scanner stage. It was false for a long time, and the
+// reasoning that kept it false is worth keeping because it is what the change
+// had to answer:
 //
-//   • There is no QR-decoding package in `pubspec.yaml`, and the phase forbids
-//     adding one without a written justification.
-//   • The camera is a bespoke channel built for the 6-photo capture ring, not a
-//     generic preview surface. Decoding in it is new native work on two
-//     platforms, not a flag.
-//   • The rep's OS camera ALREADY scans the standee. It opens
-//     `{PUBLIC_RESOLVER_BASE_URL}/r/{code}`, which for an unassigned code is
-//     stage 3's "not live yet" page — and that page carries a one-tap
-//     "Activate this code" link straight back into this app with the code
-//     prefilled (note J). So the scanning experience exists; it just does not
-//     run inside our process.
+//   • "No QR package, and the phase forbids adding one without a written
+//     justification." — The justification now exists, in pubspec.yaml. The
+//     deciding argument was that `mobile_scanner` covers android, ios, macos
+//     AND web from one call site, so the alternative was not "add a package
+//     instead of native work" but "add a package instead of MLKit plus Vision
+//     plus a browser story" — three implementations of one screen.
+//   • "The camera is a bespoke channel built for the 6-photo ring, not a
+//     generic preview surface." — Still true, and untouched. The scanner does
+//     not extend that channel; the plugin owns its own short-lived preview and
+//     disposes it with the route. Nothing in lib/platform changed.
+//   • "The rep's OS camera ALREADY scans the standee." — It does, and that path
+//     still works: the resolver's "not live yet" page still deep-links back
+//     with `?code=`. What it does not do is work while the rep is already
+//     standing in the activation screen, which is where they actually are.
 //
-// Keeping it false on BOTH targets is what makes this stage's parity claim
-// honest: manual entry is the offered path everywhere, identically. If an
-// in-app scanner is ever built, flipping this one constant is the entire client
-// change — `rep_web_parity_test.dart` already asserts both renderings.
-const bool kCanScanQrCode = false;
+// Manual entry stays on every target regardless — a damaged or badly-lit
+// sticker needs it, and it is still what the screen leads with.
+const bool kCanScanQrCode = true;
 const bool kCanCaptureDish = true;
-
-Future<String?> scanQrCode() =>
-    throw UnsupportedError('No in-app QR scanner in this build.');

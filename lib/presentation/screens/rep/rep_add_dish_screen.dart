@@ -3,14 +3,20 @@
 // One dish, authored on a restaurant's behalf, from whichever source this build
 // can offer.
 //
-// THREE SOURCES, AND ONE OF THEM IS PLATFORM-GATED:
+// THREE SOURCES, ON EVERY TARGET:
 //   • CAPTURE NOW      — shoot the dish, then pick the capture that comes back.
-//                        MOBILE ONLY. A browser has no capture pipeline (not
-//                        merely no camera — no exposure, stability, IMU or
-//                        permission channels), so this source is ABSENT there,
-//                        never disabled.
+//                        Runs a DIFFERENT ENGINE per platform (see _captureNow):
+//                        the guided IMU ring on a phone, the six-shot browser
+//                        flow on web. Same button, same outcome, same picker.
 //   • FROM A CAPTURE   — a capture already finished. Both targets.
 //   • PHOTO            — image only, no AR. Both targets.
+//
+// This source used to be MOBILE-ONLY, and the reason it no longer is worth
+// keeping straight: the browser still has no capture PIPELINE — no exposure,
+// stability, IMU or permission channels — and a laptop has no gyroscope to
+// drive a ring with. What changed is that the backend's `meshy` mode wants one
+// ring of six manual shots, which is a shape `getUserMedia` CAN produce. The
+// parity is in the output, not the mechanism.
 //
 // The first two converge: both produce a THREE_D dish carrying a
 // `sourceModelId`, and differ only in whether the rep shoots first. That is why
@@ -35,6 +41,8 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_capabilities.dart';
+import '../../../application/rep/web_dish_camera.dart';
+import '../../../application/projects/projects_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/rep_repository.dart';
@@ -42,6 +50,7 @@ import '../../../domain/entities/product_type.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/model_picker_field.dart';
+import 'rep_web_capture_screen.dart';
 
 /// Which source the rep is authoring from. Distinct from [ProductType] on
 /// purpose: `captureNow` and `fromCapture` both END in a `threeD` product, and
@@ -86,6 +95,17 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
       ];
 
   Future<void> _captureNow() async {
+    // TWO CAPTURES, ONE BUTTON. Which one runs is a platform capability, not a
+    // choice the rep makes: a phone has the guided ring and the browser has the
+    // six-shot flow, and neither target can offer the other. The button says
+    // the same thing on both because the OUTCOME is the same — a capture that
+    // shows up in the picker below — and a rep should not have to learn which
+    // engine their laptop happens to have.
+    if (ref.read(hasWebDishCameraProvider)) {
+      await _captureInBrowser();
+      return;
+    }
+
     // The UNMODIFIED capture entry point — the same one an owner uses. It
     // returns when the flow is done and the new capture then appears in the
     // picker below, newest first.
@@ -95,6 +115,36 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
       _source = RepDishSource.fromCapture;
       _failureMessage = null;
     });
+  }
+
+  /// The browser flow, which needs the dish's name BEFORE it starts.
+  ///
+  /// The name goes on the PROJECT the capture creates, and the picker below
+  /// lists projects by name. Starting unnamed would leave the rep hunting for
+  /// "Untitled" among the other captures they made today — so the name field is
+  /// promoted from "fill it in whenever" to a precondition, and says why.
+  Future<void> _captureInBrowser() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      setState(
+        () => _failureMessage =
+            "Name the dish first — the capture is saved under that name.",
+      );
+      return;
+    }
+
+    setState(() => _failureMessage = null);
+    final captured = await showRepWebCapture(context, dishName: name);
+    if (!mounted || captured != true) return;
+
+    // The job is QUEUED, not finished: the model appears in the picker once the
+    // backend has built it, exactly as it does after a phone capture. Switching
+    // the source is what puts the rep in front of that picker.
+    setState(() {
+      _source = RepDishSource.fromCapture;
+      _failureMessage = null;
+    });
+    await ref.read(projectsProvider.notifier).refresh();
   }
 
   Future<void> _pickImage() async {

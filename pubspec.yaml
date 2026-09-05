@@ -65,6 +65,28 @@ dependencies:
   # injected element's `loaded` state, since no JS channel exists on web.
   web: ^1.1.1
 
+  # In-app QR scanning for the rep standee flow.
+  #
+  # THE WRITTEN JUSTIFICATION rep_capabilities_io.dart asks for before this
+  # package exists at all:
+  #
+  #   • The alternative was native work on THREE targets. Decoding inside our
+  #     own camera channel means MLKit on Android and Vision on iOS, and the
+  #     browser has no bespoke channel to extend at all. This package covers
+  #     android / ios / macos / web from one Dart call site, so the rep surface
+  #     stays ONE screen rather than three implementations that drift.
+  #   • It does NOT touch the capture pipeline. The 6-photo ring keeps its
+  #     bespoke MethodChannel (lib/platform/camera); this plugin owns a separate
+  #     short-lived preview that exists only while the scanner sheet is open.
+  #     Nothing in lib/platform changes, and no capture code imports it.
+  #   • Web support is first-party here (MobileScannerWeb), not a community
+  #     shim — which is what makes the scan capability true on BOTH targets and
+  #     retires the last asymmetry the rep surface had.
+  #
+  # Android needs no new manifest permission (CAMERA is already declared for
+  # capture); iOS reuses the existing NSCameraUsageDescription.
+  mobile_scanner: ^7.4.0
+
 dependency_overrides:
   # permission_handler_android 14.0.0 requires AGP 9 / Kotlin 2.3. Its
   # android/build.gradle.kts calls the top-level `kotlin { compilerOptions { … } }`

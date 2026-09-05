@@ -168,28 +168,38 @@ Widget _app(
       ),
     );
 
+// BOTH REAL TARGETS CAPTURE NOW. The browser runs a different ENGINE for it —
+// six manual shots rather than the guided IMU ring — but this screen only ever
+// asked whether the source can be offered, and on both targets it now can.
 const _mobile = RepCapabilities(canScan: false, canCaptureDish: true);
-const _web = RepCapabilities(canScan: false, canCaptureDish: false);
+const _web = RepCapabilities(canScan: false, canCaptureDish: true);
+
+/// The stub target: no `dart:io`, no `dart:js_interop`, so no capture of either
+/// kind. Kept because HIDDEN-NOT-DISABLED is a rule about this renderer, and it
+/// needs a false capability to be asserted against at all.
+const _fallback = RepCapabilities(canScan: false, canCaptureDish: false);
 
 Finder _source(RepDishSource source) =>
     find.byKey(ValueKey('rep_dish_source_${source.name}'));
 
 void main() {
   group('the source list', () {
-    testWidgets('mobile offers three, capture included', (tester) async {
-      await tester.pumpWidget(_app(_FakeRepRepository(), caps: _mobile));
+    for (final (name, caps) in [('mobile', _mobile), ('web', _web)]) {
+      testWidgets('$name offers three, capture included', (tester) async {
+        await tester.pumpWidget(_app(_FakeRepRepository(), caps: caps));
 
-      expect(_source(RepDishSource.captureNow), findsOneWidget);
-      expect(_source(RepDishSource.fromCapture), findsOneWidget);
-      expect(_source(RepDishSource.photo), findsOneWidget);
-    });
+        expect(_source(RepDishSource.captureNow), findsOneWidget);
+        expect(_source(RepDishSource.fromCapture), findsOneWidget);
+        expect(_source(RepDishSource.photo), findsOneWidget);
+      });
+    }
 
-    testWidgets('web offers exactly two, and capture is ABSENT',
+    testWidgets('a build that cannot capture omits the source ENTIRELY',
         (tester) async {
-      await tester.pumpWidget(_app(_FakeRepRepository(), caps: _web));
+      await tester.pumpWidget(_app(_FakeRepRepository(), caps: _fallback));
 
-      // findsNothing, not a disabled tile. A browser has no capture pipeline,
-      // so an offered-but-dead source would be a promise it cannot keep.
+      // findsNothing, not a disabled tile. An offered-but-dead source would be
+      // a promise the target cannot keep.
       expect(_source(RepDishSource.captureNow), findsNothing);
       expect(_source(RepDishSource.fromCapture), findsOneWidget);
       expect(_source(RepDishSource.photo), findsOneWidget);

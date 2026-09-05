@@ -46,15 +46,31 @@ STEP 2 — ACTIVATE THE STANDEE
 STEP 3 — ADD THE DISHES
 -----------------------
 13. From your rep home, open the restaurant you just activated.
-14. Tap "Add a dish". Up to three sources:
-      Capture now   - shoot the dish for AR.        PHONE ONLY.
+14. Tap "Add a dish". Three sources, on the phone AND in the browser:
+      Capture now   - shoot the dish for AR.
       3D model      - use a capture you finished earlier.
       Photo         - a plain photo. No AR, but instant.
-15. For "Capture now", follow the usual six-photo ring. When you come back,
-    pick the capture you just made and name the dish.
-16. Names must be unique within one restaurant. Use what a diner would read.
-17. Repeat per dish. There is no bulk import.
-18. Watch each row's badge:
+15. "Capture now" works differently on the two, and it matters:
+
+    ON THE PHONE - the guided six-photo ring, as always. The app tracks where
+    you are standing and will not accept two shots from the same spot. Follow
+    the ring; it tells you when a wedge is done.
+
+    IN THE BROWSER - six photos you take yourself, one tap each. A laptop has
+    no motion sensor, so NOTHING CHECKS YOUR ANGLE. That is the whole
+    difference, and it is on you to cover it:
+      - Name the dish BEFORE you start. The browser asks first, because the
+        capture is saved under that name and you will need to find it after.
+      - Move about a sixth of the way around the dish between every shot.
+        Six evenly spread shots make a model; six from the same chair do not.
+      - Keep the whole dish in frame each time.
+      - "Retake last" drops only the shot you just took.
+    The model is built from the best of your six either way.
+
+16. When the capture comes back, pick it in the list and name the dish.
+17. Names must be unique within one restaurant. Use what a diner would read.
+18. Repeat per dish. There is no bulk import.
+19. Watch each row's badge:
       "3D generating..."  model being built. Minutes, not seconds.
       "AR ready"          that dish now has a working AR button.
       "3D unavailable"    the model failed. The dish still works in 2D.
@@ -63,7 +79,7 @@ STEP 3 — ADD THE DISHES
 
 STEP 4 — BEFORE YOU LEAVE THE TABLE
 -----------------------------------
-19. *** THE MENU IS NOT LIVE YET. *** This is the part that surprises people.
+20. *** THE MENU IS NOT LIVE YET. *** This is the part that surprises people.
     Activating binds the standee. It does not put the menu online. Scanning it
     right now shows a "not live yet" page, which is correct.
 
@@ -73,41 +89,48 @@ STEP 4 — BEFORE YOU LEAVE THE TABLE
 
     So if you added ONLY photo dishes, nothing publishes on its own. Tell the
     owner plainly: they must sign in and publish, or the standee stays dead.
-20. Have the owner sign in NOW, on their own phone, with the number you typed.
+21. Have the owner sign in NOW, on their own phone, with the number you typed.
     Best use of your last five minutes: it proves the number was right while
     you can still fix it, it lets them publish, and if they cannot get in you
     are still in the room.
-21. Scan the standee yourself and check where it lands.
-22. Leave the standee on the table.
+22. Scan the standee yourself and check where it lands.
+23. Leave the standee on the table.
 
 WHAT WORKS WHERE
 ----------------
-23. Phone and browser do the same things, with ONE exception:
+24. Phone and browser now do the SAME THINGS. Nothing is missing on either:
       Sign in / activate / type a code ......... phone YES   browser YES
+      Scan a standee in the app ............... phone YES   browser YES
       See your restaurants .................... phone YES   browser YES
       Add a photo or finished-capture dish .... phone YES   browser YES
-      SHOOT a dish ............................ phone YES   browser NO
-    A browser has no camera pipeline, so the option is not shown there.
-    The phone is the field tool; the browser is the desk tool.
-24. There is no in-app QR scanner on either. Use your phone's own camera, or
-    type the 8 characters. This is deliberate, not a missing feature.
-25. About 30 activations per hour. Normal visits never reach this.
+      SHOOT a dish ............................ phone YES   browser YES
+25. The one real difference is HOW a dish gets shot, not whether it can be:
+      Phone   - guided ring. It knows where you are standing and refuses a
+                second shot from the same wedge. It catches your mistakes.
+      Browser - six manual shots. No motion sensor exists on a laptop, so
+                nothing checks your spacing. It catches nothing.
+    Both end in the same 3D model. Use the phone at a table if you have it;
+    the browser is there so a desk visit or a dead phone is not a lost menu.
+26. The in-app scanner needs a camera and a secure page. If the browser says
+    it cannot open one, you are probably on an http:// address — or you denied
+    the camera. Typing the 8 characters always works and is never wrong.
+27. About 30 activations per hour. Normal visits never reach this.
 
 IF SOMETHING GOES WRONG
 -----------------------
-26. Wrong phone number typed -> escalate to engineering IMMEDIATELY with the
+28. Wrong phone number typed -> escalate to engineering IMMEDIATELY with the
     restaurant name and the correct number. Do NOT re-activate.
-27. Standee lost or damaged -> attach a fresh code to the same restaurant. The
+29. Standee lost or damaged -> attach a fresh code to the same restaurant. The
     old link keeps working until it is retired separately.
-28. "You can no longer edit this restaurant" -> your access was revoked; ask
+30. "You can no longer edit this restaurant" -> your access was revoked; ask
     for it again.
-29. Dish stuck on "3D generating" over an hour -> report it. It still shows 2D.
-30. Anything you cannot explain to the owner -> note the restaurant name, the
+31. Dish stuck on "3D generating" over an hour -> report it. It still shows 2D.
+32. Anything you cannot explain to the owner -> note the restaurant name, the
     standee code and the time, and send it on. Do not guess.
 
 THE ONE-LINE VERSION
 --------------------
-31. Code in -> read the phone number aloud -> shoot the dishes -> have the
+33. Code in -> read the phone number aloud -> shoot the dishes -> have the
     owner sign in and publish before you leave.
 
 

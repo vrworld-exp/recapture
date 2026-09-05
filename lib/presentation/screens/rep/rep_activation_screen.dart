@@ -37,6 +37,7 @@ import '../../../domain/rep/qr_code_input.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/country_code_picker.dart';
+import 'rep_qr_scanner_screen.dart';
 
 class RepActivationScreen extends ConsumerStatefulWidget {
   const RepActivationScreen({super.key, this.initialCode});
@@ -90,6 +91,24 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
   /// The E.164 form — dial code plus the national digits, exactly as the OTP
   /// screen composes it. The restaurant will later sign in with this string.
   String get _e164 => '${_country.dialCode}${_phoneController.text.trim()}';
+
+  /// Open the scanner, and treat what it returns exactly as if the rep had
+  /// typed it — same field, same validation, same Continue.
+  ///
+  /// IT DOES NOT AUTO-SUBMIT. The scanner already guarantees the value is one
+  /// of our codes, so submitting here would work; it is still wrong. A scan of
+  /// the WRONG STANDEE is the mistake this flow cannot take back later, and the
+  /// rep's own eyes on the filled field are the only check against it. This is
+  /// the same reasoning the `?code=` deep link follows — a prefill, never a
+  /// command — and the two paths stay identical on purpose.
+  Future<void> _scanCode() async {
+    final code = await showRepQrScanner(context);
+    if (code == null || !mounted) return;
+    setState(() {
+      _codeController.text = code;
+      _codeError = null;
+    });
+  }
 
   Future<void> _submitCode() async {
     final raw = _codeController.text;
@@ -191,7 +210,7 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
             key: const ValueKey('rep_scan_button'),
             label: 'Scan the code',
             icon: Icons.qr_code_scanner,
-            onPressed: () {},
+            onPressed: _scanCode,
           ),
           const SizedBox(height: AppSpacing.md),
         ],

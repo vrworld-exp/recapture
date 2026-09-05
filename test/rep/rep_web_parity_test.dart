@@ -101,25 +101,40 @@ Widget _app(
       ),
     );
 
+// BOTH REAL TARGETS NOW ANSWER TRUE TO BOTH. That is the point of the scanner
+// and web-capture stages, and it is why these two constants are no longer
+// opposites — the asymmetry this file was written to pin has been removed, and
+// the file's job changed from "prove the gap is handled" to "prove the gap is
+// gone and stays gone".
 const _mobile = RepCapabilities(canScan: true, canCaptureDish: true);
-const _web = RepCapabilities(canScan: false, canCaptureDish: false);
+const _web = RepCapabilities(canScan: true, canCaptureDish: true);
+
+/// The third target: neither `dart:io` nor `dart:js_interop`, so
+/// `rep_capabilities_stub.dart` answers false to everything.
+///
+/// Kept as a fixture even though no shipping target reports it, because the
+/// HIDDEN-NOT-DISABLED rule below is a claim about the renderer, not about a
+/// platform — and it is the rule that has to survive the next capability that
+/// starts out false.
+const _fallback = RepCapabilities(canScan: false, canCaptureDish: false);
 
 void main() {
   group('the scan affordance', () {
-    testWidgets('a build that can scan offers BOTH scan and manual entry',
-        (tester) async {
-      await tester.pumpWidget(_app(_FakeRepRepository(), caps: _mobile));
+    for (final (name, caps) in [('mobile', _mobile), ('web', _web)]) {
+      testWidgets('$name offers BOTH scan and manual entry', (tester) async {
+        await tester.pumpWidget(_app(_FakeRepRepository(), caps: caps));
 
-      expect(find.byKey(const ValueKey('rep_scan_button')), findsOneWidget);
-      // Manual entry is not the fallback for the OTHER platform — it is present
-      // on every target, because a damaged or badly-lit sticker needs it even
-      // where a scanner exists.
-      expect(find.byKey(const ValueKey('rep_code_field')), findsOneWidget);
-    });
+        expect(find.byKey(const ValueKey('rep_scan_button')), findsOneWidget);
+        // Manual entry is not the fallback for the OTHER platform — it is
+        // present on every target, because a damaged or badly-lit sticker needs
+        // it even where a scanner exists.
+        expect(find.byKey(const ValueKey('rep_code_field')), findsOneWidget);
+      });
+    }
 
-    testWidgets('a build that cannot is missing the button ENTIRELY',
+    testWidgets('a build that cannot scan is missing the button ENTIRELY',
         (tester) async {
-      await tester.pumpWidget(_app(_FakeRepRepository(), caps: _web));
+      await tester.pumpWidget(_app(_FakeRepRepository(), caps: _fallback));
 
       // findsNothing, not "is disabled". THE assertion of this file.
       expect(find.byKey(const ValueKey('rep_scan_button')), findsNothing);
