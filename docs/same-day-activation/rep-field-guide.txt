@@ -109,3 +109,44 @@ THE ONE-LINE VERSION
 --------------------
 31. Code in -> read the phone number aloud -> shoot the dishes -> have the
     owner sign in and publish before you leave.
+
+
+
+New how to use this ------------------------------>>>>>>>>>>
+
+What the rep does
+1. Get to the rep area
+Open app → Profile → tap My restaurants (the row I just added).
+
+2. Start an activation
+Tap the Activate a standee button (bottom right).
+
+3. Type the code
+Every printed standee has an 8-character code under the QR square — like ABCD2345. Type it. You can also paste the whole link if you scanned with your phone's normal camera.
+
+In Chrome there is no "Scan the code" button. That's on purpose — the browser can't scan, so the button is hidden rather than shown broken.
+
+4. Tap Continue
+The app checks that code is still free before asking anything else — so the rep never fills in a full form against a standee someone already took.
+
+5. Enter the restaurant's details
+Name + phone number. ⚠️ That phone number becomes the restaurant owner's login. Type it wrong and the owner can't get into their own account.
+
+6. Confirm
+The app reads the number back. The rep taps to confirm. This step exists so a typo is caught at the table, not by a support call later.
+
+7. Done
+You get the live link and the phone number shown again. Then tap Add dishes.
+
+8. Add each dish
+Tap Add a dish, then pick where it comes from:
+
+Source	Phone	Chrome
+Capture now (shoot it)	✅	❌ hidden
+From a finished capture	✅	✅
+Photo only (no AR)	✅	✅
+9. Watch it turn ready
+The dish shows "3D generating…", then flips to "AR ready" by itself — no pull-to-refresh. Seeing that flip is the point of the visit; it's how the rep knows it worked before leaving.
+
+
+
