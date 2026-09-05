@@ -236,6 +236,30 @@ void main() {
     expect(find.text('Model artist'), findsOneWidget);
   });
 
+  testWidgets('rep tools: hidden for a plain USER, shown from SALES_REP up',
+      (tester) async {
+    // The only in-app door to /rep. It rides the SAME isSalesRepProvider gate
+    // as the Role pill above, but is asserted separately on purpose: they are
+    // two independent rows, and a refactor that kept the badge while dropping
+    // this one would restore the original bug -- routes that render but that
+    // nothing navigates to -- without failing a single existing test.
+    //
+    // Presence only, no tap: this file pumps the screen ROUTER-FREE (see the
+    // header), and the row's onTap is a context.push. Where the push LANDS is
+    // the router's contract and is pinned in rep_role_gating_test.dart.
+    await pumpScreen(tester);
+    expect(find.byKey(const ValueKey('profile_rep_tools')), findsNothing);
+    expect(find.text('My restaurants'), findsNothing);
+
+    // A SALES_REP is the lowest role that may see it -- the gate is inclusive
+    // upward, so this is the boundary case, not modelArtist.
+    account.profile = _profile(role: UserRole.salesRep);
+    await pumpScreen(tester, role: UserRole.salesRep);
+
+    expect(find.byKey(const ValueKey('profile_rep_tools')), findsOneWidget);
+    expect(find.text('My restaurants'), findsOneWidget);
+  });
+
   testWidgets('sign out is error-coloured, NOT the mirageRed primary CTA',
       (tester) async {
     await pumpScreen(tester);

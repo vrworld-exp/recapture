@@ -25,8 +25,10 @@ import 'package:flutter/cupertino.dart'
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../app/app_info.dart';
+import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -624,6 +626,60 @@ class _IdentityBlock extends ConsumerWidget {
             ],
           ),
         ),
+
+        // -- Rep tools ---------------------------------------------------------
+        // The ONLY in-app way into the /rep subtree. Every other entry to it is
+        // a DEEP LINK: stage 3's 'not live yet' page hands the rep
+        // /rep/activate?code=... after their OS camera reads the standee. So
+        // without this row a rep who opens the app cold -- or runs it in a
+        // browser, where there is no standee to point a camera at -- can reach
+        // the surface only by typing the URL. The routes existed and rendered;
+        // nothing navigated to them.
+        //
+        // Gated on the SAME hasRoleBadge the Role row above uses, which is
+        // isSalesRepProvider and fails CLOSED: a plain USER never renders it,
+        // and a failed /auth/me degrades to USER rather than showing a row the
+        // router would immediately bounce (repRedirectFor). One predicate for
+        // both the badge and the door keeps them from drifting apart.
+        //
+        // Label matches the destination's own AppBar ('My restaurants') so the
+        // push does not appear to land somewhere else.
+        if (hasRoleBadge) ...[
+          const SizedBox(height: AppSpacing.md),
+          AppCard(
+            key: const ValueKey('profile_rep_tools'),
+            onTap: () => context.push(AppRoutes.repCatalogs),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.storefront_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'My restaurants',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.textPrimary),
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Activate a standee, add dishes, publish',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: AppColors.textMuted),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
