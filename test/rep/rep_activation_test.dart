@@ -229,6 +229,30 @@ void main() {
       );
     });
 
+    testWidgets('a published source catalog says WHY, not "try again"',
+        (tester) async {
+      final repo = _FakeRepRepository(
+        activateThrows: const CatalogFailure(
+          code: RepErrorCodes.sourceCatalogPublished,
+          message: 'Source catalog has been published',
+          statusCode: 409,
+        ),
+      );
+      await tester.pumpWidget(_app(repo));
+      await _fillIn(tester);
+      await tester.tap(find.byKey(const ValueKey('rep_confirm_activate')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('That code belongs to a restaurant that is already live.'),
+        findsOneWidget,
+      );
+      // The refusal is PERMANENT. The generic fallback invites a retry that can
+      // never succeed, so it must not be what the rep reads here.
+      expect(find.text('Something went wrong.'), findsNothing);
+      expect(find.text('Try again in a moment.'), findsNothing);
+    });
+
     testWidgets('a taken code is caught at preflight, before the form',
         (tester) async {
       final repo = _FakeRepRepository(

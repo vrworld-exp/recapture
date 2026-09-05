@@ -1,3 +1,4 @@
+✅✅✅✅✅
 # Stage 7 — Verification and Rollout
 
 **Side:** cross · **Size:** M (≈ 1 day) · **Depends on:** stages 1–6
@@ -256,3 +257,4 @@ wrong host is unrecoverable at scale.
 - [ ] The AGENTS.md envelope carve-out (stage 3, step 1) is written.
 - [ ] Q12 in `../next-phase/06-open-questions.md` is annotated with the CSV answer.
 - [ ] `../README.md`'s status board is fully ticked.
+   

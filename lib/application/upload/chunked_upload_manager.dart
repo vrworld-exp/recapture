@@ -449,8 +449,9 @@ class ChunkedUploadManager implements UploadProgressSource, UploadController {
         );
         return etag;
       } catch (e) {
-        if (_cancelled || (e is DioException && CancelToken.isCancel(e)))
+        if (_cancelled || (e is DioException && CancelToken.isCancel(e))) {
           rethrow;
+        }
         // Reset this part's in-flight contribution so a retry can't double-count.
         _inFlight[part.partNumber] = 0;
 

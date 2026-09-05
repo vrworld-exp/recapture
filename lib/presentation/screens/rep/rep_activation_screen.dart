@@ -484,6 +484,14 @@ class _FailureNote extends StatelessWidget {
             what: 'Too many activations just now.',
             next: 'Wait a few minutes and try again.',
           ),
+        // A PERMANENT refusal, not a retryable one — the generic "try again in
+        // a moment" would send the rep round a loop that can never succeed.
+        // Moving this code would strand the printed URL of a restaurant that is
+        // already live, so the only way forward is a different standee.
+        RepErrorCodes.sourceCatalogPublished => (
+            what: 'That code belongs to a restaurant that is already live.',
+            next: 'Use a fresh standee — this one cannot be moved.',
+          ),
         RepErrorCodes.resolverNotConfigured => (
             what: 'Activation is not available right now.',
             next: 'Let the team know — this one is on us, not you.',
