@@ -1,0 +1,111 @@
+SAME-DAY ACTIVATION — SALES REP FIELD GUIDE
+===========================================
+One visit: close the deal, shoot the dishes, leave a working QR standee behind.
+About 15 minutes per restaurant. Keep this open the first few times.
+
+BEFORE YOU LEAVE THE OFFICE
+---------------------------
+1.  Your account needs the SALES_REP role. There is no button for it — ask
+    engineering.
+2.  Take printed standees. Each has an 8-character code under the QR square.
+3.  Take unused standees only. A used one is refused at step 8.
+4.  Charge your phone. The dish capture is the battery-hungry part.
+
+STEP 1 — SIGN IN
+----------------
+5.  Open the app on your phone, or the web build in Chrome. Both work.
+6.  Enter your phone number, tap Send code.
+7.  Type the 6-digit OTP. (On dev builds the code is 555555.)
+    You land on your rep home — the restaurants you may act on. Empty at first.
+
+STEP 2 — ACTIVATE THE STANDEE
+-----------------------------
+8.  Tap "Activate a standee" and type the 8-character code.
+      - Case, hyphens and spaces do not matter.
+      - You can paste the whole link if you scanned it with your phone camera.
+      - I, L, O and U are never used in a code. If you see one it is a 1 or 0.
+9.  Tap Continue. The code is checked BEFORE you are asked for anything else,
+    so you never fill in a restaurant's details against a dead standee.
+      "already in use"            -> use a different standee.
+      "not one of ours"           -> re-read the characters.
+      "restaurant already live"   -> that standee cannot be moved; use a fresh one.
+10. Enter the restaurant's NAME and PHONE NUMBER.
+
+    *** THE PHONE NUMBER IS THE MOST IMPORTANT THING YOU TYPE TODAY. ***
+    It becomes the owner's sign-in identity and cannot be edited afterwards.
+    A wrong digit shows no error anywhere. It silently creates an account for
+    a number nobody owns, and the real owner can never get in. Fixing it needs
+    an engineer running a repair script.
+
+11. Tap Continue. The app reads the number back with the country code.
+    READ IT ALOUD AND HAVE THE OWNER CONFIRM IT. This screen exists only for
+    that. Do not tap past it.
+12. Tap Activate. The standee is now bound to this restaurant, permanently.
+    You will see the live link.
+
+STEP 3 — ADD THE DISHES
+-----------------------
+13. From your rep home, open the restaurant you just activated.
+14. Tap "Add a dish". Up to three sources:
+      Capture now   - shoot the dish for AR.        PHONE ONLY.
+      3D model      - use a capture you finished earlier.
+      Photo         - a plain photo. No AR, but instant.
+15. For "Capture now", follow the usual six-photo ring. When you come back,
+    pick the capture you just made and name the dish.
+16. Names must be unique within one restaurant. Use what a diner would read.
+17. Repeat per dish. There is no bulk import.
+18. Watch each row's badge:
+      "3D generating..."  model being built. Minutes, not seconds.
+      "AR ready"          that dish now has a working AR button.
+      "3D unavailable"    the model failed. The dish still works in 2D.
+      "Photo only"        an image-only dish. Expected, not an error.
+    You do not have to wait — it keeps working after you close the app.
+
+STEP 4 — BEFORE YOU LEAVE THE TABLE
+-----------------------------------
+19. *** THE MENU IS NOT LIVE YET. *** This is the part that surprises people.
+    Activating binds the standee. It does not put the menu online. Scanning it
+    right now shows a "not live yet" page, which is correct.
+
+    The menu goes live when EITHER:
+      (a) a 3D dish finishes generating — that publishes automatically; or
+      (b) the owner signs in and taps Publish.
+
+    So if you added ONLY photo dishes, nothing publishes on its own. Tell the
+    owner plainly: they must sign in and publish, or the standee stays dead.
+20. Have the owner sign in NOW, on their own phone, with the number you typed.
+    Best use of your last five minutes: it proves the number was right while
+    you can still fix it, it lets them publish, and if they cannot get in you
+    are still in the room.
+21. Scan the standee yourself and check where it lands.
+22. Leave the standee on the table.
+
+WHAT WORKS WHERE
+----------------
+23. Phone and browser do the same things, with ONE exception:
+      Sign in / activate / type a code ......... phone YES   browser YES
+      See your restaurants .................... phone YES   browser YES
+      Add a photo or finished-capture dish .... phone YES   browser YES
+      SHOOT a dish ............................ phone YES   browser NO
+    A browser has no camera pipeline, so the option is not shown there.
+    The phone is the field tool; the browser is the desk tool.
+24. There is no in-app QR scanner on either. Use your phone's own camera, or
+    type the 8 characters. This is deliberate, not a missing feature.
+25. About 30 activations per hour. Normal visits never reach this.
+
+IF SOMETHING GOES WRONG
+-----------------------
+26. Wrong phone number typed -> escalate to engineering IMMEDIATELY with the
+    restaurant name and the correct number. Do NOT re-activate.
+27. Standee lost or damaged -> attach a fresh code to the same restaurant. The
+    old link keeps working until it is retired separately.
+28. "You can no longer edit this restaurant" -> your access was revoked; ask
+    for it again.
+29. Dish stuck on "3D generating" over an hour -> report it. It still shows 2D.
+30. Anything you cannot explain to the owner -> note the restaurant name, the
+    standee code and the time, and send it on. Do not guess.
+
+THE ONE-LINE VERSION
+--------------------
+31. Code in -> read the phone number aloud -> shoot the dishes -> have the
+    owner sign in and publish before you leave.
