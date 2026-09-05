@@ -25,6 +25,7 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { env } from '@/config/env';
 import { s3Client } from '@/config/s3';
 import { Catalog } from '@/models/Catalog';
+import type { PublicUrlScheme } from '@/models/types/catalog.types';
 import {
   MirageError,
   MirageErrorCode,
@@ -221,6 +222,9 @@ async function seedCatalog(
       };
     };
     logoKey: string;
+    /** Pre-set by rep activation — see the RECAPTURE_SHORT_CODE tests below. */
+    publicUrl: string;
+    publicUrlScheme: PublicUrlScheme;
   }> = {}
 ): Promise<{ id: Types.ObjectId; name: string }> {
   const doc = await Catalog.create({
@@ -228,6 +232,8 @@ async function seedCatalog(
     name: overrides.name ?? 'Blue Cafe',
     ...(overrides.contact ? { contact: overrides.contact } : {}),
     ...(overrides.logoKey ? { logoKey: overrides.logoKey } : {}),
+    ...(overrides.publicUrl ? { publicUrl: overrides.publicUrl } : {}),
+    ...(overrides.publicUrlScheme ? { publicUrlScheme: overrides.publicUrlScheme } : {}),
   });
   return { id: doc._id as Types.ObjectId, name: doc.name };
 }
@@ -296,6 +302,52 @@ describe('provisionCatalog — minting the public URL', () => {
     });
     expect(mirage.calls).toEqual([]);
     expect((await Catalog.findById(id).exec())?.mirageRestaurantId).toBeUndefined();
+  });
+});
+
+describe('provisionCatalog — a rep-activated catalog keeps its standee URL', () => {
+  it('writes the Mirage mapping without touching a pre-set publicUrl', async () => {
+    const mirage = fakeMirage();
+    const standeeUrl = 'https://scan.test/r/ABCD2345';
+    const { id } = await seedCatalog({
+      name: 'Blue Cafe',
+      publicUrl: standeeUrl,
+      publicUrlScheme: 'RECAPTURE_SHORT_CODE',
+    });
+
+    const result = await provisionCatalog(id);
+
+    // Mirage provisioning owns `mirageRestaurantId`. It does NOT own the URL:
+    // this catalog's code is already printed on a standee, and minting over it
+    // would break every one of them in the field.
+    expect(result.outcome).toBe('CREATED');
+    const stored = await Catalog.findById(id).exec();
+    expect(stored?.mirageRestaurantId).toBe(mirage.restaurants[0]?.id);
+    expect(stored?.mirageProvisionedAt).toBeInstanceOf(Date);
+    expect(stored?.publicUrl).toBe(standeeUrl);
+    expect(stored?.publicUrlScheme).toBe('RECAPTURE_SHORT_CODE');
+
+    // And the mapping the caller is handed reports the URL that is actually
+    // stored, not the one that would have been minted.
+    if (result.outcome !== 'CREATED') return;
+    expect(result.mapping.publicUrl).toBe(standeeUrl);
+    expect(result.mapping.publicUrlScheme).toBe('RECAPTURE_SHORT_CODE');
+  });
+
+  it('still mints for a catalog with no publicUrl — the unchanged path', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({ name: 'Green Cafe' });
+
+    const result = await provisionCatalog(id);
+
+    // The split payload must not have broken the flow every existing catalog
+    // goes through.
+    const created = mirage.restaurants[0];
+    const stored = await Catalog.findById(id).exec();
+    expect(stored?.publicUrl).toBe(`https://menu.test/${created?.id}`);
+    expect(stored?.publicUrlScheme).toBe('MIRAGE_OBJECT_ID');
+    if (result.outcome !== 'CREATED') return;
+    expect(result.mapping.publicUrl).toBe(`https://menu.test/${created?.id}`);
   });
 });
 

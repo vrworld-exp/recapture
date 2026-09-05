@@ -109,6 +109,24 @@ export const AnalyticsEvent = {
   CATALOG_PUBLISH_REQUESTED: 'catalog_publish_requested',
   CATALOG_UNPUBLISH_REQUESTED: 'catalog_unpublish_requested',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
+  // ── Pre-printed standee inventory ─────────────────────────────────────────
+  // The MINT, not the code. A code value is a public identifier for a specific
+  // restaurant's menu, so it never becomes an analytics property — only the
+  // size of the run and a hashed actor.
+  QR_BATCH_MINTED: 'qr_batch_minted',
+  // ── The public resolver (GET /r/:code) ────────────────────────────────────
+  // THE OUTCOME, AND NOTHING ELSE. A code value is a public identifier for one
+  // restaurant's menu, and a scan is one diner's presence in that restaurant —
+  // so no code, no catalog id, no restaurant name, no IP and no user agent
+  // appears here. What the event is for is the shape of the funnel: how many
+  // scans land on a live menu versus a holding page, and whether the error
+  // outcome is ever non-zero.
+  QR_CODE_SCANNED: 'qr_code_scanned',
+  // ── Rep activation (POST /rep/activations) ────────────────────────────────
+  // The hashed REP and the outcome. Never the code, never the restaurant's
+  // phone: the first is a public identifier for one restaurant's menu, the
+  // second is a person.
+  QR_CODE_ACTIVATED: 'qr_code_activated',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -792,6 +810,59 @@ const catalogQrRenderedProps = z
   .strict();
 
 /**
+ * The MINT, never the code. `batch_size` is the whole point of the event — it
+ * answers "how much inventory did we just commit to printing" — and a code
+ * value would be a public identifier for one restaurant's menu, so none appears
+ * here. Actor is hashed per the house rule.
+ */
+const qrBatchMintedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    batch_size: z.number().int().positive(),
+  })
+  .strict();
+
+/**
+ * Every way a scan can end, and NOTHING about which code or which restaurant.
+ *
+ * `REDIRECT` is the success case; the other four are the fallback pages. ERROR
+ * is in the enum because the public router swallows its own exceptions to keep
+ * a diner off the JSON envelope — this event is then the ONLY external signal
+ * that the terminal error handler fired at all.
+ */
+export const QR_SCAN_OUTCOMES = [
+  'REDIRECT',
+  'NOT_YET_LIVE',
+  'REPLACED',
+  'UNKNOWN',
+  'ERROR',
+] as const;
+
+/**
+ * One scanned standee. `outcome` is the entire payload — deliberately. A code
+ * identifies one restaurant's menu; a scan identifies one diner's presence
+ * there. Neither belongs in an analytics property, and there is no actor to
+ * hash because the client is an anonymous phone camera.
+ */
+const qrCodeScannedProps = z.object({ outcome: z.enum(QR_SCAN_OUTCOMES) }).strict();
+
+/** How a rep's activation attempt ended. */
+export const QR_ACTIVATION_OUTCOMES = ['ACTIVATED', 'ALREADY_ACTIVE', 'CODE_UNAVAILABLE'] as const;
+
+/**
+ * One activation attempt. The rep is hashed per the house rule; the restaurant
+ * appears nowhere, because "which restaurant did a rep sign up" is answerable
+ * from the CatalogDelegation ledger by someone with a reason to ask, and does
+ * not belong in an analytics stream.
+ */
+const qrCodeActivatedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    outcome: z.enum(QR_ACTIVATION_OUTCOMES),
+  })
+  .strict();
+
+/**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
  * is a compile error.
@@ -849,6 +920,9 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_PUBLISH_REQUESTED]: catalogPublishRequestedProps,
   [AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED]: catalogUnpublishRequestedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
+  [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
+  [AnalyticsEvent.QR_CODE_SCANNED]: qrCodeScannedProps,
+  [AnalyticsEvent.QR_CODE_ACTIVATED]: qrCodeActivatedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

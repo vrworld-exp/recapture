@@ -21,6 +21,7 @@
 //     never publishes the edit. `JSON.stringify(a) === JSON.stringify(b)` and
 //     object spreads are both banned here for exactly that reason — key order
 //     and dropped keys are invisible failures.
+import { isModelPending } from '@/models/types/catalog.types';
 import type {
   ProductPublishedSnapshot,
   PublishAction,
@@ -279,6 +280,21 @@ function planProduct(
     targetId: product.id,
     targetName: product.name,
   };
+
+  // A dish waiting on its FIRST model is not a step at all — the same kind of
+  // non-event as a product deleted before it was ever published. It has no
+  // assets to send, the gates already excluded it from this run, and it will
+  // plan a CREATE by itself once promotion writes its assets. Guarded on
+  // `mirageItemId` so a product that IS on Mirage always keeps being planned:
+  // silently dropping a published row would strand it there forever.
+  if (
+    !product.mirageItemId &&
+    isModelPending(product.modelStatus) &&
+    !product.glbUrl &&
+    mode !== 'UNPUBLISH'
+  ) {
+    return null;
+  }
 
   const gone = Boolean(product.deletedAt) || Boolean(product.archivedAt);
   const wantsDelete = gone || mode === 'UNPUBLISH';

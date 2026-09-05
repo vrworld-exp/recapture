@@ -17,8 +17,10 @@ import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
+import { effectiveModelStatus } from '@/models/types/catalog.types';
 import type {
   ProductAssets,
+  ProductModelStatus,
   ProductAvailability,
   ProductType,
   SyncStatus,
@@ -78,6 +80,13 @@ export interface ProductDto {
    */
   sourceProjectId: string | null;
   sourceModelId: string | null;
+  /**
+   * Whether this dish can launch AR right now, and if not, why not. The client
+   * polls a PROCESSING product and shows the AR button when it reads READY —
+   * `glbUrl` alone is not the gate, because a product may carry a previous
+   * model's URLs while a replacement generates.
+   */
+  modelStatus: ProductModelStatus;
   syncStatus: SyncStatus;
   /** OUR message for the last failure, never Mirage's prose. */
   syncError: string | null;
@@ -120,6 +129,10 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     // Field by field, like everything else here — never a spread of the record.
     sourceProjectId: p.sourceProjectId ? p.sourceProjectId.toHexString() : null,
     sourceModelId: p.sourceModelId ? p.sourceModelId.toHexString() : null,
+    // Derived, never read raw — a document predating the field materialises as
+    // NONE and is resolved back to READY from its own glbUrl. See the backfill
+    // note on effectiveModelStatus.
+    modelStatus: effectiveModelStatus(p),
     syncStatus: p.syncStatus,
     syncError: p.syncError?.message ?? null,
     isArchived: Boolean(p.archivedAt),
@@ -256,6 +269,17 @@ export type CreateProductResult =
   | { outcome: 'TOO_LARGE' }
   | { outcome: 'CREATED'; product: ProductDto };
 
+/** Non-owner inputs to a create. Empty for every owner-driven call. */
+export interface CreateProductOptions {
+  /**
+   * A SECOND user whose projects may supply `sourceModelId` — the rep who shot
+   * the dish. Set ONLY by the `/rep` route, and only after
+   * `resolveDelegatedCatalog` has proven the delegation. See
+   * {@link resolveOwnedModel} for why the widening is safe.
+   */
+  capturedByUserId?: string;
+}
+
 /**
  * Creates a product (features 6, 7, 11, 13).
  *
@@ -266,7 +290,8 @@ export type CreateProductResult =
  */
 export async function createProduct(
   userId: string,
-  input: CreateProductInput
+  input: CreateProductInput,
+  options: CreateProductOptions = {}
 ): Promise<CreateProductResult> {
   const catalog = await findOwnedCatalog(userId);
   if (!catalog) return { outcome: 'NO_CATALOG' };
@@ -289,15 +314,38 @@ export async function createProduct(
   let assets: ProductAssets | undefined;
   let sourceProjectId: Types.ObjectId | undefined;
   let sourceModelId: Types.ObjectId | undefined;
+  let modelStatus: ProductModelStatus = 'NONE';
 
   if (input.type === 'THREE_D') {
     // `sourceModelId` is guaranteed present by the schema's superRefine.
-    const resolved = await resolveOwnedModel(ownerId, input.sourceModelId as string);
-    if (resolved.outcome !== 'OK') return resolved;
-
-    assets = resolved.assets;
-    sourceProjectId = resolved.projectId;
-    sourceModelId = resolved.modelId;
+    const resolved = await resolveOwnedModel(
+      ownerId,
+      input.sourceModelId as string,
+      options.capturedByUserId
+        ? new Types.ObjectId(options.capturedByUserId)
+        : undefined
+    );
+    // Switched rather than compared to 'OK', so adding a fifth outcome to the
+    // union is a compile error here instead of a silent fall-through. Do NOT
+    // add a `default` case.
+    switch (resolved.outcome) {
+      case 'MODEL_NOT_FOUND':
+      case 'MODEL_NOT_READY':
+        return resolved;
+      case 'OK_PENDING':
+        // A real THREE_D product with nothing to render in 3D yet. No assets,
+        // and therefore no AR button until promotion writes them.
+        sourceProjectId = resolved.projectId;
+        sourceModelId = resolved.modelId;
+        modelStatus = resolved.modelStatus;
+        break;
+      case 'OK':
+        assets = resolved.assets;
+        sourceProjectId = resolved.projectId;
+        sourceModelId = resolved.modelId;
+        modelStatus = 'READY';
+        break;
+    }
   } else {
     // IMAGE_ONLY. `imageKey` is guaranteed present by the schema's superRefine,
     // and it is CLIENT-SUPPLIED — so it goes through the same containment guard
@@ -331,6 +379,7 @@ export async function createProduct(
     catalogId,
     userId: ownerId,
     type: input.type,
+    modelStatus,
     name: input.name,
     ...(input.description !== undefined ? { description: input.description } : {}),
     ...(input.price !== undefined ? { price: input.price } : {}),
@@ -353,6 +402,17 @@ export async function createProduct(
 type ResolveModelResult =
   | { outcome: 'MODEL_NOT_FOUND' }
   | { outcome: 'MODEL_NOT_READY' }
+  /**
+   * The model is real, owned, and still generating. The product may link it and
+   * go on the menu in 2D; catalogModelPromotionService copies the assets across
+   * when Meshy returns.
+   */
+  | {
+      outcome: 'OK_PENDING';
+      projectId: Types.ObjectId;
+      modelId: Types.ObjectId;
+      modelStatus: ProductModelStatus;
+    }
   | {
       outcome: 'OK';
       assets: ProductAssets;
@@ -367,6 +427,20 @@ type ResolveModelResult =
  * trusting the model row: models carry no owner of their own. A model belonging
  * to someone else returns the same MODEL_NOT_FOUND as one that does not exist.
  *
+ * [capturedBy] WIDENS that ownership by exactly one id, and exists for one
+ * caller: a SALES_REP authoring a dish on a restaurant's behalf. The rep shoots
+ * the dish on their own phone, so the Project is theirs — `/projects` has no
+ * delegation and deliberately none was added — while the catalog belongs to the
+ * restaurant. Without this the two never meet and every rep-captured dish is
+ * MODEL_NOT_FOUND.
+ *
+ * Safe because the model's artifact URLs are COPIED onto the product below and
+ * frozen there: the restaurant's dish does not keep reading from the rep's
+ * project, and `catalogModelPromotionService` matches on `sourceModelId` alone
+ * with no ownership test, so a later promotion works unchanged. The caller is
+ * responsible for having already proven the delegation — this function widens
+ * ownership, it does not authorise anything.
+ *
  * Queries the two collections directly rather than going through
  * projectModelsService, which imports adminProjectsService → projectsService;
  * routing through it would pull an import cycle into the catalog feature. Same
@@ -374,14 +448,16 @@ type ResolveModelResult =
  */
 async function resolveOwnedModel(
   ownerId: Types.ObjectId,
-  modelId: string
+  modelId: string,
+  capturedBy?: Types.ObjectId
 ): Promise<ResolveModelResult> {
   const model = await ProjectModel.findById(new Types.ObjectId(modelId)).exec();
   if (!model) return { outcome: 'MODEL_NOT_FOUND' };
 
+  const owners = capturedBy ? [ownerId, capturedBy] : [ownerId];
   const project = await Project.findOne({
     _id: model.projectId,
-    userId: ownerId,
+    userId: { $in: owners },
     deletedAt: null,
   })
     .select('_id')
@@ -389,8 +465,21 @@ async function resolveOwnedModel(
   // Not owned reads exactly as not found — no existence leak.
   if (!project) return { outcome: 'MODEL_NOT_FOUND' };
 
-  // Only a finished model can back a product. A QUEUED/PROCESSING/FAILED record
-  // has no artifacts, and a product pointing at one would publish a broken page.
+  // A QUEUED or PROCESSING model is LINKABLE: the dish goes on the menu in 2D
+  // now and the AR button appears by itself when meshyModelProcessor promotes
+  // the assets. FAILED is still refused — there is nothing coming, so linking
+  // one would produce a product that waits forever.
+  if (model.status === 'QUEUED' || model.status === 'PROCESSING') {
+    return {
+      outcome: 'OK_PENDING',
+      projectId: model.projectId,
+      modelId: model._id as Types.ObjectId,
+      modelStatus: model.status,
+    };
+  }
+
+  // A SUCCEEDED record with no GLB is not usable either — the app's viewer has
+  // nothing to render — and no promotion is coming to fix it.
   if (model.status !== 'SUCCEEDED' || !model.artifacts?.cdnUrls?.glb) {
     return { outcome: 'MODEL_NOT_READY' };
   }
@@ -515,14 +604,45 @@ export async function updateProduct(
 
   if (input.sourceModelId !== undefined) {
     const resolved = await resolveOwnedModel(existing.userId, input.sourceModelId);
-    if (resolved.outcome !== 'OK') return resolved;
+    // Exhaustive switch, no `default` — a new outcome must break the build here.
+    switch (resolved.outcome) {
+      case 'MODEL_NOT_FOUND':
+      case 'MODEL_NOT_READY':
+        return resolved;
 
-    // The card image comes with the model — a 3D product shows its generated
-    // preview, so a leftover uploaded image would compete with it.
-    set.assets = resolved.assets;
-    set.sourceProjectId = resolved.projectId;
-    set.sourceModelId = resolved.modelId;
-    set.type = 'THREE_D';
+      case 'OK_PENDING':
+        /**
+         * ⚠ THE DECISION, PINNED BY A TEST: swapping in a model that is still
+         * generating KEEPS THE CURRENT ASSETS. The dish goes on rendering its
+         * previous model — and keeps its AR button — until the replacement is
+         * actually promoted, at which point the swap happens in one write.
+         *
+         * The alternative (clear the assets now, restore them on promotion) is
+         * what silently strips a live dish of its AR button mid-service for
+         * however long Meshy takes, in exchange for nothing: nobody is served
+         * better by a blank card than by the model that is still perfectly
+         * good. It also un-publishes a published product for the duration,
+         * because the publish gates read `assets.glbUrl`.
+         *
+         * `modelStatus` still moves, so the client can show "a new model is
+         * generating" without the product losing anything.
+         */
+        set.sourceProjectId = resolved.projectId;
+        set.sourceModelId = resolved.modelId;
+        set.modelStatus = resolved.modelStatus;
+        set.type = 'THREE_D';
+        break;
+
+      case 'OK':
+        // The card image comes with the model — a 3D product shows its generated
+        // preview, so a leftover uploaded image would compete with it.
+        set.assets = resolved.assets;
+        set.sourceProjectId = resolved.projectId;
+        set.sourceModelId = resolved.modelId;
+        set.modelStatus = 'READY';
+        set.type = 'THREE_D';
+        break;
+    }
   } else if (input.imageKey !== undefined) {
     const check = await checkCatalogImageKey(catalogId, input.imageKey);
     if (check.outcome !== 'OK') return check;
@@ -534,6 +654,10 @@ export async function updateProduct(
       set.type = 'IMAGE_ONLY';
       set.sourceProjectId = null;
       set.sourceModelId = null;
+      // The link is gone, so any pending or ready model status goes with it —
+      // a promotion arriving later must not resurrect an AR button on a product
+      // that is now a photo.
+      set.modelStatus = 'NONE';
     } else {
       set['assets.imageKey'] = input.imageKey;
     }

@@ -20,9 +20,11 @@ import { Types } from 'mongoose';
 import { Catalog } from '@/models/Catalog';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct } from '@/models/CatalogProduct';
+import { effectiveModelStatus } from '@/models/types/catalog.types';
 import type {
   CatalogContact,
   CatalogStatus,
+  ProductModelStatus,
   ProductPublishedSnapshot,
   ProductType,
   SyncStatus,
@@ -90,6 +92,11 @@ export interface CatalogSnapshotProduct {
   usdzUrl?: string;
   thumbnailUrl?: string;
   imageKey?: string;
+  /**
+   * Carried so the planner can tell a dish waiting on its FIRST model from an
+   * ordinary one. Never diffed — see PRODUCT_DIFF_FIELDS.
+   */
+  modelStatus: ProductModelStatus;
   mirageItemId?: string;
   mirageCategoryIdAtSync?: string;
   syncStatus: SyncStatus;
@@ -231,6 +238,9 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
         usdzUrl: product.assets?.usdzUrl,
         thumbnailUrl: product.assets?.thumbnailUrl,
         imageKey: product.assets?.imageKey,
+        // Derived, so a legacy row reads READY rather than NONE — the planner
+        // must not mistake a long-published 3D dish for one awaiting a model.
+        modelStatus: effectiveModelStatus(product),
         mirageItemId: product.mirageItemId,
         mirageCategoryIdAtSync: product.mirageCategoryIdAtSync,
         syncStatus: product.syncStatus,

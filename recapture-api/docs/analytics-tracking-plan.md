@@ -263,6 +263,17 @@ there.
   `code`. The emitter strips any property whose NAME contains `code` as a
   suspected OTP/secret leak, so a prop called `code` would be dropped silently.
 
+## Pre-printed standee inventory
+
+### `qr_batch_minted`
+- **When:** an ADMIN mints a run of blank standee codes via
+  `POST /admin/qr-batches`. Fires once per batch, after the mint succeeds,
+  so a rolled-back (short) mint emits nothing.
+- **Props:** `actor_id_hash`, `batch_size` (int > 0)
+- **Note:** NO CODE VALUE EVER APPEARS HERE. A code is a public identifier
+  for one specific restaurant's menu, so the event carries the size of the
+  run and a hashed actor and nothing else.
+
 ## QA
 
 Run `npx tsx scripts/analytics-qa.ts` (see the script header for the dev/prod

@@ -65,6 +65,7 @@ import {
 import { MirageError } from '@/services/mirage';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
+import { sweepPromotedProducts } from '@/services/catalogModelPromotionService';
 import { log } from '@/worker/workerLog';
 import {
   DEFAULT_MAX_ATTEMPTS,
@@ -368,6 +369,15 @@ export const mirageCatalogPublishProcessor: JobProcessor = async (job) => {
       state,
       snapshotRevision: plan.snapshotRevision,
     });
+
+    // THE FOLLOW-UP FOR PROMOTIONS THAT LANDED MID-RUN. A model that finished
+    // while this run held the publish lock wrote its rows and lost the enqueue
+    // race; those rows are PENDING with nobody coming for them. This is the one
+    // moment the lock is guaranteed free — finalizeCatalogAfterRun just cleared
+    // it — so the sweep happens here rather than in a background scanner.
+    // One follow-up run, never a loop: if it collides too, ITS finalize sweeps
+    // again. Never throws, and deliberately after the finalize.
+    await sweepPromotedProducts(catalogObjectId, plan.snapshotRevision);
 
     track(AnalyticsEvent.CATALOG_PUBLISH_FINISHED, {
       user_id_hash: userIdHash,

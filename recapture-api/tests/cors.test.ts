@@ -50,6 +50,41 @@ describe('CORS allowlist', () => {
     expect(res.headers['access-control-allow-origin']).toBe('http://localhost:52341');
   });
 
+  // ── Exposed response headers ──────────────────────────────────────────────
+  //
+  // A browser cannot READ a response header unless it is exposed, even on an
+  // allowed origin — and the failure is SILENT: the download still happens, it
+  // is just named "export" with no extension. Nothing in the client can detect
+  // it, so it is pinned here.
+
+  it('exposes Content-Disposition, so a browser download keeps its filename', async () => {
+    const res = await request(app).get('/health').set('Origin', WEB_CLIENT);
+
+    const exposed = res.headers['access-control-expose-headers'] ?? '';
+    // Both consumers of this: the QR PNG/PDF download (matrix row 9, row 22)
+    // and the admin QR batch CSV export (row 23).
+    expect(exposed).toContain('Content-Disposition');
+  });
+
+  it('exposes ETag, so the QR render can be conditionally re-fetched', async () => {
+    const res = await request(app).get('/health').set('Origin', WEB_CLIENT);
+
+    expect(res.headers['access-control-expose-headers'] ?? '').toContain('ETag');
+  });
+
+  it('answers the preflight for the QR batch CSV export', async () => {
+    // The export is a GET behind a Bearer token, so the browser preflights it.
+    const res = await request(app)
+      .options('/admin/qr-batches/000000000000000000000000/export')
+      .set('Origin', WEB_CLIENT)
+      .set('Access-Control-Request-Method', 'GET')
+      .set('Access-Control-Request-Headers', 'authorization');
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe(WEB_CLIENT);
+    expect(res.headers['access-control-allow-headers']).toContain('authorization');
+  });
+
   it('serves a request with no Origin header (the mobile builds, curl)', async () => {
     const res = await request(app).get('/health');
 

@@ -89,6 +89,7 @@ function product(
     usdzUrl: 'https://cdn.test/model.usdz',
     thumbnailUrl: 'https://cdn.test/preview.jpg',
     imageKey: 'prod/img.jpg',
+    modelStatus: 'READY',
     mirageItemId: 'mi-1',
     mirageCategoryIdAtSync: 'm-c1',
     syncStatus: 'SYNCED',
@@ -468,5 +469,86 @@ describe('planPublish — modes', () => {
       delete: 0,
       skip: 2,
     });
+  });
+});
+
+// ── PENDING MODELS (stage 5) ────────────────────────────────────────────────
+
+describe('planPublish — products waiting on a model', () => {
+  it('skips a dish awaiting its FIRST model entirely, and plans its siblings', () => {
+    const plan = planPublish(
+      snapshot({
+        products: [
+          product({ id: 'p1' }),
+          product({
+            id: 'p2',
+            name: 'Waiting',
+            modelStatus: 'PROCESSING',
+            glbUrl: undefined,
+            usdzUrl: undefined,
+            thumbnailUrl: undefined,
+            imageKey: undefined,
+            mirageItemId: undefined,
+            publishedSnapshot: undefined,
+            syncStatus: 'NEVER',
+          }),
+        ],
+      }),
+      'FULL'
+    );
+
+    // Not a step at all — the same non-event as a product deleted before it was
+    // ever published. It has nothing to send, and it plans a CREATE by itself
+    // once promotion writes its assets.
+    expect(stepFor(plan, 'PRODUCT', 'p2')).toBeUndefined();
+    expect(stepFor(plan, 'PRODUCT', 'p1')).toMatchObject({ action: 'SKIP' });
+  });
+
+  it('still plans a published dish whose REPLACEMENT model is generating', () => {
+    // It carries the previous model's URLs and renders perfectly well. Dropping
+    // it from the plan would strand a live item on Mirage.
+    const plan = planPublish(
+      snapshot({ products: [product({ id: 'p1', modelStatus: 'PROCESSING' })] }),
+      'FULL'
+    );
+    expect(stepFor(plan, 'PRODUCT', 'p1')).toMatchObject({ action: 'SKIP', reason: 'UP_TO_DATE' });
+  });
+
+  it('a promoted product plans UPDATE while its untouched siblings SKIP', () => {
+    // THE PLANNER SELF-NARROWS (correction C1). This is what makes a
+    // catalog-wide re-publish after one promotion cost exactly one Mirage write
+    // — no `productIds` scoping needed, and therefore no corrupted
+    // `publishedRevision`.
+    const promoted = product({
+      id: 'p2',
+      name: 'Promoted',
+      glbUrl: 'https://cdn.test/NEW.glb',
+      syncStatus: 'PENDING',
+      publishedSnapshot: { ...PUBLISHED, name: 'Promoted', glbUrl: undefined },
+    });
+
+    const plan = planPublish(
+      snapshot({ products: [product({ id: 'p1' }), promoted, product({ id: 'p3' })] }),
+      'FULL'
+    );
+
+    expect(stepFor(plan, 'PRODUCT', 'p2')).toMatchObject({
+      action: 'UPDATE',
+      reason: 'FIELDS_CHANGED',
+    });
+    const changed = plan.steps.find((step) => step.targetId === 'p2')?.changedFields;
+    expect(changed).toEqual(['glbUrl']);
+    expect(stepFor(plan, 'PRODUCT', 'p1')).toMatchObject({ action: 'SKIP' });
+    expect(stepFor(plan, 'PRODUCT', 'p3')).toMatchObject({ action: 'SKIP' });
+  });
+
+  it('an UNPUBLISH still takes down a pending dish that reached Mirage', () => {
+    const plan = planPublish(
+      snapshot({
+        products: [product({ id: 'p1', modelStatus: 'PROCESSING', glbUrl: undefined })],
+      }),
+      'UNPUBLISH'
+    );
+    expect(stepFor(plan, 'PRODUCT', 'p1')).toMatchObject({ action: 'DELETE' });
   });
 });

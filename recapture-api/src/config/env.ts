@@ -431,6 +431,47 @@ const envSchema = z.object({
    */
   CATALOG_QR_MAX_PER_WINDOW: z.coerce.number().int().positive().default(60),
   CATALOG_QR_WINDOW_SECONDS: z.coerce.number().int().positive().default(600),
+
+  // ── Same-day activation: pre-printed standees, minting, rep rate limits ────
+  /**
+   * Origin the pre-printed standees encode: a code resolves at
+   * `{PUBLIC_RESOLVER_BASE_URL}/r/{code}`. Written verbatim into
+   * `catalog.publicUrl` at activation and then FROZEN, so changing this value
+   * later does NOT repoint already-printed codes — it only affects codes minted
+   * after the change. Treat it as append-only in production.
+   *
+   * `.optional()` rather than defaulted ON PURPOSE: an environment that has not
+   * set it must not silently mint codes pointing at a guessed host. The mint
+   * endpoint and activation both fail loudly when it is absent; the API still
+   * boots without it, so this can deploy before the hostname is decided.
+   */
+  PUBLIC_RESOLVER_BASE_URL: z
+    .string()
+    .url()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/+$/, '') : v)),
+  /**
+   * Origin of the web client — used to build the rep's one-tap activation link
+   * on the public resolver's "not live yet" page
+   * (`{WEB_APP_BASE_URL}/rep/activate?code={code}`).
+   *
+   * `.optional()` for the same reason PUBLIC_RESOLVER_BASE_URL is, and the
+   * fallback page checks it: when unset the page renders WITHOUT the link
+   * rather than with a broken one. A rep tapping through to
+   * `undefined/rep/activate` is worse than a rep typing the code into the app,
+   * and this page is customer-facing — it is the surface where a guess is most
+   * expensive.
+   */
+  WEB_APP_BASE_URL: z
+    .string()
+    .url()
+    .optional()
+    .transform((v) => (v ? v.replace(/\/+$/, '') : v)),
+  /** Largest single mint. Bounds one bad admin request, not total inventory. */
+  QR_BATCH_MAX_SIZE: z.coerce.number().int().positive().max(10_000).default(2_000),
+  /** Per-rep activation rate window — see utils/rateLimit.ts. */
+  ACTIVATION_MAX_PER_WINDOW: z.coerce.number().int().positive().default(30),
+  ACTIVATION_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
   /**
    * Publish runs retained per catalog for the activity log (feature 55).
    *

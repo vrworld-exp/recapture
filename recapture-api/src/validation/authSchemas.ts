@@ -6,10 +6,21 @@ import { AVATAR_CONTENT_TYPES } from '@/utils/avatarKeys';
 // E.164: a leading '+', a non-zero country digit, then up to 14 more digits.
 const E164 = /^\+[1-9]\d{7,14}$/;
 
-// Identifier normalization, shared by send + verify so lookups always match:
-// phone has spaces/dashes stripped and is E.164-checked; email is trimmed and
-// lowercased.
-const phoneField = z
+/**
+ * Identifier normalization, shared by send + verify so lookups always match:
+ * phone has spaces/dashes stripped and is E.164-checked; email is trimmed and
+ * lowercased.
+ *
+ * EXPORTED FOR REP ACTIVATION, and this is the single highest-consequence
+ * detail in that feature. Activation stores `User.phone` on the rep's word;
+ * the owner later signs in through the ordinary OTP flow and verifyOtpService
+ * looks the user up by that exact string. If the two normalised differently —
+ * `9876543210` stored, `+919876543210` looked up — the owner would land on a
+ * SECOND, empty account and their catalog would be stranded behind an orphan
+ * user with no way back. There is exactly one normaliser and both paths import
+ * it; validation/repSchemas.ts must never declare its own.
+ */
+export const phoneField = z
   .string()
   .trim()
   .min(8)

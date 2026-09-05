@@ -6,9 +6,11 @@
 // requireRole('MODEL_ARTIST') — ADMIN passes by role inheritance; destructive
 // routes add their own requireRole('ADMIN'). Standard envelope throughout.
 import { Router } from 'express';
+import { Types } from 'mongoose';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
 import { requireRole } from '@/middleware/requireRole';
+import { validateBody } from '@/middleware/validate';
 import {
   adminListProjectsQuerySchema,
   adminProjectIdParamsSchema,
@@ -52,6 +54,14 @@ import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
+import { QrBatch } from '@/models/QrBatch';
+import {
+  exportBatchCsv,
+  mintBatch,
+  slugifyBatchLabel,
+  QrResolverNotConfiguredError,
+} from '@/services/qrCodeService';
+import { mintQrBatchSchema, type MintQrBatchInput } from '@/validation/qrSchemas';
 
 const router = Router();
 
@@ -967,6 +977,100 @@ router.post(
     });
 
     res.status(200).json({ status: 'success', model });
+  })
+);
+// ── Pre-printed standee inventory (stage 2) ─────────────────────────────────
+
+/**
+ * POST /admin/qr-batches — mint a run of blank standee codes.
+ *
+ * ADMIN-ONLY, a stricter gate than the router-level MODEL_ARTIST: a mint commits
+ * the business to a physical print run, and the codes it produces are the thing
+ * every future activation hands out. Body `{count, label}`; `count` is bounded
+ * by QR_BATCH_MAX_SIZE in the schema, not here.
+ *
+ * The codes come back UNASSIGNED and resolve to nothing. Analytics carries the
+ * hashed actor and the batch SIZE only — never a code, which is a public
+ * identifier for one restaurant's menu.
+ */
+router.post(
+  '/qr-batches',
+  requireRole('ADMIN'),
+  validateBody(mintQrBatchSchema),
+  asyncHandler(async (req, res) => {
+    const { count, label } = req.body as MintQrBatchInput;
+    const userId = req.user!.userId;
+
+    const { batchId, minted } = await mintBatch({
+      count,
+      label,
+      createdByUserId: new Types.ObjectId(userId),
+    });
+
+    track(AnalyticsEvent.QR_BATCH_MINTED, {
+      actor_id_hash: hashIdentifier(userId),
+      batch_size: minted,
+    });
+
+    res.status(201).json({ status: 'success', batchId: batchId.toString(), minted });
+  })
+);
+
+/**
+ * GET /admin/qr-batches/:batchId/export — the print vendor's CSV.
+ *
+ * One `code,url` line per standee, no header, so the line count IS the batch
+ * count and a short run is visible at a glance. ADMIN-ONLY for the same reason
+ * the mint is.
+ *
+ * Answers 409 when PUBLIC_RESOLVER_BASE_URL is unset rather than emitting URLs
+ * against a guessed host — those would be printed onto thousands of physical
+ * standees before anyone noticed. `Content-Disposition` is already in the CORS
+ * exposedHeaders allowlist (app.ts), so the web client can read the filename.
+ */
+router.get(
+  '/qr-batches/:batchId/export',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const { batchId } = req.params;
+    if (!Types.ObjectId.isValid(batchId)) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid batch id',
+      });
+      return;
+    }
+
+    let csv: string | null;
+    try {
+      csv = await exportBatchCsv(new Types.ObjectId(batchId));
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'RESOLVER_NOT_CONFIGURED',
+          message: 'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment',
+        });
+        return;
+      }
+      throw err;
+    }
+
+    if (csv === null) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Batch not found',
+      });
+      return;
+    }
+
+    const batch = await QrBatch.findById(batchId).lean().exec();
+    const filename = `qr-batch-${slugifyBatchLabel(batch?.label ?? '')}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.status(200).send(csv);
   })
 );
 

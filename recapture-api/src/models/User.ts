@@ -5,15 +5,26 @@ export type AuthProvider = 'cognito' | 'firebase' | 'custom';
 
 /**
  * Access roles, in ascending privilege order. Privilege is INCLUSIVE upward
- * (ADMIN ⊇ MODEL_ARTIST ⊇ USER): every role check must go through
+ * (ADMIN ⊇ MODEL_ARTIST ⊇ SALES_REP ⊇ USER): every role check must go through
  * {@link hasRoleAtLeast}, never exact equality, so an admin passes every
  * model-artist gate. Granted only via scripts/set-user-role.ts (DB flag) —
  * there is deliberately no grant UI or endpoint.
+ *
+ * SALES_REP sits at rank 1: a rep is trusted with act-on-behalf-of writes but
+ * with none of the staff surfaces. Note the upward inclusion is REAL here —
+ * MODEL_ARTIST and ADMIN both pass every /rep gate. That is accepted, not
+ * overlooked: both are script-granted trusted roles, and every acting-on-behalf
+ * write leaves a CatalogDelegation row, so the inheritance is auditable.
  */
-export const USER_ROLES = ['USER', 'MODEL_ARTIST', 'ADMIN'] as const;
+export const USER_ROLES = ['USER', 'SALES_REP', 'MODEL_ARTIST', 'ADMIN'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
-const ROLE_RANK: Record<UserRole, number> = { USER: 0, MODEL_ARTIST: 1, ADMIN: 2 };
+const ROLE_RANK: Record<UserRole, number> = {
+  USER: 0,
+  SALES_REP: 1,
+  MODEL_ARTIST: 2,
+  ADMIN: 3,
+};
 
 /** The ONE role comparison — inclusive upward, never `===`. */
 export function hasRoleAtLeast(role: UserRole, minRole: UserRole): boolean {

@@ -90,7 +90,7 @@ import {
 } from '@/services/catalogProductsService';
 import {
   PRODUCT_IMAGE_CONTENT_TYPES,
-  type ProductImageContentType,
+  sniffProductImageContentType,
 } from '@/utils/productImageKeys';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
@@ -989,28 +989,6 @@ router.post(
     res.status(200).json({ status: 'success', key: result.key });
   })
 );
-
-/**
- * JPEG/PNG/WebP by MAGIC BYTES, or null. Mirrors the client's sniffer exactly,
- * and the pair must not be able to disagree — the stored content type is
- * derived from this, and the key's extension from that.
- */
-function sniffProductImageContentType(bytes: Buffer): ProductImageContentType | null {
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-    return 'image/jpeg';
-  }
-  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  if (bytes.length >= 8 && png.every((b, i) => bytes[i] === b)) return 'image/png';
-  // RIFF....WEBP — the four size bytes at 4..7 are skipped on purpose.
-  if (
-    bytes.length >= 12 &&
-    bytes.toString('ascii', 0, 4) === 'RIFF' &&
-    bytes.toString('ascii', 8, 12) === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-  return null;
-}
 
 /**
  * PUT /catalog/products/:id/image — bind an uploaded object to a product

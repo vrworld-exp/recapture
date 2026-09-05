@@ -13,7 +13,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { createApp } from '@/app';
 import { env } from '@/config/env';
 import { s3Client } from '@/config/s3';
-import { User, type UserRole } from '@/models/User';
+import { User, hasRoleAtLeast, type UserRole } from '@/models/User';
 import { Project } from '@/models/Project';
 import { Job } from '@/models/Job';
 import { RateWindow } from '@/models/RateWindow';
@@ -237,6 +237,37 @@ describe('requireRole on /admin routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
     }
+  });
+
+  it('SALES_REP → 403 on a MODEL_ARTIST gate (rank ladder, not membership)', async () => {
+    // The one assertion that proves the SALES_REP renumbering went the right
+    // way round: if SALES_REP had been ranked ABOVE MODEL_ARTIST, every other
+    // test in this file would still pass.
+    const { auth } = await makeUser('SALES_REP');
+    const someId = new Types.ObjectId().toHexString();
+
+    for (const path of [
+      '/admin/projects',
+      `/admin/projects/${someId}`,
+      `/admin/projects/${someId}/export`,
+    ]) {
+      const res = await request(app).get(path).set(auth);
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({
+        status: 'error',
+        code: 'FORBIDDEN',
+        message: expect.any(String),
+      });
+    }
+  });
+
+  it('the ladder is USER < SALES_REP < MODEL_ARTIST <= ADMIN', () => {
+    // Guards the renumber against an off-by-one directly, without a route.
+    expect(hasRoleAtLeast('SALES_REP', 'USER')).toBe(true);
+    expect(hasRoleAtLeast('SALES_REP', 'MODEL_ARTIST')).toBe(false);
+    expect(hasRoleAtLeast('MODEL_ARTIST', 'SALES_REP')).toBe(true);
+    expect(hasRoleAtLeast('ADMIN', 'SALES_REP')).toBe(true);
+    expect(hasRoleAtLeast('USER', 'SALES_REP')).toBe(false);
   });
 
   it('401 (not 403) without a token', async () => {

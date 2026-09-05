@@ -31,15 +31,26 @@ export type CatalogStatus = (typeof CATALOG_STATUSES)[number];
  * How {@link ICatalog.publicUrl} was derived, recorded ON the catalog so a
  * future scheme change cannot silently rewrite already-issued URLs — a
  * grandfathered catalog is visibly on the old scheme instead of quietly
- * repointed. Today there is exactly one scheme:
+ * repointed. There are two:
  *
  *   MIRAGE_OBJECT_ID — `{MIRAGE_PUBLIC_BASE_URL}/{mirageRestaurantId}`.
  *   Every public Mirage resolver falls back to `findById` when the name lookup
  *   misses (mirage-be/src/Controllers/itemController.js:472-478), and an
  *   ObjectId is immutable where a name is not. That is what makes "the QR never
  *   breaks" a property of the URL scheme rather than a rule people remember.
+ *
+ *   RECAPTURE_SHORT_CODE — `{PUBLIC_RESOLVER_BASE_URL}/r/{code}`, written at
+ *   REP ACTIVATION, before Mirage has ever heard of this restaurant. The
+ *   indirection is the point: the printed code is meaningless and permanent,
+ *   and remapping happens on the QrCode row rather than on this URL — so
+ *   `publicUrl` stays as frozen under this scheme as under the other one.
+ *
+ * This enum being multi-member is exactly why it was written as an enum rather
+ * than inferred from the string: catalogs provisioned before same-day
+ * activation keep MIRAGE_OBJECT_ID and their printed QRs keep working, visibly
+ * grandfathered instead of quietly repointed.
  */
-export const PUBLIC_URL_SCHEMES = ['MIRAGE_OBJECT_ID'] as const;
+export const PUBLIC_URL_SCHEMES = ['MIRAGE_OBJECT_ID', 'RECAPTURE_SHORT_CODE'] as const;
 export type PublicUrlScheme = (typeof PUBLIC_URL_SCHEMES)[number];
 
 /**
@@ -84,12 +95,68 @@ export interface CatalogContact {
  *                available, a USDZ and a generated preview image).
  *   IMAGE_ONLY — a photo, a name and a price. No model.
  *
- * Converting between the two is a real operation with a Mirage-side cost: M9
- * (`update-item`) cannot unset `imgOnly`, so a conversion has to be published
- * as DELETE + CREATE and mints a new Mirage item id (§12 edge case 7).
+ * ⚠ THE OLD REASON TO FEAR A CONVERSION IS GONE. This comment used to say that
+ * `update-item` cannot unset `imgOnly`, so a conversion had to be published as
+ * DELETE + CREATE and minted a new Mirage item id. Mirage's current handler
+ * RE-DERIVES the flag from what the document ends up holding
+ * (adminController.js:1995), so a conversion is an ordinary UPDATE and the
+ * Mirage item id — with its whole analytics history — survives. See C7 in
+ * docs/same-day-activation/00-preflight-and-corrections.md. Do not build a
+ * DELETE + CREATE path on the strength of the old sentence.
+ *
+ * `type` is AUTHORED INTENT and does not move on its own. Whether a THREE_D
+ * product can actually launch AR right now is {@link ProductModelStatus}, which
+ * is a different question with a different answer.
  */
 export const PRODUCT_TYPES = ['THREE_D', 'IMAGE_ONLY'] as const;
 export type ProductType = (typeof PRODUCT_TYPES)[number];
+
+/**
+ * Does this product have a usable 3D model RIGHT NOW?
+ *
+ * Mirrors ProjectModel.status onto the row the menu actually renders, so the
+ * menu never has to join to a project to answer "can this dish launch AR".
+ *
+ *   NONE       — image-only, or 3D with no linked model.
+ *   QUEUED     — linked to a model that has not started generating.
+ *   PROCESSING — Meshy is working on it.
+ *   READY      — assets are promoted and live. THE ONLY STATE THAT GATES AR.
+ *   FAILED     — generation failed; the product stays on the menu in 2D.
+ *
+ * `type` stays AUTHORED INTENT (THREE_D vs IMAGE_ONLY) and does not move.
+ * `modelStatus` is the runtime fact. A THREE_D product with modelStatus
+ * PROCESSING is a real, valid menu item — it just has no AR button yet.
+ */
+export const PRODUCT_MODEL_STATUSES = ['NONE', 'QUEUED', 'PROCESSING', 'READY', 'FAILED'] as const;
+export type ProductModelStatus = (typeof PRODUCT_MODEL_STATUSES)[number];
+
+/**
+ * The model status of a product row, correct for legacy documents too.
+ *
+ * ⚠ THE BACKFILL DECISION, WRITTEN DOWN: `modelStatus` is DERIVED AT READ TIME
+ * for documents that predate the field. There is no migration script and there
+ * will not be one.
+ *
+ * Every pre-existing document materialises as `NONE` through the schema
+ * default, and a product carrying a `glbUrl` is READY by definition — no other
+ * state can produce one. So the derivation is total and unambiguous, it needs
+ * no write, it cannot half-complete the way a script can, and a row that is
+ * later promoted overwrites the stored field with the same answer. Reading the
+ * raw field anywhere a legacy row could reach is the bug; call this instead.
+ */
+export function effectiveModelStatus(product: {
+  modelStatus?: ProductModelStatus;
+  assets?: { glbUrl?: string };
+}): ProductModelStatus {
+  const stored = product.modelStatus ?? 'NONE';
+  if (stored === 'NONE' && product.assets?.glbUrl) return 'READY';
+  return stored;
+}
+
+/** QUEUED or PROCESSING — a model is coming, but it is not here yet. */
+export function isModelPending(status: ProductModelStatus): boolean {
+  return status === 'QUEUED' || status === 'PROCESSING';
+}
 
 /**
  * ReCapture-only stock flag. Mirage's item schema has no availability field, so
