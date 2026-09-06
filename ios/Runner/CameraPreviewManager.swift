@@ -209,9 +209,16 @@ final class CameraPreviewManager: NSObject {
   /// interruption + runtime-error observers once configured.
   private func configureSession() -> ConfigFailure? {
     session.beginConfiguration()
-    // `.high` is a sensible preview preset; capture resolution is a separate
-    // iOS task. Fall back to whatever the device offers if it is unsupported.
-    if session.canSetSessionPreset(.high) {
+    // `.photo`, NOT `.high`. `.high` is a VIDEO preset: stills captured under it
+    // come out at video resolution through a video-tuned pipeline — shorter
+    // exposures, video noise reduction, and none of the still-image multi-frame
+    // fusion — which is why in-app captures were darker and softer than the
+    // system camera, and why Meshy refused them. `.photo` selects the
+    // full-sensor still pipeline the system camera uses.
+    // Falls back to `.high` only if a device somehow cannot do `.photo`.
+    if session.canSetSessionPreset(.photo) {
+      session.sessionPreset = .photo
+    } else if session.canSetSessionPreset(.high) {
       session.sessionPreset = .high
     }
 
@@ -243,8 +250,12 @@ final class CameraPreviewManager: NSObject {
 
     // Attach the still-capture photo output into the SAME session (parity with
     // Android binding ImageCapture alongside Preview). canAddOutput-gated.
-    if let photoOutput = captureManager?.photoOutput, session.canAddOutput(photoOutput) {
-      session.addOutput(photoOutput)
+    if let captureManager = captureManager,
+       session.canAddOutput(captureManager.photoOutput) {
+      session.addOutput(captureManager.photoOutput)
+      // Quality/resolution opt-ins are CONFIGURATION-time properties and must be
+      // set here, with the output attached and before commitConfiguration.
+      captureManager.configureOutput(for: device)
     }
 
     session.commitConfiguration()

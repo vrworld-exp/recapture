@@ -17,6 +17,10 @@ import Flutter
   /// ImuOrientationStreamHandler).
   private var imuOrientationStreamHandler: ImuOrientationStreamHandler?
 
+  /// Strong reference to the stability-gate stream handler so its
+  /// FlutterEventChannel keeps a live delegate (see StabilityStreamHandler).
+  private var stabilityStreamHandler: StabilityStreamHandler?
+
   /// Strong reference to the real-time blur analyzer so its FlutterEventChannel
   /// keeps a live delegate; its video-data output is attached to the preview
   /// session by the camera manager (see BlurAnalysisManager).
@@ -35,6 +39,11 @@ import Flutter
   /// BackgroundUploadManager).
   private var uploadEventStreamHandler: UploadEventStreamHandler?
 
+  /// Strong reference to the AR Quick Look presenter so its
+  /// FlutterMethodChannel keeps a live handler, and so the downloaded USDZ it
+  /// is previewing outlives the call (see ARQuickLookManager).
+  private var arQuickLookManager: ARQuickLookManager?
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -45,10 +54,28 @@ import Flutter
     registerCameraPreview()
     registerSensorStream()
     registerImuOrientationStream()
+    registerStabilityStream()
     registerCaptureStorage()
     registerBackgroundUpload()
+    registerArQuickLook()
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  /// Registers the AR Quick Look MethodChannel (`preview`, `isSupported`).
+  /// The model viewer's "View in AR" calls it directly instead of going
+  /// through `<model-viewer>`, which disables AR inside an app WebView — see
+  /// ARQuickLookManager for the full reason.
+  private func registerArQuickLook() {
+    guard let registrar = registrar(forPlugin: "ARQuickLookPlugin") else { return }
+    let manager = ARQuickLookManager()
+    arQuickLookManager = manager
+    FlutterMethodChannel(
+      name: ARQuickLookManager.channelName,
+      binaryMessenger: registrar.messenger()
+    ).setMethodCallHandler { call, result in
+      manager.handle(call, result: result)
+    }
   }
 
   /// Registers the background-upload MethodChannel (`enqueueUpload`) and the
@@ -123,6 +150,23 @@ import Flutter
     imuOrientationStreamHandler = handler
     let channel = FlutterEventChannel(
       name: ImuOrientationStreamHandler.channelName,
+      binaryMessenger: registrar.messenger())
+    channel.setStreamHandler(handler)
+  }
+
+  /// Registers the stability-gate `FlutterEventChannel` (CMDeviceMotion rotation
+  /// rate + user acceleration → a debounced stable/unstable state, the
+  /// auto-capture "stable" trigger, and a throttled stillness score), the iOS
+  /// counterpart to the Android stability channel. This is what opens the capture
+  /// shutter: without it the Dart readiness gate never sees `stable`, so neither
+  /// guided auto-capture nor the Meshy shutter can fire. See
+  /// StabilityStreamHandler.
+  private func registerStabilityStream() {
+    guard let registrar = registrar(forPlugin: "StabilityPlugin") else { return }
+    let handler = StabilityStreamHandler()
+    stabilityStreamHandler = handler
+    let channel = FlutterEventChannel(
+      name: StabilityStreamHandler.channelName,
       binaryMessenger: registrar.messenger())
     channel.setStreamHandler(handler)
   }

@@ -9,10 +9,15 @@ import Flutter
 /// Dart `CaptureChannel`/`CapturedFrame` decode unchanged.
 ///
 /// Scope here is `captureSingle` (single still). It returns `{ id, path,
-/// timestampNs }`: a HEIC (HEVC codec) file when the device supports it, else a
-/// JPEG, written to an app-scoped `captures/{sessionId}/` dir (Application
-/// Support — the iOS analog of Android's app-scoped external files dir, NOT the
-/// system temp dir, NOT the photo library). The Dart layer owns the file's fate.
+/// timestampNs }`: a JPEG — always, see `makeSettings` — written to an app-scoped
+/// `captures/{sessionId}/` dir (Application Support — the iOS analog of Android's
+/// app-scoped external files dir, NOT the system temp dir, NOT the photo
+/// library). The Dart layer owns the file's fate.
+///
+/// Capture quality is set up in `configureOutput`, which the preview manager
+/// calls while configuring the session: full-resolution stills on the `.photo`
+/// preset with `.quality` prioritization. Those opt-ins are what make a capture
+/// match the system camera rather than a dim, soft video-pipeline frame.
 ///
 /// `timestampNs` is the photo's capture time (`AVCapturePhoto.timestamp`, the mach
 /// host clock AVFoundation uses) so it aligns with the IMU/blur stream timestamps.
@@ -133,13 +138,60 @@ final class CameraCaptureManager: NSObject, FlutterStreamHandler,
     }
   }
 
-  /// Fresh settings per capture (reusing an `AVCapturePhotoSettings` is illegal).
-  /// HEIC (HEVC codec) when the device supports it, else JPEG.
-  private func makeSettings() -> AVCapturePhotoSettings {
-    if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
-      return AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
+  /// Session-configuration-time setup of the photo output, called by
+  /// `CameraPreviewManager` inside its begin/commitConfiguration block once the
+  /// output is attached. It MUST run there: `maxPhotoQualityPrioritization` is a
+  /// configuration-time property, and a per-capture request above the ceiling it
+  /// sets raises an exception.
+  func configureOutput(for device: AVCaptureDevice) {
+    // Opt into the still pipeline's best work — multi-frame fusion and the
+    // longer effective exposure that makes a hand-held indoor capture usable.
+    // Left at the `.balanced` default, stills came out dark and soft; the cost
+    // is added latency per shot, which this flow can afford because it already
+    // waits for the user to hold steady.
+    photoOutput.maxPhotoQualityPrioritization = .quality
+
+    // Full sensor resolution rather than the active format's default, which is
+    // often binned. More pixels on the object is directly more detail for the
+    // reconstruction to work from.
+    if #available(iOS 16.0, *) {
+      let supported = device.activeFormat.supportedMaxPhotoDimensions
+      if let largest = supported.max(by: {
+        Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height)
+      }) {
+        photoOutput.maxPhotoDimensions = largest
+      }
+    } else {
+      photoOutput.isHighResolutionCaptureEnabled = true
     }
-    return AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+  }
+
+  /// Fresh settings per capture (reusing an `AVCapturePhotoSettings` is illegal).
+  ///
+  /// JPEG, deliberately NOT HEIC. Every downstream layer assumes JPEG — the
+  /// `StorageSegments` frame contract, the bundle packer that names each file
+  /// `<ring>_NNNN.jpg` and copies the source bytes VERBATIM, and the upload's
+  /// declared content type. Capturing HEVC therefore shipped HEIC bytes inside
+  /// `.jpg` files, which is why Meshy rejected in-app captures while photos
+  /// picked from the library (real JPEGs) reconstructed fine. It also matches
+  /// Android, whose CameraX ImageCapture already produces JPEG.
+  private func makeSettings() -> AVCapturePhotoSettings {
+    let settings = AVCapturePhotoSettings(
+      format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+
+    // Mirror the ceiling `configureOutput` set (never exceed it — that throws).
+    settings.photoQualityPrioritization = photoOutput.maxPhotoQualityPrioritization
+    if #available(iOS 16.0, *) {
+      settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
+    } else {
+      settings.isHighResolutionPhotoEnabled = photoOutput.isHighResolutionCaptureEnabled
+    }
+
+    // A capture ring needs CONSISTENT lighting. The default is `.auto`, so a
+    // flash could fire on some frames of a ring and not others, handing the
+    // reconstruction contradictory shading for the same surface.
+    settings.flashMode = .off
+    return settings
   }
 
   // MARK: - AVCapturePhotoCaptureDelegate (AVFoundation internal queue)
@@ -166,9 +218,8 @@ final class CameraCaptureManager: NSObject, FlutterStreamHandler,
       return
     }
 
-    // Extension follows the codec actually used (HEVC ⇒ .heic, else .jpg).
-    let isHeic = photo.resolvedSettings.photoCodecType == .hevc
-    let ext = isHeic ? "heic" : "jpg"
+    // Always JPEG — see makeSettings for why the pipeline requires it.
+    let ext = "jpg"
     let tsNs = Int64(photo.timestamp.seconds * 1_000_000_000.0)
     // id mirrors Android: "{sessionId}_{index:05}"; index 0 for a single capture.
     let id = String(format: "%@_%05d", pending.sessionId, 0)

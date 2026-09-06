@@ -20,10 +20,13 @@
 		CAFE000000000000000000D2 /* SensorStreamHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000D1 /* SensorStreamHandler.swift */; };
 		CAFE000000000000000000E2 /* OrientationFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000E1 /* OrientationFilter.swift */; };
 		CAFE000000000000000000F2 /* ImuOrientationStreamHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE000000000000000000F1 /* ImuOrientationStreamHandler.swift */; };
+		CAFE0000000000000000B602 /* StabilityGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B601 /* StabilityGate.swift */; };
+		CAFE0000000000000000B702 /* StabilityStreamHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B701 /* StabilityStreamHandler.swift */; };
 		CAFE0000000000000000B102 /* BlurMetric.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B101 /* BlurMetric.swift */; };
 		CAFE0000000000000000B202 /* BlurThresholdPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B201 /* BlurThresholdPolicy.swift */; };
 		CAFE0000000000000000B302 /* BlurAnalysisManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B301 /* BlurAnalysisManager.swift */; };
 		CAFE0000000000000000B402 /* CameraCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B401 /* CameraCaptureManager.swift */; };
+		CAFE0000000000000000B502 /* ARQuickLookManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE0000000000000000B501 /* ARQuickLookManager.swift */; };
 		CAFE00000000000000005102 /* StorageSegments.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00000000000000005101 /* StorageSegments.swift */; };
 		CAFE00000000000000005202 /* JobManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00000000000000005201 /* JobManifest.swift */; };
 		CAFE00000000000000005302 /* CaptureStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00000000000000005301 /* CaptureStorage.swift */; };
@@ -33,6 +36,7 @@
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -77,10 +81,13 @@
 		CAFE000000000000000000D1 /* SensorStreamHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorStreamHandler.swift; sourceTree = "<group>"; };
 		CAFE000000000000000000E1 /* OrientationFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationFilter.swift; sourceTree = "<group>"; };
 		CAFE000000000000000000F1 /* ImuOrientationStreamHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImuOrientationStreamHandler.swift; sourceTree = "<group>"; };
+		CAFE0000000000000000B601 /* StabilityGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilityGate.swift; sourceTree = "<group>"; };
+		CAFE0000000000000000B701 /* StabilityStreamHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StabilityStreamHandler.swift; sourceTree = "<group>"; };
 		CAFE0000000000000000B101 /* BlurMetric.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurMetric.swift; sourceTree = "<group>"; };
 		CAFE0000000000000000B201 /* BlurThresholdPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurThresholdPolicy.swift; sourceTree = "<group>"; };
 		CAFE0000000000000000B301 /* BlurAnalysisManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurAnalysisManager.swift; sourceTree = "<group>"; };
 		CAFE0000000000000000B401 /* CameraCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCaptureManager.swift; sourceTree = "<group>"; };
+		CAFE0000000000000000B501 /* ARQuickLookManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARQuickLookManager.swift; sourceTree = "<group>"; };
 		CAFE00000000000000005101 /* StorageSegments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageSegments.swift; sourceTree = "<group>"; };
 		CAFE00000000000000005201 /* JobManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JobManifest.swift; sourceTree = "<group>"; };
 		CAFE00000000000000005301 /* CaptureStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureStorage.swift; sourceTree = "<group>"; };
@@ -99,6 +106,7 @@
 		B723E269F592313C3EF3D100 /* Pods-RunnerTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.release.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.release.xcconfig"; sourceTree = "<group>"; };
 		DD1DAB836062306E4462727C /* Pods_RunnerTests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RunnerTests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		ECD361D77A2B5019FB4578D0 /* Pods-RunnerTests.profile.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.profile.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.profile.xcconfig"; sourceTree = "<group>"; };
+		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +114,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */,
 				6EB179D0B0DCF013CE134C95 /* Pods_Runner.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -154,6 +163,7 @@
 		9740EEB11CF90186004384FC /* Flutter */ = {
 			isa = PBXGroup;
 			children = (
+				78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */,
 				3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */,
 				9740EEB21CF90195004384FC /* Debug.xcconfig */,
 				7AFA3C8E1D35360C0083082E /* Release.xcconfig */,
@@ -200,10 +210,13 @@
 				CAFE000000000000000000D1 /* SensorStreamHandler.swift */,
 				CAFE000000000000000000E1 /* OrientationFilter.swift */,
 				CAFE000000000000000000F1 /* ImuOrientationStreamHandler.swift */,
+				CAFE0000000000000000B601 /* StabilityGate.swift */,
+				CAFE0000000000000000B701 /* StabilityStreamHandler.swift */,
 				CAFE0000000000000000B101 /* BlurMetric.swift */,
 				CAFE0000000000000000B201 /* BlurThresholdPolicy.swift */,
 				CAFE0000000000000000B301 /* BlurAnalysisManager.swift */,
 				CAFE0000000000000000B401 /* CameraCaptureManager.swift */,
+				CAFE0000000000000000B501 /* ARQuickLookManager.swift */,
 				CAFE00000000000000005101 /* StorageSegments.swift */,
 				CAFE00000000000000005201 /* JobManifest.swift */,
 				CAFE00000000000000005301 /* CaptureStorage.swift */,
@@ -238,6 +251,9 @@
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		97C146ED1CF9000F007C117D /* Runner */ = {
+			packageProductDependencies = (
+				78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */,
+			);
 			isa = PBXNativeTarget;
 			buildConfigurationList = 97C147051CF9000F007C117D /* Build configuration list for PBXNativeTarget "Runner" */;
 			buildPhases = (
@@ -262,6 +278,9 @@
 
 /* Begin PBXProject section */
 		97C146E61CF9000F007C117D /* Project object */ = {
+			packageReferences = (
+				781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */,
+			);
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
@@ -418,10 +437,13 @@
 				CAFE000000000000000000D2 /* SensorStreamHandler.swift in Sources */,
 				CAFE000000000000000000E2 /* OrientationFilter.swift in Sources */,
 				CAFE000000000000000000F2 /* ImuOrientationStreamHandler.swift in Sources */,
+				CAFE0000000000000000B602 /* StabilityGate.swift in Sources */,
+				CAFE0000000000000000B702 /* StabilityStreamHandler.swift in Sources */,
 				CAFE0000000000000000B102 /* BlurMetric.swift in Sources */,
 				CAFE0000000000000000B202 /* BlurThresholdPolicy.swift in Sources */,
 				CAFE0000000000000000B302 /* BlurAnalysisManager.swift in Sources */,
 				CAFE0000000000000000B402 /* CameraCaptureManager.swift in Sources */,
+				CAFE0000000000000000B502 /* ARQuickLookManager.swift in Sources */,
 				CAFE00000000000000005102 /* StorageSegments.swift in Sources */,
 				CAFE00000000000000005202 /* JobManifest.swift in Sources */,
 				CAFE00000000000000005302 /* CaptureStorage.swift in Sources */,
@@ -775,6 +797,18 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+/* Begin XCLocalSwiftPackageReference section */
+		781AD8BC2B33823900A9FFBB /* XCLocalSwiftPackageReference "Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage;
+		};
+/* End XCLocalSwiftPackageReference section */
+/* Begin XCSwiftPackageProductDependency section */
+		78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = FlutterGeneratedPluginSwiftPackage;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 97C146E61CF9000F007C117D /* Project object */;
 }
