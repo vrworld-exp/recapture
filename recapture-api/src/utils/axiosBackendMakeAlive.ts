@@ -34,15 +34,15 @@ async function ping(): Promise<HealthResponse> {
 
 
 export async function axiosBackendMakeAlive(): Promise<void> {
-    try {
-
-        // const min = 1000 * 60 * 10;  // 10 mins
-        const min = 1000 * 60 * 2;  // 2 mins
-        // const health = await ping();
-        await setInterval(ping, min); // ping every 10 seconds
-        // console.log('✅ Backend health check passed');
-    } catch (err) {
-        console.error('❌ Backend health check failed:', err);
-    }
-
+    // const min = 1000 * 60 * 10;  // 10 mins
+    const min = 1000 * 60 * 2;  // 2 mins
+    // setInterval's callback runs on its own tick, outside this function's
+    // call stack — a rejection here is NOT caught by a try/catch wrapping
+    // setInterval itself, it becomes an unhandled rejection that crashes the
+    // process. Each tick must catch its own failure.
+    setInterval(() => {
+        ping().catch((err) => {
+            console.error('❌ Backend health check failed:', err);
+        });
+    }, min);
 }
