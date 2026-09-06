@@ -121,7 +121,7 @@ and one object for tests to `vi.spyOn(s3Client, 'send')` against.
 | Written by | the phone, directly (presigned multipart) | the worker, server-side |
 | Read by | API + staff export, via presigned GET | **anyone**, via CloudFront |
 | Public? | **No.** Private, presigned-only | Fronted by the CDN |
-| CORS | **none** — deliberately | n/a (CDN serves it) |
+| CORS | `PUT`/`GET`/`HEAD` for browser part-uploads (see below) | n/a (CDN serves it) |
 
 ### Why two buckets instead of one with prefixes
 
@@ -565,9 +565,14 @@ headers).
 
 1. **Buckets.** Create `<prefix>-raw-captures` and `<prefix>-model-artifacts` in
    your region. **Block all public access on both.**
-2. **CORS.** Add a CORS policy on the *raw* bucket **only if** you need browser
-   clients to PUT directly. Native mobile does not need it. (The current setup
-   deliberately has none — hence the two proxy routes in §7.3/§7.4.)
+2. **CORS.** Add a CORS policy on the *raw* bucket if you need browser clients
+   to PUT directly — this deployment does, for artist photo-set upload from the
+   web build. Native mobile does not need it. Applied policy:
+   `AllowedMethods` `PUT`, `GET`, `HEAD`; `AllowedHeaders` `content-type`;
+   `ExposeHeaders` `ETag` (the multipart engine reads it off every part
+   response). Scope `AllowedOrigins` to your web origins rather than `*`.
+   This does **not** make the bucket public — objects stay presigned-only, and
+   Block Public Access stays on.
 3. **IAM user.** Create a programmatic user, attach a policy scoped to those two
    bucket ARNs and the actions listed in §2. Save the key pair once.
 4. **CloudFront.** Create a distribution with the **artifacts** bucket as origin.
@@ -590,7 +595,7 @@ headers).
 | Finalize returns 422 | Object count under the prefix ≠ `expectedFilesCount`. List the prefix; remember the count includes the manifest. |
 | Model URL 403s from CloudFront | Object isn't at that key, or OAC/bucket policy is wrong. HEAD the S3 key first to tell the two apart. |
 | Model URL 404s but the object exists | Prefix mismatch between what was persisted and what the CDN path is — the two must be byte-identical. |
-| Browser can't load a capture photo | Expected: the raw bucket has no CORS. Use the bytes proxy, not a direct fetch. |
+| Browser can't load a capture photo | The raw bucket's CORS policy covers `PUT`/`GET`/`HEAD` for upload, but display still goes through the bytes proxy — use it, not a direct fetch. |
 | Avatar commit → 403 | The key's `{userId}` doesn't match the token. Working as designed. |
 | Staging deleted prod objects | Should be impossible — `{env}` is the firewall. If it happened, someone hardcoded a prefix. |
 

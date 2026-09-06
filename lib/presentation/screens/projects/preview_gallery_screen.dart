@@ -5,10 +5,16 @@
 // (share-sheet) action and — for ADMIN only — a Delete (soft-delete) action, so
 // staff can curate the set before/instead of a bulk export.
 //
-// Reuses the SAME rate-limited export manifest as the Export flow: the manifest
-// is fetched ONCE per open (previewGalleryProvider) and each file's presigned
-// url is used as BOTH the thumbnail source and the download URL. Errors show
-// MAPPED copy only — never a raw code or URL (same rule as 9F / the Live tab).
+// BROWSING COSTS NOTHING. The grid is listed from the credential-free
+// `/photos` endpoint and every pixel is drawn through the authenticated
+// photo-bytes proxy ([AdminPhotoImage]). Only Download reaches for the
+// rate-limited export manifest, and its notifier caches that until it expires.
+// This screen used to draw its thumbnails from presigned export urls, so ten
+// opens spent a budget meant for ten real exports and the gallery started
+// refusing to load. Do not reintroduce a presigned url as an image source.
+//
+// Errors show MAPPED copy only — never a raw code or URL (same rule as 9F /
+// the Live tab).
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -19,6 +25,8 @@ import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/model_generation_notifier.dart';
 import '../../../application/projects/preview_download_service.dart';
 import '../../../application/projects/preview_gallery_notifier.dart';
+import '../../../data/remote/admin_photo_image.dart';
+import '../../../data/remote/api_client.dart';
 import '../../../data/repositories/live_projects_repository.dart';
 import '../../../domain/entities/preview_manifest.dart';
 import '../../widgets/app_button.dart';
@@ -34,6 +42,17 @@ class PreviewGalleryScreen extends ConsumerStatefulWidget {
   ConsumerState<PreviewGalleryScreen> createState() =>
       _PreviewGalleryScreenState();
 }
+
+/// Server-side downscale width for a grid thumbnail. The grid is 3 columns, so
+/// a tile is well under 512 px even at a high DPR — asking for the original
+/// would stream full-resolution captures through the proxy to paint them into
+/// a ~125 dp square.
+const int kPreviewThumbWidth = 512;
+
+/// Downscale width for the full-screen viewer: generous enough for
+/// pinch-to-zoom inspection, still bounded so opening one photo isn't a
+/// multi-megabyte transfer. Download always delivers the untouched original.
+const int kPreviewViewerWidth = 2048;
 
 /// Selection bounds for a Meshy generation. MIRRORS the server's authority
 /// (projectModelsService MIN/MAX_SELECTED_PHOTOS) — the CTA gate here is a
@@ -217,13 +236,25 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
     }
   }
 
+  /// The authenticated proxy-backed image for [photo] at [width] px. Every
+  /// pixel the gallery shows comes through here — never a presigned url, whose
+  /// minting is what the export rate limit protects.
+  AdminPhotoImage _imageFor(PreviewPhoto photo, int width) => AdminPhotoImage(
+        dio: ref.read(dioProvider),
+        projectId: widget.projectId,
+        photoKey: photo.key,
+        maxWidth: width,
+      );
+
   Future<void> _openViewer(PreviewManifest manifest, PreviewPhoto photo) async {
     final canDelete = ref.read(isAdminProvider);
+    final image = _imageFor(photo, kPreviewViewerWidth);
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         fullscreenDialog: true,
         builder: (_) => _PhotoViewer(
           photo: photo,
+          image: image,
           canDelete: canDelete,
           isDownloading: () => _downloadInFlight.contains(photo.key),
           onDownload: () => _download(photo),
@@ -343,7 +374,7 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
     return RefreshIndicator(
       color: AppColors.mirageRed,
       backgroundColor: AppColors.surface1,
-      // Explicit re-fetch (spends a rate-limit token) — the user asked for it.
+      // Re-lists the capture set; mints no presigned urls, so refreshing is free.
       onRefresh: () =>
           ref.read(previewGalleryProvider(widget.projectId).notifier).refresh(),
       child: CustomScrollView(
@@ -371,6 +402,7 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
                     return _PhotoTile(
                       key: ValueKey('preview_tile_${photo.key}'),
                       photo: photo,
+                      image: _imageFor(photo, kPreviewThumbWidth),
                       selectable: _selecting,
                       selected: selected,
                       // In selection mode a tap picks instead of opening — the
@@ -438,12 +470,18 @@ class _PhotoTile extends StatelessWidget {
   const _PhotoTile({
     super.key,
     required this.photo,
+    required this.image,
     required this.onTap,
     this.selectable = false,
     this.selected = false,
   });
 
   final PreviewPhoto photo;
+
+  /// Proxy-backed thumbnail source (see [AdminPhotoImage]) — the tile never
+  /// holds a url of its own.
+  final ImageProvider image;
+
   final VoidCallback onTap;
   final bool selectable;
   final bool selected;
@@ -459,8 +497,8 @@ class _PhotoTile extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              Image.network(
-                photo.url,
+              Image(
+                image: image,
                 fit: BoxFit.cover,
                 loadingBuilder: (context, child, progress) => progress == null
                     ? child
@@ -539,6 +577,7 @@ class _TilePlaceholder extends StatelessWidget {
 class _PhotoViewer extends StatefulWidget {
   const _PhotoViewer({
     required this.photo,
+    required this.image,
     required this.canDelete,
     required this.isDownloading,
     required this.onDownload,
@@ -546,6 +585,11 @@ class _PhotoViewer extends StatefulWidget {
   });
 
   final PreviewPhoto photo;
+
+  /// Proxy-backed full-view source (see [AdminPhotoImage]). Download resolves
+  /// its own presigned url separately and delivers the untouched original.
+  final ImageProvider image;
+
   final bool canDelete;
   final bool Function() isDownloading;
   final VoidCallback onDownload;
@@ -575,8 +619,8 @@ class _PhotoViewerState extends State<_PhotoViewer> {
           Expanded(
             child: Center(
               child: InteractiveViewer(
-                child: Image.network(
-                  widget.photo.url,
+                child: Image(
+                  image: widget.image,
                   fit: BoxFit.contain,
                   loadingBuilder: (context, child, progress) => progress == null
                       ? child

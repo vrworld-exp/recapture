@@ -156,4 +156,14 @@ abstract final class AppConfig {
   /// (buffered natively across background relaunches until Dart subscribes).
   static const String channelUploadEvents =
       'com.mayasabhaxr.recapture/upload_events';
+
+  /// Native iOS AR Quick Look MethodChannel — must match
+  /// ARQuickLookManager.channelName on the Swift side. `preview` downloads a
+  /// USDZ and presents QLPreviewController, landing the user in AR on ONE tap.
+  /// iOS-only: `<model-viewer>` disables its own Quick Look inside an app
+  /// WebView, so the model viewer cannot go through the web component here
+  /// (see ModelRenderViewState.canQuickLook). Android keeps using Scene Viewer
+  /// through model_viewer_plus and never calls this.
+  static const String channelArQuickLook =
+      'com.mayasabhaxr.recapture/ar_quicklook';
 }

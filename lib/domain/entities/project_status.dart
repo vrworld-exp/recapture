@@ -28,7 +28,14 @@ enum ProjectStatus {
 }
 
 /// The single contextual action a project card offers for a given status.
-enum ProjectCardAction { resume, view, retry, uploading, processing, none }
+enum ProjectCardAction {
+  resume,
+  view,
+  retry,
+  uploading,
+  processing,
+  none,
+}
 
 /// Display properties for each ProjectStatus.
 /// Import this extension wherever a status needs a label, color, or action.
@@ -72,6 +79,13 @@ extension ProjectStatusDisplay on ProjectStatus {
   ///
   /// `capturing` is resumable (the user can return to the in-progress capture);
   /// `uploading` and `processing` are non-interactive progress states.
+  /// The card action a status implies ON ITS OWN.
+  ///
+  /// Read through [Project.cardAction], never directly from a widget: a status
+  /// does not know where a project's photos came from, and `DRAFT` means two
+  /// different things depending on that. A DRAFT capture has a session to walk
+  /// back into ("Resume"); a DRAFT upload has a finished photo set and nothing
+  /// to resume at all.
   ProjectCardAction get cardAction => switch (this) {
         ProjectStatus.draft => ProjectCardAction.resume,
         ProjectStatus.capturing => ProjectCardAction.resume,

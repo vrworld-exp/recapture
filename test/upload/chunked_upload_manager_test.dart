@@ -169,6 +169,58 @@ UploadSessionSpec _session(List<int> sizes) => UploadSessionSpec(
 void main() {
   tearDown(() => Analytics.testSink = null);
 
+  // ── The contract the artist upload-progress screen reads ────────────────────
+  //
+  // ProjectPhotosState.statusForPhoto turns this engine's AGGREGATE
+  // `filesUploaded` count into a per-photo status: index < count is uploaded,
+  // index == count is the one in flight, the rest are queued. That is only true
+  // while files are transferred STRICTLY SEQUENTIALLY IN SPEC ORDER, which is
+  // exactly what this test pins. If files are ever made concurrent, this fails
+  // FIRST — before the screen starts telling artists the wrong photo is moving.
+  test('files upload sequentially in spec order — filesUploaded is a cursor',
+      () async {
+    final api = _FakeApi();
+    final manager = ChunkedUploadManager(
+      api: api,
+      s3: _FakeS3(),
+      byteSource: _ZeroBytes({'f0': 1000, 'f1': 2000, 'f2': 3000}),
+    );
+
+    // Every emission, paired with which file the engine had initiated by then.
+    final seen = <({int filesUploaded, int initiated})>[];
+    final sub = manager.watch().listen(
+          (p) => seen.add(
+            (filesUploaded: p.filesUploaded, initiated: api.initiated.length),
+          ),
+        );
+    addTearDown(sub.cancel);
+    addTearDown(manager.dispose);
+
+    await manager.start(_session([1000, 2000, 3000]));
+    await _tick();
+
+    // Initiated in spec order, one per file.
+    expect(api.initiated, ['file_0.jpg', 'file_1.jpg', 'file_2.jpg']);
+
+    for (final frame in seen) {
+      // NEVER more finalized than started: a count that ran ahead of the
+      // initiates would mean files overlapped.
+      expect(frame.filesUploaded, lessThanOrEqualTo(frame.initiated));
+      // At most ONE file open at a time — the initiate for file N+1 only
+      // happens after file N finalized. This is the sequential claim itself.
+      expect(frame.initiated - frame.filesUploaded, lessThanOrEqualTo(1));
+    }
+
+    // Monotonic, and it lands on the whole set.
+    for (var i = 1; i < seen.length; i++) {
+      expect(
+        seen[i].filesUploaded,
+        greaterThanOrEqualTo(seen[i - 1].filesUploaded),
+      );
+    }
+    expect(seen.last.filesUploaded, 3);
+  });
+
   test('full session uploads: initiate → parts → complete, monotonic progress', () async {
     final api = _FakeApi();
     final s3 = _FakeS3();

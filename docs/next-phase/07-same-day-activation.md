@@ -3,6 +3,7 @@
 Architecture plan for collapsing restaurant onboarding into a single on-site visit: the rep closes
 the deal, photographs the dishes, and activates a pre-printed QR standee before leaving the building.
 
+<<<<<<< HEAD
 > **Implementation pack:** [`../same-day-activation/`](../same-day-activation/) breaks this plan
 > into seven staged, independently-shippable steps with per-stage tests, done-when checklists and
 > rollback notes. **Start with
@@ -11,6 +12,8 @@ the deal, photographs the dishes, and activates a pre-printed QR standee before 
 > them a correctness hazard (`FULL` + `productIds` would corrupt `publishedRevision`). The stages
 > already incorporate the corrections; this document is left as written for the record.
 
+=======
+>>>>>>> feature/ios-build
 Every convention here defers to `ReCapture/AGENTS.md`. Where this document adds something new, it
 says so explicitly and gives the reason. Written as a plan, not a task breakdown — see
 `04-task-breakdown.md` for the format that work items take once this is agreed.

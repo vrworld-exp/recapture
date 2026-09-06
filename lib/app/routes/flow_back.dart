@@ -38,6 +38,12 @@ String? flowBackRouteFor(String location) {
       location.endsWith('/preview')) {
     return AppRoutes.projects;
   }
+  // Same shape rule for the artist photo grid, which the upload flow reaches by
+  // go() (replacing the finished create form) — so BACK has nothing to pop and
+  // would otherwise exit the app from the middle of the flow.
+  if (location.startsWith('/projects/') && location.endsWith('/photos')) {
+    return AppRoutes.projects;
+  }
   // Same shape problem: the change-model path carries a concrete product id.
   // Normally pushed (so this never fires); the mapping is for the cold
   // deep-link, where there is no catalog underneath to pop to.

@@ -227,18 +227,31 @@ function toRelativeKey(absoluteKey: string, rawPrefix: string): string {
   return absoluteKey.startsWith(rawPrefix) ? absoluteKey.slice(rawPrefix.length) : absoluteKey;
 }
 
+/** The project + exportable job + its capture objects, or why there are none. */
+type ResolvedCaptureSet =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  | { outcome: 'NOT_EXPORTABLE' }
+  | {
+      outcome: 'RESOLVED';
+      project: IProject;
+      job: IJob;
+      rawBucket: string;
+      rawPrefix: string;
+      objects: { key: string; size: number }[];
+    };
+
 /**
- * Builds the presigned-URL export manifest for a project's most recent
- * upload-finalized job. Lists the ACTUAL objects under the job's stored
+ * Resolves a project's capture set: the project, its most recent
+ * upload-finalized job, and the ACTUAL objects under the job's stored
  * `rawPrefix` (the canonical builder's output persisted at create time — the
  * exact prefix finalize verified; deliberately not recomputed, same reasoning
- * as finalize) and presigns a GET per key in parallel (local signing — cheap).
+ * as finalize).
  *
- * `fileCount` is the listed truth and `expectedFileCount` the job's verified
- * expectation; both ship in the manifest so a drift (e.g. an object deleted
- * since finalize) is visible to the consumer rather than silently masked.
+ * Shared by the presigned export manifest and the credential-free photo listing
+ * so the two can never disagree about which objects belong to the capture set —
+ * the filtering rules below are the single definition.
  */
-export async function buildProjectExport(projectId: string): Promise<BuildExportResult> {
+async function resolveCaptureSet(projectId: string): Promise<ResolvedCaptureSet> {
   const project = await Project.findOne({
     _id: new Types.ObjectId(projectId),
     deletedAt: null,
@@ -260,6 +273,76 @@ export async function buildProjectExport(projectId: string): Promise<BuildExport
     );
   });
 
+  return { outcome: 'RESOLVED', project, job, rawBucket, rawPrefix, objects };
+}
+
+/** One capture photo as the credential-free listing reports it. */
+export interface ProjectPhotoEntry {
+  /** Path RELATIVE to the job root — the same identity the export manifest,
+   * Create-Model and the soft-delete route all address a photo by. */
+  key: string;
+  size: number;
+}
+
+export interface ProjectPhotoListing {
+  projectId: string;
+  jobId: string;
+  fileCount: number;
+  expectedFileCount: number;
+  files: ProjectPhotoEntry[];
+}
+
+export type ListPhotosResult =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  | { outcome: 'NOT_EXPORTABLE' }
+  | { outcome: 'LISTED'; photos: ProjectPhotoListing };
+
+/**
+ * Lists a project's capture photos WITHOUT presigning anything — the browse
+ * counterpart to [buildProjectExport].
+ *
+ * This exists so viewing the gallery costs no bearer credentials. The export
+ * manifest hands out presigned URLs, which is why it is deliberately
+ * rate-limited; browsing thumbnails is routine and must not spend that budget.
+ * A consumer renders each key through the authenticated photo-bytes proxy and
+ * only asks for an export when it actually needs a downloadable URL.
+ */
+export async function listProjectPhotos(projectId: string): Promise<ListPhotosResult> {
+  const resolved = await resolveCaptureSet(projectId);
+  if (resolved.outcome !== 'RESOLVED') return { outcome: resolved.outcome };
+
+  const { project, job, rawPrefix, objects } = resolved;
+  const files = objects.map((object) => ({
+    key: toRelativeKey(object.key, rawPrefix),
+    size: object.size,
+  }));
+
+  return {
+    outcome: 'LISTED',
+    photos: {
+      projectId: project.id as string,
+      jobId: job.id as string,
+      fileCount: files.length,
+      expectedFileCount: job.upload!.expectedFilesCount,
+      files,
+    },
+  };
+}
+
+/**
+ * Builds the presigned-URL export manifest for a project's most recent
+ * upload-finalized job — one presigned GET per key, signed in parallel (local
+ * signing — cheap).
+ *
+ * `fileCount` is the listed truth and `expectedFileCount` the job's verified
+ * expectation; both ship in the manifest so a drift (e.g. an object deleted
+ * since finalize) is visible to the consumer rather than silently masked.
+ */
+export async function buildProjectExport(projectId: string): Promise<BuildExportResult> {
+  const resolved = await resolveCaptureSet(projectId);
+  if (resolved.outcome !== 'RESOLVED') return { outcome: resolved.outcome };
+
+  const { project, job, rawBucket, rawPrefix, objects } = resolved;
   const ttlSeconds = env.ADMIN_EXPORT_URL_TTL_SECONDS;
   const generatedAt = new Date();
   const files = await Promise.all(
@@ -286,7 +369,7 @@ export async function buildProjectExport(projectId: string): Promise<BuildExport
       generatedAt: generatedAt.toISOString(),
       expiresAt: new Date(generatedAt.getTime() + ttlSeconds * 1000).toISOString(),
       fileCount: files.length,
-      expectedFileCount: job.upload.expectedFilesCount,
+      expectedFileCount: job.upload!.expectedFilesCount,
       files,
     },
   };

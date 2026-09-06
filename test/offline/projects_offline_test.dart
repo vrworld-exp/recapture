@@ -29,6 +29,7 @@ import 'package:recapture/data/local/projects_cache_box.dart';
 import 'package:recapture/data/repositories/projects_repository.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/create_project_options.dart';
+import 'package:recapture/domain/entities/project_source.dart';
 import 'package:recapture/domain/entities/offline_action.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_status.dart';
@@ -70,11 +71,13 @@ class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRe
   @override
   Future<Project> create({
     required String name,
-    required ObjectSize size,
-    required CaptureMode mode,
+    ObjectSize? size,
+    CaptureMode? mode,
+    String? category,
+    ProjectSource source = ProjectSource.capture,
   }) async {
     createCalls++;
-    createPayloads.add({'name': name, 'size': size.apiValue, 'mode': mode.apiValue});
+    createPayloads.add({'name': name, 'size': (size ?? ObjectSize.medium).apiValue, 'mode': (mode ?? CaptureMode.guided).apiValue});
     if (!online) throw const _Offline();
     final created = Project(
       id: 'srv_${++_serverSeq}',

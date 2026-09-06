@@ -12,6 +12,7 @@
 // per the AGENTS.md routes → services → models layering.
 import { randomUUID } from 'node:crypto';
 import { Types } from 'mongoose';
+import sharp from 'sharp';
 import { Project } from '@/models/Project';
 import { Job, MESHY_MODEL_GENERATION_JOB_TYPE, MODEL_OPTIMIZATION_JOB_TYPE } from '@/models/Job';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
@@ -701,11 +702,20 @@ export type ReadProjectPhotoBytesResult =
   | { outcome: 'OK'; projectId: string; body: Buffer; contentType: string };
 
 /**
- * Reads ONE job-root-relative object's bytes for the staff Prepare-Images
- * screen — a read-through proxy so browser clients can load a capture without
- * the raw bucket serving CORS, and so a session outliving its presigned URL
- * (~1h) can still fetch. Native clients keep using the presigned URL directly
- * and only fall back here, so this stays off the hot path.
+ * Reads ONE job-root-relative object's bytes — the read-through proxy behind
+ * the staff Prepare-Images fallback AND every Preview gallery thumbnail.
+ *
+ * It exists because a presigned S3 GET is not always usable: browser clients
+ * cannot read the raw bucket (no CORS on it), a long session outlives the ~1h
+ * presign, and — the reason the gallery uses it — presigned URLs are bearer
+ * credentials whose minting is rate-limited, while merely LOOKING at a photo
+ * should not be.
+ *
+ * `maxWidth` downscales the response to fit that width (aspect preserved,
+ * never upscaled): the gallery grid asks for a thumbnail rather than pulling
+ * full-resolution captures for 20 px tiles. Omitted ⇒ original bytes,
+ * untouched. A source sharp cannot decode is served as-is rather than failing —
+ * proxying the original always beats a broken tile.
  *
  * Reuses the SAME `isContainedRelativeKey` guard as Create-Model: the key is
  * caller-supplied, and without containment this route would become an
@@ -713,7 +723,8 @@ export type ReadProjectPhotoBytesResult =
  */
 export async function readProjectPhotoBytes(
   projectId: string,
-  relativeKey: string
+  relativeKey: string,
+  maxWidth?: number
 ): Promise<ReadProjectPhotoBytesResult> {
   const project = await Project.findOne({
     _id: new Types.ObjectId(projectId),
@@ -730,12 +741,36 @@ export async function readProjectPhotoBytes(
   const fetched = await getObjectBytes(rawBucket, `${rawPrefix}${relativeKey}`);
   if (fetched.outcome === 'absent') return { outcome: 'OBJECT_NOT_FOUND' };
 
+  const resized = maxWidth ? await downscaleToWidth(fetched.body, maxWidth) : null;
+
   return {
     outcome: 'OK',
     projectId: project.id as string,
-    body: fetched.body,
-    contentType: fetched.contentType,
+    body: resized?.body ?? fetched.body,
+    contentType: resized?.contentType ?? fetched.contentType,
   };
+}
+
+/**
+ * Downscales image bytes to fit `maxWidth`, or returns null to mean "serve the
+ * original" — for a non-image or anything sharp refuses to decode. JPEG out
+ * because these are captures (photographs), and it is what the source already
+ * is; `withoutEnlargement` keeps a small source from being blown up.
+ */
+async function downscaleToWidth(
+  body: Buffer,
+  maxWidth: number
+): Promise<{ body: Buffer; contentType: string } | null> {
+  try {
+    const out = await sharp(body)
+      .rotate() // honour EXIF orientation, which resizing would otherwise drop
+      .resize({ width: maxWidth, withoutEnlargement: true })
+      .jpeg({ quality: 82 })
+      .toBuffer();
+    return { body: out, contentType: 'image/jpeg' };
+  } catch {
+    return null;
+  }
 }
 
 // ── Read ─────────────────────────────────────────────────────────────────────

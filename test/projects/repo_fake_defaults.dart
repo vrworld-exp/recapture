@@ -75,6 +75,16 @@ mixin FakeOwnerModelListDefaults {
       throw UnimplementedError('not used here');
 }
 
+/// The Preview gallery's browse member of `LiveProjectsRepository`.
+///
+/// Separate from `export`: browsing lists the capture set credential-free and
+/// costs no rate-limit budget, while `export` mints presigned urls. A fake that
+/// drives the gallery overrides this one; a fake that doesn't gets the throw.
+mixin FakePreviewBrowseDefaults {
+  Future<Map<String, dynamic>> photos(String projectId) async =>
+      throw UnimplementedError('not used here');
+}
+
 /// ADMIN curation members of `LiveProjectsRepository`.
 mixin FakeAdminDeleteDefaults {
   Future<void> deleteProject(

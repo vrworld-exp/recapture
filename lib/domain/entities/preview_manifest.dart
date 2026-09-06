@@ -1,23 +1,33 @@
 // lib/domain/entities/preview_manifest.dart
 //
-// Typed model of the staff export manifest as the Preview gallery consumes it.
-// The raw `GET /admin/projects/:id/export` response is a `Map<String,dynamic>`
-// full of presigned-URL bearer credentials; this parses it ONCE at the repo
-// seam so no untyped map (and no stray URL handling) leaks into the widgets.
+// Typed model of a project's capture set as the Preview gallery consumes it,
+// parsed ONCE at the repo seam so no untyped map (and no stray URL handling)
+// leaks into the widgets.
 //
-// A `PreviewPhoto.url` is used as BOTH the thumbnail source and the download
-// URL — it expires (~1h, ADMIN_EXPORT_URL_TTL_SECONDS), so the manifest is held
-// for the lifetime of one Preview open and never re-requested per thumbnail.
+// It is fed by TWO endpoints, which is the point:
+//   • GET /admin/projects/:id/photos — keys + sizes, NO credentials. This is
+//     what a gallery open costs, and it is not rate-limited.
+//   • GET /admin/projects/:id/export — the same set plus a presigned url per
+//     file. Rate-limited (the urls are bearer credentials), so it is fetched
+//     only when a downloadable url is actually needed.
+//
+// Hence [PreviewPhoto.url] is NULLABLE: a listed photo has no url and is drawn
+// through the authenticated photo-bytes proxy instead. Thumbnails must never
+// depend on a presigned url again — that coupling is what made ten gallery
+// opens exhaust a budget meant for ten real exports.
 
-/// One capturable object: its job-root-relative [key] (stable identity, e.g.
-/// `images/EYE/eye_0001.jpg`), its presigned [url] (bearer credential — never
-/// logged), and byte [size].
+/// One capture photo: its job-root-relative [key] (stable identity, e.g.
+/// `images/EYE/eye_0001.jpg`), byte [size], and — only when it came from an
+/// export manifest — a presigned [url] (bearer credential; never logged).
 class PreviewPhoto {
-  const PreviewPhoto({required this.key, required this.url, required this.size});
+  const PreviewPhoto({required this.key, required this.size, this.url});
 
   final String key;
-  final String url;
   final int size;
+
+  /// Presigned download url, or null when this photo was merely LISTED. Null is
+  /// the normal case in the gallery; the download path mints one on demand.
+  final String? url;
 
   /// A short label for the viewer (the file name, not the full key path).
   String get fileName {
@@ -26,21 +36,23 @@ class PreviewPhoto {
   }
 
   /// Defensive parse — a malformed row is dropped by the caller, never crashes.
+  /// Only [key] is required: an absent/empty url yields a listed photo, which
+  /// renders through the proxy exactly like every other tile.
   static PreviewPhoto? tryFromMap(Object? raw) {
     if (raw is! Map) return null;
     final key = (raw['key'] ?? '').toString();
+    if (key.isEmpty) return null;
     final url = (raw['url'] ?? '').toString();
-    if (key.isEmpty || url.isEmpty) return null;
     final size = raw['size'];
     return PreviewPhoto(
       key: key,
-      url: url,
       size: size is num && size >= 0 ? size.toInt() : 0,
+      url: url.isEmpty ? null : url,
     );
   }
 }
 
-/// The parsed export manifest backing one Preview gallery session.
+/// The parsed capture set backing one Preview gallery session.
 class PreviewManifest {
   const PreviewManifest({
     required this.files,
@@ -51,11 +63,12 @@ class PreviewManifest {
 
   final List<PreviewPhoto> files;
 
-  /// When the presigned URLs stop working (null if unparsable) — drives the
-  /// subtle "links expire at HH:MM" note.
+  /// When the presigned urls stop working, or null when this set was LISTED
+  /// (nothing to expire) — drives the "links expire at HH:MM" note, which is
+  /// therefore absent in the normal browse case.
   final DateTime? expiresAt;
 
-  /// Server-reported listed count (the export's truth). May differ from
+  /// Server-reported listed count (the server's truth). May differ from
   /// [files.length] only if a row failed to parse.
   final int fileCount;
 
@@ -70,10 +83,25 @@ class PreviewManifest {
         expectedFileCount: expectedFileCount,
       );
 
+  /// Parses the credential-free `photos` object from `GET /…/photos`.
+  factory PreviewManifest.fromPhotosMap(Map<String, dynamic> map) =>
+      PreviewManifest._from(map, expiresAt: null);
+
   /// Parses the raw `export` object (the same map [LiveProjectsRepository.export]
-  /// returns). Unparsable file rows are skipped so one bad entry can't blank the
-  /// whole grid.
-  factory PreviewManifest.fromExportMap(Map<String, dynamic> map) {
+  /// returns), keeping each file's presigned url.
+  factory PreviewManifest.fromExportMap(Map<String, dynamic> map) =>
+      PreviewManifest._from(
+        map,
+        expiresAt: DateTime.tryParse((map['expiresAt'] ?? '').toString()),
+      );
+
+  /// Shared body of both factories — the two payloads differ only in whether a
+  /// file carries a url and whether the set expires. Unparsable rows are
+  /// skipped so one bad entry can't blank the whole grid.
+  factory PreviewManifest._from(
+    Map<String, dynamic> map, {
+    required DateTime? expiresAt,
+  }) {
     final rawFiles = map['files'];
     final files = <PreviewPhoto>[
       if (rawFiles is List)
@@ -84,7 +112,7 @@ class PreviewManifest {
     final rawExpected = map['expectedFileCount'];
     return PreviewManifest(
       files: files,
-      expiresAt: DateTime.tryParse((map['expiresAt'] ?? '').toString()),
+      expiresAt: expiresAt,
       fileCount: rawFileCount is num ? rawFileCount.toInt() : files.length,
       expectedFileCount: rawExpected is num ? rawExpected.toInt() : files.length,
     );

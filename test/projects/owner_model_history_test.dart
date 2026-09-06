@@ -48,7 +48,8 @@ class _FakeRepo
     with
         FakeAdminDeleteDefaults,
         FakeAutoGenerationDefaults,
-        FakeModelOptimizeDefaults
+        FakeModelOptimizeDefaults,
+        FakePreviewBrowseDefaults
     implements LiveProjectsRepository {
   _FakeRepo(this.models);
 

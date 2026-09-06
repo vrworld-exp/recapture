@@ -55,6 +55,19 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
     // rebuild. Non-PII: no ids ride along.
     Analytics.logEvent('live_projects_viewed');
     _scroll.addListener(_maybeLoadMore);
+    // Re-pull on every tab ENTRY. [liveProjectsProvider] is long-lived (not
+    // autoDispose), so a second entry would otherwise render whatever the list
+    // held when the artist last left it — most visibly missing the project they
+    // just finished uploading, which is exactly what they switched over to
+    // check. Post-frame and only when the provider ALREADY has data: on a first
+    // entry `build()` is the fetch, and firing here too would double it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !ref.read(liveProjectsProvider).hasValue) return;
+      ref
+          .read(liveProjectsProvider.notifier)
+          .refresh()
+          .catchError((Object e) => _showFailure(e));
+    });
   }
 
   @override

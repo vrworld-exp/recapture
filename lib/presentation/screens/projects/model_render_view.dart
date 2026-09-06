@@ -14,8 +14,10 @@
 // no ARCore, a desktop browser) get one line of mapped guidance instead of a
 // silent dead tap.
 //
-// AR scope is Scene Viewer (Android intent) + Quick Look (iOS `iosSrc`), both
-// driven entirely by model_viewer_plus — no native AR plugin.
+// AR scope is Scene Viewer (Android intent) + Quick Look (iOS USDZ). Android
+// goes through model_viewer_plus; iOS does NOT — model-viewer disables Quick
+// Look inside an app WebView, so this widget launches it itself. See
+// [ModelRenderViewState.canQuickLook]. Still no native AR plugin.
 //
 // WEB CAVEAT: none of the CHANNEL plumbing can exist on web — the package
 // injects its page via `innerHTML` (scripts never execute) and has no
@@ -35,13 +37,15 @@
 // surfaces the CTA instead of silently losing the button.
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:model_viewer_plus/model_viewer_plus.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../domain/entities/project_model.dart';
+import '../../../platform/ar_quick_look_channel.dart';
 import '../../widgets/app_button.dart';
 import 'model_viewer_load_probe.dart' as load_probe;
 
@@ -54,6 +58,7 @@ class ModelRenderView extends StatefulWidget {
     super.key,
     required ProjectModelView model,
     @visibleForTesting this.viewerOverride,
+    @visibleForTesting this.arQuickLookOverride,
     this.showArCtaWhenUnavailable = true,
   })  : glbUrl = model.glbUrl,
         usdzUrl = model.usdzUrl;
@@ -67,6 +72,7 @@ class ModelRenderView extends StatefulWidget {
     required this.glbUrl,
     this.usdzUrl,
     @visibleForTesting this.viewerOverride,
+    @visibleForTesting this.arQuickLookOverride,
     this.showArCtaWhenUnavailable = true,
   });
 
@@ -90,6 +96,10 @@ class ModelRenderView extends StatefulWidget {
   /// a phone browser genuinely can launch Scene Viewer / Quick Look, and a
   /// blanket web branch would take AR away from exactly the users who have it.
   final bool showArCtaWhenUnavailable;
+
+  /// Test-only stand-in for the native AR Quick Look channel, which has no
+  /// platform implementation in widget tests.
+  final ArQuickLookChannel? arQuickLookOverride;
 
   /// Test-only stand-in for the real [ModelViewer], which drives a WebView
   /// with no platform implementation in widget tests. The surrounding
@@ -221,6 +231,13 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
 
   _RenderPhase _phase = _RenderPhase.loading;
   bool _arAvailable = false;
+
+  /// A native AR Quick Look present is in flight (downloading, most likely).
+  /// Blocks a second tap and drives the CTA's pending state.
+  bool _arLaunching = false;
+
+  late final ArQuickLookChannel _arQuickLook =
+      widget.arQuickLookOverride ?? ArQuickLookChannel();
 
   /// Bumped on retry so the [ValueKey] rebuilds the webview from scratch.
   int _attempt = 0;
@@ -392,7 +409,50 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
     ).toString();
   }
 
+  /// Whether WE must launch iOS AR Quick Look, because model-viewer won't.
+  ///
+  /// model-viewer refuses to enter AR inside an app WebView. Its
+  /// `IS_AR_QUICKLOOK_CANDIDATE` (`$h` in the bundled `model-viewer.min.js`)
+  /// reads:
+  ///
+  /// ```js
+  /// if (IS_IOS) {
+  ///   if (window.webkit && window.webkit.messageHandlers)   // an app WebView
+  ///     return /CriOS\/|EdgiOS\/|FxiOS\/|GSA\/|DuckDuckGo\//.test(navigator.userAgent);
+  ///   return document.createElement('a').relList.supports('ar');
+  /// }
+  /// ```
+  ///
+  /// We ARE a WKWebView and our [_channelName] channel guarantees
+  /// `window.webkit.messageHandlers` exists, while the stock WebView user
+  /// agent matches none of those five browsers — so the flag is permanently
+  /// false, and BOTH routes to model-viewer's QUICK_LOOK mode require it.
+  /// `canActivateAR` therefore never flips, no attribute we pass can change
+  /// that, and the plugin's own Quick Look intercept (an exact match on
+  /// `iosSrc`) never gets a navigation to catch.
+  ///
+  /// So we present QLPreviewController natively instead
+  /// ([ArQuickLookChannel]). Opening the CloudFront URL with url_launcher was
+  /// tried first and is NOT equivalent: it lands the user on the model page in
+  /// a browser, where AR needs a SECOND tap. Requires a USDZ — there is
+  /// nothing to preview without one.
+  @visibleForTesting
+  bool get canQuickLook =>
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.iOS &&
+      widget.usdzUrl != null;
+
+  /// AR is reachable — either the page said so, or we can launch Quick Look
+  /// ourselves. Gates the CTA everywhere in place of the raw page signal.
+  bool get _arReady => _arAvailable || canQuickLook;
+
   void _activateAr() {
+    // Checked BEFORE the page signal: on iOS the page's own AR is dead (see
+    // [canQuickLook]), so deferring to it would be deferring to nothing.
+    if (canQuickLook) {
+      unawaited(_openQuickLook());
+      return;
+    }
     if (kIsWeb) {
       // No controller exists on web — drive the element directly via the
       // same DOM seam that watched canActivateAR.
@@ -400,6 +460,42 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
       return;
     }
     _runJs?.call("document.querySelector('model-viewer').activateAR();");
+  }
+
+  /// Presents the USDZ in native AR Quick Look.
+  ///
+  /// The first view of a model downloads it, which is not instant on a phone
+  /// network — [_arLaunching] keeps the CTA in a pending state for that window
+  /// so the tap visibly did something. Resolves as soon as the preview is on
+  /// screen, not when the user leaves it.
+  Future<void> _openQuickLook() async {
+    final usdzUrl = widget.usdzUrl;
+    if (usdzUrl == null || _arLaunching) return;
+    setState(() => _arLaunching = true);
+    final failure = await _arQuickLook.present(usdzUrl);
+    if (!mounted) return;
+    setState(() => _arLaunching = false);
+    switch (failure) {
+      case null:
+      // A double tap or a mid-transition present: AR is already coming up, so
+      // saying "AR isn't available" here would be a lie.
+      case ArQuickLookFailure.busy:
+        return;
+      case ArQuickLookFailure.download:
+        _explainArFetchFailed();
+      case ArQuickLookFailure.unsupported:
+        _explainArUnavailable();
+    }
+  }
+
+  /// The model itself could not be fetched for AR — distinct from "this device
+  /// can't do AR", because the user CAN fix this one by retrying on a better
+  /// connection. Mapped copy only; the URL never appears.
+  void _explainArFetchFailed() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('We couldn’t load this model for AR. Check your '
+          'connection and try again.'),
+    ));
   }
 
   /// Tap on the AR CTA while the page reports no AR support: one line of
@@ -511,16 +607,16 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
             ),
           ),
         if (_phase == _RenderPhase.ready &&
-            (_arAvailable || widget.showArCtaWhenUnavailable))
+            (_arReady || widget.showArCtaWhenUnavailable))
           Positioned(
             left: 0,
             right: 0,
             bottom: AppSpacing.xl,
             child: Center(
               child: _ArCta(
-                available: _arAvailable,
-                onPressed:
-                    _arAvailable ? _activateAr : _explainArUnavailable,
+                available: _arReady,
+                pending: _arLaunching,
+                onPressed: _arReady ? _activateAr : _explainArUnavailable,
               ),
             ),
           ),
@@ -534,9 +630,19 @@ window.ModelViewerElement.meshoptDecoderLocation = '$kMeshoptDecoderLocation';
 /// `canActivateAR`: true renders the full-strength CTA and launches AR;
 /// false renders it muted and the tap explains instead of doing nothing.
 class _ArCta extends StatelessWidget {
-  const _ArCta({required this.available, required this.onPressed});
+  const _ArCta({
+    required this.available,
+    required this.onPressed,
+    this.pending = false,
+  });
 
   final bool available;
+
+  /// A native Quick Look present is in flight — the USDZ is downloading. Shown
+  /// as a spinner in place of the AR glyph so a tap on a cold model reads as
+  /// working rather than ignored, and swallows further taps.
+  final bool pending;
+
   final VoidCallback onPressed;
 
   @override
@@ -553,7 +659,7 @@ class _ArCta extends StatelessWidget {
           : AppColors.surface2.withValues(alpha: 0.92),
       borderRadius: BorderRadius.circular(AppRadius.lg),
       child: InkWell(
-        onTap: onPressed,
+        onTap: pending ? null : onPressed,
         borderRadius: BorderRadius.circular(AppRadius.lg),
         child: Padding(
           padding: const EdgeInsets.symmetric(
@@ -563,10 +669,21 @@ class _ArCta extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.view_in_ar, size: 18, color: foreground),
+              if (pending)
+                SizedBox(
+                  key: const ValueKey('model_ar_cta_pending'),
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation(foreground),
+                  ),
+                )
+              else
+                Icon(Icons.view_in_ar, size: 18, color: foreground),
               const SizedBox(width: AppSpacing.sm),
               Text(
-                'View in AR',
+                pending ? 'Opening AR…' : 'View in AR',
                 style: Theme.of(context)
                     .textTheme
                     .bodyMedium

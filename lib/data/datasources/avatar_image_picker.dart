@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../dev/dev_log/dev_upload_log.dart';
+import '../../utils/image_content_type.dart';
 import '../../domain/entities/avatar_upload_failure.dart';
 
 /// One picked avatar: the image BYTES and the content type those bytes say
@@ -140,33 +141,13 @@ class ImagePickerAvatarSource implements AvatarImagePicker {
   /// The content type according to the file's MAGIC BYTES, or null when it is
   /// neither JPEG nor PNG.
   ///
-  /// Sniffed rather than read off the extension on purpose: image_picker can
-  /// hand back a `.png` path holding re-encoded JPEG bytes (it re-encodes when
-  /// resizing). The content type is baked into the presigned PUT signature, so
-  /// a mismatch surfaces as a confusing S3 403 at upload time rather than
-  /// anything readable.
-  /// Pure and synchronous — the server runs the identical check on the bytes it
-  /// receives, and the two must not be able to disagree.
-  static String? _sniffContentType(Uint8List bytes) {
-    if (bytes.length >= 3 &&
-        bytes[0] == 0xFF &&
-        bytes[1] == 0xD8 &&
-        bytes[2] == 0xFF) {
-      return 'image/jpeg';
-    }
-    const png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // \x89PNG\r\n\x1a\n
-    if (bytes.length >= 8) {
-      var matches = true;
-      for (var i = 0; i < png.length; i++) {
-        if (bytes[i] != png[i]) {
-          matches = false;
-          break;
-        }
-      }
-      if (matches) return 'image/png';
-    }
-    return null;
-  }
+  /// Delegates to the shared sniffer (utils/image_content_type.dart) — the ONE
+  /// place magic bytes are read, so the avatar path and the project-photo path
+  /// cannot disagree about what a JPEG is. WebP stays OFF here: widening what
+  /// an avatar upload accepts is a separate decision, not a side effect of
+  /// extracting this.
+  static String? _sniffContentType(Uint8List bytes) =>
+      sniffImageContentType(bytes);
 }
 
 /// App-wide gallery picker. Overridden in widget tests so the Profile screen's
