@@ -36,6 +36,13 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Recapture saves your finished captures to your photo library.</string>
 
+	<!-- Local Network — required by iOS 14+ whenever the app connects to a
+	     private LAN address (our dev/staging backend during local testing).
+	     Without this key iOS silently blocks the connection instead of
+	     prompting, which is indistinguishable from a real offline failure. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Recapture connects to your local network to reach the Recapture server during development and testing.</string>
+
 	<!-- ───────────────────────────────────────────
 	     AR CAPABILITY DECLARATION
 	─────────────────────────────────────────────── -->
@@ -56,6 +63,14 @@
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<false/>
+		<!-- Permits cleartext HTTP to LOCAL NETWORK addresses only, so a device
+		     can reach the dev backend at http://<mac-lan-ip>:3000 during
+		     testing. Public internet endpoints still require HTTPS: unlike
+		     NSAllowsArbitraryLoads, this does not weaken transport security for
+		     anything outside the local network. Paired with the existing
+		     NSLocalNetworkUsageDescription, which iOS 14+ prompts on. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 	</dict>
 
 	<!-- ───────────────────────────────────────────
