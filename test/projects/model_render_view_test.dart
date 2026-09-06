@@ -8,14 +8,21 @@
 //     canActivateAR — unsupported devices / no-USDZ-on-iOS get no dead button;
 //   • a failed load shows mapped copy (never the URL) with a working retry;
 //   • quick-look is enabled only when a USDZ exists;
+//   • on iOS the CTA bypasses model-viewer entirely and presents native AR
+//     Quick Look, since the page's canActivateAR never fires in a WebView;
 //   • ModelViewerScreen hands the WHOLE model to the render seam, and the
 //     approve bar stays staff-only (regression).
+import 'dart:async';
+
+import 'package:flutter/foundation.dart'
+    show debugDefaultTargetPlatformOverride, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/domain/entities/project_model.dart';
+import 'package:recapture/platform/ar_quick_look_channel.dart';
 import 'package:recapture/presentation/screens/projects/model_render_view.dart';
 import 'package:recapture/presentation/screens/projects/model_viewer_screen.dart';
 
@@ -371,4 +378,220 @@ void main() {
       expect(find.byKey(const ValueKey('model_approve_cta')), findsNothing);
     });
   });
+
+  // ── iOS AR Quick Look bypass ───────────────────────────────────────────
+  //
+  // model-viewer never reports canActivateAR inside an app WebView (see
+  // ModelRenderViewState.canQuickLook), so on iOS the CTA must NOT wait for
+  // the page signal — it presents native QLPreviewController itself.
+  group('ModelRenderView — iOS Quick Look bypass', () {
+    late _FakeArQuickLook quickLook;
+
+    setUp(() => quickLook = _FakeArQuickLook());
+
+    /// Runs [body] as [platform]. The reset MUST happen inside the test body —
+    /// flutter_test asserts every foundation debug variable is back to null
+    /// before tearDown runs, so a tearDown reset fails the test it cleans up
+    /// after. The finally keeps a failing expectation from leaking the
+    /// override into the next test.
+    Future<void> asPlatform(
+      TargetPlatform platform,
+      Future<void> Function() body,
+    ) async {
+      debugDefaultTargetPlatformOverride = platform;
+      try {
+        await body();
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    }
+
+    Widget app(GlobalKey<ModelRenderViewState> key, ProjectModelView model) =>
+        MaterialApp(
+          theme: AppTheme.dark,
+          home: Scaffold(
+            body: ModelRenderView(
+              key: key,
+              model: model,
+              viewerOverride: const SizedBox.expand(),
+              arQuickLookOverride: quickLook,
+            ),
+          ),
+        );
+
+    testWidgets('on iOS with a USDZ the CTA is launch-capable WITHOUT any ar '
+        'signal, and the tap presents the USDZ in Quick Look', (tester) async {
+      await asPlatform(TargetPlatform.iOS, () async {
+        final key = GlobalKey<ModelRenderViewState>();
+        await tester.pumpWidget(app(key, _model));
+
+        // Plain `loaded` — the page reported NO AR, which is what really
+        // happens in the WebView. The CTA must still be live.
+        key.currentState!.handleEvent('loaded');
+        await tester.pump();
+        expect(key.currentState!.canQuickLook, isTrue);
+
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pumpAndSettle();
+
+        // The USDZ, never the GLB — Quick Look cannot read a GLB.
+        expect(quickLook.presented, 'https://cdn/model.usdz');
+        expect(find.textContaining('AR isn’t available'), findsNothing);
+        expect(find.textContaining('couldn’t load this model for AR'),
+            findsNothing);
+      });
+    });
+
+    testWidgets('the CTA shows a pending state while the USDZ downloads, and '
+        'swallows a second tap', (tester) async {
+      await asPlatform(TargetPlatform.iOS, () async {
+        final key = GlobalKey<ModelRenderViewState>();
+        await tester.pumpWidget(app(key, _model));
+        key.currentState!.handleEvent('loaded');
+        await tester.pump();
+
+        quickLook.hold = true;
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pump();
+
+        expect(find.byKey(const ValueKey('model_ar_cta_pending')),
+            findsOneWidget);
+        expect(find.text('Opening AR…'), findsOneWidget);
+
+        // A second tap while the first is in flight must not queue another.
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pump();
+        expect(quickLook.calls, 1);
+
+        quickLook.release();
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('model_ar_cta_pending')), findsNothing);
+        expect(find.text('View in AR'), findsOneWidget);
+      });
+    });
+
+    testWidgets('a failed download says so — distinct from "no AR here", '
+        'because the user can retry this one', (tester) async {
+      await asPlatform(TargetPlatform.iOS, () async {
+        quickLook.failure = ArQuickLookFailure.download;
+        final key = GlobalKey<ModelRenderViewState>();
+        await tester.pumpWidget(app(key, _model));
+
+        key.currentState!.handleEvent('loaded');
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('couldn’t load this model for AR'),
+            findsOneWidget);
+        expect(find.textContaining('AR isn’t available'), findsNothing);
+      });
+    });
+
+    testWidgets('a busy presenter (double tap / mid-transition) stays SILENT — '
+        'AR is already coming up', (tester) async {
+      await asPlatform(TargetPlatform.iOS, () async {
+        quickLook.failure = ArQuickLookFailure.busy;
+        final key = GlobalKey<ModelRenderViewState>();
+        await tester.pumpWidget(app(key, _model));
+
+        key.currentState!.handleEvent('loaded');
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(SnackBar), findsNothing);
+      });
+    });
+
+    testWidgets('an iOS build with no native channel falls back to the '
+        'unavailable guidance', (tester) async {
+      await asPlatform(TargetPlatform.iOS, () async {
+        quickLook.failure = ArQuickLookFailure.unsupported;
+        final key = GlobalKey<ModelRenderViewState>();
+        await tester.pumpWidget(app(key, _model));
+
+        key.currentState!.handleEvent('loaded');
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('AR isn’t available'), findsOneWidget);
+      });
+    });
+
+    testWidgets('on iOS WITHOUT a USDZ there is nothing to preview — the '
+        'bypass stays off and the tap explains', (tester) async {
+      await asPlatform(TargetPlatform.iOS, () async {
+        final key = GlobalKey<ModelRenderViewState>();
+        await tester.pumpWidget(app(key, _noUsdz));
+
+        key.currentState!.handleEvent('loaded');
+        await tester.pump();
+        expect(key.currentState!.canQuickLook, isFalse);
+
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pumpAndSettle();
+
+        expect(quickLook.presented, isNull);
+        expect(find.textContaining('AR isn’t available'), findsOneWidget);
+      });
+    });
+
+    testWidgets('Android is untouched: no bypass, the page signal still rules',
+        (tester) async {
+      await asPlatform(TargetPlatform.android, () async {
+        final key = GlobalKey<ModelRenderViewState>();
+        await tester.pumpWidget(app(key, _model));
+
+        key.currentState!.handleEvent('loaded');
+        await tester.pump();
+        expect(key.currentState!.canQuickLook, isFalse);
+
+        await tester.tap(find.byKey(const ValueKey('model_ar_cta')));
+        await tester.pumpAndSettle();
+
+        // Scene Viewer goes through model-viewer, never through this channel.
+        expect(quickLook.presented, isNull);
+        expect(find.textContaining('AR isn’t available'), findsOneWidget);
+      });
+    });
+  });
+}
+
+const _noUsdz = ProjectModelView(
+  id: 'm2',
+  source: ModelSource.meshy,
+  status: ModelStatus.succeeded,
+  glbUrl: 'https://cdn/model.glb',
+);
+
+/// Records what the AR CTA hands to the native presenter, and can hold the
+/// call open so the pending state is observable.
+class _FakeArQuickLook extends ArQuickLookChannel {
+  String? presented;
+  int calls = 0;
+  ArQuickLookFailure? failure;
+
+  /// Keeps [present] unresolved until [release], standing in for the USDZ
+  /// download.
+  bool hold = false;
+  Completer<void>? _gate;
+
+  void release() {
+    _gate?.complete();
+    _gate = null;
+  }
+
+  @override
+  Future<ArQuickLookFailure?> present(String usdzUrl) async {
+    calls++;
+    presented = usdzUrl;
+    if (hold) {
+      final gate = Completer<void>();
+      _gate = gate;
+      await gate.future;
+    }
+    return failure;
+  }
 }

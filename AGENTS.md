@@ -206,6 +206,28 @@ do not remove it).
   `_lifecycleJs` in `model_render_view.dart` — two separate pages, and fixing
   one ships the feature broken on the other platform.
   `test/projects/meshopt_decoder_test.dart` guards the pair.
+- ⚠ **`<model-viewer>` DISABLES iOS AR Quick Look inside an app WebView**, so
+  the `ar`/`arModes`/`iosSrc` attributes alone never produce AR on iOS. Its
+  `IS_AR_QUICKLOOK_CANDIDATE` returns, when `window.webkit.messageHandlers`
+  exists (i.e. any WKWebView — our JS channel guarantees it), only whether the
+  user agent matches `CriOS/|EdgiOS/|FxiOS/|GSA/|DuckDuckGo/`. The stock
+  WebView UA matches none, both routes to its QUICK_LOOK mode require that
+  flag, so `canActivateAR` is permanently false and model_viewer_plus's own
+  Quick Look intercept (an exact match on `iosSrc`) never sees a navigation.
+  `ModelRenderView` therefore presents **native `QLPreviewController`** itself
+  (`canQuickLook` there → `ArQuickLookChannel` → iOS `ARQuickLookManager`).
+  Three things that look like simpler fixes and are not:
+  - **`launchUrl` on the CloudFront USDZ** (tried, rejected): it opens a
+    browser on the model page, so AR needs a SECOND tap. Not one-tap AR.
+  - **Spoofing the UA** to match the whitelist: changes the UA for every
+    request the page makes, including the CloudFront GLB fetch.
+  - **Deleting the bypass** in favour of the `ar`/`arModes`/`iosSrc`
+    attributes: they are already set, and are not sufficient.
+  `QLPreviewController` previews FILES, so the manager downloads the USDZ into
+  `Caches/ar-quicklook` first, keyed by a hash of the full URL. It MUST reject
+  non-2xx responses — a cached CloudFront 403 body under a `.usdz` name is a
+  permanent un-openable "model". Web is unaffected: real Safari passes the
+  `relList.supports('ar')` branch, so it keeps using the web component.
 - **`sharp` must resolve to ONE copy in `node_modules`.** `@gltf-transform/functions`
   pulls it in transitively via `ndarray-pixels`; two libvips native addons in one
   process break GObject type registration and every texture pass fails with
