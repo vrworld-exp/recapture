@@ -187,19 +187,28 @@ class ImagePickerProjectPhotoSource implements ProjectPhotoPicker {
     }
 
     // On web there is no path to stream from later, so the bytes read here ARE
-    // the upload payload and are kept. On native they are read only to sniff
-    // the type and are dropped immediately — the engine re-reads the range it
-    // needs, part by part, off disk.
-    final Uint8List bytes;
+    // the upload payload and are kept. On native NOTHING is kept, and nothing
+    // whole is even read: only the [kImageSniffHeaderBytes] the sniffer needs
+    // come off disk, and the engine re-reads each part's range later. Reading
+    // every photo in full here — which is what this did — pulled the WHOLE set
+    // through RAM at pick time, 48 x up to 15 MiB of short-lived allocations on
+    // the UI isolate, for the sake of 12 magic bytes.
+    final Uint8List head;
+    Uint8List? payload;
     try {
-      bytes = await file.readAsBytes();
+      if (kIsWeb) {
+        payload = await file.readAsBytes();
+        head = payload;
+      } else {
+        head = await _readHead(file, kImageSniffHeaderBytes);
+      }
     } catch (error, stack) {
       DevUploadLog.instance.add('photo set: could not read a picked file',
           error: error, stack: stack);
       return const _Rejected(PhotoRejectionReason.unreadable);
     }
 
-    final contentType = sniffImageContentType(bytes, allowWebp: true);
+    final contentType = sniffImageContentType(head, allowWebp: true);
     if (contentType == null) {
       return const _Rejected(PhotoRejectionReason.unsupportedType);
     }
@@ -209,9 +218,25 @@ class ImagePickerProjectPhotoSource implements ProjectPhotoPicker {
       size: size,
       contentType: contentType,
       path: kIsWeb ? null : file.path,
-      bytes: kIsWeb ? bytes : null,
+      // Native keeps nothing; only the web branch above produced a payload.
+      bytes: payload,
     ));
   }
+}
+
+/// Reads at most [maxBytes] leading bytes of [file].
+///
+/// `openRead(0, maxBytes)` STREAMS, so a 15 MiB photo yields one short chunk and
+/// the rest of the file is never touched; leaving the loop cancels the
+/// subscription and closes the handle. Chunks may arrive shorter than asked for,
+/// so they accumulate until the sniffer has enough or the file ends.
+Future<Uint8List> _readHead(XFile file, int maxBytes) async {
+  final head = <int>[];
+  await for (final chunk in file.openRead(0, maxBytes)) {
+    head.addAll(chunk);
+    if (head.length >= maxBytes) break;
+  }
+  return Uint8List.fromList(head);
 }
 
 sealed class _PhotoResult {

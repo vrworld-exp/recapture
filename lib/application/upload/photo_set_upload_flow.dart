@@ -31,11 +31,13 @@ import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/datasources/project_photo_picker.dart';
+import '../../data/local/upload_progress_box.dart';
 import '../../data/repositories/project_photos_repository.dart';
 import '../../data/repositories/projects_repository.dart';
 import '../../domain/entities/project.dart';
 import '../../domain/entities/project_source.dart';
 import '../../domain/upload/upload_session_spec.dart';
+import '../../platform/connectivity_watcher.dart';
 import '../connectivity/connectivity_providers.dart';
 import 'chunked_upload_manager.dart';
 import 'bytes_part_byte_source.dart';
@@ -273,17 +275,48 @@ class PhotoSetUploadFlow {
 
 /// Production engine: the SAME [ChunkedUploadManager] + [ResilientUploadRunner]
 /// pair the capture flow builds, differing only in the byte source.
+///
+/// ── WHY IT LISTENS TO CONNECTIVITY ──────────────────────────────────────────
+/// The manager's `isOnline` gate AUTO-PAUSES rather than burning retries into a
+/// dead network: a worker that finds the network gone parks on the pause gate.
+/// Only [UploadController.resume] reopens that gate. The CAPTURE flow has two
+/// things that call it — the on-screen upload controls and the offline queue's
+/// `autoResumeQueued` — but this flow has NEITHER: the photo progress screen
+/// offers only Cancel. Without the subscription below, airplane mode mid-upload
+/// parked every worker permanently and the transfer hung even after the network
+/// came back. [onlineChanges] is the missing edge: it resumes on reconnect.
 class RunnerPhotoSetUploadEngine implements PhotoSetUploadEngine {
-  RunnerPhotoSetUploadEngine({required this.manager, required this.runner});
+  RunnerPhotoSetUploadEngine({
+    required this.manager,
+    required this.runner,
+    Stream<bool>? onlineChanges,
+  }) : _onlineChanges = onlineChanges;
 
   final ChunkedUploadManager manager;
   final ResilientUploadRunner runner;
+
+  /// Online/offline edges for the life of ONE run. Null disables auto-resume
+  /// (the manager then behaves exactly as it always has).
+  final Stream<bool>? _onlineChanges;
 
   @override
   UploadProgressSource get progress => manager;
 
   @override
-  Future<ResilientUploadOutcome> run(UploadSessionSpec spec) => runner.run(spec);
+  Future<ResilientUploadOutcome> run(UploadSessionSpec spec) async {
+    // Subscribed for the RUN, cancelled with it — no listener outlives the
+    // transfer it was opened for.
+    final sub = _onlineChanges?.listen((online) {
+      // `resume` is a no-op unless the manager is actually paused, so a
+      // spurious online event cannot disturb a healthy transfer.
+      if (online) manager.resume();
+    });
+    try {
+      return await runner.run(spec);
+    } finally {
+      await sub?.cancel();
+    }
+  }
 
   /// Through the RUNNER, so a cancel during a backoff wait is not lost.
   @override
@@ -315,8 +348,15 @@ PhotoSetUploadFlow buildPhotoSetUploadFlow(
         byteSource: bytes.isEmpty
             ? const FilePartByteSource()
             : BytesPartByteSource(bytes),
+        // The SAME durable store the capture flow uses. Without it the engine is
+        // stateless, so every auto-retry re-initiated each file and re-sent every
+        // part from zero — which is precisely what the runner's own idempotency
+        // note promises does not happen. A dropped network on part 300 of a
+        // 48-photo set must not cost the first 299.
+        store: HiveUploadProgressStore(),
         // Connectivity gate: parts park (auto-pause) instead of burning retries
-        // into a dead network.
+        // into a dead network. Paired with `onlineChanges` below, which is what
+        // un-parks them — this flow has no upload controls to do it by hand.
         isOnline: () => ref.read(isOnlineProvider),
         deviceType: deviceType,
       );
@@ -326,6 +366,10 @@ PhotoSetUploadFlow buildPhotoSetUploadFlow(
           attempt: ManagerUploadAttempt(manager),
           deviceType: deviceType,
         ),
+        onlineChanges: ref
+            .read(connectivityWatcherProvider)
+            .statusStream
+            .map((s) => s == AppConnectivityStatus.online),
       );
     },
   );
