@@ -43,6 +43,10 @@ class _StubLiveRepo
       _page;
 
   @override
+  Future<Map<String, dynamic>> photos(String projectId) async =>
+      throw UnimplementedError();
+
+  @override
   Future<Map<String, dynamic>> export(String projectId) async =>
       throw UnimplementedError();
 

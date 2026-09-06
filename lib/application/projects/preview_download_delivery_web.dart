@@ -24,7 +24,15 @@ import 'dart:html' as html;
 import '../../domain/entities/preview_manifest.dart';
 
 Future<void> deliverPreviewDownload(PreviewPhoto photo) async {
-  final anchor = html.AnchorElement(href: photo.url)
+  // A browsed photo carries no url (the gallery lists them credential-free);
+  // the caller mints one via freshPhotoFor first. Reaching here without one is
+  // a programming error, so fail loudly rather than navigate nowhere.
+  final url = photo.url;
+  if (url == null) {
+    throw StateError('Photo has no download url — resolve one before delivery.');
+  }
+
+  final anchor = html.AnchorElement(href: url)
     // Cross-origin browsers ignore this filename in favour of S3's
     // Content-Disposition, but it also signals "download, don't navigate".
     ..download = photo.fileName

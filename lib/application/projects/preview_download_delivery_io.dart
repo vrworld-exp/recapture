@@ -20,9 +20,17 @@ import 'package:share_plus/share_plus.dart';
 import '../../domain/entities/preview_manifest.dart';
 
 Future<void> deliverPreviewDownload(PreviewPhoto photo) async {
+  // A browsed photo carries no url (the gallery lists them credential-free);
+  // the caller mints one via freshPhotoFor first. Reaching here without one is
+  // a programming error, so fail loudly rather than download nothing.
+  final url = photo.url;
+  if (url == null) {
+    throw StateError('Photo has no download url — resolve one before delivery.');
+  }
+
   final http = Dio();
   final res = await http.get<List<int>>(
-    photo.url,
+    url,
     options: Options(
       responseType: ResponseType.bytes,
       // A non-2xx (e.g. an expired / re-signed url returning 403) must fail

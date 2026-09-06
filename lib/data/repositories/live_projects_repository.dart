@@ -69,8 +69,18 @@ abstract interface class LiveProjectsRepository {
   /// Throws [LiveProjectsException] on failure.
   Future<LiveProjectsPage> list({int limit, String? cursor});
 
+  /// The capture set for [projectId] as the RAW response `photos` object —
+  /// keys + sizes, no presigned urls. This is the BROWSE call: it mints no
+  /// credentials and is not rate-limited, so a gallery open is free. Use it for
+  /// anything that only needs to look at photos; reach for [export] only when a
+  /// downloadable url is genuinely required.
+  /// Throws [LiveProjectsException] (notExportable / network / …).
+  Future<Map<String, dynamic>> photos(String projectId);
+
   /// The export manifest for [projectId] — returned as the RAW response
   /// `export` object (the artist-facing JSON written to the share file).
+  /// Every call mints presigned bearer urls and spends the server's per-user
+  /// export budget, so call it deliberately — see [photos] for browsing.
   /// Throws [LiveProjectsException] (notExportable / rateLimited / …).
   Future<Map<String, dynamic>> export(String projectId);
 
@@ -257,6 +267,22 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
         nextCursor:
             data['nextCursor'] is String ? data['nextCursor'] as String : null,
       );
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>> photos(String projectId) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>(
+        '/admin/projects/$projectId/photos',
+      );
+      final photos = res.data?['photos'];
+      if (photos is! Map<String, dynamic>) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return photos;
     } on DioException catch (e) {
       throw _translate(e);
     }

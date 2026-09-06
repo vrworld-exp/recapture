@@ -9,12 +9,14 @@
 //
 // Hermetic: fake repo, no network. Images/ModelViewer are never loaded — taps
 // hit the GestureDetector/button, which exist regardless of network state.
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/projects/preview_download_service.dart';
+import 'package:recapture/data/remote/api_client.dart';
 import 'package:recapture/data/repositories/live_projects_repository.dart';
 import 'package:recapture/domain/entities/live_project.dart';
 import 'package:recapture/domain/entities/preview_manifest.dart';
@@ -34,7 +36,7 @@ class _FakeRepo
     implements LiveProjectsRepository {
   _FakeRepo({this.models = const []});
 
-  Map<String, dynamic> exportResult = const {};
+  Map<String, dynamic> photosResult = const {};
   List<ProjectModelView> models;
 
   /// Every createModel call, as (keys, idempotencyKey).
@@ -46,7 +48,11 @@ class _FakeRepo
       const LiveProjectsPage(items: [], nextCursor: null);
 
   @override
-  Future<Map<String, dynamic>> export(String projectId) async => exportResult;
+  Future<Map<String, dynamic>> photos(String projectId) async => photosResult;
+
+  @override
+  Future<Map<String, dynamic>> export(String projectId) async =>
+      throw UnimplementedError('the gallery must not mint export urls to browse');
 
   @override
   Future<PreviewDeleteResult> deletePhotos(String p, List<String> k) async =>
@@ -83,13 +89,25 @@ class _NoopDownloader implements PreviewDownloader {
   Future<void> download(PreviewPhoto photo) async {}
 }
 
-Map<String, dynamic> _manifest(List<String> keys) => {
-      'expiresAt': '2099-01-01T00:00:00.000Z',
+/// A client that rejects every request, so the gallery's proxy-backed
+/// thumbnails fail fast to their placeholder instead of reaching the network
+/// (and so reading a base url from unloaded dotenv never throws).
+Dio _offlineDio() {
+  final dio = Dio();
+  dio.interceptors.add(InterceptorsWrapper(
+    onRequest: (options, handler) => handler.reject(
+      DioException(requestOptions: options, message: 'offline (widget test)'),
+    ),
+  ));
+  return dio;
+}
+
+/// The credential-free `/photos` payload the gallery grid loads from.
+Map<String, dynamic> _photos(List<String> keys) => {
       'fileCount': keys.length,
       'expectedFileCount': keys.length,
       'files': [
-        for (final k in keys)
-          {'key': k, 'url': 'https://signed/$k', 'size': 100},
+        for (final k in keys) {'key': k, 'size': 100},
       ],
     };
 
@@ -102,6 +120,7 @@ Widget _gallery(_FakeRepo repo, {bool staff = true, int instance = 0}) =>
       overrides: [
         liveProjectsRepositoryProvider.overrideWithValue(repo),
         previewDownloaderProvider.overrideWithValue(_NoopDownloader()),
+        dioProvider.overrideWithValue(_offlineDio()),
         isStaffProvider.overrideWithValue(staff),
         isAdminProvider.overrideWithValue(false),
       ],
@@ -156,7 +175,7 @@ const _keys = [
 void main() {
   group('Preview gallery — Create Model selection gate', () {
     testWidgets('the CTA is hidden for a non-staff caller', (tester) async {
-      final repo = _FakeRepo()..exportResult = _manifest(_keys);
+      final repo = _FakeRepo()..photosResult = _photos(_keys);
       _useRoomySurface(tester);
       await tester.pumpWidget(_gallery(repo, staff: false));
       await tester.pumpAndSettle();
@@ -166,7 +185,7 @@ void main() {
 
     testWidgets('below 3 selected the CTA stays disabled and nothing is sent',
         (tester) async {
-      final repo = _FakeRepo()..exportResult = _manifest(_keys);
+      final repo = _FakeRepo()..photosResult = _photos(_keys);
       _useRoomySurface(tester);
       await tester.pumpWidget(_gallery(repo));
       await tester.pumpAndSettle();
@@ -185,7 +204,7 @@ void main() {
 
     testWidgets('at 3 selected the CTA sends exactly the picked keys',
         (tester) async {
-      final repo = _FakeRepo()..exportResult = _manifest(_keys);
+      final repo = _FakeRepo()..photosResult = _photos(_keys);
       _useRoomySurface(tester);
       await tester.pumpWidget(_gallery(repo));
       await tester.pumpAndSettle();
@@ -203,7 +222,7 @@ void main() {
     });
 
     testWidgets('a 5th tap cannot exceed the 4-photo maximum', (tester) async {
-      final repo = _FakeRepo()..exportResult = _manifest(_keys);
+      final repo = _FakeRepo()..photosResult = _photos(_keys);
       _useRoomySurface(tester);
       await tester.pumpWidget(_gallery(repo));
       await tester.pumpAndSettle();
@@ -218,7 +237,7 @@ void main() {
 
     testWidgets('the same selection always yields the SAME idempotency key',
         (tester) async {
-      final repo = _FakeRepo()..exportResult = _manifest(_keys);
+      final repo = _FakeRepo()..photosResult = _photos(_keys);
 
       // Two independent visits to the gallery, picking the same three photos —
       // the key must depend only on (project, selection), never on screen
@@ -238,7 +257,7 @@ void main() {
     testWidgets('a failed create shows mapped copy, never a raw error',
         (tester) async {
       final repo = _FakeRepo()
-        ..exportResult = _manifest(_keys)
+        ..photosResult = _photos(_keys)
         ..createFail =
             const LiveProjectsException(LiveProjectsFailure.rateLimited);
       _useRoomySurface(tester);
