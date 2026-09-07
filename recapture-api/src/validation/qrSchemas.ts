@@ -76,18 +76,42 @@ export const adminBatchCodesQuerySchema = z
 export type AdminBatchCodesQuery = z.infer<typeof adminBatchCodesQuerySchema>;
 
 /**
- * GET /admin/qr-codes/:code/qr query.
+ * The standee-sheet query, for BOTH callers that render one:
+ * `GET /admin/qr-codes/:code/qr` and `GET /rep/standees/:code/qr`.
  *
  * Deliberately the same shape as `catalogQrQuerySchema` — same formats, same
  * "clamp the size rather than reject it" rule — because it feeds the same
- * renderer. Two schemas rather than a shared one only because the two route
- * groups own their own validation files; if a third caller appears, hoist it.
+ * renderer. That one stays in catalogSchemas.ts, which its own route group
+ * owns; the two standee callers share THIS one, because they are both the QR
+ * inventory surface and this file is where that surface's validation lives.
+ * (The earlier note here said to hoist when a third caller appeared. The rep
+ * download is that caller, and this rename is the hoist.)
  */
-export const adminStandeeQrQuerySchema = z
+export const standeeQrQuerySchema = z
   .object({
     format: z.enum(['png', 'pdf']).default('png'),
     size: z.coerce.number().int().positive().optional(),
   })
   .strict();
 
-export type AdminStandeeQrQuery = z.infer<typeof adminStandeeQrQuerySchema>;
+export type StandeeQrQuery = z.infer<typeof standeeQrQuerySchema>;
+
+/**
+ * POST /admin/qr-codes/:code/assignment — hand this standee to that rep.
+ *
+ * The id is checked for SHAPE only. Whether it names a real account, and one
+ * with a role that can act on the assignment, is decided by
+ * `standeeAssignmentService.assignCode` against the database — a schema cannot
+ * know that, and splitting the check across both would leave two places to fix
+ * when the set of assignable roles changes.
+ */
+export const assignStandeeSchema = z
+  .object({
+    repUserId: z
+      .string()
+      .trim()
+      .regex(/^[a-fA-F0-9]{24}$/, 'repUserId must be a valid id'),
+  })
+  .strict();
+
+export type AssignStandeeInput = z.infer<typeof assignStandeeSchema>;

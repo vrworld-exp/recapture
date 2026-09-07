@@ -95,6 +95,36 @@ class _FakeRepo implements AdminStandeeRepository {
       mimeType: 'text/csv',
     );
   }
+
+  // ── Assignment ───────────────────────────────────────────────────────────
+  List<SalesRepSummary> repList = const [];
+  CatalogFailure? assignThrows;
+
+  /// Every assignment asked for, in order, so a test can assert the code AND
+  /// the rep rather than just that something happened.
+  final List<({String code, String repUserId})> assigned = [];
+  final List<String> unassigned = [];
+
+  @override
+  Future<List<SalesRepSummary>> salesReps() async => repList;
+
+  @override
+  Future<StandeeAssignee> assign(
+    String code, {
+    required String repUserId,
+  }) async {
+    assigned.add((code: code, repUserId: repUserId));
+    if (assignThrows != null) throw assignThrows!;
+    return repList
+        .firstWhere((r) => r.id == repUserId)
+        .person;
+  }
+
+  @override
+  Future<void> unassign(String code) async {
+    unassigned.add(code);
+    if (assignThrows != null) throw assignThrows!;
+  }
 }
 
 /// Captures what the platform would have been handed.

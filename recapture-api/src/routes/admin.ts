@@ -62,27 +62,25 @@ import {
   listBatchCodes,
   listBatches,
   mintBatch,
-  resolverUrlFor,
   slugifyBatchLabel,
   QrResolverNotConfiguredError,
 } from '@/services/qrCodeService';
 import {
   adminBatchCodesQuerySchema,
-  adminStandeeQrQuerySchema,
+  assignStandeeSchema,
   mintQrBatchSchema,
   qrCodeParam,
+  standeeQrQuerySchema,
+  type AssignStandeeInput,
   type MintQrBatchInput,
 } from '@/validation/qrSchemas';
-import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
+import { renderStandeeSheet } from '@/services/standeeSheetService';
+import {
+  assignCode,
+  listAssignableReps,
+  unassignCode,
+} from '@/services/standeeAssignmentService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
-
-/**
- * The line printed under every standee code.
- *
- * Here rather than inline so the sheet cannot start saying two different things
- * if a second caller ever renders one.
- */
-const STANDEE_TAGLINE = 'Created for mirage menu';
 
 const router = Router();
 
@@ -1272,7 +1270,7 @@ router.get(
       return;
     }
 
-    const parsed = adminStandeeQrQuerySchema.safeParse(req.query);
+    const parsed = standeeQrQuerySchema.safeParse(req.query);
     if (!parsed.success) {
       res.status(400).json({
         status: 'error',
@@ -1292,18 +1290,11 @@ router.get(
       return;
     }
 
-    if (record.state === 'RETIRED') {
-      res.status(409).json({
-        status: 'error',
-        code: 'CODE_RETIRED',
-        message: 'This standee was retired. Mint a replacement rather than reprinting it.',
-      });
-      return;
-    }
+    const { format, size } = parsed.data;
 
-    let url: string;
+    let rendered;
     try {
-      url = resolverUrlFor(record.code);
+      rendered = await renderStandeeSheet({ record, format, size });
     } catch (err) {
       if (err instanceof QrResolverNotConfiguredError) {
         res.status(409).json({
@@ -1316,13 +1307,21 @@ router.get(
       throw err;
     }
 
-    const { format, size } = parsed.data;
-    const clamped = clampQrSize(size);
+    if (rendered.outcome === 'CODE_RETIRED') {
+      res.status(409).json({
+        status: 'error',
+        code: 'CODE_RETIRED',
+        message: 'This standee was retired. Mint a replacement rather than reprinting it.',
+      });
+      return;
+    }
 
     // Keyed on everything that changes the bytes and nothing that does not. The
     // code's STATE is deliberately absent: activating a standee does not change
-    // what it encodes, which is the entire premise of the resolver.
-    const etag = strongETag({ url, format, size: clamped });
+    // what it encodes, which is the entire premise of the resolver. Nor is the
+    // HOLDER — assigning a standee does not alter one pixel of the sheet, so a
+    // reassignment must not invalidate a cached copy.
+    const etag = strongETag({ url: rendered.url, format, size: rendered.size });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
@@ -1330,23 +1329,148 @@ router.get(
       return;
     }
 
-    const rendered = await renderCatalogQr({
-      publicUrl: url,
-      // Still the filename stem (`standee-abcd2345-qr.pdf`), so an admin with
-      // several of these in a downloads folder can tell them apart unopened.
-      catalogName: `Standee ${record.code}`,
-      format,
-      size: clamped,
-      // What is PRINTED under the square. The code, big and monospaced, because
-      // a rep reads those eight characters off the sheet and types them; then
-      // one line saying what the sheet is, for whoever finds it in a drawer.
-      standeeCode: record.code,
-      standeeTagline: STANDEE_TAGLINE,
-    });
-
     res.setHeader('Content-Type', rendered.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
     res.status(200).send(rendered.body);
+  })
+);
+
+/**
+ * GET /admin/sales-reps — the staff an admin may hand a standee to.
+ *
+ * NOT a user directory, and it must not grow into one. It lists accounts that
+ * already hold a script-granted staff role — the people who can open `/rep` at
+ * all — so it exposes no account an admin could not already reach through the
+ * role script. The in-app user-management surface, which WOULD need search,
+ * paging and a grant path, remains deliberately unbuilt; this is a picker for
+ * one action, not the first half of that feature.
+ *
+ * Rows carry a display name and a MASKED contact. An admin has to be able to
+ * tell two reps apart to hand a standee to the right one, and the masked form
+ * is what `GET /auth/me` already ships for exactly that purpose — raw phone and
+ * email stay inside the API, as everywhere else.
+ */
+router.get(
+  '/sales-reps',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    const reps = await listAssignableReps();
+    res.status(200).json({ status: 'success', reps });
+  })
+);
+
+/**
+ * POST /admin/qr-codes/:code/assignment — hand this standee to that rep.
+ *
+ * IDEMPOTENT AND OVERWRITING. Assigning a code that is already assigned — to
+ * the same rep or a different one — succeeds and leaves the named rep holding
+ * it. A standee is a physical object that moves between people; refusing the
+ * second assignment would mean an admin correcting a mistake has to unassign
+ * first, for no gain, since the correction is the whole point.
+ *
+ * ADVISORY. This does not reserve the code: any rep may still activate any
+ * UNASSIGNED standee, and `activationService` never reads the field. See the
+ * header of standeeAssignmentService for why that was chosen over a lock.
+ */
+router.post(
+  '/qr-codes/:code/assignment',
+  requireRole('ADMIN'),
+  validateBody(assignStandeeSchema),
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid QR code',
+      });
+      return;
+    }
+
+    const { repUserId } = req.body as AssignStandeeInput;
+    const result = await assignCode({
+      code: code.data,
+      repUserId: new Types.ObjectId(repUserId),
+      actorUserId: new Types.ObjectId(req.user!.userId),
+    });
+
+    switch (result.outcome) {
+      case 'CODE_NOT_FOUND':
+        res.status(404).json({
+          status: 'error',
+          code: 'NOT_FOUND',
+          message: 'No such code',
+        });
+        return;
+      case 'CODE_RETIRED':
+        res.status(409).json({
+          status: 'error',
+          code: 'CODE_RETIRED',
+          message: 'This standee was retired. Assign a replacement instead.',
+        });
+        return;
+      case 'REP_NOT_FOUND':
+        // Covers both "no such account" and "that account is not staff". One
+        // answer for both, matching the house enumeration rule: an admin needs
+        // to know the assignment did not happen, not which of the two it was.
+        res.status(404).json({
+          status: 'error',
+          code: 'REP_NOT_FOUND',
+          message: 'That account cannot hold a standee.',
+        });
+        return;
+      case 'ASSIGNED':
+        break;
+    }
+
+    track(AnalyticsEvent.QR_CODE_ASSIGNED, {
+      actor_id_hash: hashIdentifier(req.user!.userId),
+      rep_id_hash: hashIdentifier(result.rep.id),
+      outcome: 'ASSIGNED',
+    });
+
+    res.status(200).json({ status: 'success', code: result.code, assignedTo: result.rep });
+  })
+);
+
+/**
+ * DELETE /admin/qr-codes/:code/assignment — take the standee back.
+ *
+ * Succeeds on a code nobody holds (see `unassignCode`): the admin asked for it
+ * to be on no one's list, and it is.
+ */
+router.delete(
+  '/qr-codes/:code/assignment',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid QR code',
+      });
+      return;
+    }
+
+    const result = await unassignCode(code.data);
+    if (result.outcome === 'CODE_NOT_FOUND') {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'No such code',
+      });
+      return;
+    }
+
+    // No `rep_id_hash`: the standee is on nobody's list now, and naming who it
+    // used to be with would be the one property this event does not need.
+    track(AnalyticsEvent.QR_CODE_ASSIGNED, {
+      actor_id_hash: hashIdentifier(req.user!.userId),
+      outcome: 'UNASSIGNED',
+    });
+
+    res.status(200).json({ status: 'success', code: result.code, assignedTo: null });
   })
 );
 

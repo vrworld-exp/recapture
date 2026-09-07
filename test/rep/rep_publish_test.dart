@@ -23,6 +23,10 @@ import 'package:recapture/application/rep/rep_publish_notifier.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show ProductImageSlot;
+import 'package:recapture/application/catalog/qr_download_file.dart';
+import 'package:recapture/data/repositories/admin_standee_repository.dart'
+    show StandeeQrFormat;
+import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/catalog/publish_gate.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
@@ -93,6 +97,26 @@ class _FakeRepRepository implements RepRepository {
 
   @override
   Future<void> retireCode(String code) async {}
+
+  /// The rep's assigned stock. Empty by default, so a test that does not care
+  /// about the recommendations renders exactly the screen it did before.
+  List<RepStandee> assignedStandees = const [];
+
+  @override
+  Future<List<RepStandee>> standees() async => assignedStandees;
+
+  @override
+  Future<QrDownloadFile> standeeFile(
+    String code, {
+    StandeeQrFormat format = StandeeQrFormat.pdf,
+    int? size,
+  }) async =>
+      QrDownloadFile(
+        bytes: Uint8List.fromList([1, 2, 3]),
+        fileName: 'standee-$code.pdf',
+        mimeType: 'application/pdf',
+      );
+
 }
 
 ProviderContainer _containerWith(_FakeRepRepository repo) {

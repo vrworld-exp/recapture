@@ -154,6 +154,67 @@ class AdminBatchCodesNotifier
     );
   }
 
+  /// Hands one standee to one rep.
+  ///
+  /// THE ROW IS PATCHED IN PLACE from the response, not re-fetched. A reload
+  /// would restart the keyset paging from page one and throw away every page
+  /// the admin had scrolled through — to learn one field the server just told
+  /// us. The response carries the holder precisely so this can be a local edit.
+  ///
+  /// Reassignment needs no special case: the endpoint overwrites, so handing a
+  /// code to a second rep is the same call as the first.
+  Future<void> assign(String code, {required String repUserId}) async {
+    if (state.busyCode != null) return;
+    state = state.copyWith(busyCode: code, failure: null, notice: null);
+
+    try {
+      final holder = await _repo.assign(code, repUserId: repUserId);
+      if (_disposed) return;
+      state = _patchRow(code, holder).copyWith(
+        busyCode: null,
+        notice: 'Standee $code assigned to ${holder.label}.',
+      );
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      state = state.copyWith(busyCode: null, failure: failure);
+    }
+  }
+
+  /// Takes a standee back off whoever was holding it.
+  Future<void> unassign(String code) async {
+    if (state.busyCode != null) return;
+    state = state.copyWith(busyCode: code, failure: null, notice: null);
+
+    try {
+      await _repo.unassign(code);
+      if (_disposed) return;
+      state = _patchRow(code, null).copyWith(
+        busyCode: null,
+        notice: 'Standee $code is back in stock.',
+      );
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      state = state.copyWith(busyCode: null, failure: failure);
+    }
+  }
+
+  /// Replaces one row's holder, leaving every other row and the paging cursor
+  /// untouched.
+  ///
+  /// A no-op when the list is not loaded, or when the code is not on a page the
+  /// admin currently has — neither can happen from the UI (the action starts
+  /// from a visible row) and both would be a silent list rewrite if they did.
+  AdminBatchCodesState _patchRow(String code, StandeeAssignee? holder) {
+    final rows = state.codes.valueOrNull;
+    if (rows == null) return state;
+    return state.copyWith(
+      codes: AsyncData([
+        for (final row in rows)
+          if (row.code == code) row.copyWith(assignedTo: holder) else row,
+      ]),
+    );
+  }
+
   /// Fetches the whole batch's vendor CSV and hands it to the platform.
   Future<void> deliverCsv() async {
     if (state.downloadingCsv) return;

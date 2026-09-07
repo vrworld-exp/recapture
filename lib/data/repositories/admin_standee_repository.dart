@@ -30,6 +30,11 @@ abstract final class AdminStandeeErrorCodes {
   /// Asked to render a standee that was retired. Mint a replacement instead.
   static const codeRetired = 'CODE_RETIRED';
 
+  /// The picked account cannot hold a standee — it does not exist, or it has
+  /// no staff role. One code for both, matching the backend, which will not say
+  /// which of the two it was.
+  static const repNotFound = 'REP_NOT_FOUND';
+
   static const notFound = 'NOT_FOUND';
   static const invalidRequest = 'INVALID_REQUEST';
 }
@@ -71,6 +76,26 @@ abstract interface class AdminStandeeRepository {
 
   /// The print vendor's CSV for a whole batch.
   Future<QrDownloadFile> batchCsv(String batchId);
+
+  /// Everyone an admin may hand a standee to.
+  ///
+  /// Unpaged and unsearchable, mirroring the endpoint: this is the internal
+  /// staff roster, a handful of people, not a user directory.
+  Future<List<SalesRepSummary>> salesReps();
+
+  /// Hands one standee to one rep, and reports who ends up holding it.
+  ///
+  /// IDEMPOTENT AND OVERWRITING — assigning an already-assigned code succeeds
+  /// and moves it, because a standee is a physical object that changes hands.
+  ///
+  /// Throws [CatalogFailure] with [AdminStandeeErrorCodes.repNotFound] for an
+  /// account that cannot hold one, and [AdminStandeeErrorCodes.codeRetired]
+  /// for a standee that is out of service.
+  Future<StandeeAssignee> assign(String code, {required String repUserId});
+
+  /// Takes a standee back off whoever was holding it. Succeeds on a code
+  /// nobody holds — the admin's intent is satisfied either way.
+  Future<void> unassign(String code);
 }
 
 class RemoteAdminStandeeRepository implements AdminStandeeRepository {
@@ -149,6 +174,41 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
         fallbackMime:
             format == StandeeQrFormat.png ? 'image/png' : 'application/pdf',
       );
+
+  @override
+  Future<List<SalesRepSummary>> salesReps() => mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>('/admin/sales-reps');
+        final raw = res.data?['reps'];
+        if (raw is! List) return const <SalesRepSummary>[];
+        return raw
+            .whereType<Map<String, dynamic>>()
+            .map(SalesRepSummary.fromMap)
+            .toList(growable: false);
+      });
+
+  @override
+  Future<StandeeAssignee> assign(String code, {required String repUserId}) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/qr-codes/$code/assignment',
+          data: {'repUserId': repUserId},
+        );
+        final holder = res.data?['assignedTo'];
+        if (holder is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return StandeeAssignee.fromMap(holder);
+      });
+
+  @override
+  Future<void> unassign(String code) => mapCatalogErrors(() async {
+        await _dio.delete<Map<String, dynamic>>(
+          '/admin/qr-codes/$code/assignment',
+        );
+      });
 
   @override
   Future<QrDownloadFile> batchCsv(String batchId) => _bytes(

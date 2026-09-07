@@ -6,7 +6,9 @@ import { Types } from 'mongoose';
 import { env } from '@/config/env';
 import { QrBatch } from '@/models/QrBatch';
 import { QrCode, type IQrCode } from '@/models/QrCode';
+import { User } from '@/models/User';
 import type { QrCodeState } from '@/models/types/qr.types';
+import { maskIdentifier } from '@/utils/maskIdentifier';
 import { generateQrCode, normalizeQrCode } from '@/utils/qrCodes';
 
 /**
@@ -268,6 +270,20 @@ export async function listBatches(): Promise<QrBatchSummary[]> {
   });
 }
 
+/**
+ * Who is currently carrying a standee, as the admin's row shows them.
+ *
+ * The same masked shape `standeeAssignmentService` returns for the picker, so
+ * the row an admin reads and the entry they picked from render identically —
+ * a display name where one is set, otherwise the masked contact. Raw phone and
+ * email never appear, exactly as in every other staff-facing DTO.
+ */
+export interface QrCodeAssignee {
+  id: string;
+  displayName: string | null;
+  contactMasked: string | null;
+}
+
 /** One standee as the batch detail screen reads it. */
 export interface QrCodeRow {
   code: string;
@@ -275,6 +291,14 @@ export interface QrCodeRow {
   /** Exactly what the standee encodes — the same composer the CSV uses. */
   url: string;
   activatedAt: Date | null;
+  /**
+   * The rep holding this standee, or null for stock nobody has been handed.
+   *
+   * Present on the ROW rather than fetched per code by the screen: the admin's
+   * whole reason for opening this list is to see where a batch went, and a
+   * client that had to ask separately would issue one request per row.
+   */
+  assignedTo: QrCodeAssignee | null;
 }
 
 /**
@@ -305,17 +329,60 @@ export async function listBatchCodes(
       deletedAt: null,
       ...(opts.after ? { code: { $gt: opts.after } } : {}),
     },
-    { code: 1, state: 1, activatedAt: 1 }
+    { code: 1, state: 1, activatedAt: 1, assignedToUserId: 1 }
   )
     .sort({ code: 1 })
     .limit(opts.limit)
     .lean()
     .exec();
 
+  const holders = await loadAssignees(codes);
+
   return codes.map((c) => ({
     code: c.code,
     state: c.state,
     url: resolverUrlFor(c.code),
     activatedAt: c.activatedAt ?? null,
+    assignedTo: c.assignedToUserId ? (holders.get(String(c.assignedToUserId)) ?? null) : null,
   }));
+}
+
+/**
+ * The staff rows for one page of codes, keyed by user id.
+ *
+ * ONE query for the whole page, not one per row: a batch page is up to 200
+ * codes and the reps holding them are a handful of people, so the DISTINCT set
+ * is tiny however long the page is. This is the same instinct behind
+ * `listBatches`'s single `$group` — the read count must not scale with the
+ * number of rows on screen.
+ *
+ * A holder who no longer exists (an account deleted after the assignment) is
+ * simply absent from the map, and the row reads as unassigned. That is the
+ * honest rendering: nobody is carrying that standee.
+ */
+async function loadAssignees(
+  codes: readonly { assignedToUserId?: Types.ObjectId }[]
+): Promise<Map<string, QrCodeAssignee>> {
+  const ids = [
+    ...new Set(codes.map((c) => c.assignedToUserId).filter((id): id is Types.ObjectId => !!id)),
+  ];
+  if (ids.length === 0) return new Map();
+
+  const users = await User.find(
+    { _id: { $in: ids } },
+    { displayName: 1, phone: 1, email: 1 }
+  )
+    .lean()
+    .exec();
+
+  return new Map(
+    users.map((u) => [
+      String(u._id),
+      {
+        id: String(u._id),
+        displayName: u.displayName ?? null,
+        contactMasked: maskIdentifier({ phone: u.phone, email: u.email }),
+      },
+    ])
+  );
 }

@@ -12,6 +12,13 @@
 // A retired code offers NEITHER. Reprinting one produces a sheet that resolves
 // to the fallback page, and the whole cost of that lands after somebody has
 // printed it and stood it on a table.
+//
+// ASSIGNMENT sits beside the download and answers the question the download
+// could not: WHO has this standee. Sending a PDF told nobody anything, so two
+// reps could be sent the same code and find out at a table. Assigning it puts
+// the code on one rep's own list instead. It is ADVISORY — the code is not
+// reserved, and any rep can still activate any free standee — so this button
+// changes what people can SEE, never what they may do.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -24,6 +31,7 @@ import '../../../domain/entities/qr_standee.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import 'assign_standee_sheet.dart';
 
 class AdminBatchDetailScreen extends ConsumerWidget {
   const AdminBatchDetailScreen({required this.batchId, super.key});
@@ -117,6 +125,13 @@ class AdminBatchDetailScreen extends ConsumerWidget {
                                   format: StandeeQrFormat.pdf,
                                 )
                             : null,
+                        // Offered for the same states that can be printed. A
+                        // RETIRED standee is refused by the endpoint anyway, and
+                        // handing one to a rep would put a row on their list
+                        // that they can do nothing with.
+                        onAssign: code.state.isPrintable
+                            ? () => _assign(context, notifier, code)
+                            : null,
                       );
                     },
                   ),
@@ -127,11 +142,41 @@ class AdminBatchDetailScreen extends ConsumerWidget {
   }
 }
 
+/// Opens the picker and performs whatever the admin chose.
+///
+/// The AWAIT AND THE ACTION ARE SPLIT ACROSS THE SHEET BOUNDARY on purpose: the
+/// sheet only decides, and the notifier call happens here, so the row spins and
+/// any failure lands on the list the admin is still looking at.
+Future<void> _assign(
+  BuildContext context,
+  AdminBatchCodesNotifier notifier,
+  QrStandeeCode code,
+) async {
+  final choice = await showAssignStandeeSheet(
+    context,
+    code: code.code,
+    currentHolder: code.assignedTo,
+  );
+  if (choice == null) return;
+
+  switch (choice) {
+    case AssignToRep(:final rep):
+      // Re-picking the rep who already holds it is treated as a no-op rather
+      // than a redundant round trip that reports "assigned" for a change that
+      // did not happen.
+      if (rep.id == code.assignedTo?.id) return;
+      await notifier.assign(code.code, repUserId: rep.id);
+    case UnassignStandee():
+      await notifier.unassign(code.code);
+  }
+}
+
 class _CodeTile extends StatelessWidget {
   const _CodeTile({
     required this.code,
     required this.busy,
     required this.onSend,
+    required this.onAssign,
   });
 
   final QrStandeeCode code;
@@ -141,6 +186,10 @@ class _CodeTile extends StatelessWidget {
   /// than disabled, matching the rep surface's rule: an affordance you do not
   /// have should be invisible, not greyed.
   final VoidCallback? onSend;
+
+  /// Null for a code that cannot be handed to anyone. Same absent-not-greyed
+  /// rule as [onSend].
+  final VoidCallback? onAssign;
 
   @override
   Widget build(BuildContext context) {
@@ -185,6 +234,35 @@ class _CodeTile extends StatelessWidget {
                     },
                   ),
                 ),
+
+                // WHO HAS IT — the answer this screen could not give before.
+                // Present only when somebody holds it, so untouched stock stays
+                // a two-line row and a handed-out one is visibly different at a
+                // glance down the list.
+                if (code.assignedTo != null) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.person_outline,
+                        size: 14,
+                        color: AppColors.textMuted,
+                      ),
+                      const SizedBox(width: AppSpacing.xs),
+                      Flexible(
+                        child: Text(
+                          code.assignedTo!.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: AppTypography.sizeLabel,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -194,17 +272,40 @@ class _CodeTile extends StatelessWidget {
               height: 18,
               child: CircularProgressIndicator(strokeWidth: 2),
             )
-          else if (onSend != null)
-            IconButton(
-              tooltip: 'Save a printable standee',
-              onPressed: onSend,
-              // NEUTRAL BY TARGET, like the word "Save" the catalog QR screen
-              // uses. On a phone this opens a share sheet; in a browser it is a
-              // plain download. An iOS share glyph would be a lie in Chrome,
-              // and the seam already hides which one is happening.
-              icon: const Icon(Icons.save_alt),
-              color: AppColors.textSecondary,
-            ),
+          else ...[
+            if (onAssign != null)
+              IconButton(
+                key: ValueKey('assign_${code.code}'),
+                // The verb changes with the state, because "Assign" on a row
+                // that already names a holder reads as though it is unassigned.
+                tooltip: code.isAssigned
+                    ? 'Reassign this standee'
+                    : 'Assign this standee to a rep',
+                onPressed: onAssign,
+                icon: Icon(
+                  code.isAssigned
+                      ? Icons.person
+                      : Icons.person_add_alt_1_outlined,
+                ),
+                // Gold ONLY when assigned, and it is the single accent on this
+                // row — the screen's 2–3% budget, spent on the one bit of state
+                // an admin scans the list for.
+                color: code.isAssigned
+                    ? AppColors.royalGold
+                    : AppColors.textSecondary,
+              ),
+            if (onSend != null)
+              IconButton(
+                tooltip: 'Save a printable standee',
+                onPressed: onSend,
+                // NEUTRAL BY TARGET, like the word "Save" the catalog QR screen
+                // uses. On a phone this opens a share sheet; in a browser it is
+                // a plain download. An iOS share glyph would be a lie in Chrome,
+                // and the seam already hides which one is happening.
+                icon: const Icon(Icons.save_alt),
+                color: AppColors.textSecondary,
+              ),
+          ],
         ],
       ),
     );

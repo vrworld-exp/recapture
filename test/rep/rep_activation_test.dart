@@ -25,6 +25,10 @@ import 'package:recapture/application/rep/rep_capabilities.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show ProductImageSlot;
+import 'package:recapture/application/catalog/qr_download_file.dart';
+import 'package:recapture/data/repositories/admin_standee_repository.dart'
+    show StandeeQrFormat;
+import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_type.dart';
@@ -110,6 +114,26 @@ class _FakeRepRepository implements RepRepository {
   /// present so widening the interface did not cost the suites their ability
   /// to assert a publish never happened.
   final List<String> published = [];
+
+  /// The rep's assigned stock. Empty by default, so a test that does not care
+  /// about the recommendations renders exactly the screen it did before.
+  List<RepStandee> assignedStandees = const [];
+
+  @override
+  Future<List<RepStandee>> standees() async => assignedStandees;
+
+  @override
+  Future<QrDownloadFile> standeeFile(
+    String code, {
+    StandeeQrFormat format = StandeeQrFormat.pdf,
+    int? size,
+  }) async =>
+      QrDownloadFile(
+        bytes: Uint8List.fromList([1, 2, 3]),
+        fileName: 'standee-$code.pdf',
+        mimeType: 'application/pdf',
+      );
+
 }
 
 Widget _app(_FakeRepRepository repo, {bool canScan = false}) => ProviderScope(

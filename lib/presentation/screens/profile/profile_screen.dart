@@ -687,6 +687,54 @@ class _IdentityBlock extends ConsumerWidget {
           ),
         ],
 
+        // -- My standees -------------------------------------------------------
+        // The rep's own stock, and the reason the assignment feature is worth
+        // anything from this side: before it, a rep learned their codes by
+        // reading eight characters off a PDF an admin had emailed them. Now the
+        // codes are a list in the app and an activation starts with a tap.
+        //
+        // Gated on the SAME hasRoleBadge as the row above — one predicate for
+        // every /rep door, so they cannot drift apart — and it fails CLOSED, so
+        // a failed /auth/me shows no row rather than one the router bounces.
+        if (hasRoleBadge) ...[
+          const SizedBox(height: AppSpacing.md),
+          AppCard(
+            key: const ValueKey('profile_my_standees'),
+            onTap: () => context.push(AppRoutes.repStandees),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.qr_code_2_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        // Matches the destination's own AppBar, so the push
+                        // does not appear to land somewhere else.
+                        'My standees',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.textPrimary),
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Standees assigned to you, ready to activate',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: AppColors.textMuted),
+              ],
+            ),
+          ),
+        ],
+
         // -- Standee inventory -----------------------------------------------
         // The only in-app way into /admin/standees, and the reason the screen
         // exists: minting has lived behind two ADMIN endpoints with no UI since

@@ -28,7 +28,7 @@ import { requireRole } from '@/middleware/requireRole';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { QrCode } from '@/models/QrCode';
-import { qrCodeParam } from '@/validation/qrSchemas';
+import { qrCodeParam, standeeQrQuerySchema } from '@/validation/qrSchemas';
 import {
   createProductSchema,
   productImageBytesQuerySchema,
@@ -44,6 +44,10 @@ import {
   listDelegatedCatalogs,
   resolveDelegatedCatalog,
 } from '@/services/catalogDelegationService';
+import { findRepStandee, listRepStandees } from '@/services/standeeAssignmentService';
+import { renderStandeeSheet } from '@/services/standeeSheetService';
+import { QrResolverNotConfiguredError } from '@/services/qrCodeService';
+import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 import {
   createProduct,
   createProductImageSlot,
@@ -652,6 +656,126 @@ router.post(
         });
         return;
     }
+  })
+);
+
+/**
+ * GET /rep/standees — the stock this rep is carrying.
+ *
+ * THE POINT OF THE WHOLE ASSIGNMENT FEATURE, from the rep side. Before it, a
+ * rep learned their codes by reading eight characters off a PDF an admin had
+ * emailed them, and typed those characters at the table. Now the codes are a
+ * list in their own app, and `POST /rep/activations` is reached by tapping one.
+ *
+ * Scoped to the CALLER and nothing else — the rep id comes from the token, not
+ * from a query parameter, so there is no shape of this request that reads
+ * another rep's folder.
+ *
+ * Every row carries the resolver URL, so a 409 rather than a partial list when
+ * the deployment has no public origin: the same answer `/admin/qr-batches/:id/
+ * codes` gives, for the same reason.
+ */
+router.get(
+  '/standees',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+
+    let standees;
+    try {
+      standees = await listRepStandees(repUserId);
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        return fail(
+          res,
+          409,
+          'RESOLVER_NOT_CONFIGURED',
+          'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment.'
+        );
+      }
+      throw err;
+    }
+
+    res.status(200).json({ status: 'success', standees });
+  })
+);
+
+/**
+ * GET /rep/standees/:code/qr?format=&size= — the printable sheet, for a code
+ * this rep actually holds.
+ *
+ * A SECOND DOOR TO THE SAME BYTES, and the narrower one. The admin endpoint
+ * (`/admin/qr-codes/:code/qr`) renders ANY code and is ADMIN-gated; this one is
+ * open to a rep but only for codes assigned to them, which `findRepStandee`
+ * decides with a query that has the rep id in it — there is no code parameter
+ * that reaches a standee somebody else is holding. Both routes compose the
+ * sheet through `renderStandeeSheet`, so what a rep prints and what an admin
+ * prints are the same physical object.
+ *
+ * A code that is not on this rep's list gets a 404, identical to a code that
+ * does not exist. A rep must not be able to probe which codes have been minted
+ * — the same enumeration rule `notDelegated` applies to catalogs.
+ */
+router.get(
+  '/standees/:code/qr',
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) return invalidCode(res);
+
+    const parsed = standeeQrQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const record = await findRepStandee(repUserId, code.data);
+    if (!record) {
+      return fail(res, 404, 'CODE_NOT_FOUND', 'That code is not one of ours.');
+    }
+
+    const { format, size } = parsed.data;
+
+    let rendered;
+    try {
+      rendered = await renderStandeeSheet({ record, format, size });
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        return fail(
+          res,
+          409,
+          'RESOLVER_NOT_CONFIGURED',
+          'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment.'
+        );
+      }
+      throw err;
+    }
+
+    if (rendered.outcome === 'CODE_RETIRED') {
+      return fail(
+        res,
+        409,
+        'CODE_RETIRED',
+        'That standee was retired. Ask for a replacement rather than reprinting it.'
+      );
+    }
+
+    // The SAME key the admin route uses — url, format, size and nothing else —
+    // so the two endpoints agree that identical bytes have an identical tag.
+    const etag = strongETag({ url: rendered.url, format, size: rendered.size });
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
+      res.status(304).end();
+      return;
+    }
+
+    res.setHeader('Content-Type', rendered.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
+    res.status(200).send(rendered.body);
   })
 );
 

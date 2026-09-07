@@ -460,6 +460,43 @@ do not remove it).
   (`assertMeshyConfigured()`): only the worker calls Meshy, so the API must not
   fail to boot over a secret it never uses.
 
+### Standee assignment (who is carrying which code)
+
+- **`QrCode.assignedToUserId` is ADVISORY and must stay that way.**
+  `activationService` does not read it, and no test may be written that assumes
+  it does — `tests/standee-assignment.test.ts` asserts the opposite in both
+  directions (a code assigned to rep A still activates for rep B; a code nobody
+  holds still activates for anyone). Assignment changes what each side can
+  **see**: the rep's own stock list, the recommendations on their activation
+  screen, and the admin's view of where a batch went. Turning it into a
+  reservation is a product decision about the walk-up standee — the one nobody
+  assigned — not a refactor.
+- **It is a POINTER, not a ledger.** `QrCodeAssignment` records what a code
+  *points at* and its history is load-bearing (scan rollups are bucketed by it,
+  so reassignment closes a row and opens a new one). Who is *carrying* a standee
+  is a mutable fact about the present with no downstream reader, so reassignment
+  is a plain field overwrite. Do not add a second ledger for it.
+- **Two doors to the same sheet, one composer.** `GET /admin/qr-codes/:code/qr`
+  (ADMIN, any code) and `GET /rep/standees/:code/qr` (the holder only) both go
+  through `services/standeeSheetService.ts`, which owns `STANDEE_TAGLINE` and the
+  RETIRED refusal. A rep-printed standee and an admin-printed one must be the
+  same physical object; a second renderer is how that stops being true.
+- **The rep download is scoped by ASSIGNMENT, not by role.** `findRepStandee`
+  puts the rep id in the query, and a code the rep does not hold answers the
+  same `404 CODE_NOT_FOUND` a nonexistent code gives — a rep must not be able to
+  probe which codes have been minted.
+- **`GET /admin/sales-reps` is a picker, not a user directory.** It lists
+  accounts that already hold a script-granted staff role (rank ≥ `SALES_REP`,
+  via `hasRoleAtLeast`'s ladder — never `role === 'SALES_REP'`), carries
+  `displayName` + `contactMasked` and no raw phone/email, and is deliberately
+  unpaged and unsearchable. The in-app user-management surface stays unbuilt;
+  if this ever needs a search box, that decision changed and belongs here.
+- **Client:** the rep's list (`/rep/standees`) has **no assign control** —
+  assignment is ADMIN-gated, so a button there would answer 403. Tapping a row
+  or a recommendation chip is a **prefill**, never a submit, matching the
+  scanner and the `?code=` deep link: the preflight still runs and the rep can
+  still edit the field.
+
 ### Catalog publish (ReCapture → Mirage)
 
 - **Publishing is an explicit user action that runs as ONE background job over a

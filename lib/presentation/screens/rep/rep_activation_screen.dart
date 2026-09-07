@@ -28,10 +28,12 @@ import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_activation_notifier.dart';
 import '../../../application/rep/rep_capabilities.dart';
 import '../../../application/rep/rep_catalogs_notifier.dart';
+import '../../../application/rep/rep_standees_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/rep_repository.dart';
 import '../../../domain/auth/auth_input_validators.dart';
 import '../../../domain/entities/country_code.dart';
+import '../../../domain/entities/qr_standee.dart';
 import '../../../domain/entities/rep_activation.dart';
 import '../../../domain/rep/qr_code_input.dart';
 import '../../widgets/app_button.dart';
@@ -106,6 +108,20 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
     if (code == null || !mounted) return;
     setState(() {
       _codeController.text = code;
+      _codeError = null;
+    });
+  }
+
+  /// Fills the field from the rep's own assigned stock.
+  ///
+  /// A PREFILL, NEVER A SUBMIT — the same contract [_scanCode] and the `?code=`
+  /// deep link both keep. A recommendation is the app's guess at which standee
+  /// the rep is holding, and the rep's eyes on the filled field are the only
+  /// check against activating the wrong one. Tapping it also does not skip the
+  /// preflight: the list can be seconds stale, and the server still decides.
+  void _pickAssigned(RepStandee standee) {
+    setState(() {
+      _codeController.text = standee.code;
       _codeError = null;
     });
   }
@@ -231,6 +247,13 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
             if (_codeError != null) setState(() => _codeError = null);
           },
           onFieldSubmitted: (_) => _submitCode(),
+        ),
+        const SizedBox(height: AppSpacing.md),
+
+        // The standees an admin assigned to this rep, offered as one-tap fills.
+        _AssignedStandees(
+          codeController: _codeController,
+          onPick: _pickAssigned,
         ),
         const SizedBox(height: AppSpacing.md),
         if (state.failure != null) _FailureNote(failure: state.failure!),
@@ -430,6 +453,127 @@ class UpperCaseTextFormatter extends TextInputFormatter {
 }
 
 // ── Small pieces ────────────────────────────────────────────────────────────
+
+/// The rep's own assigned standees, as one-tap fills for the code field.
+///
+/// WHY THIS IS ON THE FIRST SCREEN OF THE FLOW. A rep arrives at a table
+/// holding a printed sheet and, until now, typed eight characters off it — the
+/// one place in the whole flow where a slip produces a live standee on the
+/// wrong restaurant. Their assigned stock is the short list of codes it is
+/// almost certainly one of, so it belongs exactly where the typing happens.
+///
+/// SILENT WHEN IT HAS NOTHING TO SAY. A rep with no assignments, or one whose
+/// list has not loaded, sees no section at all — not a spinner and not an empty
+/// state. This is a shortcut past the text field, and a shortcut that announces
+/// its own absence is worse than one that is simply not there; the field above
+/// it works regardless. That is also why a load FAILURE renders nothing: it
+/// costs the rep a convenience, never the activation.
+///
+/// Only ACTIVATABLE standees appear ([RepStandeesState.available]). Offering a
+/// code that is already live somewhere would be a recommendation whose only
+/// outcome is the "already in use" error this feature exists to avoid.
+class _AssignedStandees extends ConsumerWidget {
+  const _AssignedStandees({required this.codeController, required this.onPick});
+
+  /// Watched, not read: the highlight has to follow the field on every
+  /// keystroke, including a code the rep typed by hand that happens to be one
+  /// of theirs. A value captured at build time would go stale immediately.
+  final TextEditingController codeController;
+
+  final void Function(RepStandee) onPick;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final available = ref.watch(repStandeesProvider).available;
+    if (available.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          available.length == 1
+              ? 'Your standee'
+              : 'Your standees (${available.length})',
+          style: const TextStyle(
+            fontSize: AppTypography.sizeLabel,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: codeController,
+          builder: (_, value, __) {
+            final typed = value.text.trim().toUpperCase();
+            return Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: [
+                for (final standee in available)
+                  _StandeeChip(
+                    standee: standee,
+                    selected: typed == standee.code,
+                    onTap: () => onPick(standee),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _StandeeChip extends StatelessWidget {
+  const _StandeeChip({
+    required this.standee,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final RepStandee standee;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? AppColors.surface2 : AppColors.surface1,
+      borderRadius: BorderRadius.circular(AppRadius.xs),
+      child: InkWell(
+        key: ValueKey('rep_standee_chip_${standee.code}'),
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: AppSpacing.sm,
+          ),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.xs),
+            // The ONE gold accent this section spends: a ring on the chip whose
+            // code is in the field, so the rep can see at a glance that the
+            // thing they tapped is the thing that will be preflighted.
+            border: Border.all(
+              color: selected ? AppColors.royalGold : AppColors.surface2,
+              width: selected ? 1.5 : 1,
+            ),
+          ),
+          child: Text(
+            standee.code,
+            style: TextStyle(
+              fontSize: AppTypography.sizeBody,
+              fontFamily: 'monospace',
+              letterSpacing: 1.5,
+              color:
+                  selected ? AppColors.textPrimary : AppColors.textSecondary,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class _StepTitle extends StatelessWidget {
   const _StepTitle(this.text);

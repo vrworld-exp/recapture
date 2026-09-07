@@ -35,6 +35,25 @@ export interface IQrCode extends Document {
    * together; retiring or repointing closes the row and moves this pointer.
    */
   currentAssignmentId?: Types.ObjectId;
+  /**
+   * The rep this standee has been HANDED TO, if any.
+   *
+   * ADVISORY, NOT A LOCK. Nothing in the activation path reads this field: any
+   * rep may still activate any UNASSIGNED code, exactly as before. What it buys
+   * is that a rep's own app can list the stock they are carrying, so they pick a
+   * code instead of typing eight characters off a sheet — and an admin can see
+   * where a batch went without keeping a spreadsheet.
+   *
+   * Deliberately NOT modelled as a second ledger alongside QrCodeAssignment.
+   * That ledger records what a code POINTS AT, and its history is load-bearing —
+   * scan rollups are bucketed by it. Who is carrying a standee is a mutable
+   * fact about the present with no downstream reader, so it is a pointer that
+   * gets overwritten. Reassignment is a field write, not a closed row.
+   */
+  assignedToUserId?: Types.ObjectId;
+  assignedAt?: Date;
+  /** The admin who handed it over, for audit. */
+  assignedByUserId?: Types.ObjectId;
   activatedAt?: Date;
   /** The rep who activated it, for audit. */
   activatedByUserId?: Types.ObjectId;
@@ -61,6 +80,9 @@ const QrCodeSchema = new Schema<IQrCode>(
     state: { type: String, enum: QR_CODE_STATES, required: true, default: 'UNASSIGNED' },
     catalogId: { type: Schema.Types.ObjectId, ref: 'Catalog' },
     currentAssignmentId: { type: Schema.Types.ObjectId, ref: 'QrCodeAssignment' },
+    assignedToUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    assignedAt: { type: Date },
+    assignedByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
     activatedAt: { type: Date },
     activatedByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date, default: null },
@@ -86,5 +108,11 @@ QrCodeSchema.index({ catalogId: 1, state: 1 });
 // "What is in this batch, and how much of it has been activated" — the export
 // CSV and the ops view of stock burn-down.
 QrCodeSchema.index({ batchId: 1, state: 1 });
+
+// "What is this rep carrying" — the rep's own standee list, and the source of
+// the recommendations on their activation screen. Sparse, because the field is
+// absent on every code that has never been handed out, which is most of them:
+// an index entry per unassigned code would be pure cost on the mint path.
+QrCodeSchema.index({ assignedToUserId: 1, state: 1, code: 1 }, { sparse: true });
 
 export const QrCode = model<IQrCode>('QrCode', QrCodeSchema);

@@ -6,7 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_type.dart';
 import '../../domain/catalog/publish_gate.dart';
+import '../../application/catalog/qr_download_file.dart';
 import '../../domain/entities/qr_code_preflight.dart';
+import '../../domain/entities/qr_standee.dart';
+import 'admin_standee_repository.dart' show StandeeQrFormat;
+import 'bytes_response.dart';
 import 'catalog_products_repository.dart' show ProductImageSlot;
 import '../../domain/entities/rep_activation.dart';
 import '../remote/api_client.dart';
@@ -103,6 +107,23 @@ abstract interface class RepRepository {
 
   /// Takes one standee out of service.
   Future<void> retireCode(String code);
+
+  /// The stock this rep is carrying — every standee an admin handed them.
+  ///
+  /// Usable codes first (see the backend's ordering), so the top of the list is
+  /// what can go on a table right now.
+  Future<List<RepStandee>> standees();
+
+  /// The printable sheet for one of THIS rep's standees.
+  ///
+  /// A code the rep does not hold answers [RepErrorCodes.codeNotFound] —
+  /// identical to a code that does not exist, so the endpoint cannot be used to
+  /// discover what has been minted.
+  Future<QrDownloadFile> standeeFile(
+    String code, {
+    StandeeQrFormat format,
+    int? size,
+  });
 }
 
 /// Envelope codes the `/rep` endpoints return that a screen branches on.
@@ -291,6 +312,58 @@ class RemoteRepRepository implements RepRepository {
   Future<void> retireCode(String code) => mapCatalogErrors(() async {
         await _dio.post<Map<String, dynamic>>('/rep/qr-codes/$code/retire');
       });
+
+  @override
+  Future<List<RepStandee>> standees() => mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>('/rep/standees');
+        final raw = res.data?['standees'];
+        if (raw is! List) return const <RepStandee>[];
+        return raw
+            .whereType<Map<String, dynamic>>()
+            .map(RepStandee.fromMap)
+            .toList(growable: false);
+      });
+
+  @override
+  Future<QrDownloadFile> standeeFile(
+    String code, {
+    StandeeQrFormat format = StandeeQrFormat.pdf,
+    int? size,
+  }) async {
+    // NOT mapCatalogErrors, and the reason is the same one documented on
+    // RemoteAdminStandeeRepository._bytes: `responseType: bytes` applies to
+    // FAILURES too, so without withDecodedBody a 409 CODE_RETIRED arrives as an
+    // undecodable byte array and collapses into a generic sentence.
+    try {
+      final res = await _dio.get<List<int>>(
+        '/rep/standees/$code/qr',
+        queryParameters: {
+          'format': format.apiValue,
+          if (size != null) 'size': size,
+        },
+        options: Options(responseType: ResponseType.bytes),
+      );
+
+      final data = res.data;
+      if (data == null || data.isEmpty) {
+        throw const CatalogFailure(
+          code: 'MALFORMED_RESPONSE',
+          message: 'Something went wrong. Please try again.',
+        );
+      }
+
+      return QrDownloadFile(
+        bytes: Uint8List.fromList(data),
+        fileName:
+            fileNameFromDisposition(res.headers.value('content-disposition')) ??
+                'standee-$code.${format.apiValue}',
+        mimeType: res.headers.value(Headers.contentTypeHeader) ??
+            (format == StandeeQrFormat.png ? 'image/png' : 'application/pdf'),
+      );
+    } on DioException catch (error) {
+      throw CatalogFailure.fromDio(withDecodedBody(error));
+    }
+  }
 
   @override
   Future<RepPublishResult> publish(String catalogId) async {

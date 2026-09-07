@@ -26,6 +26,7 @@ import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
 import '../../presentation/screens/rep/rep_catalogs_screen.dart';
+import '../../presentation/screens/rep/rep_standees_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
 import '../../presentation/screens/projects/capture_mode_sheet.dart';
 import '../../presentation/screens/projects/project_photos_screen.dart';
@@ -148,6 +149,14 @@ abstract final class AppRoutes {
   /// Activate one standee: code → preflight → details → confirm → live.
   static const repActivate = '/rep/activate';
 
+  /// The standees an admin has handed to this rep — their own stock, with the
+  /// code and a printable sheet for each.
+  ///
+  /// Inside `/rep`, so it inherits the subtree gate rather than needing its own:
+  /// [repRedirectFor] tests by PREFIX precisely so a new route here cannot be
+  /// added ungated by accident.
+  static const repStandees = '/rep/standees';
+
   /// One delegated restaurant's dishes. `:id` = the catalog id.
   static const repCatalogDetail = '/rep/catalogs/:id';
 
@@ -223,6 +232,7 @@ abstract final class AppRouteNames {
   static const catalogAnalytics = 'catalogAnalytics';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
+  static const repStandees = 'repStandees';
   static const repCatalogDetail = 'repCatalogDetail';
   static const repAddDish = 'repAddDish';
   static const adminStandees = 'adminStandees';
@@ -509,6 +519,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (_, state) => RepActivationScreen(
           initialCode: state.uri.queryParameters['code'],
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.repStandees,
+        name: AppRouteNames.repStandees,
+        builder: (_, __) => const RepStandeesScreen(),
       ),
       GoRoute(
         path: AppRoutes.repCatalogs,

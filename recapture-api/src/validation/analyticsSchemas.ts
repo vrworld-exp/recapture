@@ -114,6 +114,13 @@ export const AnalyticsEvent = {
   // restaurant's menu, so it never becomes an analytics property — only the
   // size of the run and a hashed actor.
   QR_BATCH_MINTED: 'qr_batch_minted',
+  // ── Handing a standee to a rep (POST/DELETE /admin/qr-codes/:code/assignment)
+  // Two hashed actors — the admin who did it and the rep who now holds it — and
+  // the outcome. NEVER the code: it is a public identifier for one restaurant's
+  // menu, barred here by the same rule that keeps it out of the mint event.
+  // What this answers is whether stock is actually being handed out, or whether
+  // reps are still working from codes read off a PDF.
+  QR_CODE_ASSIGNED: 'qr_code_assigned',
   // ── The public resolver (GET /r/:code) ────────────────────────────────────
   // THE OUTCOME, AND NOTHING ELSE. A code value is a public identifier for one
   // restaurant's menu, and a scan is one diner's presence in that restaurant —
@@ -863,6 +870,22 @@ const qrCodeActivatedProps = z
   .strict();
 
 /**
+ * Assigning or unassigning one standee.
+ *
+ * `rep_id_hash` is optional because UNASSIGNED has no rep — the standee came
+ * back off somebody's list and onto nobody's. Modelled as an absent property
+ * rather than a null or a sentinel string so a query for "assignments to rep X"
+ * cannot accidentally match the give-backs.
+ */
+const qrCodeAssignedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    rep_id_hash: z.string().min(1).optional(),
+    outcome: z.enum(['ASSIGNED', 'UNASSIGNED']),
+  })
+  .strict();
+
+/**
  * Registry mapping every event name to its property schema. The `satisfies`
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
  * is a compile error.
@@ -921,6 +944,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED]: catalogUnpublishRequestedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
+  [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,
   [AnalyticsEvent.QR_CODE_SCANNED]: qrCodeScannedProps,
   [AnalyticsEvent.QR_CODE_ACTIVATED]: qrCodeActivatedProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
