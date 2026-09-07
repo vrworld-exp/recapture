@@ -12,8 +12,9 @@
 // Mirrors [ProductDetailNotifier] deliberately, down to the save-step enum and
 // the commit-retry rule, and differs in exactly two places:
 //   • it writes through /rep, so ownership comes from the delegation;
-//   • it refreshes the REP's dish list, never the owner's grid or catalog
-//     header — those belong to a different user's catalog.
+//   • it touches only the REP's own surfaces, never the owner's grid or catalog
+//     header — those belong to a different user's catalog. See [_adopt] for why
+//     even that is an invalidate rather than a read.
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
