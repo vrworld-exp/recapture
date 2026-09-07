@@ -153,18 +153,57 @@ function qrBitmap1Bit(
   return { data, side };
 }
 
+/** Point size of the printed code. Large enough to read across a table. */
+const CODE_SIZE = 30;
+
 /** Device pixels per QR module inside the PDF. See qrBitmap1Bit. */
 const PDF_MODULE_SCALE = 8;
 
 /**
- * Half the width of a string, for centring text by hand.
+ * Helvetica-Bold advance widths, in 1/1000 em, for exactly the glyphs a code can
+ * contain — the QR alphabet is uppercase and digits only.
  *
- * Courier is METRICALLY EXACT — every glyph is 0.6 em — so a code centred with
- * this is centred, not approximately centred. Helvetica is proportional and gets
- * an average; it carries the tagline, where a few points either way is invisible.
+ * From the Adobe AFM metrics for one of the base-14 fonts, so these are the real
+ * numbers the reader will use, not estimates. A table rather than an average
+ * because the range here is wide (a `W` is 944 against a `J` at 556): averaging
+ * puts an eight-character code visibly off-centre.
  */
-function halfWidth(text: string, fontSize: number, monospace: boolean): number {
-  return (text.length * fontSize * (monospace ? 0.6 : 0.52)) / 2;
+const HELVETICA_BOLD_WIDTHS: Readonly<Record<string, number>> = {
+  '0': 556, '1': 556, '2': 556, '3': 556, '4': 556,
+  '5': 556, '6': 556, '7': 556, '8': 556, '9': 556,
+  A: 722, B: 722, C: 722, D: 722, E: 667, F: 611, G: 778, H: 722,
+  J: 556, K: 722, M: 833, N: 722, P: 667, Q: 778, R: 722, S: 667,
+  T: 611, V: 667, W: 944, X: 667, Y: 667, Z: 611,
+};
+
+/** Extra space between the code's characters, in points at [CODE_SIZE]. */
+const CODE_LETTER_SPACING = 4;
+
+/**
+ * Half the ink width of the printed code, for centring it by hand.
+ *
+ * Exact, because every glyph a code can contain is in the table above and the
+ * letter spacing is known. `n - 1` gaps, not `n`: PDF's `Tc` adds space after
+ * every glyph including the last, but that trailing gap is not ink and counting
+ * it would shift the code left by half a space.
+ */
+function halfCodeWidth(code: string, fontSize: number): number {
+  const glyphs = [...code].reduce(
+    (total, ch) => total + (HELVETICA_BOLD_WIDTHS[ch] ?? 600),
+    0
+  );
+  const ink = (glyphs / 1000) * fontSize + Math.max(0, code.length - 1) * CODE_LETTER_SPACING;
+  return ink / 2;
+}
+
+/**
+ * Half the width of a proportional line, for centring the tagline.
+ *
+ * An average is fine here and not for the code: this line is prose a reader
+ * glances at, where a few points either way is invisible.
+ */
+function halfWidth(text: string, fontSize: number): number {
+  return (text.length * fontSize * 0.52) / 2;
 }
 
 /**
@@ -181,7 +220,7 @@ function halfWidth(text: string, fontSize: number, monospace: boolean): number {
  *
  * Written by hand — see the file header. The structure is the minimum a
  * conforming reader needs: catalog, pages, one page, one content stream, one
- * embedded image XObject, two Type1 base fonts (Helvetica and Courier-Bold are
+ * embedded image XObject, two Type1 base fonts (Helvetica and Helvetica-Bold are
  * both among the fourteen every reader must provide, so nothing is embedded and
  * nothing is licensed). The xref offsets are computed from the actual byte
  * lengths as the file is assembled, which is the only fiddly part and the part
@@ -189,19 +228,29 @@ function halfWidth(text: string, fontSize: number, monospace: boolean): number {
  */
 function buildPdf(
   image: { data: Buffer; side: number },
-  caption: { primary: string; secondary: string; primaryMono: boolean }
+  caption: { primary: string; secondary: string; primaryCode: boolean }
 ): Buffer {
   const qrSide = 360;
   const qrX = (A4_WIDTH_PT - qrSide) / 2;
   const qrY = A4_HEIGHT_PT - 200 - qrSide;
 
-  const primarySize = caption.primaryMono ? 30 : 20;
-  const secondarySize = caption.primaryMono ? 13 : 11;
-  const primaryFont = caption.primaryMono ? '/F2' : '/F1';
+  const isCode = caption.primaryCode;
+  const primarySize = isCode ? CODE_SIZE : 20;
+  const secondarySize = isCode ? 13 : 11;
+  // HELVETICA-BOLD, NOT COURIER. The code was set in Courier-Bold on the
+  // reasoning that a monospaced face keeps similar glyphs apart — but the QR
+  // alphabet already excludes every pair that argument was about (I, L, O and U
+  // are not in it), so the discrimination was buying nothing and the typewriter
+  // face read as cramped and informal on a sheet that sits on a restaurant
+  // table. A bold grotesque is cleaner at a glance and looks like signage.
+  const primaryFont = isCode ? '/F2' : '/F1';
 
   const primaryX =
-    A4_WIDTH_PT / 2 - halfWidth(caption.primary, primarySize, caption.primaryMono);
-  const secondaryX = A4_WIDTH_PT / 2 - halfWidth(caption.secondary, secondarySize, false);
+    A4_WIDTH_PT / 2 -
+    (isCode
+      ? halfCodeWidth(caption.primary, primarySize)
+      : halfWidth(caption.primary, primarySize));
+  const secondaryX = A4_WIDTH_PT / 2 - halfWidth(caption.secondary, secondarySize);
 
   const content = [
     'q',
@@ -209,9 +258,14 @@ function buildPdf(
     '/Im0 Do',
     'Q',
     `BT ${primaryFont} ${primarySize} Tf`,
+    // Tc opens the characters up so each is read on its own — the single
+    // biggest legibility win on a string nobody can guess from context. Reset
+    // to 0 before the tagline, or the spacing leaks into prose and looks broken.
+    `${isCode ? CODE_LETTER_SPACING : 0} Tc`,
     `1 0 0 1 ${primaryX.toFixed(2)} ${(qrY - 52).toFixed(2)} Tm`,
     `(${pdfText(caption.primary)}) Tj`,
     'ET',
+    '0 Tc',
     'BT /F1 ' + secondarySize + ' Tf',
     `1 0 0 1 ${secondaryX.toFixed(2)} ${(qrY - 84).toFixed(2)} Tm`,
     `(${pdfText(caption.secondary)}) Tj`,
@@ -244,7 +298,7 @@ function buildPdf(
       Buffer.from('\nendstream'),
     ]),
     Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'),
-    Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >>'),
+    Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>'),
   ];
 
   const header = Buffer.from('%PDF-1.4\n');
@@ -349,12 +403,12 @@ export async function renderCatalogQr(params: {
         ? {
             primary: params.standeeCode,
             secondary: params.standeeTagline ?? '',
-            primaryMono: true,
+            primaryCode: true,
           }
         : {
             primary: params.catalogName,
             secondary: params.publicUrl,
-            primaryMono: false,
+            primaryCode: false,
           }
     ),
     contentType: 'application/pdf',
