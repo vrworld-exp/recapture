@@ -32,6 +32,30 @@ services:
         sync: false
       - key: USER_PASS_FOR_NODMAILER
         sync: false
+      # ── Same-day activation ────────────────────────────────────────────────
+      # ⚠ PUBLIC_RESOLVER_BASE_URL IS EFFECTIVELY PERMANENT. Every printed
+      # standee encodes {PUBLIC_RESOLVER_BASE_URL}/r/{code}, and activation
+      # freezes that exact string into catalog.publicUrl, where
+      # assertMappingImmutable refuses to rewrite it. Changing this value later
+      # does NOT repoint codes already printed — it only affects codes minted
+      # after the change. Treat it as append-only in production.
+      #
+      # The value is THIS API's own public origin, because /r is mounted on this
+      # service (app.ts: app.use('/r', publicRouter)) — or a short custom domain
+      # that fronts it, which is worth having before the first real print run:
+      # a diner reads this off a table, and it can never be shortened later.
+      #
+      # Unset is a SAFE state, not a broken one: minting, the batch CSV and the
+      # standee render all answer 409 RESOLVER_NOT_CONFIGURED rather than
+      # emitting URLs against a guessed host that would then be printed.
+      - key: PUBLIC_RESOLVER_BASE_URL
+        sync: false
+      # Origin of the WEB client, used only to build the rep's one-tap
+      # activation link on the public "not live yet" page. Unset degrades
+      # cleanly — the page renders WITHOUT the link rather than with a broken
+      # one — so this is optional in a way the resolver origin is not.
+      - key: WEB_APP_BASE_URL
+        sync: false
       # Buckets live in us-east-1 (verified via scripts/aws-smoke-test.ts);
       # ap-south-1 here makes every presigned URL fail with a region error.
       - key: AWS_REGION

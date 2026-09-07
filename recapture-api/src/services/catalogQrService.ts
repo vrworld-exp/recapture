@@ -27,6 +27,7 @@
 //     dependency for it — plus every one worth using stamps a CreationDate,
 //     which would break byte-identity on its own.
 import QRCode from 'qrcode';
+import zlib from 'zlib';
 import sharp from 'sharp';
 
 /** Fixed rendering parameters. Changing any of these changes every issued code. */
@@ -111,46 +112,122 @@ function pdfText(value: string): string {
 }
 
 /**
- * A one-page A4 PDF: the code centred, the catalog name beneath it, the URL
- * beneath that.
+ * Packs the matrix as a 1-BIT bitmap, `scale` device pixels per module.
  *
- * THE URL IS PRINTED AS TEXT ON PURPOSE. A smudged, creased or badly-photocopied
- * QR is unreadable and gives a customer nothing to do about it; the same sheet
- * with the link written out is still usable. It costs one line of content stream.
+ * ⚠ ONE BIT, NOT EIGHT, AND FLATE, NOT JPEG. The PDF used to embed the greyscale
+ * PNG re-encoded as a JPEG (`/DCTDecode`), on the reasoning that every reader
+ * supports it. Every reader does — and JPEG is a frequency-domain codec applied
+ * to the worst possible input: an image made entirely of hard black/white edges.
+ * Even at quality 100 it rings, so each module got a grey halo and the printed
+ * sheet looked washed out and fuzzy rather than like a QR code.
+ *
+ * A 1-bit image cannot be anything but pure black and pure white — there is no
+ * value between 0 and 1 to be wrong — and Flate is lossless, so what is printed
+ * is exactly the matrix. It is also far smaller: this whole image compresses to
+ * a few hundred bytes, against tens of kilobytes of JPEG.
+ *
+ * The upscale is here rather than left to the viewer because `/Interpolate` is
+ * only a HINT — a reader is free to smooth anyway, and a smoothed QR is one a
+ * phone has to work harder to read. Blowing each module up to a block of
+ * identical pixels means there is nothing left to smooth.
+ */
+function qrBitmap1Bit(
+  matrix: { size: number; isDark: (x: number, y: number) => boolean },
+  scale: number
+): { data: Buffer; side: number } {
+  const side = matrix.size * scale;
+  const rowBytes = Math.ceil(side / 8);
+  // 0xff = every bit set = every pixel WHITE. DeviceGray 1-bit reads 0 as black
+  // and 1 as white, so dark modules clear their bit below.
+  const data = Buffer.alloc(rowBytes * side, 0xff);
+
+  for (let y = 0; y < side; y++) {
+    const my = (y / scale) | 0;
+    for (let x = 0; x < side; x++) {
+      if (matrix.isDark((x / scale) | 0, my)) {
+        data[y * rowBytes + (x >> 3)]! &= ~(0x80 >> (x & 7));
+      }
+    }
+  }
+
+  return { data, side };
+}
+
+/** Device pixels per QR module inside the PDF. See qrBitmap1Bit. */
+const PDF_MODULE_SCALE = 8;
+
+/**
+ * Half the width of a string, for centring text by hand.
+ *
+ * Courier is METRICALLY EXACT — every glyph is 0.6 em — so a code centred with
+ * this is centred, not approximately centred. Helvetica is proportional and gets
+ * an average; it carries the tagline, where a few points either way is invisible.
+ */
+function halfWidth(text: string, fontSize: number, monospace: boolean): number {
+  return (text.length * fontSize * (monospace ? 0.6 : 0.52)) / 2;
+}
+
+/**
+ * A one-page A4 sheet: the QR square, and beneath it either the standee's
+ * printed code and tagline, or the catalog's name and URL.
+ *
+ * TWO CALLERS, TWO CAPTIONS. A standee is a blank object that a rep claims, so
+ * what belongs under it is the code they will type and a line saying what the
+ * sheet is for. An owner's QR is already bound to their restaurant, so what
+ * belongs under it is the restaurant's name and the URL a customer could type if
+ * the square is smudged — that argument is in the original design and still
+ * holds for that surface. The two are different sheets for different readers,
+ * which is why this takes a caption rather than growing a boolean.
  *
  * Written by hand — see the file header. The structure is the minimum a
  * conforming reader needs: catalog, pages, one page, one content stream, one
- * embedded image XObject, one Type1 base font (Helvetica is one of the fourteen
- * every reader must provide, so nothing is embedded and nothing is licensed).
- * The xref offsets are computed from the actual byte lengths as the file is
- * assembled, which is the only part that is fiddly and the part the test pins.
+ * embedded image XObject, two Type1 base fonts (Helvetica and Courier-Bold are
+ * both among the fourteen every reader must provide, so nothing is embedded and
+ * nothing is licensed). The xref offsets are computed from the actual byte
+ * lengths as the file is assembled, which is the only fiddly part and the part
+ * the test pins.
  */
-function buildPdf(png: Buffer, pngSize: number, title: string, url: string): Buffer {
+function buildPdf(
+  image: { data: Buffer; side: number },
+  caption: { primary: string; secondary: string; primaryMono: boolean }
+): Buffer {
   const qrSide = 360;
   const qrX = (A4_WIDTH_PT - qrSide) / 2;
   const qrY = A4_HEIGHT_PT - 200 - qrSide;
+
+  const primarySize = caption.primaryMono ? 30 : 20;
+  const secondarySize = caption.primaryMono ? 13 : 11;
+  const primaryFont = caption.primaryMono ? '/F2' : '/F1';
+
+  const primaryX =
+    A4_WIDTH_PT / 2 - halfWidth(caption.primary, primarySize, caption.primaryMono);
+  const secondaryX = A4_WIDTH_PT / 2 - halfWidth(caption.secondary, secondarySize, false);
 
   const content = [
     'q',
     `${qrSide} 0 0 ${qrSide} ${qrX.toFixed(2)} ${qrY.toFixed(2)} cm`,
     '/Im0 Do',
     'Q',
-    'BT /F1 20 Tf',
-    `1 0 0 1 ${(A4_WIDTH_PT / 2 - Math.min(title.length * 5.6, 240)).toFixed(2)} ${(qrY - 48).toFixed(2)} Tm`,
-    `(${pdfText(title)}) Tj`,
+    `BT ${primaryFont} ${primarySize} Tf`,
+    `1 0 0 1 ${primaryX.toFixed(2)} ${(qrY - 52).toFixed(2)} Tm`,
+    `(${pdfText(caption.primary)}) Tj`,
     'ET',
-    'BT /F1 11 Tf',
-    `1 0 0 1 ${(A4_WIDTH_PT / 2 - Math.min(url.length * 3.05, 260)).toFixed(2)} ${(qrY - 76).toFixed(2)} Tm`,
-    `(${pdfText(url)}) Tj`,
+    'BT /F1 ' + secondarySize + ' Tf',
+    `1 0 0 1 ${secondaryX.toFixed(2)} ${(qrY - 84).toFixed(2)} Tm`,
+    `(${pdfText(caption.secondary)}) Tj`,
     'ET',
   ].join('\n');
+
+  // Deterministic: zlib.deflateSync with fixed settings gives the same bytes for
+  // the same input, which is what keeps two renders of one code byte-identical.
+  const compressed = zlib.deflateSync(image.data, { level: 9 });
 
   const objects: Buffer[] = [
     Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
     Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
     Buffer.from(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4_WIDTH_PT} ${A4_HEIGHT_PT}] ` +
-        '/Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R >> >> /Contents 4 0 R >>'
+        '/Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R /F2 7 0 R >> >> /Contents 4 0 R >>'
     ),
     Buffer.concat([
       Buffer.from(`<< /Length ${Buffer.byteLength(content)} >>\nstream\n`),
@@ -159,13 +236,15 @@ function buildPdf(png: Buffer, pngSize: number, title: string, url: string): Buf
     ]),
     Buffer.concat([
       Buffer.from(
-        `<< /Type /XObject /Subtype /Image /Width ${pngSize} /Height ${pngSize} ` +
-          `/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode /Length ${png.byteLength} >>\nstream\n`
+        `<< /Type /XObject /Subtype /Image /Width ${image.side} /Height ${image.side} ` +
+          '/ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate false ' +
+          `/Filter /FlateDecode /Length ${compressed.byteLength} >>\nstream\n`
       ),
-      png,
+      compressed,
       Buffer.from('\nendstream'),
     ]),
     Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'),
+    Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >>'),
   ];
 
   const header = Buffer.from('%PDF-1.4\n');
@@ -238,6 +317,17 @@ export async function renderCatalogQr(params: {
   catalogName: string;
   format: QrFormat;
   size?: number;
+  /**
+   * The printed code, when this sheet is a STANDEE rather than an owner's QR.
+   *
+   * Its presence is what switches the caption: a standee gets the code big and
+   * monospaced with [standeeTagline] under it, because a rep reads those
+   * characters aloud and types them. An owner's QR gets the restaurant name and
+   * the URL instead — a customer cannot do anything with an 8-character code,
+   * but can type a link when the square is smudged.
+   */
+  standeeCode?: string;
+  standeeTagline?: string;
 }): Promise<RenderedQr> {
   const size = clampQrSize(params.size);
   const png = await renderPng(params.publicUrl, size);
@@ -247,17 +337,26 @@ export async function renderCatalogQr(params: {
     return { body: png, contentType: 'image/png', filename: `${slug}-qr.png` };
   }
 
-  // The PDF embeds a JPEG rather than the PNG: /DCTDecode is the only lossless-
-  // enough image filter every reader supports without also supporting
-  // /FlateDecode-with-predictor, and re-encoding here keeps the writer above
-  // small. Quality 100 on a pure black-and-white image is visually exact.
-  const matrix = matrixFor(params.publicUrl);
-  const scale = Math.max(1, Math.floor(size / matrix.size));
-  const jpegSize = matrix.size * scale;
-  const jpeg = await sharp(png).jpeg({ quality: 100, chromaSubsampling: '4:4:4' }).toBuffer();
+  // Straight from the matrix — the PNG above is not re-encoded into the PDF at
+  // all any more. See qrBitmap1Bit for why a JPEG was the wrong container for
+  // an image made entirely of hard edges.
+  const bitmap = qrBitmap1Bit(matrixFor(params.publicUrl), PDF_MODULE_SCALE);
 
   return {
-    body: buildPdf(jpeg, jpegSize, params.catalogName, params.publicUrl),
+    body: buildPdf(
+      bitmap,
+      params.standeeCode
+        ? {
+            primary: params.standeeCode,
+            secondary: params.standeeTagline ?? '',
+            primaryMono: true,
+          }
+        : {
+            primary: params.catalogName,
+            secondary: params.publicUrl,
+            primaryMono: false,
+          }
+    ),
     contentType: 'application/pdf',
     filename: `${slug}-qr.pdf`,
   };

@@ -76,6 +76,14 @@ import {
 import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 
+/**
+ * The line printed under every standee code.
+ *
+ * Here rather than inline so the sheet cannot start saying two different things
+ * if a second caller ever renders one.
+ */
+const STANDEE_TAGLINE = 'Created for mirage menu';
+
 const router = Router();
 
 router.use(requireAuth);
@@ -1324,9 +1332,16 @@ router.get(
 
     const rendered = await renderCatalogQr({
       publicUrl: url,
+      // Still the filename stem (`standee-abcd2345-qr.pdf`), so an admin with
+      // several of these in a downloads folder can tell them apart unopened.
       catalogName: `Standee ${record.code}`,
       format,
       size: clamped,
+      // What is PRINTED under the square. The code, big and monospaced, because
+      // a rep reads those eight characters off the sheet and types them; then
+      // one line saying what the sheet is, for whoever finds it in a drawer.
+      standeeCode: record.code,
+      standeeTagline: STANDEE_TAGLINE,
     });
 
     res.setHeader('Content-Type', rendered.contentType);

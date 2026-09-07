@@ -169,13 +169,21 @@ const COPY: Record<FallbackKind, { title: string; heading: string; body: string[
  * `WEB_APP_BASE_URL` unset renders the page WITHOUT the link rather than with a
  * broken one — a rep tapping through to `undefined/rep/activate` is worse than
  * a rep typing the code into the app.
+ *
+ * THE HASH IS LOAD-BEARING. The Flutter web client runs on the DEFAULT hash
+ * URL strategy (usePathUrlStrategy appears nowhere in the client), so
+ * /rep/activate is not a location the browser can resolve — only
+ * /#/rep/activate is. Without the fragment a rep who taps this link lands on
+ * the app root with the code lost, which reads as the link simply not working.
+ * If the client ever adopts the path strategy, the fragment must go in the
+ * same change and the hosting rewrite described in note F becomes real.
  */
 function repActivationLink(code: string | null): string {
   const base = env.WEB_APP_BASE_URL;
   if (!base || !code || !QR_CODE_RE.test(code)) return '';
   return (
     '<p class="rep">Are you a Mirage rep? ' +
-    `<a href="${base}/rep/activate?code=${code}">Activate this code.</a></p>`
+    `<a href="${base}/#/rep/activate?code=${code}">Activate this code.</a></p>`
   );
 }
 

@@ -343,7 +343,10 @@ describe('GET /catalog/qr?format=pdf', () => {
     expect(pdf.slice(startxref, startxref + 4)).toBe('xref');
 
     const offsets = [...pdf.matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
-    expect(offsets).toHaveLength(6);
+    // SEVEN, not six, since the sheet gained a second base font: Courier-Bold
+    // carries the standee code, where a monospaced face is what keeps 0/O and
+    // 1/I apart for someone reading eight characters aloud.
+    expect(offsets).toHaveLength(7);
     offsets.forEach((offset, index) => {
       expect(pdf.slice(offset, offset + `${index + 1} 0 obj`.length)).toBe(`${index + 1} 0 obj`);
     });

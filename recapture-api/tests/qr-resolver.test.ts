@@ -378,7 +378,7 @@ describe('the fallback pages themselves', () => {
     // The only absolute URL on the page is the rep's activation link — a
     // navigation the diner never takes, not a subresource the page fetches.
     const absolute = res.text.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
-    expect(absolute).toEqual([`${WEB_APP_BASE}/rep/activate?code=XXXX1111`]);
+    expect(absolute).toEqual([`${WEB_APP_BASE}/#/rep/activate?code=XXXX1111`]);
   });
 
   it('drops the rep link rather than rendering a broken one when the web app is unconfigured', async () => {

@@ -27,6 +27,8 @@ import request from 'supertest';
 import mongoose, { Types } from 'mongoose';
 import jwt from 'jsonwebtoken';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { Jimp } from 'jimp';
+import jsQR from 'jsqr';
 
 import { createApp } from '@/app';
 import { env } from '@/config/env';
@@ -62,6 +64,14 @@ afterEach(async () => {
   await QrBatch.deleteMany({});
   vi.restoreAllMocks();
 });
+
+/** Decodes a PNG back to the string it encodes — the same helper catalog-qr uses. */
+async function decodeQr(png: Buffer): Promise<string | null> {
+  const image = await Jimp.read(png);
+  const { width, height, data } = image.bitmap;
+  const result = jsQR(new Uint8ClampedArray(data), width, height);
+  return result?.data ?? null;
+}
 
 /** Creates a real user doc (requireRole reads the DB) + its Bearer header. */
 async function makeUser(
@@ -252,21 +262,24 @@ describe('GET /admin/qr-codes/:code/qr', () => {
     expect(res.status).toBe(200);
   });
 
-  it('prints the SAME url the vendor CSV carries', async () => {
+  it('ENCODES the same url the vendor CSV carries', async () => {
     const admin = await makeUser('ADMIN');
     const code = await oneCode(admin.id);
 
     const res = await request(app)
       .get(`/admin/qr-codes/${code}/qr`)
-      .query({ format: 'pdf' })
+      .query({ format: 'png' })
       .set(admin.auth)
-      .responseType('blob');
+      .buffer(true);
 
     expect(res.status).toBe(200);
-    // The PDF prints the URL as text under the square, so the bytes carry it
-    // literally — which is what makes this checkable without decoding a QR.
-    // If this ever fails, a second URL composer has appeared somewhere.
-    expect(res.body.toString('latin1')).toContain(resolverUrlFor(code));
+    // DECODED, not string-matched. This used to grep the PDF bytes for the URL,
+    // which worked only because the sheet printed it as text — and the standee
+    // caption is now the code and the tagline instead, so that check would pass
+    // vacuously on a sheet with no QR on it at all. Decoding asserts the
+    // stronger thing regardless: what a phone camera actually reads is
+    // byte-identical to the CSV line the print vendor receives.
+    expect(await decodeQr(res.body)).toBe(resolverUrlFor(code));
   });
 
   it('refuses a retired code rather than handing back a sheet that resolves to nothing', async () => {
@@ -308,5 +321,93 @@ describe('GET /admin/qr-codes/:code/qr', () => {
     const res = await request(app).get(`/admin/qr-codes/${code}/qr`).set(artist.auth);
 
     expect(res.status).toBe(403);
+  });
+});
+
+describe('what the printed standee sheet actually says', () => {
+  async function sheet(adminAuth: { Authorization: string }, code: string) {
+    const res = await request(app)
+      .get(`/admin/qr-codes/${code}/qr`)
+      .query({ format: 'pdf' })
+      .set(adminAuth)
+      .responseType('blob');
+    expect(res.status).toBe(200);
+    return res.body.toString('latin1');
+  }
+
+  it('prints the code and the tagline under the square', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await mintBatch({
+      count: 1,
+      label: 'caption',
+      createdByUserId: new Types.ObjectId(admin.id),
+    });
+    const code = (await QrCode.findOne({ batchId }).lean().exec())!.code;
+
+    const pdf = await sheet(admin.auth, code);
+
+    // The eight characters a rep reads off the sheet and types.
+    expect(pdf).toContain(`(${code}) Tj`);
+    expect(pdf).toContain('(Created for mirage menu) Tj');
+  });
+
+  it('is PURE BLACK AND WHITE — one bit, losslessly compressed', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await mintBatch({
+      count: 1,
+      label: 'monochrome',
+      createdByUserId: new Types.ObjectId(admin.id),
+    });
+    const code = (await QrCode.findOne({ batchId }).lean().exec())!.code;
+
+    const pdf = await sheet(admin.auth, code);
+
+    // THE REGRESSION THIS GUARDS. The sheet used to embed the QR as a JPEG,
+    // which is a frequency-domain codec applied to an image made entirely of
+    // hard black/white edges: every module picked up a grey ring and the print
+    // looked washed out. One bit per pixel cannot represent a value between
+    // black and white, so the fuzz is not merely reduced, it is unrepresentable.
+    expect(pdf).toContain('/BitsPerComponent 1');
+    expect(pdf).toContain('/Filter /FlateDecode');
+    expect(pdf).not.toContain('/DCTDecode');
+    // A hint only — but a reader that honours it will not smooth the modules.
+    expect(pdf).toContain('/Interpolate false');
+  });
+
+  it('keeps the square square', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await mintBatch({
+      count: 1,
+      label: 'square',
+      createdByUserId: new Types.ObjectId(admin.id),
+    });
+    const code = (await QrCode.findOne({ batchId }).lean().exec())!.code;
+
+    const pdf = await sheet(admin.auth, code);
+
+    const dims = pdf.match(/\/Width (\d+) \/Height (\d+)/);
+    expect(dims).not.toBeNull();
+    // Equal in the image dictionary...
+    expect(dims![1]).toBe(dims![2]);
+    // ...and equal again in the placement matrix, so a non-uniform scale cannot
+    // stretch it on the page.
+    expect(pdf).toContain('360 0 0 360 ');
+  });
+
+  it('renders the same bytes twice — a code is a fixed object', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await mintBatch({
+      count: 1,
+      label: 'stable',
+      createdByUserId: new Types.ObjectId(admin.id),
+    });
+    const code = (await QrCode.findOne({ batchId }).lean().exec())!.code;
+
+    const a = await sheet(admin.auth, code);
+    const b = await sheet(admin.auth, code);
+
+    // Deflate is deterministic at a fixed level, and there is no /Info dict and
+    // therefore no CreationDate. Two prints of one standee are one object.
+    expect(a).toBe(b);
   });
 });
