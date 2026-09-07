@@ -53,3 +53,41 @@ export const mintQrBatchSchema = z
   .strict();
 
 export type MintQrBatchInput = z.infer<typeof mintQrBatchSchema>;
+
+/**
+ * GET /admin/qr-batches/:batchId/codes query.
+ *
+ * `after` is the previous page's last code, normalised through the SAME
+ * transform every other code path uses — so a cursor echoed back from a row the
+ * screen is holding cannot be rejected for a formatting difference the client
+ * never introduced.
+ *
+ * The 200 ceiling is a response-size bound, not a policy: a 2,000-code batch is
+ * the default ceiling of one mint, and shipping it in a single JSON body is how
+ * an admin screen becomes the slowest page in the app.
+ */
+export const adminBatchCodesQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().positive().max(200).default(100),
+    after: qrCodeParam.optional(),
+  })
+  .strict();
+
+export type AdminBatchCodesQuery = z.infer<typeof adminBatchCodesQuerySchema>;
+
+/**
+ * GET /admin/qr-codes/:code/qr query.
+ *
+ * Deliberately the same shape as `catalogQrQuerySchema` — same formats, same
+ * "clamp the size rather than reject it" rule — because it feeds the same
+ * renderer. Two schemas rather than a shared one only because the two route
+ * groups own their own validation files; if a third caller appears, hoist it.
+ */
+export const adminStandeeQrQuerySchema = z
+  .object({
+    format: z.enum(['png', 'pdf']).default('png'),
+    size: z.coerce.number().int().positive().optional(),
+  })
+  .strict();
+
+export type AdminStandeeQrQuery = z.infer<typeof adminStandeeQrQuerySchema>;

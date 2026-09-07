@@ -84,6 +84,17 @@ class _FakeRepRepository implements RepRepository {
 
   @override
   Future<void> retireCode(String code) async {}
+
+  @override
+  Future<RepPublishResult> publish(String catalogId) async {
+    published.add(catalogId);
+    return const RepPublishResult(outcome: RepPublishOutcome.queued);
+  }
+
+  /// Catalogs this fake was asked to publish. Unused by most tests here —
+  /// present so widening the interface did not cost the suites their ability
+  /// to assert a publish never happened.
+  final List<String> published = [];
 }
 
 Widget _app(

@@ -20,6 +20,8 @@ import '../../presentation/screens/auth/splash_screen.dart';
 import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
+import '../../presentation/screens/admin/admin_batch_detail_screen.dart';
+import '../../presentation/screens/admin/admin_standees_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
@@ -156,6 +158,17 @@ abstract final class AppRoutes {
   /// be swallowed as an id because the segment before it is literal.
   static const repAddDish = '/rep/catalogs/:id/dishes/new';
 
+  // ── Admin (standee inventory, /admin/standees) ────────────────────────────
+  // Gated on isAdmin in the router's redirect below. NOT the whole /admin
+  // subtree: the staff project routes below it are MODEL_ARTIST surfaces, and
+  // widening this gate over them would lock staff out of their own screens.
+
+  /// Pre-printed standee inventory: the mint runs and what is left in each.
+  static const adminStandees = '/admin/standees';
+
+  /// One batch's codes. `:batchId` = the QrBatch id.
+  static const adminBatchDetail = '/admin/standees/:batchId';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -212,6 +225,8 @@ abstract final class AppRouteNames {
   static const repActivate = 'repActivate';
   static const repCatalogDetail = 'repCatalogDetail';
   static const repAddDish = 'repAddDish';
+  static const adminStandees = 'adminStandees';
+  static const adminBatchDetail = 'adminBatchDetail';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const modelViewer = 'modelViewer';
@@ -280,6 +295,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       // Inclusive upward, mirroring the backend: MODEL_ARTIST and ADMIN pass.
       final repRedirect = repRedirectFor(loc, canUseRepSurface: _canUseRep(ref));
       if (repRedirect != null) return repRedirect;
+
+      // Standee inventory is ADMIN-only, matching the backend's stricter gate
+      // on the mint and export routes — a batch label and its remaining stock
+      // say how many restaurants the business is about to be able to onboard.
+      final adminRedirect =
+          adminStandeesRedirectFor(loc, canUseStandees: _canUseStandees(ref));
+      if (adminRedirect != null) return adminRedirect;
       return null;
     },
     errorBuilder: (context, state) => RouteErrorScreen(
@@ -505,6 +527,20 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.repAddDish,
         builder: (context, state) => RepAddDishScreen(
           catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      // STATIC BEFORE PARAMETERISED, like the catalog publish/QR pair above:
+      // `/admin/standees` must not be matched as a `:batchId`.
+      GoRoute(
+        path: AppRoutes.adminStandees,
+        name: AppRouteNames.adminStandees,
+        builder: (_, __) => const AdminStandeesScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminBatchDetail,
+        name: AppRouteNames.adminBatchDetail,
+        builder: (context, state) => AdminBatchDetailScreen(
+          batchId: state.pathParameters['batchId'] ?? '',
         ),
       ),
       GoRoute(
@@ -902,6 +938,35 @@ String? repRedirectFor(
   // invisible, not broken.
   return AppRoutes.projects;
 }
+
+/// THE `/admin/standees` GATE, as a pure function — same shape and same
+/// reasoning as [repRedirectFor].
+///
+/// Scoped to the standee subtree by PREFIX, deliberately not to `/admin`. The
+/// staff project routes (`/admin/projects/...`) are MODEL_ARTIST surfaces that
+/// predate this one; gating them on ADMIN here would silently revoke a staff
+/// role's own screens.
+///
+/// Returns the location to redirect to, or null to allow.
+String? adminStandeesRedirectFor(
+  String location, {
+  required bool canUseStandees,
+}) {
+  final isStandees = location == AppRoutes.adminStandees ||
+      location.startsWith('${AppRoutes.adminStandees}/');
+  if (!isStandees || canUseStandees) return null;
+  // Their own hub, not an error page — a surface you do not have should be
+  // invisible rather than broken.
+  return AppRoutes.projects;
+}
+
+/// Whether this session may use `/admin/standees`.
+///
+/// A null [ref] gets the permissive answer for the same reason [_canUseRep]
+/// does: a gate that cannot read its input must not redirect every route it
+/// guards. Real app startup always passes one, and [isAdminProvider] itself
+/// fails CLOSED on a failed role fetch.
+bool _canUseStandees(Ref? ref) => ref == null || ref.read(isAdminProvider);
 
 /// Whether this session may use `/rep`.
 ///

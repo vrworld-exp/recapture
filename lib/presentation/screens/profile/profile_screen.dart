@@ -520,6 +520,12 @@ class _IdentityBlock extends ConsumerWidget {
     // Roled accounts only: a plain USER must see no role text at all.
     // SALES_REP and up (inclusive) show the row.
     final hasRoleBadge = ref.watch(isSalesRepProvider);
+    // A SECOND, STRICTER gate — not a reuse of hasRoleBadge. Standee
+    // inventory is ADMIN-only on the backend (the mint and export routes
+    // carry their own requireRole('ADMIN') above the router's MODEL_ARTIST),
+    // so a SALES_REP or MODEL_ARTIST seeing this row would be handed a screen
+    // that renders and then answers 403. Fails CLOSED on a failed role fetch.
+    final canMintStandees = ref.watch(isAdminProvider);
     final uploading = ref.watch(avatarUploadingProvider);
 
     return Column(
@@ -669,6 +675,49 @@ class _IdentityBlock extends ConsumerWidget {
                       const SizedBox(height: AppSpacing.xs),
                       Text(
                         'Activate a standee, add dishes, publish',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: AppColors.textMuted),
+              ],
+            ),
+          ),
+        ],
+
+        // -- Standee inventory -----------------------------------------------
+        // The only in-app way into /admin/standees, and the reason the screen
+        // exists: minting has lived behind two ADMIN endpoints with no UI since
+        // stage 2, which is fine for a print vendor and not fine for a pilot —
+        // it means no restaurant can be onboarded without an engineer running
+        // curl. Below the rep row because an admin is usually here for that one.
+        if (canMintStandees) ...[
+          const SizedBox(height: AppSpacing.md),
+          AppCard(
+            key: const ValueKey('profile_standee_inventory'),
+            onTap: () => context.push(AppRoutes.adminStandees),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.qr_code_2_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Standee inventory',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.textPrimary),
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Mint QR codes and send one to a rep',
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: AppColors.textMuted),
                       ),

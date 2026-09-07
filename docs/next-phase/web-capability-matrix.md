@@ -68,7 +68,9 @@ Two properties fall out of that, and both matter more than the tidiness:
 | 20 | **Dish image-only** | ✅ | ✅ | Bytes end-to-end via `POST /rep/catalogs/:id/products/image/bytes` | `rep_repository.uploadImageBytes` |
 | 21 | **Pending → ready polling** | ✅ | ✅ | Shared `PendingPollLoop`; identical on both | `rep_catalogs_notifier.dart` |
 | 22 | **Standee QR download (PNG/PDF)** | ✅ share sheet | ✅ `<a download>` blob | Row 9's seam, unchanged | `catalog_qr_service.dart` |
-| 23 | **Admin QR batch CSV export** | ⬜ no UI built | ⬜ no UI built | Endpoint exists; see note I | — |
+| 23 | **Admin QR batch CSV export** | ✅ share sheet | ✅ `<a download>` blob | Row 22's seam, unchanged; see note I | `admin_batch_detail_screen.dart` |
+| 25 | **Admin standee inventory + mint** | ✅ | ✅ | ADMIN-gated in the router; no platform code | `admin_standees_screen.dart` |
+| 26 | **Printable standee per code** | ✅ share sheet | ✅ `<a download>` blob | Row 22's seam again; PDF from `GET /admin/qr-codes/:code/qr` | `admin_batch_codes_notifier.dart` |
 | 24 | **Deep link into `/rep/activate?code=`** | ⚠️ custom scheme only | ✅ | Option A — see note J | `app_router.dart` |
 
 Legend: ✅ works · ⛔ deliberately absent, affordance **hidden** not disabled · ⚠️ needs
@@ -201,17 +203,37 @@ photograph a dish.
 **The phone is the field tool; the browser is the desk tool.** Both can run a restaurant's menu;
 only the phone can shoot it.
 
-### I. The CSV export has an endpoint and deliberately no UI
+### I. The CSV export had an endpoint and deliberately no UI — SUPERSEDED
 
-`GET /admin/qr-batches/:id/export` exists and returns `text/csv` behind a Bearer token, with
+`GET /admin/qr-batches/:id/export` returns `text/csv` behind a Bearer token, with
 `Content-Disposition` in the CORS `exposedHeaders` allowlist (`src/app.ts:46`) so a browser can read
 the filename.
 
-**No Flutter screen was built for it, on purpose.** Batch minting is an ADMIN action performed a
-handful of times, plausibly with curl or Postman, and an unused admin screen is worse than none. If
-one is ever wanted, the QR download seam (`qr_delivery_{io,web,stub}.dart`) already does the Blob
-dance correctly — widen `QrDownloadFile` to carry a MIME type and reuse it rather than writing a
-second copy.
+**The original decision, kept here because its reasoning still holds for what it was about:** no
+Flutter screen was built, since batch minting is an ADMIN action performed a handful of times a
+year, plausibly with curl, and an unused admin screen is worse than none.
+
+**What changed.** That argument covers the PRINT VENDOR path — mint, export a CSV, hand it to a
+printer, receive standees. It does not cover the pilot, which is where the product actually is: with
+no vendor engaged, the only way for a rep to get a code is for an admin to send them one, and with
+no UI that means no restaurant can be onboarded without an engineer running curl. The screen is
+built (`/admin/standees`, ADMIN-gated in the router), and it does three things the endpoints already
+supported and one they did not:
+
+- lists batches with a live `unassigned / active / retired` breakdown — `GET /admin/qr-batches`;
+- pages a batch's codes by keyset — `GET /admin/qr-batches/:id/codes`;
+- downloads the vendor CSV, unchanged;
+- **renders one code as a printable PDF** — `GET /admin/qr-codes/:code/qr`, the genuinely new one.
+
+The note's own prediction held: `QrDownloadFile` already carried a MIME type, so every download here
+reuses `qr_delivery_{io,web,stub}.dart` and this surface needed no platform code at all.
+
+**The invariant to not break.** The printable PDF and the vendor CSV compose their URL through the
+same `resolverUrlFor` (`services/qrCodeService.ts`), so a standee printed from the app and one
+printed from the CSV are the same physical object. That was true by coincidence while the CSV was
+the only consumer; it is now pinned by `admin-qr-inventory.test.ts`, which asserts the rendered PDF
+contains the byte-identical URL. A RETIRED code is refused (409 `CODE_RETIRED`) rather than
+rendered, because reprinting one produces a sheet that resolves to the fallback page.
 
 ### J. Deep link into activation — option A (web now, mobile later)
 

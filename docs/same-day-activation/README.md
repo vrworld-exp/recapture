@@ -146,14 +146,53 @@ own "Done when" block is green.
 > caught it, which is the argument for the ⚠ markers above.
 >
 > Stage 10's remaining ⚠ is the side-by-side run: the same activation on a phone and in Chrome.
-> One deliberate skip — **no admin CSV export UI was built** (matrix note I): the endpoint exists,
-> batch minting is a handful of ADMIN actions a year, and an unused admin screen is worse than none.
 >
-> **Two known non-green things**, neither caused by this pack: `npm test` is 1301/1308 — the 7
-> failures are all in `admin-model-variants.test.ts`, which expects a `variant` field removed from
-> `projectModelsService.ts` in `fd8ce53`, an ancestor of this pack's base commit. And the two R6
-> items (`tok.txt` tracked; a live Gmail app password in `nodeMailerTransport.ts`) are still open —
-> that password is in git history and wants rotating, not just deleting.
+> **The stage 10 skip was reversed — an admin standee surface is now built** (`/admin/standees`,
+> matrix rows 23/25/26, note I). The original reasoning — batch minting is a handful of ADMIN
+> actions a year, and an unused admin screen is worse than none — covered the PRINT VENDOR path and
+> not the pilot: with no vendor engaged, a rep gets a code only if an admin can send them one, and
+> with no UI that meant no restaurant could be onboarded without an engineer running curl. The screen
+> lists batches with their remaining stock, mints, pages a batch's codes, downloads the vendor CSV,
+> and renders **one code as a printable PDF** (`GET /admin/qr-codes/:code/qr` — the only new
+> endpoint of the four). It is ADMIN-gated in the router by `adminStandeesRedirectFor`, scoped to
+> the `/admin/standees` subtree by prefix so the MODEL_ARTIST project screens under `/admin` keep
+> working. Covered by `admin-qr-inventory.test.ts` (14) and `test/admin/` (21).
+>
+> The printable PDF and the vendor CSV now compose their URL through one function
+> (`resolverUrlFor`), so a standee printed from the app and one printed from the CSV are the same
+> physical object — asserted rather than assumed. **This does not change the rollout rule:** do not
+> mint a large batch until one real end-to-end activation has passed, because
+> `PUBLIC_RESOLVER_BASE_URL` is still baked into every printed URL.
+>
+> **Both known non-green things are now closed.**
+>
+> `npm test` was 1301/1308, the 7 failures all in `admin-model-variants.test.ts`. That suite has been
+> **deleted**, not repaired: it tested a design `fd8ce53` replaced. It asserted that one optimized
+> generation returns TWO list entries sharing ONE record, distinguished by a `variant` field and an
+> `isActiveVariant` flag, switchable through `PATCH /admin/projects/:id/models/:modelId/variant`.
+> Under the current design an optimization is a SEPARATE `ProjectModel` record carrying
+> `optimizedFrom`, so "one record, two entries" is now false by design, and `variant`,
+> `isActiveVariant` and that PATCH route no longer exist anywhere in `src/`. Its one still-passing
+> test passed vacuously, iterating a list that now has one element.
+>
+> **The invariant it existed to protect survives, elsewhere and better.** Its stated fear was that a
+> second row would double-count Meshy spend against the 24h ceiling. There IS a second row now — and
+> the OPT record deliberately sets neither `createdBySystem` nor `createdByManualButton`, so
+> `countServerSelectedGenerationsInLast24h` cannot see it. `model-optimization.test.ts` asserts
+> exactly that ("optimization does NOT count toward the server-selected 24h ceiling"), and the same
+> file covers `GET /admin/projects/:id/models` under the new contract.
+>
+> The two **R6** items are fixed in source: `tok.txt` is untracked and git-ignored, and the literal
+> Gmail address and app password are gone from `nodeMailerTransport.ts`, which now reads both from
+> the environment and returns a null transport when they are absent. `sendEmail` THROWS on that
+> rather than resolving with a stub id, so an unconfigured deployment fails loudly instead of
+> reporting OTPs as sent that nobody receives. Both keys are declared `sync: false` in
+> `render.yaml`.
+>
+> ⚠ **Two things code cannot do.** The app password and the JWT are still in git history — the
+> password must be **rotated in the Google account** and the token re-issued; deleting them from HEAD
+> only stops the leak widening. And `USER_EMAIL_FOR_NODMAILER` / `USER_PASS_FOR_NODMAILER` must be
+> set in the Render dashboard **before the next deploy**, or OTP email stops going out.
 
 ---
 

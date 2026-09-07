@@ -21,6 +21,8 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_catalogs_notifier.dart';
+import '../../../application/rep/rep_publish_notifier.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_model_status.dart';
 import '../../widgets/app_button.dart';
@@ -34,6 +36,34 @@ class RepCatalogDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final products = ref.watch(repCatalogProductsProvider(catalogId));
+    final publish = ref.watch(repPublishProvider(catalogId));
+
+    ref.listen<RepPublishState>(repPublishProvider(catalogId), (prev, next) {
+      final failure = next.failure;
+      final changed = failure?.code != prev?.failure?.code ||
+          next.notice != prev?.notice;
+      if (!changed) return;
+
+      final messenger = CatalogFeedback.of(context);
+      if (next.isBlocked) {
+        // The gate list, not a generic sentence: these are the things the rep
+        // can still fix while standing in the restaurant.
+        CatalogFeedback.confirm(
+          messenger,
+          next.gates.length == 1
+              ? next.gates.first.message
+              : '${next.gates.length} things to fix: ${next.gates.first.message}',
+        );
+      } else if (failure != null) {
+        CatalogFeedback.failure(
+          messenger,
+          failure,
+          subject: 'The menu could not be published',
+        );
+      } else if (next.notice != null) {
+        CatalogFeedback.confirm(messenger, next.notice!);
+      }
+    });
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
@@ -56,6 +86,32 @@ class RepCatalogDetailScreen extends ConsumerWidget {
         },
         icon: const Icon(Icons.add),
         label: const Text('Add a dish'),
+      ),
+      // A BOTTOM BAR, NOT A SECOND FAB. "Add a dish" is the repeated action and
+      // keeps the FAB; publishing happens once, at the end of the visit. Two
+      // floating buttons would also put the rarer, irreversible-feeling one
+      // under the thumb that has been tapping the other all visit.
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: AppButton(
+            key: const ValueKey('rep_publish_button'),
+            label: 'Publish the menu',
+            isLoading: publish.publishing,
+            onPressed: publish.publishing
+                ? null
+                : () async {
+                    await ref
+                        .read(repPublishProvider(catalogId).notifier)
+                        .publish();
+                    // The status the list renders moves on publish, so the
+                    // rep sees the change rather than having to pull down.
+                    await ref
+                        .read(repCatalogProductsProvider(catalogId).notifier)
+                        .refresh();
+                  },
+          ),
+        ),
       ),
       body: SafeArea(
         child: RefreshIndicator(

@@ -217,9 +217,17 @@ re-asked.
 
 Not caused by this work; should be fixed anyway. Do **not** fold them into a stage:
 
-1. `recapture-api/tok.txt` is git-tracked and holds a raw JWT.
-2. `src/utils/nodeMailerTransport.ts:4-5` has a literal Gmail address and app password as
-   `process.env` fallbacks.
+1. ~~`recapture-api/tok.txt` is git-tracked and holds a raw JWT.~~ **Untracked and git-ignored.**
+2. ~~`src/utils/nodeMailerTransport.ts:4-5` has a literal Gmail address and app password as
+   `process.env` fallbacks.~~ **Removed.** Both values now come from the environment only; the
+   transport is null when they are absent and `sendEmail` throws rather than reporting a send that
+   never happened. Declared `sync: false` in `render.yaml`.
+
+⚠ **Neither is finished by the code change.** Both secrets remain in git history, so the app password
+must be **rotated in the Google account** and the JWT re-issued — deleting them from HEAD only stops
+the leak widening. And because production was relying on the removed fallback,
+`USER_EMAIL_FOR_NODMAILER` and `USER_PASS_FOR_NODMAILER` must be set in the Render dashboard
+**before the next deploy** or OTP mail stops.
 
 ---
 
@@ -247,7 +255,15 @@ wrong host is unrecoverable at scale.
 
 ## Sign-off checklist
 
-- [ ] Every new and extended suite listed above is green.
+- [x] Every new and extended suite listed above is green — plus `rep-publish.test.ts` (11) and
+      `admin-qr-inventory.test.ts` (14). The 7 pre-existing failures are gone with the obsolete
+      `admin-model-variants.test.ts`; see the README for why it was deleted rather than repaired.
+- [x] **The rep can publish.** `POST /rep/catalogs/:id/publish` closes the hole where a photo-only
+      restaurant had nothing that would ever publish it — no model to finish, no owner in the room —
+      and the standee stayed dead after the rep left. It delegates to `requestPublish` keyed by the
+      catalog OWNER, exactly as the promotion path's `tryPublish` does, so a rep publish and an owner
+      publish are the same run through the same gates and the same lock. Step 20 of the field guide is
+      no longer the only mitigation.
 - [ ] `flutter build web` and `flutter build apk --debug` both succeed.
 - [ ] The end-to-end run passes, **including step 6** (owner OTP sign-in reaches the rep-created
       catalog).

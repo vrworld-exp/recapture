@@ -58,11 +58,23 @@ import { track, AnalyticsEvent } from '@/utils/analytics';
 import { QrBatch } from '@/models/QrBatch';
 import {
   exportBatchCsv,
+  findByCode,
+  listBatchCodes,
+  listBatches,
   mintBatch,
+  resolverUrlFor,
   slugifyBatchLabel,
   QrResolverNotConfiguredError,
 } from '@/services/qrCodeService';
-import { mintQrBatchSchema, type MintQrBatchInput } from '@/validation/qrSchemas';
+import {
+  adminBatchCodesQuerySchema,
+  adminStandeeQrQuerySchema,
+  mintQrBatchSchema,
+  qrCodeParam,
+  type MintQrBatchInput,
+} from '@/validation/qrSchemas';
+import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
+import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 
 const router = Router();
 
@@ -1122,6 +1134,204 @@ router.get(
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.status(200).send(csv);
+  })
+);
+
+/**
+ * GET /admin/qr-batches — the inventory listing behind the admin standee screen.
+ *
+ * ADMIN-only, matching the mint and the export rather than the router-level
+ * MODEL_ARTIST: a batch label and its remaining stock say how many restaurants
+ * the business is about to be able to onboard, which is not a model artist's
+ * business.
+ *
+ * READ-ONLY and unrated. It carries no code values, so unlike the export it is
+ * not a list of public identifiers, and an admin refreshing a screen is not a
+ * threat model worth a rate window.
+ */
+router.get(
+  '/qr-batches',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    const batches = await listBatches();
+    res.status(200).json({ status: 'success', batches });
+  })
+);
+
+/**
+ * GET /admin/qr-batches/:batchId/codes?limit=&after= — one page of a batch.
+ *
+ * Keyset paging: `nextAfter` is the last code of this page, or null when the
+ * page came back short. A short page is the ONLY end-of-list signal — asking for
+ * a total would cost a countDocuments per request to tell the screen something
+ * it learns for free one request later.
+ *
+ * Answers 409 when PUBLIC_RESOLVER_BASE_URL is unset, for the same reason the
+ * export does: every row carries the URL the standee encodes, and a URL against
+ * a guessed host is the one output here that can be printed onto something
+ * physical.
+ */
+router.get(
+  '/qr-batches/:batchId/codes',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const { batchId } = req.params;
+    if (!Types.ObjectId.isValid(batchId)) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid batch id',
+      });
+      return;
+    }
+
+    const parsed = adminBatchCodesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: parsed.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    let codes;
+    try {
+      codes = await listBatchCodes(new Types.ObjectId(batchId), parsed.data);
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'RESOLVER_NOT_CONFIGURED',
+          message: 'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment',
+        });
+        return;
+      }
+      throw err;
+    }
+
+    if (codes === null) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Batch not found',
+      });
+      return;
+    }
+
+    const nextAfter =
+      codes.length === parsed.data.limit ? (codes[codes.length - 1]?.code ?? null) : null;
+
+    res.status(200).json({ status: 'success', codes, nextAfter });
+  })
+);
+
+/**
+ * GET /admin/qr-codes/:code/qr?format=png|pdf&size=<px> — the standee itself.
+ *
+ * THE PILOT PATH. Before a print vendor is engaged, this is how a code reaches a
+ * rep: an admin renders the PDF and sends it, the rep prints one sheet and puts
+ * it on the table. The bytes are rendered from `resolverUrlFor(code)`, the SAME
+ * composer the vendor CSV uses, so a standee printed from this endpoint and one
+ * printed from the CSV are the same physical object.
+ *
+ * Rendered through `renderCatalogQr` unchanged — it takes the URL verbatim and
+ * has never known what a catalog is. `catalogName` becomes the PDF title and the
+ * filename stem, so it carries the code: an admin with eight of these in a
+ * downloads folder can tell them apart without opening them.
+ *
+ * NOT TRACKED. `CATALOG_QR_RENDERED` answers "do restaurants use their QR"; the
+ * equivalent here would be a few events a year from a handful of staff, and the
+ * only property worth having — the code — is a public identifier for one
+ * restaurant's menu and is barred from analytics by the same house rule that
+ * keeps it out of the mint event.
+ *
+ * A RETIRED code is REFUSED. Retirement means a standee was replaced; rendering
+ * one would hand somebody a sheet that resolves to the fallback page, and the
+ * whole cost of this feature lands after it has been printed and put on a table.
+ */
+router.get(
+  '/qr-codes/:code/qr',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid QR code',
+      });
+      return;
+    }
+
+    const parsed = adminStandeeQrQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: parsed.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const record = await findByCode(code.data);
+    if (!record) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'No such code',
+      });
+      return;
+    }
+
+    if (record.state === 'RETIRED') {
+      res.status(409).json({
+        status: 'error',
+        code: 'CODE_RETIRED',
+        message: 'This standee was retired. Mint a replacement rather than reprinting it.',
+      });
+      return;
+    }
+
+    let url: string;
+    try {
+      url = resolverUrlFor(record.code);
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'RESOLVER_NOT_CONFIGURED',
+          message: 'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment',
+        });
+        return;
+      }
+      throw err;
+    }
+
+    const { format, size } = parsed.data;
+    const clamped = clampQrSize(size);
+
+    // Keyed on everything that changes the bytes and nothing that does not. The
+    // code's STATE is deliberately absent: activating a standee does not change
+    // what it encodes, which is the entire premise of the resolver.
+    const etag = strongETag({ url, format, size: clamped });
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
+      res.status(304).end();
+      return;
+    }
+
+    const rendered = await renderCatalogQr({
+      publicUrl: url,
+      catalogName: `Standee ${record.code}`,
+      format,
+      size: clamped,
+    });
+
+    res.setHeader('Content-Type', rendered.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
+    res.status(200).send(rendered.body);
   })
 );
 

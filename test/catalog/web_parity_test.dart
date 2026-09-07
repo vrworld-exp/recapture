@@ -51,11 +51,24 @@ const List<String> _catalogDirs = [
   'lib/application/rep',
   'lib/domain/rep',
   'lib/presentation/screens/rep',
+  // THE ADMIN STANDEE SURFACE, for the third time the same reason. An admin
+  // mints and sends standees from a desk at least as often as from a phone, and
+  // this tree reaches for the SAME download seam the catalog QR does — so the
+  // one rule that would break it (a stray `dart:io` on the delivery path) is
+  // exactly the rule these guards exist to catch.
+  'lib/application/admin',
+  'lib/presentation/screens/admin',
 ];
 
 /// Single files outside those directories that the same rules cover.
 const List<String> _extraSources = [
   'lib/data/repositories/rep_repository.dart',
+  'lib/data/repositories/admin_standee_repository.dart',
+  'lib/domain/entities/qr_standee.dart',
+  // The shared bytes-mode helpers. Both the catalog QR and every standee
+  // download route their failures through this file, so a `dart:io` here would
+  // take out the whole download surface on web at once.
+  'lib/data/repositories/bytes_response.dart',
 ];
 
 /// Files allowed to import `dart:io`: the native half of a conditional-import

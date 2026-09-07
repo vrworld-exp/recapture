@@ -8,6 +8,10 @@ BEFORE YOU LEAVE THE OFFICE
 1.  Your account needs the SALES_REP role. There is no button for it — ask
     engineering.
 2.  Take printed standees. Each has an 8-character code under the QR square.
+      - No printed stock yet? An admin can send you one standee as a PDF
+        (Profile -> Standee inventory). Print it and it works exactly the
+        same: it carries the same code and the same link a vendor-printed
+        one would. The 8 characters are under the square either way.
 3.  Take unused standees only. A used one is refused at step 8.
 4.  Charge your phone. The dish capture is the battery-hungry part.
 
@@ -79,20 +83,24 @@ STEP 3 — ADD THE DISHES
 
 STEP 4 — BEFORE YOU LEAVE THE TABLE
 -----------------------------------
-20. *** THE MENU IS NOT LIVE YET. *** This is the part that surprises people.
-    Activating binds the standee. It does not put the menu online. Scanning it
-    right now shows a "not live yet" page, which is correct.
+20. *** TAP "PUBLISH THE MENU". *** Activating binds the standee; it does not
+    put the menu online. Until something publishes, scanning the standee shows
+    a "not live yet" page — correct, and useless to a diner.
 
-    The menu goes live when EITHER:
-      (a) a 3D dish finishes generating — that publishes automatically; or
-      (b) the owner signs in and taps Publish.
+    The button is at the bottom of the restaurant's dish list. Tap it before
+    you leave. DO NOT SKIP THIS because you added a 3D dish: a finished 3D
+    model does publish by itself, but only when it finishes, and you should not
+    be walking out on a maybe.
 
-    So if you added ONLY photo dishes, nothing publishes on its own. Tell the
-    owner plainly: they must sign in and publish, or the standee stays dead.
+    If it says the menu is not ready, it tells you exactly what is wrong —
+    usually a dish with no photo, or no dishes at all. Fix that and tap again.
+    You are in the room; that is the cheapest this will ever be to fix.
 21. Have the owner sign in NOW, on their own phone, with the number you typed.
     Best use of your last five minutes: it proves the number was right while
-    you can still fix it, it lets them publish, and if they cannot get in you
-    are still in the room.
+    you can still fix it, and if they cannot get in you are still there. This
+    is no longer about publishing — you have already done that at step 20 —
+    it is about the phone number, which is the one thing you cannot repair
+    later without an engineer.
 22. Scan the standee yourself and check where it lands.
 23. Leave the standee on the table.
 
@@ -103,6 +111,7 @@ WHAT WORKS WHERE
       Scan a standee in the app ............... phone YES   browser YES
       See your restaurants .................... phone YES   browser YES
       Add a photo or finished-capture dish .... phone YES   browser YES
+      Publish the menu ........................ phone YES   browser YES
       SHOOT a dish ............................ phone YES   browser YES
 25. The one real difference is HOW a dish gets shot, not whether it can be:
       Phone   - guided ring. It knows where you are standing and refuses a
@@ -130,8 +139,8 @@ IF SOMETHING GOES WRONG
 
 THE ONE-LINE VERSION
 --------------------
-33. Code in -> read the phone number aloud -> shoot the dishes -> have the
-    owner sign in and publish before you leave.
+33. Code in -> read the phone number aloud -> shoot the dishes -> TAP PUBLISH
+    -> scan the standee yourself before you leave.
 
 
 

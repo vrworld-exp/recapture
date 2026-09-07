@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_type.dart';
+import '../../domain/catalog/publish_gate.dart';
 import '../../domain/entities/qr_code_preflight.dart';
 import 'catalog_products_repository.dart' show ProductImageSlot;
 import '../../domain/entities/rep_activation.dart';
@@ -37,6 +38,21 @@ abstract interface class RepRepository {
 
   /// One delegated catalog's dishes.
   Future<List<CatalogProduct>> products(String catalogId);
+
+  /// Puts the restaurant's menu online, on their behalf.
+  ///
+  /// THE ONE ACTION THAT MAKES THE STANDEE WORK. Activating binds a code; it
+  /// does not publish. Before this existed, a restaurant whose dishes were all
+  /// photo-only had nothing that would ever publish it — no model to finish, no
+  /// owner in the room — and the standee stayed dead after the rep left.
+  ///
+  /// A publish already running is a SUCCESS ([RepPublishOutcome.alreadyRunning]),
+  /// not a failure: a rep who taps twice, or taps while a finished 3D dish is
+  /// already publishing, is in the state they were asking for.
+  ///
+  /// Throws [RepPublishBlocked] — carrying every failing gate, not the first —
+  /// when the catalog is not ready.
+  Future<RepPublishResult> publish(String catalogId);
 
   /// Attaches a replacement standee to a catalog the rep holds.
   ///
@@ -117,6 +133,13 @@ abstract final class RepErrorCodes {
   /// The catalog is not delegated to this rep — indistinguishable from one that
   /// does not exist, by design on the server side.
   static const catalogNotFound = 'CATALOG_NOT_FOUND';
+
+  /// The menu cannot go live yet. Carries a gate list — see [RepPublishBlocked].
+  static const publishBlocked = 'PUBLISH_BLOCKED';
+
+  /// A publish is already running for this catalog. Handled as an OUTCOME
+  /// rather than an error; see [RepRepository.publish].
+  static const publishInProgress = 'PUBLISH_IN_PROGRESS';
 }
 
 /// Whether a failure means "this standee cannot be used, try another".
@@ -268,6 +291,88 @@ class RemoteRepRepository implements RepRepository {
   Future<void> retireCode(String code) => mapCatalogErrors(() async {
         await _dio.post<Map<String, dynamic>>('/rep/qr-codes/$code/retire');
       });
+
+  @override
+  Future<RepPublishResult> publish(String catalogId) async {
+    // NOT mapCatalogErrors: two of this endpoint's non-2xx answers are not
+    // failures to report. A 409 PUBLISH_IN_PROGRESS is the outcome the rep
+    // wanted, and a 422 PUBLISH_BLOCKED carries a gate list that
+    // CatalogFailure.fromDio would flatten to a single sentence — losing the
+    // checklist that tells the rep what to fix before leaving the table.
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/rep/catalogs/$catalogId/publish',
+      );
+      final body = res.data;
+      return RepPublishResult(
+        outcome: RepPublishOutcome.queued,
+        runId: body?['runId'] as String?,
+        publicUrl: body?['publicUrl'] as String?,
+      );
+    } on DioException catch (error) {
+      final data = error.response?.data;
+      final code = data is Map<String, dynamic> ? data['code'] : null;
+
+      if (code == RepErrorCodes.publishInProgress) {
+        return RepPublishResult(
+          outcome: RepPublishOutcome.alreadyRunning,
+          runId: (data as Map<String, dynamic>)['runId'] as String?,
+        );
+      }
+
+      if (code == RepErrorCodes.publishBlocked) {
+        final raw = (data as Map<String, dynamic>)['gates'];
+        throw RepPublishBlocked(
+          raw is List
+              ? raw
+                  .whereType<Map<String, dynamic>>()
+                  .map(PublishGate.fromMap)
+                  .toList(growable: false)
+              : const <PublishGate>[],
+        );
+      }
+
+      throw CatalogFailure.fromDio(error);
+    }
+  }
+}
+
+/// How a rep-initiated publish ended, when it did not throw.
+enum RepPublishOutcome {
+  /// A run was enqueued. The menu goes live when it finishes.
+  queued,
+
+  /// One was already running — the state the rep wanted, reached by someone
+  /// else (usually a 3D dish that finished generating a moment earlier).
+  alreadyRunning,
+}
+
+class RepPublishResult {
+  const RepPublishResult({required this.outcome, this.runId, this.publicUrl});
+
+  final RepPublishOutcome outcome;
+  final String? runId;
+
+  /// Present only on the FIRST publish, which is when provisioning mints it.
+  final String? publicUrl;
+}
+
+/// The catalog is not ready, and here is everything that is wrong with it.
+///
+/// A [CatalogFailure] so a screen that only knows how to show failures still
+/// shows something useful, and a subclass so the one screen that can render a
+/// checklist gets [gates] instead of a flattened sentence.
+class RepPublishBlocked extends CatalogFailure {
+  const RepPublishBlocked(this.gates)
+      : super(
+          code: RepErrorCodes.publishBlocked,
+          message: 'This menu is not ready to publish yet.',
+          statusCode: 422,
+        );
+
+  /// EVERY failing gate, not the first — fixing one problem per round trip is
+  /// three trips and three disappointments while a rep stands at a table.
+  final List<PublishGate> gates;
 }
 
 /// The `/rep` data source. Overridden with a fake in tests.
