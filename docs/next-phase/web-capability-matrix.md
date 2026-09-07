@@ -71,6 +71,7 @@ Two properties fall out of that, and both matter more than the tidiness:
 | 23 | **Admin QR batch CSV export** | ✅ share sheet | ✅ `<a download>` blob | Row 22's seam, unchanged; see note I | `admin_batch_detail_screen.dart` |
 | 25 | **Admin standee inventory + mint** | ✅ | ✅ | ADMIN-gated in the router; no platform code | `admin_standees_screen.dart` |
 | 26 | **Printable standee per code** | ✅ share sheet | ✅ `<a download>` blob | Row 22's seam again; PDF from `GET /admin/qr-codes/:code/qr` | `admin_batch_codes_notifier.dart` |
+| 27 | **Rep publishes the menu** | ✅ | ✅ | Pure widgets + Dio; no platform seam involved at all | `rep_publish_notifier.dart` |
 | 24 | **Deep link into `/rep/activate?code=`** | ⚠️ custom scheme only | ✅ | Option A — see note J | `app_router.dart` |
 
 Legend: ✅ works · ⛔ deliberately absent, affordance **hidden** not disabled · ⚠️ needs
@@ -234,6 +235,36 @@ printed from the CSV are the same physical object. That was true by coincidence 
 the only consumer; it is now pinned by `admin-qr-inventory.test.ts`, which asserts the rendered PDF
 contains the byte-identical URL. A RETIRED code is refused (409 `CODE_RETIRED`) rather than
 rendered, because reprinting one produces a sheet that resolves to the fallback page.
+
+### K. Rows 23 and 25–27 were verified, not assumed
+
+These rows were first written as "✅ both" on the reasoning that the code contains no platform
+branches. That is an argument, not evidence, so it was checked:
+
+- **`flutter build web` succeeds** with the whole surface in it. This is the check that actually
+  catches a web-hostile import, because `flutter test` runs on the VM and would happily pass with a
+  `dart:io` in the tree.
+- **The structural guards now cover it.** `test/catalog/web_parity_test.dart` was extended from the
+  catalog + rep trees to `lib/application/admin`, `lib/presentation/screens/admin`,
+  `admin_standee_repository.dart`, `qr_standee.dart` and `bytes_response.dart`. No `dart:io`
+  outside a `_io.dart` seam, and no `kIsWeb` deciding layout. The point is that this stays true:
+  the next person to add a download here trips a test rather than a production web build.
+- **The download seam is genuinely format-agnostic.** `qr_delivery_web.dart` builds its Blob with
+  `file.mimeType`, so the standee PDF and the batch CSV go through the same path the PNG already
+  did — no second implementation, nothing new to keep in step.
+- **CORS already carries it.** These endpoints need `Content-Disposition` for the filename, and it
+  is in the `exposedHeaders` allowlist (`src/app.ts:48`) alongside `ETag`.
+- **Routing needs no hosting change.** This build is on the hash strategy (note F, corrected), so
+  `{WEB_APP_BASE_URL}/#/admin/standees` deep-links without a rewrite rule.
+
+One deliberate UI change fell out of this: the standee row's action icon was `Icons.ios_share`,
+which is a lie in Chrome, where the seam performs a plain download. It is `Icons.save_alt` now, and
+the tooltip says "Save" — the same target-neutral word `catalog_qr_screen.dart` uses for the same
+reason.
+
+**What is still NOT verified: a human clicking through it in a browser.** Everything above is
+structural. The side-by-side run — the same activation, mint and download on a phone and in Chrome —
+is stage 7's outstanding manual pass and is not closed by any of this.
 
 ### J. Deep link into activation — option A (web now, mobile later)
 
