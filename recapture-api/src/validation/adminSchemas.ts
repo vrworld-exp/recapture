@@ -130,6 +130,14 @@ export type AdminModelImageUploadsBody = z.infer<typeof adminModelImageUploadsBo
 export const adminPhotoBytesQuerySchema = z
   .object({
     key: z.string().min(1).max(1024),
+    /**
+     * Optional max width in px — the response is downscaled to fit (aspect
+     * preserved, never upscaled past the original). Absent means original
+     * bytes, which is what the Prepare-Images fallback wants; the Preview
+     * gallery passes a thumbnail width so a grid of 30 captures doesn't stream
+     * 30 full-resolution photos through the API.
+     */
+    w: z.coerce.number().int().min(32).max(2048).optional(),
   })
   .strict();
 

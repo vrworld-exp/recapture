@@ -27,6 +27,7 @@ import {
   listAllCapturedProjects,
   getAdminProjectDetail,
   buildProjectExport,
+  listProjectPhotos,
   softDeleteProjectPhotos,
   adminDeleteProject,
 } from '@/services/adminProjectsService';
@@ -165,13 +166,63 @@ router.get(
 );
 
 /**
+ * GET /admin/projects/:id/photos — the capture set of the project's most recent
+ * upload-finalized job, as bare keys + sizes.
+ *
+ * Deliberately NOT rate-limited, and that is the whole point of it existing:
+ * it mints no credentials, so browsing costs nothing from the export budget.
+ * The Preview gallery lists from here and renders each key through
+ * `/photo-bytes`; it asks for `/export` only when a downloadable URL is
+ * actually needed. Before this route the gallery reused the export manifest to
+ * draw thumbnails, so ten opens exhausted a cap meant for ten real exports.
+ */
+router.get(
+  '/projects/:id/photos',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const result = await listProjectPhotos(params.data.id);
+
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Project not found.',
+      });
+      return;
+    }
+
+    if (result.outcome === 'NOT_EXPORTABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'This project has no finalized upload to preview.',
+      });
+      return;
+    }
+
+    res.status(200).json({ status: 'success', photos: result.photos });
+  })
+);
+
+/**
  * GET /admin/projects/:id/export — the presigned-URL export manifest for the
  * project's most recent upload-finalized job.
  *
  * Rate-limited per staff user (the presigned URLs are bearer credentials —
  * generating them should be deliberate, not free). The response's `files[].url`
  * values are the ONLY place a presigned URL may appear: never in logs or
- * analytics (ids there are hashed).
+ * analytics (ids there are hashed). Callers that only need to LOOK at the
+ * photos want `/photos` + `/photo-bytes` instead — this one is for handing out
+ * downloadable URLs.
  */
 router.get(
   '/projects/:id/export',
@@ -798,7 +849,7 @@ router.get(
       return;
     }
 
-    const result = await readProjectPhotoBytes(params.data.id, query.data.key);
+    const result = await readProjectPhotoBytes(params.data.id, query.data.key, query.data.w);
 
     if (result.outcome === 'PROJECT_NOT_FOUND') {
       res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
