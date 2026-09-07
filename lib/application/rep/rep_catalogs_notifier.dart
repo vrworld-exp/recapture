@@ -11,20 +11,40 @@ import '../common/pending_poll_loop.dart';
 /// Re-read on screen open rather than cached: a delegation is revoked
 /// server-side and takes effect on the next request, so a stale list would
 /// offer a rep a restaurant they can no longer write to.
-class RepCatalogsNotifier extends AsyncNotifier<List<RepCatalogSummary>> {
-  @override
-  Future<List<RepCatalogSummary>> build() =>
-      ref.read(repRepositoryProvider).catalogs();
+///
+/// autoDispose is what makes that sentence true. Kept alive, this provider
+/// builds ONCE per app run and every later open of 'My restaurants' re-renders
+/// whatever that first read returned — an empty list from before the rep had a
+/// restaurant, or a list from a previous sign-in, with no request made and no
+/// spinner to hint that nothing was asked. Disposing it with the screen means
+/// the next open runs [build] again, which is the API call.
+class RepCatalogsNotifier
+    extends AutoDisposeAsyncNotifier<List<RepCatalogSummary>> {
+  /// Set once the provider is gone: [refresh] writes `state` after an awaited
+  /// read, and with autoDispose the rep can leave the screen mid-flight —
+  /// writing then throws, which would surface as an unhandled async error
+  /// rather than as the nothing it should be.
+  bool _disposed = false;
 
+  @override
+  Future<List<RepCatalogSummary>> build() {
+    _disposed = false;
+    ref.onDispose(() => _disposed = true);
+    return ref.read(repRepositoryProvider).catalogs();
+  }
+
+  /// Re-reads now, for pull-to-refresh and the retry on the error state.
   Future<void> refresh() async {
-    state = await AsyncValue.guard(
+    final next = await AsyncValue.guard(
       () => ref.read(repRepositoryProvider).catalogs(),
     );
+    if (_disposed) return;
+    state = next;
   }
 }
 
-final repCatalogsProvider =
-    AsyncNotifierProvider<RepCatalogsNotifier, List<RepCatalogSummary>>(
+final repCatalogsProvider = AsyncNotifierProvider.autoDispose<
+    RepCatalogsNotifier, List<RepCatalogSummary>>(
   RepCatalogsNotifier.new,
 );
 

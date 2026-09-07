@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/repositories/business_profile_repository.dart';
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
+import '../../data/repositories/rep_repository.dart';
+import '../../domain/catalog/catalog_scope.dart';
 import '../../domain/entities/business_profile.dart';
 import '../auth/auth_notifier.dart';
 import 'catalog_notifier.dart';
@@ -70,26 +72,45 @@ class BrandingUpload {
 
 const Object _unset = Object();
 
-/// Owns the business profile (features 58, 59, 60, 2).
+/// Owns the business profile (features 58, 59, 60, 2), for ONE [CatalogScope].
 ///
 /// State is an `AsyncValue<BusinessProfile?>` with the same three-way meaning as
 /// [CatalogNotifier]: `AsyncData(null)` is **no catalog yet**, which is a
 /// first-run state and not an error — the repository translates the server's
-/// 404 into it.
+/// 404 into it. That case belongs to the OWNER scope alone: a delegated scope
+/// was reached by resolving a catalog, so a missing one there is a real failure
+/// and is reported as one.
+///
+/// ONE NOTIFIER, TWO CALLERS, and the difference is [arg] and nothing else. The
+/// restaurant's profile is the same seven fields, the same validators, the same
+/// two-step branding upload and the same "nothing here is live until you
+/// publish" promise whether the person typing owns the restaurant or is standing
+/// in it with a standee. A second notifier for the rep would be a second place
+/// to fix the commit-retry bug, and the one that is exercised less would be the
+/// one that kept it.
 ///
 /// Invariants:
-///   - No HTTP here; everything goes through the two repositories.
+///   - No HTTP here; everything goes through the repositories.
 ///   - Nothing on this screen reaches customers. Every write is a draft edit and
-///     bumps `draftRevision` server-side, which is why every successful write
+///     bumps `draftRevision` server-side, which is why a successful OWNER write
 ///     refreshes [catalogProvider] — the "Draft changes not yet live" badge is
-///     server-derived and must never be guessed at locally.
+///     server-derived and must never be guessed at locally. A delegated write
+///     refreshes nothing here; the rep's own screens own that read, and reaching
+///     into the owner's catalog provider from a rep's edit would refresh the
+///     REP's catalog, which is a different restaurant entirely.
 ///   - The upload steps live OUTSIDE the AsyncValue, in [uploadOf]. An
 ///     `AsyncLoading` mid-upload would blank the very form being edited.
-class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
-  BusinessProfileRepository get _repo =>
+class BusinessProfileNotifier
+    extends FamilyAsyncNotifier<BusinessProfile?, CatalogScope> {
+  BusinessProfileRepository get _ownerRepo =>
       ref.read(businessProfileRepositoryProvider);
 
-  CatalogRepository get _catalogRepo => ref.read(catalogRepositoryProvider);
+  CatalogRepository get _ownerCatalogRepo => ref.read(catalogRepositoryProvider);
+
+  RepRepository get _repRepo => ref.read(repRepositoryProvider);
+
+  /// The delegated catalog id, or null when this is the caller's own catalog.
+  String? get _catalogId => arg.delegatedCatalogId;
 
   /// One upload channel per slot, REBUILT with the rest of this provider: the
   /// set registered in `onDispose` is torn down on a session change, so a fresh
@@ -108,7 +129,7 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
   ValueNotifier<BrandingUpload> uploadOf(BrandingSlot slot) => _uploads[slot]!;
 
   @override
-  Future<BusinessProfile?> build() async {
+  Future<BusinessProfile?> build(CatalogScope arg) async {
     // Session-scoped like the catalog itself: blanked on sign-out, re-fetched
     // (with a loading state) on the next sign-in rather than left showing the
     // previous session's reset value.
@@ -128,15 +149,30 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
 
     if (session == null) return null; // signed out — nothing to read
 
-    return _repo.fetch();
+    return _fetch();
+  }
+
+  /// The one read, routed by scope.
+  ///
+  /// The owner repository answers null for "no catalog yet"; the delegated one
+  /// cannot — the server resolved a catalog to authorise the request at all — so
+  /// a failure there arrives as a thrown [CatalogFailure] and is shown as one.
+  Future<BusinessProfile?> _fetch() {
+    final catalogId = _catalogId;
+    return catalogId == null
+        ? _ownerRepo.fetch()
+        : _repRepo.profile(catalogId);
   }
 
   /// Re-reads the profile without emitting `AsyncLoading`, so the form does not
   /// flash a spinner over fields the user is looking at.
   Future<void> refresh() async {
     try {
-      state = AsyncData(await _repo.fetch());
+      final profile = await _fetch();
+      if (_disposed) return;
+      state = AsyncData(profile);
     } catch (error, stack) {
+      if (_disposed) return;
       // A failed background refresh must not blank a profile that is on screen.
       if (state.valueOrNull == null) state = AsyncError(error, stack);
     }
@@ -156,15 +192,26 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
     String? businessName,
     required BusinessContact contact,
   }) async {
-    final updated = await _repo.update(
-      name: name,
-      // The PATCH schema is `.strict()` and refuses null, so an absent business
-      // name has to be an absent KEY. An empty string is a legitimate value the
-      // server accepts (`max(120)` with no `min`), and it is how the field is
-      // cleared.
-      businessName: businessName ?? '',
-      contact: contact,
-    );
+    final catalogId = _catalogId;
+    // The PATCH schema is `.strict()` and refuses null, so an absent business
+    // name has to be an absent KEY. An empty string is a legitimate value the
+    // server accepts (`max(120)` with no `min`), and it is how the field is
+    // cleared.
+    final resolvedBusinessName = businessName ?? '';
+
+    final updated = catalogId == null
+        ? await _ownerRepo.update(
+            name: name,
+            businessName: resolvedBusinessName,
+            contact: contact,
+          )
+        : await _repRepo.updateProfile(
+            catalogId,
+            name: name,
+            businessName: resolvedBusinessName,
+            contact: contact,
+          );
+
     if (!_disposed) state = AsyncData(updated);
     _refreshCatalog();
     return updated;
@@ -187,14 +234,23 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
     final upload = _uploads[slot]!;
     upload.value = const BrandingUpload(step: BrandingUploadStep.uploading);
 
+    final catalogId = _catalogId;
     final String key;
     try {
-      key = await _catalogRepo.uploadBrandingBytes(
-        bytes,
-        slot: slot,
-        contentType: contentType,
-      );
+      key = catalogId == null
+          ? await _ownerCatalogRepo.uploadBrandingBytes(
+              bytes,
+              slot: slot,
+              contentType: contentType,
+            )
+          : await _repRepo.uploadBrandingBytes(
+              catalogId,
+              bytes,
+              slot: slot,
+              contentType: contentType,
+            );
     } on CatalogFailure catch (failure) {
+      if (_disposed) return false;
       upload.value = BrandingUpload(error: failure);
       return false;
     }
@@ -217,8 +273,11 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
       pendingKey: key,
     );
 
+    final catalogId = _catalogId;
     try {
-      final profile = await _catalogRepo.commitBranding(slot: slot, key: key);
+      final profile = catalogId == null
+          ? await _ownerCatalogRepo.commitBranding(slot: slot, key: key)
+          : await _repRepo.commitBranding(catalogId, slot: slot, key: key);
       if (_disposed) return true;
       state = AsyncData(profile);
       // Cleared only now: with the pointer flipped there is nothing left to
@@ -238,16 +297,36 @@ class BusinessProfileNotifier extends AsyncNotifier<BusinessProfile?> {
   /// Every write here bumps `draftRevision` server-side, so the catalog's
   /// "Draft changes not yet live" badge and its header name both move.
   ///
+  /// OWNER SCOPE ONLY. [catalogProvider] is the signed-in user's own catalog,
+  /// and for a rep that is a different restaurant — or none at all. Refreshing
+  /// it after a delegated write would re-read the wrong document and, on the one
+  /// screen whose job is to say what is not live yet, would say it about
+  /// something else.
+  ///
   /// Best-effort: the write already succeeded, and a failed refresh must not be
   /// reported as though the save failed.
   void _refreshCatalog() {
-    if (_disposed) return;
+    if (_disposed || arg.isDelegated) return;
     unawaited(ref.read(catalogProvider.notifier).refresh().catchError((_) {}));
   }
 }
 
-/// The app-wide business profile.
-final businessProfileProvider =
-    AsyncNotifierProvider<BusinessProfileNotifier, BusinessProfile?>(
+/// The business profile for one [CatalogScope].
+///
+/// Family-keyed rather than one provider per surface: a rep can hold delegations
+/// on several restaurants, and two of them open in one session must not share a
+/// slot. [CatalogScope] carries value equality precisely so two reads of the
+/// same restaurant DO.
+final businessProfileFor = AsyncNotifierProvider.family<BusinessProfileNotifier,
+    BusinessProfile?, CatalogScope>(
   BusinessProfileNotifier.new,
 );
+
+/// The signed-in user's OWN business profile.
+///
+/// An alias for the owner instance of [businessProfileFor], not a second
+/// provider: a family canonicalises by argument, so this and
+/// `businessProfileFor(const CatalogScope.owner())` are the same provider and
+/// the same state. It keeps every owner-side call site reading the way it
+/// always has.
+final businessProfileProvider = businessProfileFor(const CatalogScope.owner());

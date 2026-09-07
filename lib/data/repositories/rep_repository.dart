@@ -3,7 +3,11 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/entities/business_profile.dart';
+import '../../domain/entities/catalog.dart';
+import '../../domain/entities/catalog_category.dart';
 import '../../domain/entities/catalog_product.dart';
+import '../../domain/entities/product_availability.dart';
 import '../../domain/entities/product_type.dart';
 import '../../domain/catalog/publish_gate.dart';
 import '../../application/catalog/qr_download_file.dart';
@@ -11,7 +15,9 @@ import '../../domain/entities/qr_code_preflight.dart';
 import '../../domain/entities/qr_standee.dart';
 import 'admin_standee_repository.dart' show StandeeQrFormat;
 import 'bytes_response.dart';
-import 'catalog_products_repository.dart' show ProductImageSlot;
+import 'catalog_repository.dart' show BrandingSlot, BrandingSlotX;
+import 'catalog_products_repository.dart'
+    show ProductImageSlot, kCatalogUnchanged;
 import '../../domain/entities/rep_activation.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
@@ -90,10 +96,17 @@ abstract interface class RepRepository {
   /// ([createImageSlot]) needs a cross-origin PUT to a bucket that serves no
   /// CORS policy, so the browser build cannot use it — see
   /// `catalog_products_repository.dart` for the same split on the owner side.
+  ///
+  /// [productId] groups the stored object under the dish it belongs to, exactly
+  /// as the owner repository does. Omit it while AUTHORING — the dish does not
+  /// exist yet, so there is nothing to group under — and pass it when REPLACING
+  /// an existing dish's photo, so the sweep that cleans up after a delete can
+  /// find the object from the product alone.
   Future<String> uploadImageBytes(
     String catalogId,
     Uint8List bytes, {
     required String contentType,
+    String? productId,
   });
 
   /// Mints a presigned PUT slot. NATIVE ONLY — kept because it keeps image
@@ -123,6 +136,95 @@ abstract interface class RepRepository {
     String code, {
     StandeeQrFormat format,
     int? size,
+  });
+
+  // ── The restaurant behind the dishes ──────────────────────────────────────
+  //
+  // Everything below reads or writes the CATALOG DOCUMENT rather than a product
+  // on it. All of it is delegated: the server resolves the same
+  // `resolveDelegatedCatalog` gate the product routes use and then hands the
+  // work to the owner service with the RESTAURANT's userId, so a rep's edit is
+  // byte-identical to the owner's own.
+
+  /// The catalog document itself — counts, slug, draft revision.
+  ///
+  /// Not the same thing as the row in [catalogs]: that is a picker line (name,
+  /// status) sized for a list, this is what the preview and the details screens
+  /// need. Both exist so neither has to carry the other's weight.
+  Future<Catalog> catalog(String catalogId);
+
+  /// The restaurant's sections, in their set order.
+  ///
+  /// READ-ONLY on this surface by design — a rep previews and files dishes into
+  /// the sections the owner made, and never reshapes the page itself.
+  Future<CatalogCategoryList> categories(String catalogId);
+
+  /// The restaurant's business profile: name, contact block, branding urls.
+  Future<BusinessProfile> profile(String catalogId);
+
+  /// Edits it.
+  ///
+  /// [contact] REPLACES the whole contact block — the server's own semantics, so
+  /// callers pass the FULL block built from every field, never a delta. That is
+  /// also what makes "clear the website" expressible at all.
+  Future<BusinessProfile> updateProfile(
+    String catalogId, {
+    String? name,
+    String? businessName,
+    BusinessContact? contact,
+  });
+
+  /// Uploads a logo or cover through the API and returns its committed key.
+  ///
+  /// The ONE upload path that works on every target, for the reason
+  /// [uploadImageBytes] documents: the presigned alternative needs a
+  /// cross-origin PUT to a bucket that serves no CORS policy.
+  Future<String> uploadBrandingBytes(
+    String catalogId,
+    Uint8List bytes, {
+    required BrandingSlot slot,
+    required String contentType,
+  });
+
+  /// Binds an uploaded object as the logo or cover, and answers the updated
+  /// profile.
+  ///
+  /// SEPARATE from the upload so a commit that fails after the bytes have landed
+  /// can be retried on its own — a rep on restaurant wifi must not be made to
+  /// send the same logo twice.
+  Future<BusinessProfile> commitBranding(
+    String catalogId, {
+    required BrandingSlot slot,
+    required String key,
+  });
+
+  /// ONE dish, by id.
+  ///
+  /// The dish editor is reached from a list that already holds the product, so
+  /// this is not how it usually gets one — it is how the screen survives a
+  /// BROWSER RELOAD, where the two ids in the URL are all that is left.
+  Future<CatalogProduct> product(String catalogId, String productId);
+
+  /// Edits a dish on the restaurant's behalf.
+  ///
+  /// [price] and [categoryId] take the same sentinel semantics the owner
+  /// repository uses: pass null to CLEAR (no price / Uncategorized), omit to
+  /// leave alone. Nothing else can tell "clear this" from "I did not touch it",
+  /// and both are ordinary things a rep does at a table.
+  ///
+  /// `sourceModelId` is deliberately absent. Re-pointing a dish at a different
+  /// capture cannot succeed through the delegated route — see the note on
+  /// `PATCH /rep/catalogs/:id/products/:productId` — so the method does not
+  /// offer an argument the server would answer 404 to.
+  Future<CatalogProduct> updateProduct(
+    String catalogId,
+    String productId, {
+    String? name,
+    String? description,
+    Object? price = kCatalogUnchanged,
+    Object? categoryId = kCatalogUnchanged,
+    ProductAvailability? availability,
+    String? imageKey,
   });
 }
 
@@ -255,6 +357,7 @@ class RemoteRepRepository implements RepRepository {
     String catalogId,
     Uint8List bytes, {
     required String contentType,
+    String? productId,
   }) =>
       mapCatalogErrors(() async {
         // The raw image IS the body — not multipart, not JSON. The app Dio is
@@ -262,6 +365,7 @@ class RemoteRepRepository implements RepRepository {
         final res = await _dio.post<Map<String, dynamic>>(
           '/rep/catalogs/$catalogId/products/image/bytes',
           data: Stream.value(bytes),
+          queryParameters: {if (productId != null) 'productId': productId},
           options: Options(
             headers: {
               Headers.contentTypeHeader: contentType,
@@ -298,6 +402,165 @@ class RemoteRepRepository implements RepRepository {
         }
         return ProductImageSlot.fromMap(slot);
       });
+
+  @override
+  Future<Catalog> catalog(String catalogId) => mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId',
+        );
+        final catalog = res.data?['catalog'];
+        if (catalog is! Map<String, dynamic>) throw _malformed;
+        return Catalog.fromMap(catalog);
+      });
+
+  @override
+  Future<CatalogCategoryList> categories(String catalogId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/categories',
+        );
+        final raw = res.data?['categories'];
+        return CatalogCategoryList(
+          categories: [
+            if (raw is List)
+              for (final item in raw)
+                if (item is Map<String, dynamic>) CatalogCategory.fromMap(item),
+          ],
+          uncategorizedCount: switch (res.data?['uncategorizedCount']) {
+            final num n when n >= 0 => n.toInt(),
+            _ => 0,
+          },
+        );
+      });
+
+  @override
+  Future<BusinessProfile> profile(String catalogId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/profile',
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateProfile(
+    String catalogId, {
+    String? name,
+    String? businessName,
+    BusinessContact? contact,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/profile',
+          data: {
+            // The schema is `.strict()` and refuses an empty patch, so an
+            // omitted field must be an absent KEY rather than a null.
+            if (name != null) 'name': name,
+            if (businessName != null) 'businessName': businessName,
+            if (contact != null) 'contact': contact.toMap(),
+          },
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<String> uploadBrandingBytes(
+    String catalogId,
+    Uint8List bytes, {
+    required BrandingSlot slot,
+    required String contentType,
+  }) =>
+      mapCatalogErrors(() async {
+        // The raw image IS the body — not multipart, not JSON. The app Dio is
+        // right: the endpoint is ours and needs the Bearer token.
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/logo/bytes',
+          data: Stream.value(bytes),
+          queryParameters: {'slot': slot.apiValue},
+          options: Options(
+            headers: {
+              Headers.contentTypeHeader: contentType,
+              Headers.contentLengthHeader: bytes.length,
+            },
+          ),
+        );
+        final key = res.data?['key'];
+        if (key is! String || key.isEmpty) throw _malformed;
+        return key;
+      });
+
+  @override
+  Future<BusinessProfile> commitBranding(
+    String catalogId, {
+    required BrandingSlot slot,
+    required String key,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.put<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/logo',
+          data: {'slot': slot.apiValue, 'key': key},
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<CatalogProduct> product(String catalogId, String productId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/products/$productId',
+        );
+        return _productFrom(res.data);
+      });
+
+  @override
+  Future<CatalogProduct> updateProduct(
+    String catalogId,
+    String productId, {
+    String? name,
+    String? description,
+    Object? price = kCatalogUnchanged,
+    Object? categoryId = kCatalogUnchanged,
+    ProductAvailability? availability,
+    String? imageKey,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/products/$productId',
+          data: {
+            if (name != null) 'name': name,
+            if (description != null) 'description': description,
+            // An explicit null is MEANINGFUL for both of these — it clears the
+            // price and moves the dish to Uncategorized — so the sentinel, not
+            // null, is what means "untouched".
+            if (!identical(price, kCatalogUnchanged)) 'price': price,
+            if (!identical(categoryId, kCatalogUnchanged))
+              'categoryId': categoryId,
+            if (availability != null) 'availability': availability.apiValue,
+            if (imageKey != null) 'imageKey': imageKey,
+          },
+        );
+        return _productFrom(res.data);
+      });
+
+  BusinessProfile _profileFrom(Map<String, dynamic>? body) {
+    final profile = body?['profile'];
+    if (profile is! Map<String, dynamic>) throw _malformed;
+    return BusinessProfile.fromMap(profile);
+  }
+
+  CatalogProduct _productFrom(Map<String, dynamic>? body) {
+    final product = body?['product'];
+    if (product is! Map<String, dynamic>) throw _malformed;
+    return CatalogProduct.fromMap(product);
+  }
+
+  /// The one failure for a 2xx whose body is not the shape we asked for. Its
+  /// code is deliberately not a `RepErrorCodes` value: nothing branches on it,
+  /// and the screens fall through to their generic sentence.
+  static const _malformed = CatalogFailure(
+    code: 'MALFORMED_RESPONSE',
+    message: 'Something went wrong. Please try again.',
+  );
 
   @override
   Future<void> attachCode(String catalogId, String code) =>

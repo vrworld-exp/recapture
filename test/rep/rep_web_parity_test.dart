@@ -33,7 +33,9 @@ import 'package:recapture/domain/entities/qr_code_preflight.dart';
 import 'package:recapture/domain/entities/rep_activation.dart';
 import 'package:recapture/presentation/screens/rep/rep_activation_screen.dart';
 
-class _FakeRepRepository implements RepRepository {
+import 'rep_repo_catalog_defaults.dart';
+
+class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
   final List<RepActivationRequest> activated = [];
 
   @override
@@ -73,6 +75,7 @@ class _FakeRepRepository implements RepRepository {
     String catalogId,
     Uint8List bytes, {
     required String contentType,
+    String? productId,
   }) async =>
       throw UnimplementedError();
 

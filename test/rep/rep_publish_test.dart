@@ -34,7 +34,9 @@ import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/domain/entities/qr_code_preflight.dart';
 import 'package:recapture/domain/entities/rep_activation.dart';
 
-class _FakeRepRepository implements RepRepository {
+import 'rep_repo_catalog_defaults.dart';
+
+class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
   _FakeRepRepository();
 
   /// What `publish` should do. Defaults to a fresh, queued run.
@@ -82,6 +84,7 @@ class _FakeRepRepository implements RepRepository {
     String catalogId,
     Uint8List bytes, {
     required String contentType,
+    String? productId,
   }) async =>
       throw UnimplementedError();
 

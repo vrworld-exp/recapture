@@ -163,8 +163,15 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
   Future<void> _confirm() async {
     await ref.read(repActivationProvider.notifier).confirm();
     // A fresh activation adds a delegation, so the rep's catalog list is stale.
+    // Invalidate rather than reach for the notifier: the list is autoDispose,
+    // and this screen is reachable by deep link with no catalogs screen behind
+    // it — reading `.notifier` there would BUILD the provider (one request)
+    // only to refresh it (a second) and drop both on the floor a tick later.
+    // Invalidate refreshes it where it is being watched and is a no-op where it
+    // is not, which is exactly right: an unmounted list re-reads on its next
+    // open anyway.
     if (ref.read(repActivationProvider).isDone) {
-      await ref.read(repCatalogsProvider.notifier).refresh();
+      ref.invalidate(repCatalogsProvider);
     }
   }
 

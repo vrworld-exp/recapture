@@ -208,10 +208,16 @@ class CatalogProduct {
   /// `categoryId` is a [Object?] sentinel rather than a plain `String?` because
   /// null is a MEANINGFUL value here (Uncategorized) and must be distinguishable
   /// from "not changing it".
+  /// A copy with fields replaced.
+  ///
+  /// [price] takes the same sentinel treatment [categoryId] already has, and for
+  /// the same reason: null is a MEANINGFUL value there — a dish with no price
+  /// set is not a dish that costs nothing — so "clear it" and "leave it alone"
+  /// cannot both be spelled `null`. Omitting the argument leaves it alone.
   CatalogProduct copyWith({
     String? name,
     String? description,
-    double? price,
+    Object? price = _unset,
     Object? categoryId = _unset,
     List<String>? tags,
     ProductAvailability? availability,
@@ -228,7 +234,7 @@ class CatalogProduct {
         type: type,
         name: name ?? this.name,
         description: description ?? this.description,
-        price: price ?? this.price,
+        price: identical(price, _unset) ? this.price : price as double?,
         currency: currency,
         categoryId: identical(categoryId, _unset)
             ? this.categoryId

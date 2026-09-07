@@ -13,15 +13,25 @@
 // rep-specific capture path and there must not be one: a forked flow is a
 // second implementation of the hardest screen in the app, and it is the one
 // nobody would keep in step.
+//
+// THREE WAYS OUT OF THIS SCREEN, AND EACH ANSWERS A DIFFERENT QUESTION:
+//   • a dish row  → 'is this one right?'          → the dish editor
+//   • Preview     → 'is the PAGE right?'          → the customer-eye preview
+//   • Details     → 'is the RESTAURANT right?'    → name, contact, branding
+// Until they existed a rep could add dishes and publish, and could not fix a
+// single thing they had got wrong — the owner had to sign in later and do it,
+// which on a pilot visit means the page goes live wrong or does not go live.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_catalogs_notifier.dart';
 import '../../../application/rep/rep_publish_notifier.dart';
+import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_model_status.dart';
@@ -67,7 +77,31 @@ class RepCatalogDetailScreen extends ConsumerWidget {
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
-      appBar: AppBar(title: const Text('Dishes')),
+      appBar: AppBar(
+        title: const Text('Dishes'),
+        actions: [
+          IconButton(
+            key: const ValueKey('rep_preview_menu'),
+            icon: const Icon(Icons.visibility_outlined),
+            tooltip: 'Preview the menu',
+            onPressed: () =>
+                context.push('${AppRoutes.repCatalogs}/$catalogId/preview'),
+          ),
+          IconButton(
+            key: const ValueKey('rep_restaurant_details'),
+            icon: const Icon(Icons.storefront_outlined),
+            tooltip: 'Restaurant details',
+            onPressed: () async {
+              await context.push('${AppRoutes.repCatalogs}/$catalogId/details');
+              if (!context.mounted) return;
+              // The details screen can change the NAME the preview and the
+              // catalog list render, and the draft state the publish button
+              // acts on. Re-read rather than leave a stale header behind.
+              ref.invalidate(repCatalogDocumentProvider(catalogId));
+            },
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         key: const ValueKey('rep_add_dish_fab'),
         onPressed: () async {
@@ -142,7 +176,24 @@ class RepCatalogDetailScreen extends ConsumerWidget {
                     itemCount: items.length,
                     separatorBuilder: (_, __) =>
                         const SizedBox(height: AppSpacing.sm),
-                    itemBuilder: (_, i) => _DishRow(product: items[i]),
+                    itemBuilder: (_, i) => _DishRow(
+                      product: items[i],
+                      // The refresh is what makes an edited name, price or
+                      // photo appear on the row the rep came back to, rather
+                      // than up to one poll interval later — or never, for a
+                      // dish with no 3D model to poll for.
+                      onTap: () async {
+                        await context.push(
+                          '${AppRoutes.repCatalogs}/$catalogId/dishes/'
+                          '${items[i].id}',
+                        );
+                        if (!context.mounted) return;
+                        await ref
+                            .read(
+                                repCatalogProductsProvider(catalogId).notifier)
+                            .refresh();
+                      },
+                    ),
                   ),
           ),
         ),
@@ -152,9 +203,14 @@ class RepCatalogDetailScreen extends ConsumerWidget {
 }
 
 class _DishRow extends StatelessWidget {
-  const _DishRow({required this.product});
+  const _DishRow({required this.product, this.onTap});
 
   final CatalogProduct product;
+
+  /// Opens the dish. Null renders the row as plain text — there is no state
+  /// where that is wanted today, and the parameter is optional only so the row
+  /// stays usable in a test that is not about navigation.
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -162,9 +218,10 @@ class _DishRow extends StatelessWidget {
     // that disagree about what "3D unavailable" looks like is how a rep learns
     // to distrust both.
     final (label, color) = switch (product.modelStatus) {
-      ProductModelStatus.queued ||
-      ProductModelStatus.processing =>
-        ('3D generating…', AppColors.textSecondary),
+      ProductModelStatus.queued || ProductModelStatus.processing => (
+          '3D generating…',
+          AppColors.textSecondary
+        ),
       ProductModelStatus.ready => ('AR ready', AppColors.royalGold),
       // NOT an error. The dish is on the menu; only AR is missing. A rep who
       // reads this as a rejection re-shoots the dish and spends generation
@@ -173,55 +230,67 @@ class _DishRow extends StatelessWidget {
       ProductModelStatus.none => ('Photo only', AppColors.textMuted),
     };
 
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      decoration: BoxDecoration(
-        color: AppColors.surface1,
+    return Material(
+      color: AppColors.surface1,
+      borderRadius: BorderRadius.circular(AppRadius.sm),
+      child: InkWell(
+        key: ValueKey('rep_dish_row_${product.id}'),
         borderRadius: BorderRadius.circular(AppRadius.sm),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  product.name,
-                  style: const TextStyle(
-                    fontSize: AppTypography.sizeHeadline,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Row(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (product.isModelPending) ...[
-                      SizedBox(
-                        width: 10,
-                        height: 10,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.5,
-                          color: color,
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.xs),
-                    ],
                     Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: AppTypography.sizeLabel,
-                        color: color,
+                      product.name,
+                      style: const TextStyle(
+                        fontSize: AppTypography.sizeHeadline,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
                       ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        if (product.isModelPending) ...[
+                          SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              color: color,
+                            ),
+                          ),
+                          const SizedBox(width: AppSpacing.xs),
+                        ],
+                        Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: AppTypography.sizeLabel,
+                            color: color,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
+              ),
+              if (product.isArReady) ...[
+                const Icon(Icons.view_in_ar,
+                    color: AppColors.royalGold, size: 18),
+                const SizedBox(width: AppSpacing.sm),
               ],
-            ),
+              // The affordance, not decoration: without it the row reads as a
+              // status line and a rep never discovers the editor behind it.
+              const Icon(Icons.chevron_right,
+                  color: AppColors.textMuted, size: 18),
+            ],
           ),
-          if (product.isArReady)
-            const Icon(Icons.view_in_ar, color: AppColors.royalGold, size: 18),
-        ],
+        ),
       ),
     );
   }

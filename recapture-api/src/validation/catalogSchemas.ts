@@ -528,6 +528,24 @@ export const catalogEntityIdParamsSchema = z
 export type CatalogEntityIdParams = z.infer<typeof catalogEntityIdParamsSchema>;
 
 /**
+ * `/rep/catalogs/:id/products/:productId` — BOTH ids, in one strict object.
+ *
+ * A separate schema rather than a loosening of the one above, because that one's
+ * `.strict()` is load-bearing everywhere it is used: the owner routes carry
+ * exactly one path id, and letting a second key through there would stop a typo
+ * in a route path from being caught at all. The delegated product routes are the
+ * only place two ids ride together, so they get their own shape.
+ */
+export const catalogProductParamsSchema = z
+  .object({
+    id: objectId('catalog id'),
+    productId: objectId('product id'),
+  })
+  .strict();
+
+export type CatalogProductParams = z.infer<typeof catalogProductParamsSchema>;
+
+/**
  * GET /catalog/qr query.
  *
  * `size` is CLAMPED by the renderer rather than rejected here — a client asking

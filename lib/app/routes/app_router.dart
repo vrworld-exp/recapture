@@ -25,6 +25,8 @@ import '../../presentation/screens/admin/admin_standees_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
+import '../../presentation/screens/rep/rep_dish_editor_screen.dart';
+import '../../presentation/screens/rep/rep_menu_preview_screen.dart';
 import '../../presentation/screens/rep/rep_catalogs_screen.dart';
 import '../../presentation/screens/rep/rep_standees_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
@@ -167,6 +169,24 @@ abstract final class AppRoutes {
   /// be swallowed as an id because the segment before it is literal.
   static const repAddDish = '/rep/catalogs/:id/dishes/new';
 
+  /// EDITING one dish on a delegated catalog, with a live customer-eye preview.
+  ///
+  /// Registered AFTER [repAddDish] below, and that ordering is the whole reason
+  /// `new` still works: go_router matches in declaration order, so a
+  /// `:productId` route sitting above it would swallow the literal segment and
+  /// send every "Add a dish" tap to an editor for a dish called `new`.
+  static const repDishDetail = '/rep/catalogs/:id/dishes/:productId';
+
+  /// The restaurant's own details — name, contact, links, logo and cover.
+  ///
+  /// `details` rather than `profile`: `/profile` in this app is the USER's
+  /// account screen, and a rep reading a route as "the restaurant's profile"
+  /// when it says profile would be reading it correctly about the wrong record.
+  static const repCatalogDetails = '/rep/catalogs/:id/details';
+
+  /// The restaurant's whole page as a customer will meet it.
+  static const repCatalogPreview = '/rep/catalogs/:id/preview';
+
   // ── Admin (standee inventory, /admin/standees) ────────────────────────────
   // Gated on isAdmin in the router's redirect below. NOT the whole /admin
   // subtree: the staff project routes below it are MODEL_ARTIST surfaces, and
@@ -235,6 +255,9 @@ abstract final class AppRouteNames {
   static const repStandees = 'repStandees';
   static const repCatalogDetail = 'repCatalogDetail';
   static const repAddDish = 'repAddDish';
+  static const repDishDetail = 'repDishDetail';
+  static const repCatalogDetails = 'repCatalogDetails';
+  static const repCatalogPreview = 'repCatalogPreview';
   static const adminStandees = 'adminStandees';
   static const adminBatchDetail = 'adminBatchDetail';
   static const previewGallery = 'previewGallery';
@@ -541,6 +564,36 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.repAddDish,
         name: AppRouteNames.repAddDish,
         builder: (context, state) => RepAddDishScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      // STATIC BEFORE PARAMETERISED, the same rule the whole file follows:
+      // `dishes/new` above must not be matchable as a `:productId`.
+      GoRoute(
+        path: AppRoutes.repDishDetail,
+        name: AppRouteNames.repDishDetail,
+        // Resolved from the two path ids and nothing else, so a browser reload
+        // on this URL behaves exactly like a push from the dish list. `extra`
+        // is never used to carry the dish, for the same reason the owner's
+        // editor refuses to.
+        builder: (context, state) => RepDishEditorScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+          productId: state.pathParameters['productId'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogDetails,
+        name: AppRouteNames.repCatalogDetails,
+        // The OWNER's business-profile screen, given a delegated scope. One
+        // screen, two readers — see BusinessProfileScreen.delegated.
+        builder: (context, state) => BusinessProfileScreen.delegated(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogPreview,
+        name: AppRouteNames.repCatalogPreview,
+        builder: (context, state) => RepMenuPreviewScreen(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),

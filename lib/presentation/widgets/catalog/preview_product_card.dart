@@ -19,6 +19,7 @@
 // the model when asked — which doubles as the answer to "very large GLB on a
 // low-end device": nothing downloads until the user says so, and the hint on
 // the button says why.
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_colors.dart';
@@ -40,6 +41,7 @@ class PreviewProductCard extends StatelessWidget {
     this.onLoadThreeD,
     this.onUnloadThreeD,
     this.onFix,
+    this.overrideImageBytes,
   });
 
   final CatalogProduct product;
@@ -64,6 +66,15 @@ class PreviewProductCard extends StatelessWidget {
 
   /// Opens the product editor at the thing the gate is about.
   final VoidCallback? onFix;
+
+  /// A picked-but-not-yet-saved photo, rendered INSTEAD of `thumbnailUrl`.
+  ///
+  /// The whole reason the rep's dish editor can promise a live preview. Without
+  /// it, a rep who picks a new photo sees the card still showing the one they
+  /// are replacing — which is the single most misleading thing a screen called
+  /// "what a customer will see" could do. Null everywhere else, and the card
+  /// falls back to the stored image exactly as before.
+  final Uint8List? overrideImageBytes;
 
   bool get _canShowThreeD => product.canViewInThreeD;
 
@@ -151,7 +162,10 @@ class PreviewProductCard extends StatelessWidget {
         showArCtaWhenUnavailable: false,
       );
     }
-    return _PreviewThumbnail(product: product);
+    return _PreviewThumbnail(
+      product: product,
+      overrideImageBytes: overrideImageBytes,
+    );
   }
 }
 
@@ -160,12 +174,24 @@ class PreviewProductCard extends StatelessWidget {
 /// absence is itself a publish gate, so the placeholder here says so plainly
 /// rather than pretending an image is on its way.
 class _PreviewThumbnail extends StatelessWidget {
-  const _PreviewThumbnail({required this.product});
+  const _PreviewThumbnail({required this.product, this.overrideImageBytes});
 
   final CatalogProduct product;
+  final Uint8List? overrideImageBytes;
 
   @override
   Widget build(BuildContext context) {
+    // An unsaved pick WINS over the stored url — it is the newer truth, and it
+    // is the one the person looking at this card just chose.
+    final bytes = overrideImageBytes;
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => const _MissingImage(),
+      );
+    }
+
     final url = product.thumbnailUrl;
     if (url == null || url.isEmpty) return const _MissingImage();
 

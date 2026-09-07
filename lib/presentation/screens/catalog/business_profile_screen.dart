@@ -26,10 +26,12 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/business_profile_notifier.dart';
 import '../../../application/catalog/catalog_notifier.dart';
+import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_repository.dart';
 import '../../../domain/catalog/business_profile_validators.dart';
+import '../../../domain/catalog/catalog_scope.dart';
 import '../../../domain/entities/business_profile.dart';
 import '../../../platform/unsaved_changes.dart';
 import '../../widgets/app_button.dart';
@@ -90,11 +92,35 @@ Future<bool> confirmDiscardProfileEdits(BuildContext context) async {
 }
 
 class BusinessProfileScreen extends ConsumerWidget {
-  const BusinessProfileScreen({super.key});
+  /// The signed-in user's own profile — `/catalog/settings`.
+  const BusinessProfileScreen({super.key}) : catalogId = null;
+
+  /// A restaurant's profile, edited by a rep who holds a delegation on it.
+  ///
+  /// THE SAME SCREEN, and that is the whole decision. The fields, the
+  /// validators, the two-step branding upload, the unsaved-changes guard and
+  /// the "nothing here is live until you publish" promise are identical for
+  /// both readers — the only difference is which catalog the writes land on,
+  /// which is a [CatalogScope] and not a second screen. A forked rep copy would
+  /// be a second place to fix the commit-retry path, and the copy exercised
+  /// less is the one that would keep the bug.
+  const BusinessProfileScreen.delegated({
+    super.key,
+    required String this.catalogId,
+  });
+
+  /// The delegated catalog id, or null for the caller's own catalog.
+  final String? catalogId;
+
+  CatalogScope get _scope => catalogId == null
+      ? const CatalogScope.owner()
+      : CatalogScope.delegated(catalogId!);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final profileAsync = ref.watch(businessProfileProvider);
+    final scope = _scope;
+    final profileProvider = businessProfileFor(scope);
+    final profileAsync = ref.watch(profileProvider);
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
@@ -111,7 +137,10 @@ class BusinessProfileScreen extends ConsumerWidget {
           },
         ),
         title: Text(
-          'Business profile',
+          // Named for whose profile it is. A rep works several restaurants in a
+          // day and a bare 'Business profile' over a form full of someone
+          // else's phone number is how the wrong one gets edited.
+          scope.isDelegated ? 'Restaurant details' : 'Business profile',
           style: Theme.of(context).textTheme.titleLarge,
         ),
       ),
@@ -124,7 +153,7 @@ class BusinessProfileScreen extends ConsumerWidget {
               ? CatalogFeedback.failureText(error)
               : CatalogFeedback.textForCode(null),
           actionLabel: 'Try again',
-          onAction: () => ref.invalidate(businessProfileProvider),
+          onAction: () => ref.invalidate(profileProvider),
         ),
         // No catalog yet is the first-run state, not an error. There is nothing
         // to brand until the catalog exists, and creating one belongs to the
@@ -137,6 +166,7 @@ class BusinessProfileScreen extends ConsumerWidget {
                     'branding that wraps it.',
               )
             : _ProfileForm(
+                scope: scope,
                 // Keyed by the catalog id ALONE, deliberately. The profile
                 // object is replaced on every branding commit, and keying on
                 // `updatedAt` would rebuild the form — throwing away text the
@@ -152,7 +182,14 @@ class BusinessProfileScreen extends ConsumerWidget {
 }
 
 class _ProfileForm extends ConsumerStatefulWidget {
-  const _ProfileForm({super.key, required this.profile});
+  const _ProfileForm({
+    super.key,
+    required this.scope,
+    required this.profile,
+  });
+
+  /// Whose catalog every write on this form lands on.
+  final CatalogScope scope;
 
   final BusinessProfile profile;
 
@@ -275,7 +312,7 @@ class _ProfileFormState extends ConsumerState<_ProfileForm> {
     );
 
     try {
-      await ref.read(businessProfileProvider.notifier).save(
+      await ref.read(businessProfileFor(widget.scope).notifier).save(
             name: _text('name').trim(),
             businessName: trimToNull(_text('businessName')),
             contact: contact,
@@ -322,7 +359,8 @@ class _ProfileFormState extends ConsumerState<_ProfileForm> {
         builder: (context, constraints) {
           final twoColumn =
               constraints.maxWidth >= kBusinessProfileTwoColumnWidth;
-          final branding = _BrandingPanel(profile: widget.profile);
+          final branding =
+              _BrandingPanel(scope: widget.scope, profile: widget.profile);
           final fields = _fieldColumn(context);
 
           return SingleChildScrollView(
@@ -334,7 +372,7 @@ class _ProfileFormState extends ConsumerState<_ProfileForm> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const _PublishReachBanner(),
+                    _PublishReachBanner(scope: widget.scope),
                     const SizedBox(height: AppSpacing.xxl),
                     if (twoColumn)
                       Row(
@@ -610,16 +648,29 @@ class _ChangedDot extends StatelessWidget {
 
 /// The one sentence the whole screen hangs on: nothing here is live yet.
 class _PublishReachBanner extends ConsumerWidget {
-  const _PublishReachBanner();
+  const _PublishReachBanner({required this.scope});
+
+  final CatalogScope scope;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Server-derived. The badge is never recomputed by diffing anything here —
     // an edit bumps `draftRevision` on the server and this reads the result.
-    final pending = ref.watch(
-      catalogProvider
-          .select((c) => c.valueOrNull?.hasUnpublishedChanges ?? false),
-    );
+    //
+    // READ FROM THE SCOPE'S OWN CATALOG. `catalogProvider` is the signed-in
+    // user's, and for a rep that is a different restaurant or none at all —
+    // so on a delegated form it would report the wrong document's draft state
+    // on the one line whose whole job is to say what is not live yet.
+    final catalogId = scope.delegatedCatalogId;
+    final pending = catalogId == null
+        ? ref.watch(
+            catalogProvider
+                .select((c) => c.valueOrNull?.hasUnpublishedChanges ?? false),
+          )
+        : ref.watch(
+            repCatalogDocumentProvider(catalogId)
+                .select((c) => c.valueOrNull?.hasUnpublishedChanges ?? false),
+          );
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -708,8 +759,9 @@ class _SaveError extends StatelessWidget {
 // ── Branding ────────────────────────────────────────────────────────────────
 
 class _BrandingPanel extends StatelessWidget {
-  const _BrandingPanel({required this.profile});
+  const _BrandingPanel({required this.scope, required this.profile});
 
+  final CatalogScope scope;
   final BusinessProfile profile;
 
   @override
@@ -719,6 +771,7 @@ class _BrandingPanel extends StatelessWidget {
           _SectionLabel(label: 'Branding'),
           const SizedBox(height: AppSpacing.lg),
           _BrandingSlotField(
+            scope: scope,
             profile: profile,
             slot: BrandingSlot.logo,
             path: 'logoUrl',
@@ -731,6 +784,7 @@ class _BrandingPanel extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xxl),
           _BrandingSlotField(
+            scope: scope,
             profile: profile,
             slot: BrandingSlot.cover,
             path: 'coverImageUrl',
@@ -746,6 +800,7 @@ class _BrandingPanel extends StatelessWidget {
 /// One branding slot: preview, pick, progress, and a commit-only retry.
 class _BrandingSlotField extends ConsumerWidget {
   const _BrandingSlotField({
+    required this.scope,
     required this.profile,
     required this.slot,
     required this.path,
@@ -755,6 +810,7 @@ class _BrandingSlotField extends ConsumerWidget {
     required this.aspectRatio,
   });
 
+  final CatalogScope scope;
   final BusinessProfile profile;
   final BrandingSlot slot;
   final String path;
@@ -769,7 +825,7 @@ class _BrandingSlotField extends ConsumerWidget {
   /// and this reuses it rather than adding a second.
   Future<void> _pick(BuildContext context, WidgetRef ref) async {
     final messenger = CatalogFeedback.of(context);
-    final notifier = ref.read(businessProfileProvider.notifier);
+    final notifier = ref.read(businessProfileFor(scope).notifier);
 
     final PickedProductImage? picked;
     try {
@@ -791,7 +847,7 @@ class _BrandingSlotField extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final notifier = ref.read(businessProfileProvider.notifier);
+    final notifier = ref.read(businessProfileFor(scope).notifier);
 
     return ValueListenableBuilder<BrandingUpload>(
       valueListenable: notifier.uploadOf(slot),

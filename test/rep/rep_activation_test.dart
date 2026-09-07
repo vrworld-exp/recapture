@@ -37,8 +37,10 @@ import 'package:recapture/domain/entities/rep_activation.dart';
 import 'package:recapture/domain/rep/qr_code_input.dart';
 import 'package:recapture/presentation/screens/rep/rep_activation_screen.dart';
 
+import 'rep_repo_catalog_defaults.dart';
+
 /// Records what it was asked to do and answers with whatever the test scripted.
-class _FakeRepRepository implements RepRepository {
+class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
   _FakeRepRepository({this.preflightResult, this.activateThrows});
 
   QrCodePreflight? preflightResult;
@@ -88,6 +90,7 @@ class _FakeRepRepository implements RepRepository {
     String catalogId,
     Uint8List bytes, {
     required String contentType,
+    String? productId,
   }) async =>
       throw UnimplementedError();
 

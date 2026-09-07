@@ -39,11 +39,13 @@ import 'package:recapture/domain/entities/qr_code_preflight.dart';
 import 'package:recapture/domain/entities/rep_activation.dart';
 import 'package:recapture/presentation/screens/rep/rep_add_dish_screen.dart';
 
+import 'rep_repo_catalog_defaults.dart';
+
 /// One recorded create, so a test can assert WHAT was authored, not just that
 /// something was.
 typedef _CreatedDish = ({ProductType type, String name, String? modelId, String? imageKey});
 
-class _FakeRepRepository implements RepRepository {
+class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
   final List<_CreatedDish> created = [];
   final List<Uint8List> uploaded = [];
 
@@ -75,6 +77,7 @@ class _FakeRepRepository implements RepRepository {
     String catalogId,
     Uint8List bytes, {
     required String contentType,
+    String? productId,
   }) async {
     uploaded.add(bytes);
     return 'catalogs/cat-1/products/uploaded.jpg';

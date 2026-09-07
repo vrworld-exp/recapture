@@ -42,6 +42,8 @@ import 'package:recapture/domain/entities/user_role.dart';
 import 'package:recapture/presentation/screens/rep/rep_activation_screen.dart';
 import 'package:recapture/presentation/screens/rep/rep_standees_screen.dart';
 
+import 'rep_repo_catalog_defaults.dart';
+
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
 StandeeAssignee _person(String id, {String? name, String? masked}) =>
@@ -129,7 +131,7 @@ class _FakeAdminRepo implements AdminStandeeRepository {
       throw UnimplementedError();
 }
 
-class _FakeRepRepo implements RepRepository {
+class _FakeRepRepo with RepRepoCatalogDefaults implements RepRepository {
   _FakeRepRepo({this.assignedStandees = const []});
 
   List<RepStandee> assignedStandees;
@@ -205,6 +207,7 @@ class _FakeRepRepo implements RepRepository {
     String catalogId,
     Uint8List bytes, {
     required String contentType,
+    String? productId,
   }) async =>
       throw UnimplementedError();
 
