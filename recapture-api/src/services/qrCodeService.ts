@@ -6,6 +6,7 @@ import { Types } from 'mongoose';
 import { env } from '@/config/env';
 import { QrBatch } from '@/models/QrBatch';
 import { QrCode, type IQrCode } from '@/models/QrCode';
+import type { QrCodeState } from '@/models/types/qr.types';
 import { generateQrCode, normalizeQrCode } from '@/utils/qrCodes';
 
 /**
@@ -147,8 +148,10 @@ export function slugifyBatchLabel(label: string): string {
  * byte-identical or a printed code resolves to nothing.
  */
 export async function exportBatchCsv(batchId: Types.ObjectId): Promise<string | null> {
-  const base = env.PUBLIC_RESOLVER_BASE_URL;
-  if (!base) throw new QrResolverNotConfiguredError();
+  // Fail BEFORE the reads. An unconfigured origin is a deployment fault, not a
+  // per-row one, and letting resolverUrlFor raise it would spend two round trips
+  // first and then throw once per code.
+  assertResolverConfigured();
 
   const batch = await QrBatch.findById(batchId).exec();
   if (!batch) return null;
@@ -160,7 +163,7 @@ export async function exportBatchCsv(batchId: Types.ObjectId): Promise<string | 
     .lean()
     .exec();
 
-  return codes.map((c) => `${c.code},${base}/r/${c.code}`).join('\n');
+  return codes.map((c) => `${c.code},${resolverUrlFor(c.code)}`).join('\n');
 }
 
 /**
@@ -172,4 +175,147 @@ export async function findByCode(code: string): Promise<IQrCode | null> {
   const normalized = normalizeQrCode(code);
   if (!normalized) return null;
   return QrCode.findOne({ code: normalized, deletedAt: null }).exec();
+}
+
+/**
+ * Throws unless this deployment has an origin for printed codes to resolve at.
+ *
+ * Separated from [resolverUrlFor] so a caller about to compose MANY URLs can
+ * fail once, up front, instead of on the first row of a loop.
+ */
+export function assertResolverConfigured(): void {
+  if (!env.PUBLIC_RESOLVER_BASE_URL) throw new QrResolverNotConfiguredError();
+}
+
+/**
+ * THE one place a resolver URL is composed.
+ *
+ * Three strings must agree byte for byte or a printed standee resolves to
+ * nothing: the CSV the print vendor consumes, the QR image an admin renders to
+ * hand a rep for a pilot visit, and the value stage 4 freezes into
+ * `catalog.publicUrl` at activation. While only the CSV existed they agreed by
+ * coincidence. A second renderer reading the same codes is exactly the moment
+ * that stops being good enough, so the composition lives here and they agree by
+ * construction instead.
+ *
+ * THROWS when PUBLIC_RESOLVER_BASE_URL is unset rather than guessing a host —
+ * see [exportBatchCsv] for why a guessed origin is worse than no output at all.
+ */
+export function resolverUrlFor(code: string): string {
+  const base = env.PUBLIC_RESOLVER_BASE_URL;
+  if (!base) throw new QrResolverNotConfiguredError();
+  return `${base}/r/${code}`;
+}
+
+/** One batch as the admin inventory screen reads it. */
+export interface QrBatchSummary {
+  id: string;
+  label: string;
+  /** Codes REQUESTED at mint. Doubles as the export CSV's expected row count. */
+  count: number;
+  createdAt: Date;
+  unassigned: number;
+  active: number;
+  retired: number;
+}
+
+/**
+ * Recent mints first, each with a live breakdown of what is still in the box.
+ *
+ * ONE aggregate for every batch's counts, not a countDocuments per batch per
+ * state — that would be 3N round trips for a screen whose entire job is to
+ * answer "have we got standees left". The `$group` is unbounded in principle and
+ * bounded in practice by the same fact that made this screen skippable for so
+ * long: batches are a handful a year.
+ *
+ * `count` and the state totals are reported SEPARATELY and never reconciled
+ * here. mintBatch already guarantees they agree — it rolls a short mint back
+ * rather than leaving one behind — so if they ever disagree on screen, that
+ * disagreement IS the finding, and papering over it would destroy the only
+ * signal anyone would get.
+ */
+export async function listBatches(): Promise<QrBatchSummary[]> {
+  const batches = await QrBatch.find({}).sort({ createdAt: -1 }).lean().exec();
+  if (batches.length === 0) return [];
+
+  const rows = await QrCode.aggregate<{
+    _id: { batchId: Types.ObjectId; state: QrCodeState };
+    n: number;
+  }>([
+    { $match: { deletedAt: null } },
+    { $group: { _id: { batchId: '$batchId', state: '$state' }, n: { $sum: 1 } } },
+  ]).exec();
+
+  const tally = new Map<string, { unassigned: number; active: number; retired: number }>();
+  for (const row of rows) {
+    const key = String(row._id.batchId);
+    const bucket = tally.get(key) ?? { unassigned: 0, active: 0, retired: 0 };
+    if (row._id.state === 'UNASSIGNED') bucket.unassigned = row.n;
+    else if (row._id.state === 'ACTIVE') bucket.active = row.n;
+    else if (row._id.state === 'RETIRED') bucket.retired = row.n;
+    tally.set(key, bucket);
+  }
+
+  return batches.map((b) => {
+    const counts = tally.get(String(b._id)) ?? { unassigned: 0, active: 0, retired: 0 };
+    return {
+      id: String(b._id),
+      label: b.label,
+      count: b.count,
+      createdAt: b.createdAt,
+      ...counts,
+    };
+  });
+}
+
+/** One standee as the batch detail screen reads it. */
+export interface QrCodeRow {
+  code: string;
+  state: QrCodeState;
+  /** Exactly what the standee encodes — the same composer the CSV uses. */
+  url: string;
+  activatedAt: Date | null;
+}
+
+/**
+ * One page of a batch's codes, sorted by code — the SAME order [exportBatchCsv]
+ * emits, so a row on screen and a line in the print file are the same row.
+ *
+ * KEYSET, not skip/limit: `after` is the last code of the previous page and the
+ * sort key is unique, so a page cannot repeat or drop a row when a code changes
+ * state mid-scroll. A batch runs to QR_BATCH_MAX_SIZE (2,000 by default, 10,000
+ * ceiling) — too many for one response, and far too many for the screen to hold.
+ *
+ * Returns null when the batch does not exist, mirroring [exportBatchCsv], so the
+ * route maps one nullable result onto its 404 rather than growing a second
+ * not-found shape.
+ */
+export async function listBatchCodes(
+  batchId: Types.ObjectId,
+  opts: { limit: number; after?: string }
+): Promise<QrCodeRow[] | null> {
+  assertResolverConfigured();
+
+  const batch = await QrBatch.findById(batchId).select('_id').lean().exec();
+  if (!batch) return null;
+
+  const codes = await QrCode.find(
+    {
+      batchId,
+      deletedAt: null,
+      ...(opts.after ? { code: { $gt: opts.after } } : {}),
+    },
+    { code: 1, state: 1, activatedAt: 1 }
+  )
+    .sort({ code: 1 })
+    .limit(opts.limit)
+    .lean()
+    .exec();
+
+  return codes.map((c) => ({
+    code: c.code,
+    state: c.state,
+    url: resolverUrlFor(c.code),
+    activatedAt: c.activatedAt ?? null,
+  }));
 }

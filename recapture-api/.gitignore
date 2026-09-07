@@ -5,6 +5,9 @@ node_modules/
 dist/
 
 AWS.txt
+# A raw JWT lived here and was git-tracked. Untracked now, but the token is
+# still in history — treat it as compromised and re-issue rather than reusing.
+tok.txt
 # Environment — never commit real credentials
 .env
 .env.local

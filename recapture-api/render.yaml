@@ -22,6 +22,16 @@ services:
         sync: false
       - key: JWT_EXPIRES_IN
         value: 7d
+      # OTP mail (Gmail SMTP). Declared here so the deployment DECLARES what it
+      # needs; the values are set in the Render dashboard and never enter the
+      # repo. These replace literal fallbacks that used to sit in
+      # src/utils/nodeMailerTransport.ts — see that file's header. Without both
+      # set, sendEmail throws and OTP mail does not go out, which is the
+      # intended loud failure rather than a silent one.
+      - key: USER_EMAIL_FOR_NODMAILER
+        sync: false
+      - key: USER_PASS_FOR_NODMAILER
+        sync: false
       # Buckets live in us-east-1 (verified via scripts/aws-smoke-test.ts);
       # ap-south-1 here makes every presigned URL fail with a region error.
       - key: AWS_REGION

@@ -16,12 +16,26 @@ import type { DispatchResult } from './sms';
 
 
 // // // Here we can use nodemailer to send email using gmail service.
-import transport, { USER_EMAIL_FOR_NODMAILER } from '@/utils/nodeMailerTransport';
+import transport, {
+  USER_EMAIL_FOR_NODMAILER,
+  isEmailConfigured,
+} from '@/utils/nodeMailerTransport';
 // const USER_EMAIL_FOR_NODMAILER = process.env.USER_EMAIL_FOR_NODMAILER || "mayasabhaxr@gmail.com";
 
 export async function sendEmail(email: string, code: string): Promise<DispatchResult> {
   if (env.OTP_SIMULATE_DISPATCH_FAILURE) {
     throw new Error('Simulated email dispatch failure');
+  }
+
+  // THROWS rather than no-ops. `transport?.sendMail` would swallow a missing
+  // configuration into a resolved promise and a stub message id, and the caller
+  // would report an OTP as sent that nobody can receive — the failure mode where
+  // a user sits waiting for mail and nothing anywhere says why. The OTP service
+  // already treats a throw here as a dispatch failure and rolls back.
+  if (!isEmailConfigured || !transport) {
+    throw new Error(
+      'Email is not configured: set USER_EMAIL_FOR_NODMAILER and USER_PASS_FOR_NODMAILER'
+    );
   }
   // TODO(provider): await emailClient.send({ to: email, subject, body w/ `code` });
   // void email;
@@ -55,10 +69,10 @@ export async function sendEmail(email: string, code: string): Promise<DispatchRe
 
   // const info = await transport?.sendMail(mailOptions  );
 
-  const info = await transport?.sendMail(mailOptions  )
+  const info = await transport.sendMail(mailOptions)
   
 
-  console.log('Email sent: ' + info?.response);
+  console.log('Email sent: ' + info.response);
 
   // res.send({ message: 'OTP sent successfully' });
   // return { result: true, message: "OTP sent successfully" }

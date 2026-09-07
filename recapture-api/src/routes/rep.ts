@@ -54,6 +54,7 @@ import {
   PRODUCT_IMAGE_CONTENT_TYPES,
   sniffProductImageContentType,
 } from '@/utils/productImageKeys';
+import { requestPublish } from '@/services/catalogPublishService';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 
@@ -533,6 +534,124 @@ router.post(
 
     const result = await retireCode(qrCode);
     res.status(200).json({ status: 'success', outcome: result.outcome, code: qrCode.code });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/publish — put the menu online before leaving the table.
+ *
+ * THE GAP THIS CLOSES. Until now a menu went live exactly two ways: a 3D dish
+ * finishing generation (`promoteModelToProducts` → `tryPublish`), or the OWNER
+ * signing in and tapping Publish. A restaurant the rep filled with photo-only
+ * dishes has no model to finish, so nothing ever published, and the standee on
+ * the table stayed dead until the owner got around to it. The field guide
+ * covered that with a warning in capitals — which is a documentation patch over
+ * a product hole, and it contradicts the one thing this feature promises: leave
+ * a WORKING standee behind.
+ *
+ * DELEGATES, never reimplements. `requestPublish` is keyed by the catalog OWNER,
+ * exactly as `tryPublish` calls it from the promotion path, so a rep-initiated
+ * publish and an owner-initiated one are the same run through the same gates,
+ * the same lock and the same provisioning. This route only decides whether the
+ * rep is allowed to ask.
+ *
+ * The rate window is keyed on the CATALOG, not the rep: the thing being
+ * protected is one restaurant's Mirage writes, and a rep legitimately works
+ * several restaurants in a day.
+ */
+router.post(
+  '/catalogs/:id/publish',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const catalogId = String(catalog._id);
+    const ownerUserId = String(catalog.userId);
+
+    const rate = await consumeRateWindow(
+      `rep-publish:${catalogId}`,
+      env.PUBLISH_MAX_PER_WINDOW,
+      env.PUBLISH_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      return fail(res, 429, 'RATE_LIMITED', 'Too many requests. Please try again shortly.');
+    }
+
+    const result = await requestPublish(ownerUserId);
+
+    // ANSWERED BEFORE THE EVENT, mirroring respondToPublishRequest. The
+    // analytics `outcome` union deliberately excludes NOT_FOUND — a publish for
+    // a catalog that vanished mid-request is not a publish attempt to count —
+    // and the compiler enforces that ordering here.
+    if (result.outcome === 'NOT_FOUND') {
+      // It resolved a moment ago, so this is a delete mid-request. Answered with
+      // the delegation 404 so every not-found on this router reads identically.
+      return notDelegated(res);
+    }
+
+    // The OWNER's hash, not the rep's. The event answers "how often is a publish
+    // attempted for this catalog, and what stops it" — a question about the
+    // restaurant, not about who pressed the button. Who acted is already durable
+    // in the CatalogDelegation row, which is where an audit belongs.
+    const gates = result.outcome === 'BLOCKED' ? result.gates : [];
+    track(AnalyticsEvent.CATALOG_PUBLISH_REQUESTED, {
+      user_id_hash: hashIdentifier(ownerUserId),
+      catalog_id: catalogId,
+      mode: 'FULL',
+      outcome: result.outcome,
+      gate_count: gates.length,
+      ...(gates.length > 0 ? { blocked_by: [...new Set(gates.map((gate) => gate.code))] } : {}),
+    });
+
+    switch (result.outcome) {
+      case 'IN_PROGRESS':
+        res.status(409).json({
+          status: 'error',
+          code: 'PUBLISH_IN_PROGRESS',
+          message: 'A publish is already running for this catalog.',
+          runId: result.runId,
+        });
+        return;
+
+      case 'BLOCKED':
+        // EVERY failing gate, byte-identical to what `POST /catalog/publish`
+        // returns — the rep and the owner must be told the same thing about the
+        // same catalog. `rep-publish.test.ts` asserts that equality rather than
+        // trusting this comment.
+        res.status(422).json({
+          status: 'error',
+          code: 'PUBLISH_BLOCKED',
+          message: 'This catalog is not ready to publish yet.',
+          gates: result.gates,
+        });
+        return;
+
+      case 'NAME_TAKEN':
+        res.status(409).json({
+          status: 'error',
+          code: result.code,
+          message: 'That catalog name is already in use. Try the suggested one.',
+          fields: { name: result.suggestedName },
+        });
+        return;
+
+      case 'NOTHING_TO_RETRY':
+        // Unreachable for mode FULL — requestPublish only returns it from
+        // requestRetry — but the switch stays exhaustive so adding an outcome is
+        // a compile error here rather than a silent fallthrough to no response.
+        res.status(200).json({ status: 'success', runId: null, queued: false });
+        return;
+
+      case 'QUEUED':
+        res.status(202).json({
+          status: 'success',
+          runId: result.run.runId,
+          queued: true,
+          ...(result.mapping ? { publicUrl: result.mapping.publicUrl } : {}),
+        });
+        return;
+    }
   })
 );
 
