@@ -421,3 +421,107 @@ describe('assignment is ADVISORY, not a reservation', () => {
     expect(res.body.outcome).toBe('ACTIVATED');
   });
 });
+
+describe('a used standee leaves the folder', () => {
+  it('drops off the rep list the moment it is activated', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const [free, used] = await mintCodes(2);
+    for (const code of [free, used]) {
+      await request(app)
+        .post(`/admin/qr-codes/${code}/assignment`)
+        .set(admin.auth)
+        .send({ repUserId: rep.id });
+    }
+
+    const before = await request(app).get('/rep/standees').set(rep.auth);
+    expect((before.body.standees as unknown[]).length).toBe(2);
+
+    // Driven through the REAL activation endpoint rather than by setting the
+    // state by hand: the thing under test is that using a standee removes it,
+    // and a test that wrote 'ACTIVE' itself would keep passing if activation
+    // ever stopped setting it.
+    const activated = await request(app)
+      .post('/rep/activations')
+      .set(rep.auth)
+      .send({
+        code: used,
+        restaurantName: 'Blue Cafe',
+        restaurantPhone: '+919876500900',
+      });
+    expect(activated.status).toBe(201);
+
+    const after = await request(app).get('/rep/standees').set(rep.auth);
+    const codes = (after.body.standees as { code: string }[]).map((s) => s.code);
+    expect(codes).toEqual([free]);
+  });
+
+  it('leaves the assignment row intact, so the admin still sees where it went',
+    async () => {
+      const admin = await makeUser('ADMIN');
+      const rep = await makeUser('SALES_REP');
+      const [code] = await mintCodes(1);
+      await request(app)
+        .post(`/admin/qr-codes/${code}/assignment`)
+        .set(admin.auth)
+        .send({ repUserId: rep.id });
+
+      await request(app)
+        .post('/rep/activations')
+        .set(rep.auth)
+        .send({
+          code,
+          restaurantName: 'Red Kitchen',
+          restaurantPhone: '+919876500901',
+        });
+
+      // HIDDEN FROM THE REP, NOT UNASSIGNED. "Where did this run go" is a
+      // question the admin batch view answers off this field; clearing it on
+      // activation would make a used code read as though nobody ever held it.
+      const row = await QrCode.findOne({ code }).lean().exec();
+      expect(String(row!.assignedToUserId)).toBe(rep.id);
+      expect(row!.state).toBe('ACTIVE');
+    });
+
+  it('keeps a RETIRED standee on the list — the rep still holds the paper', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    await request(app)
+      .post(`/admin/qr-codes/${code}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: rep.id });
+    await QrCode.updateOne({ code }, { $set: { state: 'RETIRED' } }).exec();
+
+    const res = await request(app).get('/rep/standees').set(rep.auth);
+
+    // Deliberately NOT filtered with ACTIVE. A retired sheet is still in the
+    // folder, and the row labelled "Retired" is the only thing telling the rep
+    // to bin it — hiding it leaves them carrying dead paper to a table.
+    expect((res.body.standees as { code: string }[]).map((s) => s.code)).toEqual([code]);
+  });
+
+  it('an emptied folder reads as empty, not as a list of used codes', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    await request(app)
+      .post(`/admin/qr-codes/${code}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: rep.id });
+    await request(app)
+      .post('/rep/activations')
+      .set(rep.auth)
+      .send({
+        code,
+        restaurantName: 'Green Grill',
+        restaurantPhone: '+919876500902',
+      });
+
+    const res = await request(app).get('/rep/standees').set(rep.auth);
+
+    // The empty state is the honest answer here: a rep who has used everything
+    // needs more stock, and a folder of spent codes hid that.
+    expect(res.body.standees).toEqual([]);
+  });
+});

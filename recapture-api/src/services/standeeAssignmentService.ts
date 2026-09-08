@@ -279,11 +279,16 @@ export interface RepStandeeRow {
  * Ordering key for a rep's list: usable stock first.
  *
  * A rep opens the list to answer one question — "which of these can I put on a
- * table right now" — so UNASSIGNED (free) sorts ahead of ACTIVE (already live
- * somewhere), and RETIRED sinks. An unrecognised state sorts last rather than
- * first, the same fail-closed instinct the client's `QrCodeState.unknown`
- * follows: a state this build does not understand must never be presented as
- * the readiest thing in the folder.
+ * table right now" — so UNASSIGNED (free) sorts ahead of everything and
+ * RETIRED sinks. An unrecognised state sorts last rather than first, the same
+ * fail-closed instinct the client's `QrCodeState.unknown` follows: a state
+ * this build does not understand must never be presented as the readiest
+ * thing in the folder.
+ *
+ * ACTIVE keeps its rank even though `listRepStandees` now filters it out. The
+ * map is typed exhaustively over QrCodeState, and a rank that exists for a row
+ * that cannot arrive costs nothing — while removing it would make this a
+ * partial map that silently sorts a future caller's ACTIVE rows to the top.
  */
 const REP_STANDEE_RANK: Record<QrCodeState, number> = {
   UNASSIGNED: 0,
@@ -293,6 +298,22 @@ const REP_STANDEE_RANK: Record<QrCodeState, number> = {
 
 /**
  * The stock one rep is carrying, unusable codes last.
+ *
+ * ACTIVATED CODES ARE EXCLUDED. Once a standee is on a restaurant table it is
+ * not stock any more — it is a restaurant, and the rep already has that on
+ * `/rep/catalogs`. Leaving it here made the folder grow forever and pushed the
+ * codes a rep can actually use further down it every time they signed someone
+ * up, which is precisely backwards: the list exists to answer "what can I put
+ * on a table right now".
+ *
+ * THE ASSIGNMENT ROW IS NOT CLEARED, only hidden from this list. Who was
+ * carrying a standee when it went live is what the admin batch view reads to
+ * answer "where did this run go", and unsetting it on activation would make a
+ * used code read as though it had never been handed to anyone.
+ *
+ * RETIRED CODES STAY. A retired sheet is still physically in the folder, and
+ * the row labelled "Retired" is the only thing that tells the rep to bin it —
+ * hiding it would leave them carrying dead paper and finding out at a table.
  *
  * Unpaged: a rep carries a folder of standees, not a batch of two thousand. If
  * that stops being true the fix is the keyset scheme `listBatchCodes` already
@@ -306,7 +327,14 @@ const REP_STANDEE_RANK: Record<QrCodeState, number> = {
  */
 export async function listRepStandees(repUserId: Types.ObjectId): Promise<RepStandeeRow[]> {
   const codes = await QrCode.find(
-    { assignedToUserId: repUserId, deletedAt: null },
+    {
+      assignedToUserId: repUserId,
+      deletedAt: null,
+      // Filtered in the QUERY, not after the fact: this is the difference
+      // between a rep with a long history fetching their whole career and
+      // fetching their folder.
+      state: { $ne: 'ACTIVE' },
+    },
     { code: 1, state: 1, assignedAt: 1 }
   )
     .sort({ code: 1 })
