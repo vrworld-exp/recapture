@@ -28,7 +28,11 @@ import { requireRole } from '@/middleware/requireRole';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { QrCode } from '@/models/QrCode';
-import { qrCodeParam, standeeQrQuerySchema } from '@/validation/qrSchemas';
+import {
+  qrCodeParam,
+  repPublishedQuerySchema,
+  standeeQrQuerySchema,
+} from '@/validation/qrSchemas';
 import {
   brandingBytesQuerySchema,
   brandingCommitSchema,
@@ -50,7 +54,11 @@ import {
   listDelegatedCatalogs,
   resolveDelegatedCatalog,
 } from '@/services/catalogDelegationService';
-import { findRepStandee, listRepStandees } from '@/services/standeeAssignmentService';
+import {
+  findRepStandee,
+  listRepStandees,
+  listRepPublishedStandees,
+} from '@/services/standeeAssignmentService';
 import { renderStandeeSheet } from '@/services/standeeSheetService';
 import { QrResolverNotConfiguredError } from '@/services/qrCodeService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
@@ -1224,4 +1232,59 @@ router.get(
   })
 );
 
+/**
+ * GET /rep/published?days= — the standees this rep has put live.
+ *
+ * A HISTORY, not a work queue. `/rep/standees` is stock a rep can still use
+ * and `/rep/catalogs` is restaurants they can still act on; this is the one
+ * surface that only ever grows, and it is keyed on who ACTIVATED each code so
+ * that losing access to a restaurant does not erase having signed it up.
+ *
+ * `total` ignores the window on purpose. "How many have I put live" is the
+ * question this screen exists to answer, and an answer that changed when
+ * somebody tapped "last 7 days" would be answering a different one.
+ *
+ * Scoped to the CALLER: the rep id comes from the token, never from a query
+ * parameter, so no shape of this request reads another rep history.
+ */
+router.get(
+  '/published',
+  asyncHandler(async (req, res) => {
+    const parsed = repPublishedQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const { days } = parsed.data;
+    // Resolved to an absolute instant HERE, so the service takes a date and is
+    // trivially testable against a fixed clock rather than against "now".
+    const since =
+      days === undefined
+        ? undefined
+        : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    let result;
+    try {
+      result = await listRepPublishedStandees(repUserId, since ? { since } : {});
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        return fail(
+          res,
+          409,
+          'RESOLVER_NOT_CONFIGURED',
+          'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment.'
+        );
+      }
+      throw err;
+    }
+
+    res.status(200).json({ status: 'success', ...result });
+  })
+);
 export default router;

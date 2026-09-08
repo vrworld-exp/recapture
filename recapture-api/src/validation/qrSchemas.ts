@@ -131,3 +131,27 @@ export const assignStandeeSchema = z
   .strict();
 
 export type AssignStandeeInput = z.infer<typeof assignStandeeSchema>;
+
+/**
+ * GET /rep/published query.
+ *
+ * `days` is a WINDOW, not a page. The list is a rep looking back over their
+ * own work — "this week", "this month" — and those are the only shapes anyone
+ * asks for. Absent means everything, which is the screen default.
+ *
+ * Bounded at a year because the window is a convenience, not an archive: a
+ * value beyond it means the caller wanted everything and should say so by
+ * omitting the parameter, which costs one query instead of two.
+ */
+export const repPublishedQuerySchema = z
+  .object({
+    days: z.coerce
+      .number()
+      .int('days must be a whole number')
+      .positive('days must be at least 1')
+      .max(365)
+      .optional(),
+  })
+  .strict();
+
+export type RepPublishedQuery = z.infer<typeof repPublishedQuerySchema>;

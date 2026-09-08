@@ -687,6 +687,50 @@ class _IdentityBlock extends ConsumerWidget {
           ),
         ],
 
+        // -- Published standees -------------------------------------------------
+        // What this rep has actually put online — a history, and the only rep
+        // list that only ever grows. Above My standees because it is the one a
+        // rep opens out of interest rather than mid-visit; stock is the working
+        // surface and sits nearer the activation flow.
+        //
+        // Same hasRoleBadge as every other /rep door, so they cannot drift.
+        if (hasRoleBadge) ...[
+          const SizedBox(height: AppSpacing.md),
+          AppCard(
+            key: const ValueKey('profile_published_standees'),
+            onTap: () => context.push(AppRoutes.repPublished),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.storefront_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Published standees',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.textPrimary),
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Menus you have put live',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: AppColors.textMuted),
+              ],
+            ),
+          ),
+        ],
+
         // -- My standees -------------------------------------------------------
         // The rep's own stock, and the reason the assignment feature is worth
         // anything from this side: before it, a rep learned their codes by

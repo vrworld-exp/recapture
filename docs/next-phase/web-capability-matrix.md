@@ -51,7 +51,7 @@ Two properties fall out of that, and both matter more than the tidiness:
 | 8 | **AR CTA when AR unavailable** | shown + explained | **hidden** on desktop browser | `showArCtaWhenUnavailable: false` | `preview_product_card.dart` |
 | 9 | **QR download / save** | share sheet → Files | `<a download>` of a Blob | Conditional import, one repo method | `catalog_qr_service.dart` |
 | 10 | **Share public link** | ✅ share sheet | ⛔ **button hidden** | `kCanShareLink` | `catalog_link_delivery_{io,web}.dart` |
-| 11 | **Open public link in new tab** | ⛔ **button hidden** | ✅ `window.open` | `kCanOpenLink`. See note B. | `catalog_link_delivery_{io,web}.dart` |
+| 11 | **Open public link in new tab** | ✅ `url_launcher` | ✅ `window.open` | `kCanOpenLink`. Note B SUPERSEDED. | `catalog_link_delivery_{io,web}.dart` |
 | 12 | **Copy public link** | ✅ | ✅ | Flutter `Clipboard` handles the secure-context fallback in-engine | `catalog_link_service.dart` |
 | 13 | **Auth token storage** | Keychain / Keystore | **browser storage, not a keychain** | See note E. | `auth_storage.dart` |
 | 14 | **Deep link to `/catalog/...` + refresh** | n/a | ✅ **works — hash strategy** | note F, CORRECTED | `app_router.dart` |
@@ -72,6 +72,8 @@ Two properties fall out of that, and both matter more than the tidiness:
 | 25 | **Admin standee inventory + mint** | ✅ | ✅ | ADMIN-gated in the router; no platform code | `admin_standees_screen.dart` |
 | 26 | **Printable standee per code** | ✅ share sheet | ✅ `<a download>` blob | Row 22's seam again; PDF from `GET /admin/qr-codes/:code/qr` | `admin_batch_codes_notifier.dart` |
 | 27 | **Rep publishes the menu** | ✅ | ✅ | Pure widgets + Dio; no platform seam involved at all | `rep_publish_notifier.dart` |
+| 28 | **Rep published-standees list** | ✅ | ✅ | Count, window filters, per-row sheet download | `rep_published_notifier.dart` |
+| 29 | **Open a published menu** | ✅ `url_launcher` | ✅ `window.open` | Row 11's seam, now true on both — see note B | `catalog_link_delivery_{io,web}.dart` |
 | 24 | **Deep link into `/rep/activate?code=`** | ⚠️ custom scheme only | ✅ | Option A — see note J | `app_router.dart` |
 
 Legend: ✅ works · ⛔ deliberately absent, affordance **hidden** not disabled · ⚠️ needs
@@ -96,16 +98,27 @@ surface and is gated there; the catalog consumes its output. **Nothing to gate h
 the requirement is met by the shape of the feature, and this note exists so the next person
 does not go looking for a missing `kIsWeb`.
 
-### B. "Open link" is hidden on mobile, and that is the same rule working in reverse
+### B. "Open link" was hidden on mobile — SUPERSEDED
 
-The interesting half of row 11 is the *mobile* column. Opening an external browser needs
-`url_launcher`, a new package, which the brief forbids without justification — and the
-share sheet already reaches every app that can open a URL. So the button is **hidden on
-mobile**, not on web.
+**The original decision, kept because its reasoning was sound for what it covered:** opening
+an external browser needs `url_launcher`, a new package the brief forbids without
+justification, and the share sheet already reaches every app that can open a URL. So the
+button was hidden on mobile rather than shown doing nothing.
 
-This is why the flags are `canShare` / `canOpen` rather than `isWeb`: the capability matrix
-is not "mobile has more", it is genuinely mixed. A `kIsWeb` branch would have encoded the
-wrong idea and would have to be rewritten the day a desktop target lands.
+**What changed.** That argument was about the OWNER sending their menu to somebody else,
+where "share it" is a complete answer. It stopped holding when the rep's published-standees
+list arrived (row 27): the entire point of tapping a row there is to LOOK AT the menu you
+just put live, and "share it to another app and open it from there" is a workaround, not a
+preview. `url_launcher` is now a dependency and the justification is this paragraph.
+
+`kCanOpenLink` is therefore **true on both targets**, and the owner publish screen gains the
+button as a side effect — an owner opening their own live menu on their phone is something
+that was only ever missing because of the dependency rule, not because anybody wanted it
+hidden.
+
+The flags stay `canShare` / `canOpen` rather than `isWeb`, and that is now load-bearing in
+the other direction: `canShare` is still false on web, so the matrix is still genuinely
+mixed and a `kIsWeb` branch would still have encoded the wrong idea.
 
 ### C. The meshopt decoder has two trigger sites and both must be set
 

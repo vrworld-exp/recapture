@@ -19,6 +19,7 @@ import 'package:recapture/data/repositories/catalog_repository.dart'
     show BrandingSlot;
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show kCatalogUnchanged;
+import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
@@ -27,6 +28,12 @@ import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
 
 mixin RepRepoCatalogDefaults implements RepRepository {
+  /// The published history is empty unless a test says otherwise — most of
+  /// these suites are about a single visit, not a career.
+  @override
+  Future<RepPublishedPage> publishedStandees({int? days}) async =>
+      const RepPublishedPage(standees: [], total: 0);
+
   @override
   Future<Catalog> catalog(String catalogId) =>
       throw UnimplementedError('rep catalog read is not exercised by this test');

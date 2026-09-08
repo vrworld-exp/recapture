@@ -231,7 +231,13 @@ void main() {
           ),
         );
 
-    testWidgets('a mobile build offers Share and hides Open', (tester) async {
+    testWidgets('a build that cannot open hides Open, it does not grey it',
+        (tester) async {
+      // NO LONGER THE MOBILE CONFIGURATION. `kCanOpenLink` is true on both real
+      // targets since url_launcher landed (matrix note B), so this drives the
+      // capability directly rather than claiming to describe a platform. The
+      // widget contract is what is under test and it has not changed — the stub
+      // target still answers false, and a future platform may too.
       await tester.pumpWidget(
         harness(FakeLinkActions(canShare: true, canOpen: false)),
       );

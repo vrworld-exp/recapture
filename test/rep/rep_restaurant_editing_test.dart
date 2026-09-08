@@ -272,6 +272,10 @@ class FakeRepRepository implements RepRepository {
   Future<void> attachCode(String catalogId, String code) async {}
 
   @override
+  Future<RepPublishedPage> publishedStandees({int? days}) async =>
+      const RepPublishedPage(standees: [], total: 0);
+
+  @override
   Future<void> retireCode(String code) async {}
 
   @override

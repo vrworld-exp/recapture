@@ -525,3 +525,214 @@ describe('a used standee leaves the folder', () => {
     expect(res.body.standees).toEqual([]);
   });
 });
+
+describe('GET /rep/published — what this rep has put live', () => {
+  /** Activates `code` for `rep`, and optionally takes the menu live. */
+  async function signUp(
+    rep: { auth: { Authorization: string } },
+    code: string,
+    phone: string,
+    name: string,
+    { publish = true }: { publish?: boolean } = {}
+  ): Promise<string> {
+    const res = await request(app)
+      .post('/rep/activations')
+      .set(rep.auth)
+      // BOTH names, exactly as the rep app sends them. `restaurantName` is
+      // slugged server-side because it doubles as the Mirage key, so
+      // `businessName` is the only field that keeps what the rep typed.
+      .send({
+        code,
+        restaurantName: name,
+        restaurantPhone: phone,
+        businessName: name,
+      });
+    expect(res.status).toBe(201);
+    const catalogId = res.body.catalogId as string;
+    if (publish) {
+      await Catalog.updateOne(
+        { _id: new Types.ObjectId(catalogId) },
+        { $set: { status: 'PUBLISHED' } }
+      ).exec();
+    }
+    return catalogId;
+  }
+
+  it('lists a standee whose menu is live, with the restaurant name', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    await request(app)
+      .post(`/admin/qr-codes/${code}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: rep.id });
+    await signUp(rep, code, '+919876511001', 'Blue Cafe');
+
+    const res = await request(app).get('/rep/published').set(rep.auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.standees).toHaveLength(1);
+    expect(res.body.standees[0].code).toBe(code);
+    // The HUMAN name. `name` is slugified at activation (blue_cafe), so a list
+    // built on it alone would show reps slugs.
+    expect(res.body.standees[0].businessName).toBe('Blue Cafe');
+    // The same string the standee encodes and the same one frozen into
+    // catalog.publicUrl — one URL, so the QR and the menu link cannot drift.
+    expect(res.body.standees[0].url).toBe(`${RESOLVER_BASE}/r/${code}`);
+    expect(res.body.total).toBe(1);
+  });
+
+  it('falls back to the slug for a catalog with no business name', async () => {
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    const catalogId = await signUp(rep, code, '+919876511020', 'Legacy Cafe');
+    // Rows created before the client started sending a business name. The
+    // list must still render them — as the slug, which is ugly and honest —
+    // rather than showing a blank where a restaurant should be.
+    await Catalog.updateOne(
+      { _id: new Types.ObjectId(catalogId) },
+      { $unset: { businessName: '' } }
+    ).exec();
+
+    const res = await request(app).get('/rep/published').set(rep.auth);
+
+    expect(res.body.standees[0].businessName).toBeNull();
+    expect(res.body.standees[0].name).toBe('legacy_cafe');
+  });
+
+  it('EXCLUDES an activated standee whose menu is not live yet', async () => {
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    await signUp(rep, code, '+919876511002', 'Not Live Yet', { publish: false });
+
+    const res = await request(app).get('/rep/published').set(rep.auth);
+
+    // Activation BINDS a standee; publishing puts the menu online, sometimes
+    // much later. Conflating them would put every signed-up restaurant in a
+    // list titled with the word published.
+    expect(res.body.standees).toEqual([]);
+    expect(res.body.total).toBe(0);
+  });
+
+  it('shows only the caller history, never another rep', async () => {
+    const mine = await makeUser('SALES_REP');
+    const theirs = await makeUser('SALES_REP');
+    const [a, b] = await mintCodes(2);
+    await signUp(mine, a, '+919876511003', 'Mine');
+    await signUp(theirs, b, '+919876511004', 'Theirs');
+
+    const res = await request(app).get('/rep/published').set(mine.auth);
+
+    expect(
+      (res.body.standees as { businessName: string }[]).map((s) => s.businessName)
+    ).toEqual(['Mine']);
+  });
+
+  it('survives losing access to the restaurant', async () => {
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    const catalogId = await signUp(rep, code, '+919876511005', 'Revoked Cafe');
+    await CatalogDelegation.updateMany(
+      { catalogId: new Types.ObjectId(catalogId) },
+      { $set: { revokedAt: new Date() } }
+    ).exec();
+
+    const res = await request(app).get('/rep/published').set(rep.auth);
+
+    // KEYED ON WHO ACTIVATED IT, not on delegation. Delegation is revocable
+    // current access; having signed a restaurant up is a fact about the past,
+    // and a history that vanished when access changed would be the wrong list.
+    expect(res.body.standees).toHaveLength(1);
+  });
+
+  it('filters by window, and keeps the all-time total intact', async () => {
+    const rep = await makeUser('SALES_REP');
+    const [recent, old] = await mintCodes(2);
+    await signUp(rep, recent, '+919876511006', 'Recent Cafe');
+    await signUp(rep, old, '+919876511007', 'Old Cafe');
+    // Backdated past any window the screen offers.
+    await QrCode.updateOne(
+      { code: old },
+      { $set: { activatedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) } }
+    ).exec();
+
+    const res = await request(app).get('/rep/published?days=7').set(rep.auth);
+
+    expect(
+      (res.body.standees as { code: string }[]).map((s) => s.code)
+    ).toEqual([recent]);
+    // "How many have I put live" must not change when somebody taps a filter.
+    expect(res.body.total).toBe(2);
+  });
+
+  it('rejects a nonsense window rather than guessing', async () => {
+    const rep = await makeUser('SALES_REP');
+
+    const res = await request(app).get('/rep/published?days=nope').set(rep.auth);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_REQUEST');
+  });
+
+  it('newest first, so the last visit is at the top', async () => {
+    const rep = await makeUser('SALES_REP');
+    const [first, second] = await mintCodes(2);
+    await signUp(rep, first, '+919876511008', 'First');
+    await signUp(rep, second, '+919876511009', 'Second');
+    await QrCode.updateOne(
+      { code: first },
+      { $set: { activatedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) } }
+    ).exec();
+
+    const res = await request(app).get('/rep/published').set(rep.auth);
+
+    expect(
+      (res.body.standees as { businessName: string }[]).map((s) => s.businessName)
+    ).toEqual(['Second', 'First']);
+  });
+
+  it('is closed to a plain USER', async () => {
+    const user = await makeUser('USER');
+    const res = await request(app).get('/rep/published').set(user.auth);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('the rep sheet download follows ownership, not just assignment', () => {
+  it('renders for a code this rep activated but was never assigned', async () => {
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    // A walk-up standee: nobody assigned it, the rep used it anyway.
+    await request(app)
+      .post('/rep/activations')
+      .set(rep.auth)
+      .send({
+        code,
+        restaurantName: 'Walk Up',
+        restaurantPhone: '+919876511030',
+        businessName: 'Walk Up',
+      });
+
+    const res = await request(app).get(`/rep/standees/${code}/qr`).set(rep.auth);
+
+    // The published list offers a download on every row it shows, so the
+    // authorization behind it has to cover every row it can show.
+    expect(res.status).toBe(200);
+  });
+
+  it('still 404s for a rep with no claim on the code at all', async () => {
+    const admin = await makeUser('ADMIN');
+    const mine = await makeUser('SALES_REP');
+    const stranger = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    await request(app)
+      .post(`/admin/qr-codes/${code}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: mine.id });
+
+    const res = await request(app).get(`/rep/standees/${code}/qr`).set(stranger.auth);
+
+    // Widening to "held OR activated" must not have opened a third door.
+    expect(res.status).toBe(404);
+  });
+});

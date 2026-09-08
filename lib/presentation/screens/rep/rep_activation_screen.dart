@@ -156,6 +156,15 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
             code: code,
             restaurantName: name,
             restaurantPhone: _e164,
+            // THE SAME STRING, SENT TWICE, AND BOTH ARE NEEDED.
+            //
+            // `restaurantName` is SLUGGED server-side (catalogNameField): the
+            // catalog name doubles as the Mirage key, so "Blue Cafe" is stored
+            // as `blue_cafe`. That is correct for a key and unreadable as a
+            // label, and without this line nothing anywhere keeps the words the
+            // rep actually typed — every rep-activated restaurant then reads as
+            // a slug on the rep own lists.
+            businessName: name,
           ),
         );
   }

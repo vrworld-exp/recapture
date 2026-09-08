@@ -23,6 +23,7 @@ import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/admin/admin_batch_detail_screen.dart';
 import '../../presentation/screens/admin/admin_standees_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
+import '../../presentation/screens/rep/rep_published_screen.dart';
 import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
 import '../../presentation/screens/rep/rep_dish_editor_screen.dart';
@@ -159,6 +160,9 @@ abstract final class AppRoutes {
   /// added ungated by accident.
   static const repStandees = '/rep/standees';
 
+  /// The restaurants this rep has put live — a history, not a work queue.
+  static const repPublished = '/rep/published';
+
   /// One delegated restaurant's dishes. `:id` = the catalog id.
   static const repCatalogDetail = '/rep/catalogs/:id';
 
@@ -253,6 +257,7 @@ abstract final class AppRouteNames {
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repStandees = 'repStandees';
+  static const repPublished = 'repPublished';
   static const repCatalogDetail = 'repCatalogDetail';
   static const repAddDish = 'repAddDish';
   static const repDishDetail = 'repDishDetail';
@@ -542,6 +547,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (_, state) => RepActivationScreen(
           initialCode: state.uri.queryParameters['code'],
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.repPublished,
+        name: AppRouteNames.repPublished,
+        builder: (_, __) => const RepPublishedScreen(),
       ),
       GoRoute(
         path: AppRoutes.repStandees,

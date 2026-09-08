@@ -121,6 +121,13 @@ abstract interface class RepRepository {
   /// Takes one standee out of service.
   Future<void> retireCode(String code);
 
+  /// The standees this rep has put live.
+  ///
+  /// A HISTORY, and the only rep list that only ever grows. Keyed server-side
+  /// on who ACTIVATED each code, so losing access to a restaurant does not
+  /// erase having signed it up.
+  Future<RepPublishedPage> publishedStandees({int? days});
+
   /// The stock this rep is carrying — every standee an admin handed them.
   ///
   /// Usable codes first (see the backend's ordering), so the top of the list is
@@ -574,6 +581,25 @@ class RemoteRepRepository implements RepRepository {
   @override
   Future<void> retireCode(String code) => mapCatalogErrors(() async {
         await _dio.post<Map<String, dynamic>>('/rep/qr-codes/$code/retire');
+      });
+
+  @override
+  Future<RepPublishedPage> publishedStandees({int? days}) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/rep/published',
+          queryParameters: {if (days != null) 'days': days},
+        );
+        final raw = res.data?['standees'];
+        return RepPublishedPage(
+          standees: raw is List
+              ? raw
+                  .whereType<Map<String, dynamic>>()
+                  .map(RepPublishedStandee.fromMap)
+                  .toList(growable: false)
+              : const <RepPublishedStandee>[],
+          total: (res.data?['total'] as num?)?.toInt() ?? 0,
+        );
       });
 
   @override

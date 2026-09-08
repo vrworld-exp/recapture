@@ -24,6 +24,7 @@
 import { Types } from 'mongoose';
 
 import { QrCode, type IQrCode } from '@/models/QrCode';
+import { Catalog } from '@/models/Catalog';
 import { User, type UserRole } from '@/models/User';
 import { maskIdentifier } from '@/utils/maskIdentifier';
 import { resolverUrlFor } from '@/services/qrCodeService';
@@ -369,7 +370,147 @@ export async function findRepStandee(
 ): Promise<IQrCode | null> {
   return QrCode.findOne({
     code,
-    assignedToUserId: repUserId,
+    deletedAt: null,
+    // HELD **OR** ACTIVATED, because both mean "this standee is yours".
+    //
+    // Assignment alone became too narrow the moment the published-standees
+    // screen existed: it offers a download on every row it shows, and a rep can
+    // legitimately have activated a walk-up code nobody ever assigned them. It
+    // also covers the reverse — a batch reassigned to somebody else after the
+    // visit should not retract the sheet for a restaurant this rep signed up.
+    //
+    // ENUMERATION SAFETY IS UNCHANGED: a rep with neither claim still gets the
+    // null that becomes the same 404 a nonexistent code gives, so this endpoint
+    // still cannot be used to discover which codes have been minted.
+    $or: [{ assignedToUserId: repUserId }, { activatedByUserId: repUserId }],
+  }).exec();
+}
+
+/** One standee this rep put live, as their published list reads it. */
+export interface RepPublishedStandee {
+  code: string;
+  /** What the standee encodes — the same string frozen into `catalog.publicUrl`. */
+  url: string;
+  /**
+   * BOTH names, exactly as `CatalogSummaryDto` carries them.
+   *
+   * `name` is slugified at activation (a restaurant typed as "Blue Cafe" is
+   * stored as `blue_cafe`, because it doubles as the Mirage key), so a list
+   * that showed it alone would show reps slugs. `businessName` is the human
+   * one. Both are returned and the CLIENT applies its existing fallback,
+   * rather than this endpoint inventing a second rule for the same question.
+   */
+  name: string;
+  businessName: string | null;
+  catalogId: string;
+  activatedAt: Date | null;
+}
+
+export interface RepPublishedResult {
+  standees: RepPublishedStandee[];
+  /**
+   * Every standee this rep has ever put live, ignoring the window.
+   *
+   * Carried alongside a filtered list because the two answer different
+   * questions, and the second one is the reason the screen exists: "how many
+   * have I put live" must not change when somebody taps "last 7 days".
+   */
+  total: number;
+}
+
+/**
+ * The standees this rep activated whose menus are live.
+ *
+ * KEYED ON `activatedByUserId`, NOT ON DELEGATION. Delegation is current access
+ * and is revocable — a rep removed from a restaurant would watch their own
+ * history disappear, which is exactly wrong for a list whose job is "what have I
+ * put live". Activation is a fact about the past and nobody can take it back.
+ *
+ * ACTIVE ONLY. A retired code no longer resolves and its sheet cannot be
+ * rendered, so a row for it would offer a download that 409s and a link that
+ * lands on the replaced page. The restaurant is still live under a different
+ * code, and that code is the row that belongs here.
+ *
+ * PUBLISHED IS READ FROM THE CATALOG, not inferred from the code. A standee is
+ * bound at activation and the menu goes live later — sometimes minutes later,
+ * sometimes when the owner gets around to it — so `state: ACTIVE` means "bound",
+ * never "live". Conflating them would put every signed-up restaurant in a list
+ * titled with the word published.
+ *
+ * THROWS `QrResolverNotConfiguredError`, like every path that emits a printable
+ * URL.
+ */
+export async function listRepPublishedStandees(
+  repUserId: Types.ObjectId,
+  opts: { since?: Date } = {}
+): Promise<RepPublishedResult> {
+  const base = {
+    activatedByUserId: repUserId,
+    state: 'ACTIVE' as const,
+    deletedAt: null,
+    catalogId: { $exists: true },
+  };
+
+  const codes = await QrCode.find(
+    opts.since ? { ...base, activatedAt: { $gte: opts.since } } : base,
+    { code: 1, catalogId: 1, activatedAt: 1 }
+  )
+    .sort({ activatedAt: -1, code: 1 })
+    .lean()
+    .exec();
+
+  // The catalogs are fetched in ONE query rather than per row: a rep with a good
+  // quarter would otherwise spend a round trip per restaurant to render a list.
+  const catalogIds = codes.map((c) => c.catalogId!).filter(Boolean);
+  const live = await Catalog.find(
+    { _id: { $in: catalogIds }, status: 'PUBLISHED', deletedAt: null },
+    { name: 1, businessName: 1 }
+  )
+    .lean()
+    .exec();
+  const byId = new Map(live.map((c) => [String(c._id), c]));
+
+  const standees = codes
+    .filter((c) => byId.has(String(c.catalogId)))
+    .map((c) => {
+      const catalog = byId.get(String(c.catalogId))!;
+      return {
+        code: c.code,
+        url: resolverUrlFor(c.code),
+        name: catalog.name ?? '',
+        businessName: catalog.businessName ?? null,
+        catalogId: String(c.catalogId),
+        activatedAt: c.activatedAt ?? null,
+      };
+    });
+
+  // Counted separately from the filtered page, and only when a window was
+  // asked for — an unfiltered call already knows the answer it would compute.
+  const total = opts.since
+    ? await countRepPublished(repUserId)
+    : standees.length;
+
+  return { standees, total };
+}
+
+/** All-time published count for one rep. Two queries, no documents returned. */
+async function countRepPublished(repUserId: Types.ObjectId): Promise<number> {
+  const codes = await QrCode.find(
+    {
+      activatedByUserId: repUserId,
+      state: 'ACTIVE',
+      deletedAt: null,
+      catalogId: { $exists: true },
+    },
+    { catalogId: 1 }
+  )
+    .lean()
+    .exec();
+  if (codes.length === 0) return 0;
+
+  return Catalog.countDocuments({
+    _id: { $in: codes.map((c) => c.catalogId!) },
+    status: 'PUBLISHED',
     deletedAt: null,
   }).exec();
 }

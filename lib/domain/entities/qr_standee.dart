@@ -291,6 +291,81 @@ class QrCodePage {
 }
 
 /// What a mint produced.
+/// How far back the published list is looking.
+///
+/// A WINDOW, not a page. A rep glancing back over their own work thinks in
+/// "this week" and "this month"; nobody asks for rows 40-60 of their career.
+enum PublishedWindow {
+  last7(7, 'Last 7 days'),
+  last30(30, 'Last 30 days'),
+  last90(90, 'Last 90 days'),
+  all(null, 'All time');
+
+  const PublishedWindow(this.days, this.label);
+
+  /// Null means no window — the server returns everything.
+  final int? days;
+  final String label;
+}
+
+/// One standee this rep put live.
+class RepPublishedStandee {
+  const RepPublishedStandee({
+    required this.code,
+    required this.url,
+    required this.name,
+    required this.catalogId,
+    this.businessName,
+    this.activatedAt,
+  });
+
+  /// The 8 characters printed under the QR square.
+  final String code;
+
+  /// What the standee encodes, and the menu link — they are one string.
+  final String url;
+
+  /// The catalog key. SLUGGED server-side (blue_cafe), so this is a fallback
+  /// for rows created before the app sent a business name, not a label.
+  final String name;
+
+  final String? businessName;
+  final String catalogId;
+  final DateTime? activatedAt;
+
+  /// What the row prints.
+  ///
+  /// Same rule as [RepCatalogSummary.displayName], deliberately: one
+  /// restaurant must not read as two different names on two rep screens.
+  String get displayName {
+    final business = businessName?.trim();
+    return business == null || business.isEmpty ? name : business;
+  }
+
+  static RepPublishedStandee fromMap(Map<String, dynamic> map) =>
+      RepPublishedStandee(
+        code: (map['code'] ?? '').toString(),
+        url: (map['url'] ?? '').toString(),
+        name: (map['name'] ?? '').toString(),
+        businessName: _nonEmpty(map['businessName']),
+        catalogId: (map['catalogId'] ?? '').toString(),
+        activatedAt:
+            DateTime.tryParse((map['activatedAt'] ?? '').toString())?.toLocal(),
+      );
+}
+
+/// A page of published standees, plus the number that does not move.
+class RepPublishedPage {
+  const RepPublishedPage({required this.standees, required this.total});
+
+  final List<RepPublishedStandee> standees;
+
+  /// Every standee this rep has ever put live, IGNORING the window — the
+  /// number the screen exists to show, which must not change when a filter
+  /// is tapped.
+  final int total;
+}
+
 /// What a whole-batch assignment moved.
 class BatchAssignmentResult {
   const BatchAssignmentResult({
