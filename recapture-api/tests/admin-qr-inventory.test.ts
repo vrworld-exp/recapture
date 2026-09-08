@@ -584,3 +584,203 @@ describe('bulk assignment at mint time', () => {
     expect(res.status).toBe(201);
   });
 });
+
+describe('assigning a whole batch after the fact', () => {
+  async function batchOf(adminId: string, count: number): Promise<Types.ObjectId> {
+    const { batchId } = await mintBatch({
+      count,
+      label: 'later',
+      createdByUserId: new Types.ObjectId(adminId),
+    });
+    return batchId;
+  }
+
+  it('hands every usable code to the named rep', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const batchId = await batchOf(admin.id, 6);
+
+    const res = await request(app)
+      .post(`/admin/qr-batches/${batchId.toHexString()}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: rep.id });
+
+    expect(res.status).toBe(200);
+    expect(res.body.assigned).toBe(6);
+    expect(res.body.assignedTo.id).toBe(rep.id);
+    expect(
+      await QrCode.countDocuments({
+        batchId,
+        assignedToUserId: new Types.ObjectId(rep.id),
+      }).exec()
+    ).toBe(6);
+  });
+
+  it('moves a batch between reps — the later holder wins', async () => {
+    const admin = await makeUser('ADMIN');
+    const first = await makeUser('SALES_REP');
+    const second = await makeUser('SALES_REP');
+    const batchId = await batchOf(admin.id, 3);
+    const url = `/admin/qr-batches/${batchId.toHexString()}/assignment`;
+
+    await request(app).post(url).set(admin.auth).send({ repUserId: first.id });
+    await request(app).post(url).set(admin.auth).send({ repUserId: second.id });
+
+    // A rep left, a territory changed: the batch moved, and the truth is
+    // whoever holds it now. There is no ledger to close, because nothing
+    // downstream reads the history of who carried a standee.
+    expect(
+      await QrCode.countDocuments({
+        batchId,
+        assignedToUserId: new Types.ObjectId(first.id),
+      }).exec()
+    ).toBe(0);
+    expect(
+      await QrCode.countDocuments({
+        batchId,
+        assignedToUserId: new Types.ObjectId(second.id),
+      }).exec()
+    ).toBe(3);
+  });
+
+  it('SKIPS retired codes and says how many it skipped', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const batchId = await batchOf(admin.id, 5);
+    const dead = await QrCode.find({ batchId }).limit(2).lean().exec();
+    await QrCode.updateMany(
+      { _id: { $in: dead.map((d) => d._id) } },
+      { $set: { state: 'RETIRED' } }
+    );
+
+    const res = await request(app)
+      .post(`/admin/qr-batches/${batchId.toHexString()}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: rep.id });
+
+    // A retired sheet cannot be printed or activated, so assigning one gives a
+    // rep a row they can do nothing with. Reported rather than hidden:
+    // "assigned 3" against a batch of 5 looks like a bug unless the screen can
+    // say why the other two were left alone.
+    expect(res.body.assigned).toBe(3);
+    expect(res.body.skippedRetired).toBe(2);
+  });
+
+  it('writes nothing when the rep does not exist', async () => {
+    const admin = await makeUser('ADMIN');
+    const batchId = await batchOf(admin.id, 4);
+
+    const res = await request(app)
+      .post(`/admin/qr-batches/${batchId.toHexString()}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: new Types.ObjectId().toHexString() });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REP_NOT_FOUND');
+    // A PARTIAL assignment is worse than none: an admin who saw an error would
+    // not know how much of the batch had already moved.
+    expect(
+      await QrCode.countDocuments({ batchId, assignedToUserId: { $exists: true } }).exec()
+    ).toBe(0);
+  });
+
+  it('404s an unknown batch', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+
+    const res = await request(app)
+      .post(`/admin/qr-batches/${new Types.ObjectId().toHexString()}/assignment`)
+      .set(admin.auth)
+      .send({ repUserId: rep.id });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+  });
+
+  it('is ADMIN-only', async () => {
+    const admin = await makeUser('ADMIN');
+    const artist = await makeUser('MODEL_ARTIST');
+    const rep = await makeUser('SALES_REP');
+    const batchId = await batchOf(admin.id, 1);
+
+    const res = await request(app)
+      .post(`/admin/qr-batches/${batchId.toHexString()}/assignment`)
+      .set(artist.auth)
+      .send({ repUserId: rep.id });
+
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('emptying a batch back into stock', () => {
+  it('clears every holder in the batch', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const { batchId } = await mintBatch({
+      count: 4,
+      label: 'return',
+      createdByUserId: new Types.ObjectId(admin.id),
+    });
+    const url = `/admin/qr-batches/${batchId.toHexString()}/assignment`;
+    await request(app).post(url).set(admin.auth).send({ repUserId: rep.id });
+
+    const res = await request(app).delete(url).set(admin.auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.unassigned).toBe(4);
+    expect(
+      await QrCode.countDocuments({ batchId, assignedToUserId: { $exists: true } }).exec()
+    ).toBe(0);
+  });
+
+  it('clears a RETIRED code too', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const { batchId } = await mintBatch({
+      count: 2,
+      label: 'tidy',
+      createdByUserId: new Types.ObjectId(admin.id),
+    });
+    const url = `/admin/qr-batches/${batchId.toHexString()}/assignment`;
+    await request(app).post(url).set(admin.auth).send({ repUserId: rep.id });
+    await QrCode.updateMany({ batchId }, { $set: { state: 'RETIRED' } });
+
+    await request(app).delete(url).set(admin.auth);
+
+    // The asymmetry with assign is deliberate. Clearing a stale holder off a
+    // sheet nobody can use is exactly the tidy-up somebody emptying a batch is
+    // doing; leaving it behind would make the batch read half-assigned forever.
+    expect(
+      await QrCode.countDocuments({ batchId, assignedToUserId: { $exists: true } }).exec()
+    ).toBe(0);
+  });
+
+  it('succeeds on a batch nobody holds', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await mintBatch({
+      count: 3,
+      label: 'already empty',
+      createdByUserId: new Types.ObjectId(admin.id),
+    });
+
+    const res = await request(app)
+      .delete(`/admin/qr-batches/${batchId.toHexString()}/assignment`)
+      .set(admin.auth);
+
+    // Idempotent: the intent is that none of these are on anybody list, and
+    // that is already true. A 409 would only ever be shown to someone who
+    // already has what they asked for.
+    expect(res.status).toBe(200);
+    expect(res.body.unassigned).toBe(0);
+  });
+
+  it('404s an unknown batch', async () => {
+    const admin = await makeUser('ADMIN');
+
+    const res = await request(app)
+      .delete(`/admin/qr-batches/${new Types.ObjectId().toHexString()}/assignment`)
+      .set(admin.auth);
+
+    expect(res.status).toBe(404);
+  });
+});

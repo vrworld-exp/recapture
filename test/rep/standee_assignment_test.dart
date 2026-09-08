@@ -123,6 +123,15 @@ class _FakeAdminRepo implements AdminStandeeRepository {
       const QrMintResult(batchId: 'b', minted: 0);
 
   @override
+  Future<BatchAssignmentResult> assignBatch(
+    String batchId, {
+    required String repUserId,
+  }) async =>
+      const BatchAssignmentResult(assigned: 0, skippedRetired: 0);
+
+  @override
+  Future<int> unassignBatch(String batchId) async => 0;
+  @override
   Future<QrDownloadFile> standeeFile(
     String code, {
     StandeeQrFormat format = StandeeQrFormat.pdf,

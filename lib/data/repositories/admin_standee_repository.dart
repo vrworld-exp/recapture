@@ -106,6 +106,20 @@ abstract interface class AdminStandeeRepository {
   /// Takes a standee back off whoever was holding it. Succeeds on a code
   /// nobody holds — the admin's intent is satisfied either way.
   Future<void> unassign(String code);
+
+  /// Hands an ENTIRE batch to one staff member in one call.
+  ///
+  /// The other half of bulk: minting covers a run created for a known rep,
+  /// this covers every case where that is not how it went — a batch minted
+  /// before anyone knew who was carrying it, a rep who left, a territory
+  /// that moved. Without it an admin is back to one row at a time.
+  Future<BatchAssignmentResult> assignBatch(
+    String batchId, {
+    required String repUserId,
+  });
+
+  /// Empties a batch back into stock. Succeeds on a batch nobody holds.
+  Future<int> unassignBatch(String batchId);
 }
 
 class RemoteAdminStandeeRepository implements AdminStandeeRepository {
@@ -233,6 +247,35 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
         await _dio.delete<Map<String, dynamic>>(
           '/admin/qr-codes/$code/assignment',
         );
+      });
+
+  @override
+  Future<BatchAssignmentResult> assignBatch(
+    String batchId, {
+    required String repUserId,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/qr-batches/$batchId/assignment',
+          data: {'repUserId': repUserId},
+        );
+        final body = res.data;
+        final holder = body?['assignedTo'];
+        return BatchAssignmentResult(
+          assigned: (body?['assigned'] as num?)?.toInt() ?? 0,
+          skippedRetired: (body?['skippedRetired'] as num?)?.toInt() ?? 0,
+          assignedTo: holder is Map<String, dynamic>
+              ? StandeeAssignee.fromMap(holder)
+              : null,
+        );
+      });
+
+  @override
+  Future<int> unassignBatch(String batchId) => mapCatalogErrors(() async {
+        final res = await _dio.delete<Map<String, dynamic>>(
+          '/admin/qr-batches/$batchId/assignment',
+        );
+        return (res.data?['unassigned'] as num?)?.toInt() ?? 0;
       });
 
   @override

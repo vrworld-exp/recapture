@@ -68,6 +68,20 @@ class AdminBatchDetailScreen extends ConsumerWidget {
         title: const Text('Standees'),
         actions: [
           IconButton(
+            key: const ValueKey('admin_batch_assign_all'),
+            tooltip: 'Assign the whole batch',
+            onPressed: state.bulkBusy
+                ? null
+                : () => _assignBatch(context, notifier, batchId, state),
+            icon: state.bulkBusy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.person_add_alt_1_outlined),
+          ),
+          IconButton(
             key: const ValueKey('admin_batch_csv'),
             tooltip: 'Download the print vendor CSV',
             onPressed: state.downloadingCsv ? null : notifier.deliverCsv,
@@ -142,6 +156,46 @@ class AdminBatchDetailScreen extends ConsumerWidget {
   }
 }
 
+/// The whole batch at once — the other half of bulk assignment.
+///
+/// Minting covers a run created for a known rep. This covers everything else:
+/// a batch minted before anyone knew who was carrying it, a rep who left, a
+/// territory that moved. Without it an admin is back to one row at a time,
+/// which is the problem the bulk path exists to remove.
+///
+/// "Return all to stock" is offered whenever ANY LOADED ROW has a holder.
+/// That is a deliberate approximation: rows on pages the admin has not
+/// scrolled to are unknown here, and the endpoint is idempotent, so the worst
+/// case is an offered action that clears nothing and says so. Hiding it
+/// because the visible page happens to be unassigned would be worse — the
+/// control would vanish depending on how far somebody had scrolled.
+Future<void> _assignBatch(
+  BuildContext context,
+  AdminBatchCodesNotifier notifier,
+  String batchId,
+  AdminBatchCodesState state,
+) async {
+  final rows = state.codes.valueOrNull ?? const <QrStandeeCode>[];
+  final anyHeld = rows.any((row) => row.assignedTo != null);
+
+  final choice = await showAssignStandeeSheet(
+    context,
+    title: 'Assign the whole batch',
+    subject: '${rows.length} standees on screen',
+    subjectIsCode: false,
+    canReturnToStock: anyHeld,
+    returnLabel: 'Return all to stock',
+  );
+  if (choice == null) return;
+
+  switch (choice) {
+    case AssignToRep(:final rep):
+      await notifier.assignAll(repUserId: rep.id);
+    case UnassignStandee():
+      await notifier.unassignAll();
+  }
+}
+
 /// Opens the picker and performs whatever the admin chose.
 ///
 /// The AWAIT AND THE ACTION ARE SPLIT ACROSS THE SHEET BOUNDARY on purpose: the
@@ -154,7 +208,7 @@ Future<void> _assign(
 ) async {
   final choice = await showAssignStandeeSheet(
     context,
-    code: code.code,
+    subject: code.code,
     currentHolder: code.assignedTo,
   );
   if (choice == null) return;

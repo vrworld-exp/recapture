@@ -77,6 +77,7 @@ import {
 import { renderStandeeSheet } from '@/services/standeeSheetService';
 import {
   assignBatchCodes,
+  unassignBatchCodes,
   assignCode,
   findAssignableRep,
   listAssignableReps,
@@ -1527,6 +1528,99 @@ router.delete(
     });
 
     res.status(200).json({ status: 'success', code: result.code, assignedTo: null });
+  })
+);
+
+/**
+ * POST /admin/qr-batches/:batchId/assignment — hand a WHOLE batch to one rep.
+ *
+ * THE OTHER HALF OF BULK. Assigning at mint time covers a run created for a
+ * known rep; this covers every case where that is not how it went — a batch
+ * minted before anyone knew who was carrying it, a rep who left, a territory
+ * that moved. Without it an admin is back to one row at a time, which is the
+ * problem the bulk path exists to remove.
+ *
+ * Same ordering rule as the mint: the rep is resolved before anything is
+ * written. There is no print run at stake here, but a partial assignment is
+ * still worse than none — an admin who saw an error would not know how much of
+ * the batch had moved.
+ *
+ * Overwrites existing holders, matching every other assignment path: a batch
+ * handed to somebody new is a batch that moved.
+ */
+router.post(
+  '/qr-batches/:batchId/assignment',
+  requireRole('ADMIN'),
+  validateBody(assignStandeeSchema),
+  asyncHandler(async (req, res) => {
+    const { batchId } = req.params;
+    if (!Types.ObjectId.isValid(batchId)) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid batch id',
+      });
+      return;
+    }
+
+    const batch = await QrBatch.findById(batchId).select('_id').lean().exec();
+    if (!batch) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Batch not found' });
+      return;
+    }
+
+    const { repUserId } = req.body as AssignStandeeInput;
+    const rep = await findAssignableRep(new Types.ObjectId(repUserId));
+    if (!rep) {
+      res.status(404).json({
+        status: 'error',
+        code: 'REP_NOT_FOUND',
+        message: 'That staff member was not found, or cannot hold standees.',
+      });
+      return;
+    }
+
+    const { assigned, skippedRetired } = await assignBatchCodes({
+      batchId: new Types.ObjectId(batchId),
+      repUserId: new Types.ObjectId(rep.id),
+      actorUserId: new Types.ObjectId(req.user!.userId),
+    });
+
+    // `skippedRetired` is REPORTED, not hidden. "Assigned 18" against a batch of
+    // 20 looks like a bug unless the screen can say why the other two were left.
+    res.status(200).json({ status: 'success', assigned, skippedRetired, assignedTo: rep });
+  })
+);
+
+/**
+ * DELETE /admin/qr-batches/:batchId/assignment — empty a batch back into stock.
+ *
+ * Idempotent, like the single-code version: a batch nobody holds answers 200
+ * with zero. The admin's intent is satisfied either way, and a 409 would only
+ * ever be shown to someone who already has what they asked for.
+ */
+router.delete(
+  '/qr-batches/:batchId/assignment',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const { batchId } = req.params;
+    if (!Types.ObjectId.isValid(batchId)) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid batch id',
+      });
+      return;
+    }
+
+    const batch = await QrBatch.findById(batchId).select('_id').lean().exec();
+    if (!batch) {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Batch not found' });
+      return;
+    }
+
+    const unassigned = await unassignBatchCodes(new Types.ObjectId(batchId));
+    res.status(200).json({ status: 'success', unassigned, assignedTo: null });
   })
 );
 

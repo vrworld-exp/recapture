@@ -41,15 +41,29 @@ class UnassignStandee extends AssignStandeeChoice {
   const UnassignStandee();
 }
 
-/// Opens the picker for [code]. Resolves to null if the admin backed out.
+/// Opens the picker for [subject]. Resolves to null if the admin backed out.
 ///
-/// [currentHolder] drives two things: the check beside the row that already has
-/// it, and whether the "Return to stock" control appears at all — offering it
-/// for a standee nobody holds would be a button that does nothing.
+/// ONE PICKER, TWO SUBJECTS. This opens for a single standee and for a whole
+/// batch, and the only differences are the words at the top and whether the
+/// subject is set in monospace. A second sheet for the batch case would be a
+/// second roster, a second empty state and a second failure path to keep in
+/// step — the roster is the hard part, and it is identical either way.
+///
+/// [currentHolder] puts the check beside the row that already has it. For a
+/// batch there is no single holder, so it is simply null and no row is ticked.
+///
+/// [canReturnToStock] defaults to "only when somebody actually holds this" —
+/// offering it otherwise is a button that does nothing. A batch passes it
+/// explicitly, because "is anyone holding any of these" is a question about
+/// rows the caller can see and this sheet cannot.
 Future<AssignStandeeChoice?> showAssignStandeeSheet(
   BuildContext context, {
-  required String code,
+  required String subject,
   StandeeAssignee? currentHolder,
+  String title = 'Assign this standee',
+  bool subjectIsCode = true,
+  bool? canReturnToStock,
+  String returnLabel = 'Return to stock',
 }) {
   return showModalBottomSheet<AssignStandeeChoice>(
     context: context,
@@ -60,14 +74,32 @@ Future<AssignStandeeChoice?> showAssignStandeeSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
     ),
-    builder: (_) => _AssignSheet(code: code, currentHolder: currentHolder),
+    builder: (_) => _AssignSheet(
+      subject: subject,
+      currentHolder: currentHolder,
+      title: title,
+      subjectIsCode: subjectIsCode,
+      canReturnToStock: canReturnToStock ?? (currentHolder != null),
+      returnLabel: returnLabel,
+    ),
   );
 }
 
 class _AssignSheet extends ConsumerWidget {
-  const _AssignSheet({required this.code, this.currentHolder});
+  const _AssignSheet({
+    required this.subject,
+    required this.title,
+    required this.subjectIsCode,
+    required this.canReturnToStock,
+    required this.returnLabel,
+    this.currentHolder,
+  });
 
-  final String code;
+  final String subject;
+  final String title;
+  final bool subjectIsCode;
+  final bool canReturnToStock;
+  final String returnLabel;
   final StandeeAssignee? currentHolder;
 
   @override
@@ -95,9 +127,9 @@ class _AssignSheet extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Assign this standee',
-                    style: TextStyle(
+                  Text(
+                    title,
+                    style: const TextStyle(
                       fontSize: AppTypography.sizeHeadline,
                       fontWeight: FontWeight.w600,
                       color: AppColors.textPrimary,
@@ -105,14 +137,16 @@ class _AssignSheet extends ConsumerWidget {
                   ),
                   const SizedBox(height: AppSpacing.xs),
                   Text(
-                    // The code, so an admin who opened the sheet from the wrong
-                    // row finds out here rather than after assigning it.
-                    code,
-                    style: const TextStyle(
+                    // What is being assigned, so an admin who opened the sheet
+                    // from the wrong row finds out HERE rather than afterwards.
+                    subject,
+                    style: TextStyle(
                       fontSize: AppTypography.sizeBody,
                       color: AppColors.textSecondary,
-                      fontFamily: 'monospace',
-                      letterSpacing: 1.5,
+                      // Monospace for a code, where the characters matter one
+                      // by one; proportional for a batch label, which is prose.
+                      fontFamily: subjectIsCode ? 'monospace' : null,
+                      letterSpacing: subjectIsCode ? 1.5 : null,
                     ),
                   ),
                 ],
@@ -150,7 +184,7 @@ class _AssignSheet extends ConsumerWidget {
                         padding: EdgeInsets.all(AppSpacing.lg),
                         child: Text(
                           'No staff accounts yet. Grant someone the SALES_REP '
-                          'role first, then assign the standee.',
+                          'role first, then come back.',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: AppTypography.sizeBody,
@@ -175,14 +209,14 @@ class _AssignSheet extends ConsumerWidget {
               ),
             ),
 
-            // Only for a standee somebody actually holds.
-            if (currentHolder != null) ...[
+            // Only when there is something to return.
+            if (canReturnToStock) ...[
               const Divider(height: 1, color: AppColors.surface2),
               Padding(
                 padding: const EdgeInsets.all(AppSpacing.lg),
                 child: AppButton.secondary(
                   key: const ValueKey('standee_unassign'),
-                  label: 'Return to stock',
+                  label: returnLabel,
                   icon: Icons.undo,
                   onPressed: () =>
                       Navigator.of(context).pop(const UnassignStandee()),

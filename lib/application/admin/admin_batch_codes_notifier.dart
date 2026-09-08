@@ -31,6 +31,7 @@ class AdminBatchCodesState {
     this.nextAfter,
     this.loadingMore = false,
     this.busyCode,
+    this.bulkBusy = false,
     this.downloadingCsv = false,
     this.failure,
     this.notice,
@@ -46,6 +47,13 @@ class AdminBatchCodesState {
   /// Which code is being rendered right now, so one row spins rather than the
   /// whole list going busy.
   final String? busyCode;
+
+  /// A whole-batch assign or return in flight.
+  ///
+  /// SEPARATE from [busyCode] because they disable different things. One row
+  /// downloading must not grey out the batch action, and a batch-wide change
+  /// must not look like one row is busy.
+  final bool bulkBusy;
 
   final bool downloadingCsv;
 
@@ -64,6 +72,7 @@ class AdminBatchCodesState {
     Object? nextAfter = _unset,
     bool? loadingMore,
     Object? busyCode = _unset,
+    bool? bulkBusy,
     bool? downloadingCsv,
     Object? failure = _unset,
     Object? notice = _unset,
@@ -75,6 +84,7 @@ class AdminBatchCodesState {
         loadingMore: loadingMore ?? this.loadingMore,
         busyCode:
             identical(busyCode, _unset) ? this.busyCode : busyCode as String?,
+        bulkBusy: bulkBusy ?? this.bulkBusy,
         downloadingCsv: downloadingCsv ?? this.downloadingCsv,
         failure: identical(failure, _unset)
             ? this.failure
@@ -196,6 +206,94 @@ class AdminBatchCodesNotifier
       if (_disposed) return;
       state = state.copyWith(busyCode: null, failure: failure);
     }
+  }
+
+  /// Hands the WHOLE batch to one rep.
+  ///
+  /// Loaded rows are patched in place and the rest are simply left to arrive
+  /// correct: a page fetched after this call comes from a server that already
+  /// has the new holder. So there is no reload, and the admin keeps every page
+  /// they had scrolled through — the same reasoning as [assign], reached from
+  /// the opposite direction.
+  ///
+  /// RETIRED ROWS ARE SKIPPED HERE TOO, mirroring the endpoint exactly. If the
+  /// local patch marked them assigned, the list would disagree with the server
+  /// the moment anything refetched, and the count in the confirmation would
+  /// disagree with what is on screen right now.
+  Future<void> assignAll({required String repUserId}) async {
+    if (state.bulkBusy) return;
+    state = state.copyWith(bulkBusy: true, failure: null, notice: null);
+
+    try {
+      final result = await _repo.assignBatch(arg, repUserId: repUserId);
+      if (_disposed) return;
+      final holder = result.assignedTo;
+      state = _patchAll(holder, skipRetired: true).copyWith(
+        bulkBusy: false,
+        notice: _bulkNotice(result),
+      );
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      state = state.copyWith(bulkBusy: false, failure: failure);
+    }
+  }
+
+  /// Empties the batch back into stock.
+  ///
+  /// Clears RETIRED rows as well, matching the endpoint: a stale holder on a
+  /// sheet nobody can use is exactly what somebody emptying a batch is tidying
+  /// up, and leaving it would make the batch read half-assigned forever.
+  Future<void> unassignAll() async {
+    if (state.bulkBusy) return;
+    state = state.copyWith(bulkBusy: true, failure: null, notice: null);
+
+    try {
+      final cleared = await _repo.unassignBatch(arg);
+      if (_disposed) return;
+      state = _patchAll(null, skipRetired: false).copyWith(
+        bulkBusy: false,
+        notice: cleared == 0
+            ? 'Nobody was holding this batch.'
+            : 'Returned $cleared standees to stock.',
+      );
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      state = state.copyWith(bulkBusy: false, failure: failure);
+    }
+  }
+
+  /// The confirmation, which NAMES THE SKIPPED CODES when there were any.
+  ///
+  /// "Assigned 18" against a batch of 20 reads as a bug; the same sentence
+  /// with "2 retired" after it reads as the system working.
+  String _bulkNotice(BatchAssignmentResult result) {
+    final who = result.assignedTo?.label;
+    final head = who == null
+        ? 'Assigned ${result.assigned} standees.'
+        : 'Assigned ${result.assigned} standees to $who.';
+    if (result.skippedRetired == 0) return head;
+    return '$head ${result.skippedRetired} retired and were skipped.';
+  }
+
+  /// Replaces the holder on every loaded row.
+  ///
+  /// [skipRetired] keeps this in step with the endpoint, which refuses to put
+  /// a retired sheet on anybody list but does clear one.
+  AdminBatchCodesState _patchAll(
+    StandeeAssignee? holder, {
+    required bool skipRetired,
+  }) {
+    final rows = state.codes.valueOrNull;
+    if (rows == null) return state;
+    return state.copyWith(
+      codes: AsyncData([
+        for (final row in rows)
+          if (skipRetired && row.state == QrCodeState.retired)
+            row
+          else
+            row.copyWith(assignedTo: holder),
+      ]),
+    );
   }
 
   /// Replaces one row's holder, leaving every other row and the paging cursor

@@ -291,6 +291,26 @@ class QrCodePage {
 }
 
 /// What a mint produced.
+/// What a whole-batch assignment moved.
+class BatchAssignmentResult {
+  const BatchAssignmentResult({
+    required this.assigned,
+    required this.skippedRetired,
+    this.assignedTo,
+  });
+
+  final int assigned;
+
+  /// Codes left alone because they can no longer be printed or activated.
+  ///
+  /// SHOWN, not swallowed. "Assigned 18" against a batch of 20 reads as a
+  /// bug unless the screen can say why the other two were skipped.
+  final int skippedRetired;
+
+  /// Null when the batch was emptied back into stock.
+  final StandeeAssignee? assignedTo;
+}
+
 class QrMintResult {
   const QrMintResult({
     required this.batchId,

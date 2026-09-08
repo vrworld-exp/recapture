@@ -219,6 +219,26 @@ export async function assignCode(params: {
   return { outcome: 'ASSIGNED', code: qrCode.code, rep };
 }
 
+/**
+ * Takes a whole batch back off whoever was holding it.
+ *
+ * IDEMPOTENT, like [unassignCode]: a batch nobody holds returns zero and that is
+ * a success. The admin asked for "make sure none of these are on anybody's
+ * list", and that is true either way.
+ *
+ * Unlike [assignBatchCodes] this does NOT skip retired codes. Clearing a stale
+ * holder off a sheet that can no longer be used is exactly the tidy-up somebody
+ * is doing when they empty a batch, and leaving one behind would make the batch
+ * read as half-assigned forever.
+ */
+export async function unassignBatchCodes(batchId: Types.ObjectId): Promise<number> {
+  const result = await QrCode.updateMany(
+    { batchId, deletedAt: null, assignedToUserId: { $exists: true } },
+    { $unset: { assignedToUserId: '', assignedAt: '', assignedByUserId: '' } }
+  ).exec();
+  return result.modifiedCount;
+}
+
 export type UnassignCodeResult =
   | { outcome: 'CODE_NOT_FOUND' }
   | { outcome: 'UNASSIGNED'; code: string };

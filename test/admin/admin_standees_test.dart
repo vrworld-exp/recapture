@@ -76,6 +76,34 @@ class _FakeRepo implements AdminStandeeRepository {
   StandeeAssignee? mintAssignee;
 
   @override
+  Future<BatchAssignmentResult> assignBatch(
+    String batchId, {
+    required String repUserId,
+  }) async {
+    assignedBatches.add((batchId: batchId, repUserId: repUserId));
+    if (bulkThrows != null) throw bulkThrows!;
+    return BatchAssignmentResult(
+      assigned: bulkAssigned,
+      skippedRetired: bulkSkippedRetired,
+      assignedTo: bulkHolder,
+    );
+  }
+
+  @override
+  Future<int> unassignBatch(String batchId) async {
+    unassignedBatches.add(batchId);
+    if (bulkThrows != null) throw bulkThrows!;
+    return bulkUnassigned;
+  }
+
+  final List<({String batchId, String repUserId})> assignedBatches = [];
+  final List<String> unassignedBatches = [];
+  CatalogFailure? bulkThrows;
+  int bulkAssigned = 0;
+  int bulkSkippedRetired = 0;
+  int bulkUnassigned = 0;
+  StandeeAssignee? bulkHolder;
+  @override
   Future<QrCodePage> codes(String batchId, {String? after, int? limit}) async {
     if (codesThrows != null) throw codesThrows!;
     return pages[after] ?? const QrCodePage(codes: []);
@@ -419,6 +447,219 @@ group('bulk assignment at mint time', () {
       expect(id, isNull);
       expect(state.failure?.code, 'REP_NOT_FOUND');
       expect(state.notice, isNull);
+    });
+  });
+
+
+group('assigning a whole batch', () {
+    QrStandeeCode held(String code, {QrCodeState state = QrCodeState.unassigned}) =>
+        QrStandeeCode(
+          code: code,
+          state: state,
+          url: 'https://scan.test/r/$code',
+          assignedTo: const StandeeAssignee(id: 'old', displayName: 'Old Holder'),
+        );
+
+    test('sends the batch id and the chosen rep', () async {
+      final repo = _FakeRepo()
+        ..bulkAssigned = 2
+        ..bulkHolder = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).assignAll(repUserId: 'rep-1');
+
+      expect(repo.assignedBatches.single.batchId, 'b1');
+      expect(repo.assignedBatches.single.repUserId, 'rep-1');
+    });
+
+    test('patches every loaded row instead of reloading the list', () async {
+      final repo = _FakeRepo()
+        ..pages = {
+          null: QrCodePage(
+            codes: [_code('AAAA1111'), _code('BBBB2222')],
+            nextAfter: 'BBBB2222',
+          ),
+        }
+        ..bulkAssigned = 2
+        ..bulkHolder = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).assignAll(repUserId: 'rep-1');
+
+      final state = container.read(provider);
+      // Every visible row now shows the new holder...
+      expect(
+        state.codes.valueOrNull?.map((c) => c.assignedTo?.id),
+        ['rep-1', 'rep-1'],
+      );
+      // ...and the paging cursor survived, so the admin did not get thrown back
+      // to page one to learn something the server already told us.
+      expect(state.nextAfter, 'BBBB2222');
+      expect(state.bulkBusy, isFalse);
+    });
+
+    test('leaves RETIRED rows alone, mirroring the endpoint', () async {
+      final repo = _FakeRepo()
+        ..pages = {
+          null: QrCodePage(
+            codes: [
+              _code('AAAA1111'),
+              QrStandeeCode(
+                code: 'DEAD0000',
+                state: QrCodeState.retired,
+                url: 'https://scan.test/r/DEAD0000',
+              ),
+            ],
+          ),
+        }
+        ..bulkAssigned = 1
+        ..bulkSkippedRetired = 1
+        ..bulkHolder = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).assignAll(repUserId: 'rep-1');
+
+      final rows = container.read(provider).codes.valueOrNull!;
+      // A retired sheet cannot be printed or activated, so putting it on a rep
+      // list gives them a row they can do nothing with. If the local patch
+      // claimed otherwise, the screen would disagree with the server the moment
+      // anything refetched.
+      expect(rows.firstWhere((c) => c.code == 'AAAA1111').assignedTo?.id, 'rep-1');
+      expect(rows.firstWhere((c) => c.code == 'DEAD0000').assignedTo, isNull);
+    });
+
+    test('says how many were skipped, so a short count explains itself', () async {
+      final repo = _FakeRepo()
+        ..bulkAssigned = 18
+        ..bulkSkippedRetired = 2
+        ..bulkHolder = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).assignAll(repUserId: 'rep-1');
+
+      final notice = container.read(provider).notice!;
+      expect(notice, contains('18'));
+      expect(notice, contains('Ravi'));
+      // "Assigned 18" against a batch of 20 reads as a bug on its own.
+      expect(notice, contains('2 retired'));
+    });
+
+    test('omits the skipped clause when nothing was skipped', () async {
+      final repo = _FakeRepo()
+        ..bulkAssigned = 5
+        ..bulkHolder = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).assignAll(repUserId: 'rep-1');
+
+      expect(container.read(provider).notice, isNot(contains('retired')));
+    });
+
+    test('a failure leaves the rows exactly as they were', () async {
+      final repo = _FakeRepo()
+        ..pages = {
+          null: QrCodePage(codes: [held('AAAA1111')]),
+        }
+        ..bulkThrows = const CatalogFailure(
+          code: 'REP_NOT_FOUND',
+          message: 'gone',
+        );
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).assignAll(repUserId: 'ghost');
+
+      final state = container.read(provider);
+      expect(state.failure?.code, 'REP_NOT_FOUND');
+      // The server wrote nothing, so the screen must show nothing changed.
+      expect(state.codes.valueOrNull?.single.assignedTo?.id, 'old');
+      expect(state.bulkBusy, isFalse);
+    });
+
+    test('a second batch action cannot start while one is in flight', () async {
+      final repo = _FakeRepo()..bulkAssigned = 1;
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      final notifier = container.read(provider.notifier);
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await Future.wait([
+        notifier.assignAll(repUserId: 'rep-1'),
+        notifier.assignAll(repUserId: 'rep-2'),
+      ]);
+
+      expect(repo.assignedBatches, hasLength(1));
+    });
+  });
+
+  group('emptying a whole batch', () {
+    test('clears every loaded row, retired ones included', () async {
+      final repo = _FakeRepo()
+        ..pages = {
+          null: QrCodePage(
+            codes: [
+              QrStandeeCode(
+                code: 'AAAA1111',
+                state: QrCodeState.unassigned,
+                url: 'u',
+                assignedTo: const StandeeAssignee(id: 'r', displayName: 'R'),
+              ),
+              QrStandeeCode(
+                code: 'DEAD0000',
+                state: QrCodeState.retired,
+                url: 'u',
+                assignedTo: const StandeeAssignee(id: 'r', displayName: 'R'),
+              ),
+            ],
+          ),
+        }
+        ..bulkUnassigned = 2;
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).unassignAll();
+
+      // The asymmetry with assign is deliberate: clearing a stale holder off a
+      // sheet nobody can use is exactly the tidy-up being done here.
+      expect(
+        container.read(provider).codes.valueOrNull?.every((c) => c.assignedTo == null),
+        isTrue,
+      );
+      expect(repo.unassignedBatches, ['b1']);
+    });
+
+    test('says so plainly when nobody was holding it', () async {
+      final repo = _FakeRepo()..bulkUnassigned = 0;
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).unassignAll();
+
+      // Idempotent by design, so this is a confirmation and not an error.
+      expect(container.read(provider).notice, contains('Nobody'));
+      expect(container.read(provider).failure, isNull);
     });
   });
 
