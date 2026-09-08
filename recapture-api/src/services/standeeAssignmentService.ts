@@ -76,12 +76,98 @@ export async function listAssignableReps(): Promise<AssignableRep[]> {
     .lean()
     .exec();
 
-  return users.map((u) => ({
-    id: String(u._id),
-    displayName: u.displayName ?? null,
-    contactMasked: maskIdentifier({ phone: u.phone, email: u.email }),
-    role: u.role,
-  }));
+  return users.map(toAssignableRep);
+}
+
+/** Projection → DTO, shared by every path that returns a rep summary. */
+function toAssignableRep(doc: {
+  _id: unknown;
+  displayName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  role: UserRole;
+}): AssignableRep {
+  return {
+    id: String(doc._id),
+    displayName: doc.displayName ?? null,
+    contactMasked: maskIdentifier({ phone: doc.phone, email: doc.email }),
+    role: doc.role,
+  };
+}
+
+/**
+ * One staff member, by id, if they may hold a standee at all.
+ *
+ * Exported because the MINT path needs to ask this question BEFORE it mints.
+ * The role filter is the same one `assignCode` applies: an assignment to a plain
+ * USER would produce a row nobody can ever open, since `/rep` is closed to them.
+ */
+export async function findAssignableRep(
+  repUserId: Types.ObjectId
+): Promise<AssignableRep | null> {
+  const rep = await User.findOne(
+    { _id: repUserId, role: { $in: ASSIGNABLE_ROLES } },
+    { displayName: 1, phone: 1, email: 1, role: 1 }
+  )
+    .lean()
+    .exec();
+  return rep ? toAssignableRep(rep) : null;
+}
+
+/** What a bulk assignment moved. */
+export interface AssignBatchResult {
+  assigned: number;
+  /** Codes left alone because they cannot be printed or activated. */
+  skippedRetired: number;
+}
+
+/**
+ * Hands every usable code in a batch to one rep, in a single write.
+ *
+ * WHY THIS IS NOT A LOOP OVER [assignCode]. That function reads and saves one
+ * document at a time, which is right for one standee and catastrophic for a
+ * batch: QR_BATCH_MAX_SIZE is 2,000 by default and 10,000 at the ceiling, so the
+ * loop would be up to 20,000 round trips for a screen whose whole promise is
+ * that the admin does NOT have to do this one at a time.
+ *
+ * THE CALLER MUST HAVE VALIDATED THE REP. This does no role check of its own —
+ * it takes an id it was told is good — because the mint path has to reject a
+ * stale picker selection BEFORE committing a print run, and re-checking here
+ * would be a second lookup that can only agree.
+ *
+ * RETIRED codes are skipped rather than refused. A batch is a mixed bag once it
+ * has been in service, and failing the whole assignment because one sheet was
+ * replaced months ago would make the bulk path unusable exactly when it is most
+ * wanted. `assignCode` refuses a single retired code for the opposite reason:
+ * there, the retired code IS the request.
+ *
+ * Overwrites existing holders, matching [assignCode] — a batch handed to a new
+ * rep is a batch that moved, and the truth is whoever holds it now.
+ */
+export async function assignBatchCodes(params: {
+  batchId: Types.ObjectId;
+  repUserId: Types.ObjectId;
+  actorUserId: Types.ObjectId;
+}): Promise<AssignBatchResult> {
+  const assignable = { batchId: params.batchId, deletedAt: null, state: { $ne: 'RETIRED' } };
+
+  const result = await QrCode.updateMany(assignable, {
+    $set: {
+      assignedToUserId: params.repUserId,
+      assignedAt: new Date(),
+      assignedByUserId: params.actorUserId,
+    },
+  }).exec();
+
+  // Counted separately rather than inferred from `batch.count`, which is what
+  // was REQUESTED at mint and says nothing about what the collection holds now.
+  const skippedRetired = await QrCode.countDocuments({
+    batchId: params.batchId,
+    deletedAt: null,
+    state: 'RETIRED',
+  }).exec();
+
+  return { assigned: result.modifiedCount, skippedRetired };
 }
 
 export type AssignCodeResult =
@@ -122,12 +208,7 @@ export async function assignCode(params: {
   // assignment to a plain USER would produce a row nobody can ever open, since
   // the whole /rep subtree is closed to them. A stale id from an admin's open
   // picker is the realistic way that happens.
-  const rep = await User.findOne(
-    { _id: params.repUserId, role: { $in: ASSIGNABLE_ROLES } },
-    { displayName: 1, phone: 1, email: 1, role: 1 }
-  )
-    .lean()
-    .exec();
+  const rep = await findAssignableRep(params.repUserId);
   if (!rep) return { outcome: 'REP_NOT_FOUND' };
 
   qrCode.assignedToUserId = params.repUserId;
@@ -135,16 +216,7 @@ export async function assignCode(params: {
   qrCode.assignedByUserId = params.actorUserId;
   await qrCode.save();
 
-  return {
-    outcome: 'ASSIGNED',
-    code: qrCode.code,
-    rep: {
-      id: String(rep._id),
-      displayName: rep.displayName ?? null,
-      contactMasked: maskIdentifier({ phone: rep.phone, email: rep.email }),
-      role: rep.role,
-    },
-  };
+  return { outcome: 'ASSIGNED', code: qrCode.code, rep };
 }
 
 export type UnassignCodeResult =

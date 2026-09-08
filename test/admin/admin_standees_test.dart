@@ -51,18 +51,29 @@ class _FakeRepo implements AdminStandeeRepository {
     null: QrCodePage(codes: [_code('AAAA1111')], nextAfter: null),
   };
 
-  final List<({int count, String label})> minted = [];
+  final List<({int count, String label, String? assignToUserId})> minted = [];
   final List<String> filesFor = [];
 
   @override
   Future<List<QrBatchSummary>> batches() async => batchList;
 
   @override
-  Future<QrMintResult> mint({required int count, required String label}) async {
-    minted.add((count: count, label: label));
+  Future<QrMintResult> mint({
+    required int count,
+    required String label,
+    String? assignToUserId,
+  }) async {
+    minted.add((count: count, label: label, assignToUserId: assignToUserId));
     if (mintThrows != null) throw mintThrows!;
-    return const QrMintResult(batchId: 'b-new', minted: 25);
+    // ECHOES the requested count rather than a fixed number, so an assertion
+    // about what the confirmation says is about the code under test and not
+    // about a constant buried in this fake.
+    return QrMintResult(batchId: 'b-new', minted: count, assignedTo: mintAssignee);
   }
+
+  /// Who the server reports the run went to. Null unless a test says
+  /// otherwise, because a mint that assigns nobody is the ordinary case.
+  StandeeAssignee? mintAssignee;
 
   @override
   Future<QrCodePage> codes(String batchId, {String? after, int? limit}) async {
@@ -325,6 +336,92 @@ void main() {
       expect(container.read(provider).busyCode, isNull);
     });
   });
+
+group('bulk assignment at mint time', () {
+    test('passes the chosen holder through to the repository', () async {
+      final repo = _FakeRepo()
+        ..mintAssignee = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container
+          .read(adminStandeesProvider.notifier)
+          .mint(count: 20, label: 'Ravi run', assignToUserId: 'rep-1');
+
+      expect(repo.minted.single.assignToUserId, 'rep-1');
+    });
+
+    test('omits the holder entirely when nobody was picked', () async {
+      final repo = _FakeRepo();
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container
+          .read(adminStandeesProvider.notifier)
+          .mint(count: 5, label: 'stock');
+
+      // Null, not an empty string: the request body is strict server-side and
+      // minting unassigned stock is an ordinary thing to want.
+      expect(repo.minted.single.assignToUserId, isNull);
+    });
+
+    test('names the holder in the confirmation', () async {
+      final repo = _FakeRepo()
+        ..mintAssignee = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container
+          .read(adminStandeesProvider.notifier)
+          .mint(count: 20, label: 'Ravi run', assignToUserId: 'rep-1');
+
+      expect(container.read(adminStandeesProvider).notice, contains('Ravi'));
+    });
+
+    test('does NOT claim a holder the server did not confirm', () async {
+      // THE ONE THAT MATTERS. The mint deliberately survives a failed
+      // assignment — the codes are correct and can be handed out later — so the
+      // server answers with no holder. Saying "for Ravi" off the back of what
+      // was ASKED FOR would tell an admin the folder is on its way to someone
+      // when it is sitting in unassigned stock.
+      final repo = _FakeRepo()..mintAssignee = null;
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container
+          .read(adminStandeesProvider.notifier)
+          .mint(count: 20, label: 'Ravi run', assignToUserId: 'rep-1');
+
+      final notice = container.read(adminStandeesProvider).notice;
+      expect(notice, contains('20'));
+      expect(notice, isNot(contains('for')));
+    });
+
+    test('a failed mint still reports nothing about a holder', () async {
+      final repo = _FakeRepo()
+        ..mintThrows = const CatalogFailure(
+          code: 'REP_NOT_FOUND',
+          message: 'no such staff member',
+        );
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      final id = await container
+          .read(adminStandeesProvider.notifier)
+          .mint(count: 20, label: 'Ravi run', assignToUserId: 'gone');
+
+      final state = container.read(adminStandeesProvider);
+      expect(id, isNull);
+      expect(state.failure?.code, 'REP_NOT_FOUND');
+      expect(state.notice, isNull);
+    });
+  });
+
 
   group('the state vocabulary', () {
     test('only an unassigned code counts as available', () {

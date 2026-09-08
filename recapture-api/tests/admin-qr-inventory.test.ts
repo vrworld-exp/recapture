@@ -411,3 +411,176 @@ describe('what the printed standee sheet actually says', () => {
     expect(a).toBe(b);
   });
 });
+
+describe('bulk assignment at mint time', () => {
+  it('hands the whole run to one rep in a single call', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+
+    const res = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 12, label: 'Ravi — Oct run', assignToUserId: rep.id });
+
+    expect(res.status).toBe(201);
+    expect(res.body.minted).toBe(12);
+    expect(res.body.assignedTo.id).toBe(rep.id);
+
+    // EVERY code, not most of them. The point of the feature is that the admin
+    // does not go back and catch stragglers by hand.
+    const held = await QrCode.countDocuments({
+      batchId: new Types.ObjectId(res.body.batchId as string),
+      assignedToUserId: new Types.ObjectId(rep.id),
+    }).exec();
+    expect(held).toBe(12);
+  });
+
+  it('records who did the assigning, and when', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+
+    const res = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 2, label: 'audit', assignToUserId: rep.id });
+
+    const code = await QrCode.findOne({
+      batchId: new Types.ObjectId(res.body.batchId as string),
+    })
+      .lean()
+      .exec();
+    expect(String(code!.assignedByUserId)).toBe(admin.id);
+    expect(code!.assignedAt).toBeInstanceOf(Date);
+  });
+
+  it('still mints unassigned stock when nobody is named', async () => {
+    const admin = await makeUser('ADMIN');
+
+    const res = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 3, label: 'unassigned' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.assignedTo).toBeNull();
+    // An admin who has not decided who is carrying a batch must still be able
+    // to get codes to a printer.
+    const held = await QrCode.countDocuments({
+      batchId: new Types.ObjectId(res.body.batchId as string),
+      assignedToUserId: { $exists: true },
+    }).exec();
+    expect(held).toBe(0);
+  });
+
+  it('MINTS NOTHING when the named staff member does not exist', async () => {
+    const admin = await makeUser('ADMIN');
+    const before = await QrBatch.countDocuments({}).exec();
+
+    const res = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({
+        count: 50,
+        label: 'stale picker',
+        assignToUserId: new Types.ObjectId().toHexString(),
+      });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REP_NOT_FOUND');
+    // THE ORDERING GUARANTEE, and the reason mint and assign live in one
+    // endpoint. Discovering a stale picker selection AFTER minting would leave
+    // an admin looking at an error over a batch that does exist — and the
+    // obvious reaction, pressing Mint again, commits a second print run.
+    expect(await QrBatch.countDocuments({}).exec()).toBe(before);
+    expect(await QrCode.countDocuments({}).exec()).toBe(0);
+  });
+
+  it('refuses a plain USER as the holder, and mints nothing', async () => {
+    const admin = await makeUser('ADMIN');
+    const nobody = await makeUser('USER');
+
+    const res = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 5, label: 'wrong role', assignToUserId: nobody.id });
+
+    // /rep is closed to a plain USER, so this would be a folder of standees on
+    // a screen they can never open.
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('REP_NOT_FOUND');
+    expect(await QrCode.countDocuments({}).exec()).toBe(0);
+  });
+
+  it('accepts a MODEL_ARTIST or an ADMIN, who can both use /rep', async () => {
+    const admin = await makeUser('ADMIN');
+    const artist = await makeUser('MODEL_ARTIST');
+
+    const res = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 1, label: 'inclusive', assignToUserId: artist.id });
+
+    // requireRole is inclusive upward, so the picker must not be an
+    // exact-equality role check — an admin who also does field visits has to be
+    // able to hold their own stock.
+    expect(res.status).toBe(201);
+    expect(res.body.assignedTo.id).toBe(artist.id);
+  });
+
+  it('rejects a malformed id without touching the database', async () => {
+    const admin = await makeUser('ADMIN');
+
+    const res = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 5, label: 'bad id', assignToUserId: 'not-an-id' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_REQUEST');
+    expect(await QrCode.countDocuments({}).exec()).toBe(0);
+  });
+
+  it('puts the whole run on the rep own standee list', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+
+    await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 4, label: 'visible', assignToUserId: rep.id });
+
+    const mine = await request(app).get('/rep/standees').set(rep.auth);
+
+    // The end of the chain: bulk assignment is only worth anything if the rep
+    // can see the folder they were handed.
+    expect(mine.status).toBe(200);
+    expect(mine.body.standees).toHaveLength(4);
+  });
+
+  it('stays ADVISORY — a bulk-assigned code still activates for another rep', async () => {
+    const admin = await makeUser('ADMIN');
+    const holder = await makeUser('SALES_REP');
+    const other = await makeUser('SALES_REP');
+
+    const minted = await request(app)
+      .post('/admin/qr-batches')
+      .set(admin.auth)
+      .send({ count: 1, label: 'advisory', assignToUserId: holder.id });
+    const code = (await QrCode.findOne({
+      batchId: new Types.ObjectId(minted.body.batchId as string),
+    })
+      .lean()
+      .exec())!.code;
+
+    const res = await request(app)
+      .post('/rep/activations')
+      .set(other.auth)
+      .send({ code, restaurantName: 'Walk Up Cafe', restaurantPhone: '+919000000111' });
+
+    // DELIBERATE, not an oversight. Assignment makes "who is carrying this"
+    // VISIBLE; it does not lock activation. Bulk assignment must not smuggle in
+    // the enforcement that was considered and declined for the single-code path
+    // — see standeeAssignmentService's header.
+    expect(res.status).toBe(201);
+  });
+});

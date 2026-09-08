@@ -14,6 +14,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/admin/admin_standees_notifier.dart';
+import '../../../application/admin/sales_reps_notifier.dart';
 import '../../../domain/entities/qr_standee.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
@@ -95,6 +96,7 @@ class AdminStandeesScreen extends ConsumerWidget {
     final batchId = await ref.read(adminStandeesProvider.notifier).mint(
           count: request.count,
           label: request.label,
+          assignToUserId: request.assignToUserId,
         );
     if (batchId == null || !context.mounted) return;
     context.push('${AppRoutes.adminStandees}/$batchId');
@@ -166,10 +168,17 @@ class _BatchTile extends StatelessWidget {
 
 /// What the mint dialog collects.
 class _MintRequest {
-  const _MintRequest({required this.count, required this.label});
+  const _MintRequest({
+    required this.count,
+    required this.label,
+    this.assignToUserId,
+  });
 
   final int count;
   final String label;
+
+  /// Who the whole run goes to, or null to mint unassigned stock.
+  final String? assignToUserId;
 }
 
 /// Count and label for a new run.
@@ -177,17 +186,21 @@ class _MintRequest {
 /// The label is REQUIRED, matching the backend schema, and the hint shows the
 /// house shape ("Vendor A — Oct 2026, run 3"). A batch is a physical print run
 /// somebody will have to identify months later out of a list of others.
-class _MintDialog extends StatefulWidget {
+class _MintDialog extends ConsumerStatefulWidget {
   const _MintDialog();
 
   @override
-  State<_MintDialog> createState() => _MintDialogState();
+  ConsumerState<_MintDialog> createState() => _MintDialogState();
 }
 
-class _MintDialogState extends State<_MintDialog> {
+class _MintDialogState extends ConsumerState<_MintDialog> {
   final _formKey = GlobalKey<FormState>();
   final _countController = TextEditingController(text: '25');
   final _labelController = TextEditingController();
+
+  /// Who the run goes to. Null is a real, ordinary choice — an admin who has
+  /// not decided yet still needs the codes at the printer.
+  String? _assignToUserId;
 
   @override
   void dispose() {
@@ -201,6 +214,7 @@ class _MintDialogState extends State<_MintDialog> {
     Navigator.of(context).pop(_MintRequest(
       count: int.parse(_countController.text.trim()),
       label: _labelController.text.trim(),
+      assignToUserId: _assignToUserId,
     ));
   }
 
@@ -240,6 +254,11 @@ class _MintDialogState extends State<_MintDialog> {
               },
             ),
             const SizedBox(height: AppSpacing.md),
+            _AssigneeField(
+              selectedId: _assignToUserId,
+              onChanged: (id) => setState(() => _assignToUserId = id),
+            ),
+            const SizedBox(height: AppSpacing.md),
             const Text(
               // The one irreversible thing about this screen, said before the
               // button rather than after: the resolver origin is baked into
@@ -268,6 +287,86 @@ class _MintDialogState extends State<_MintDialog> {
       ],
     );
   }
+}
+
+/// "Give the whole run to..." — the reason this dialog grew a third field.
+///
+/// BULK IS THE WHOLE POINT. Assigning standees one row at a time is fine for a
+/// correction and absurd for a rep being sent out with twenty of them, and the
+/// moment an admin actually knows who is carrying a batch is the moment they
+/// are creating it.
+///
+/// A FAILED ROSTER MUST NOT BLOCK A MINT. The codes are going to a printer
+/// whether or not we can name a holder today, and assignment is advisory — it
+/// changes what each side SEES and gates nothing. So an error here degrades to
+/// "assign them later" rather than taking the Mint button with it, which is
+/// also why nobody-selected is the default rather than a validation failure.
+class _AssigneeField extends ConsumerWidget {
+  const _AssigneeField({required this.selectedId, required this.onChanged});
+
+  final String? selectedId;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reps = ref.watch(salesRepsProvider);
+
+    return reps.when(
+      loading: () => const _AssigneeNote('Loading staff...'),
+      // No retry control: minting is the task, and the recovery for a roster
+      // that would not load is to assign afterwards.
+      error: (_, __) =>
+          const _AssigneeNote('Staff list unavailable — you can assign later.'),
+      data: (people) {
+        if (people.isEmpty) {
+          return const _AssigneeNote(
+            'No staff accounts yet — you can assign later.',
+          );
+        }
+        return DropdownButtonFormField<String?>(
+          key: const ValueKey('admin_mint_assignee'),
+          initialValue: selectedId,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Give them all to'),
+          dropdownColor: AppColors.surface2,
+          items: [
+            const DropdownMenuItem<String?>(
+              value: null,
+              child: Text('Nobody yet'),
+            ),
+            for (final person in people)
+              DropdownMenuItem<String?>(
+                value: person.id,
+                child: Text(
+                  person.person.label,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: onChanged,
+        );
+      },
+    );
+  }
+}
+
+/// Stands in for the picker when there is nobody to choose from, or not yet.
+class _AssigneeNote extends StatelessWidget {
+  const _AssigneeNote(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          message,
+          style: const TextStyle(
+            fontSize: AppTypography.sizeLabel,
+            color: AppColors.textMuted,
+          ),
+        ),
+      );
 }
 
 class _Message extends StatelessWidget {

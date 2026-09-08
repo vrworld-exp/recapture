@@ -826,6 +826,10 @@ const qrBatchMintedProps = z
   .object({
     actor_id_hash: z.string().min(1),
     batch_size: z.number().int().positive(),
+    // Whether the run was handed to a rep as it was minted. A boolean, never
+    // an id: who holds a batch is staff PII and the question here is only
+    // whether the bulk path is used at all.
+    assigned_on_mint: z.boolean().optional(),
   })
   .strict();
 

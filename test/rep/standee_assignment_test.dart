@@ -115,7 +115,11 @@ class _FakeAdminRepo implements AdminStandeeRepository {
   Future<List<QrBatchSummary>> batches() async => const [];
 
   @override
-  Future<QrMintResult> mint({required int count, required String label}) async =>
+  Future<QrMintResult> mint({
+    required int count,
+    required String label,
+    String? assignToUserId,
+  }) async =>
       const QrMintResult(batchId: 'b', minted: 0);
 
   @override

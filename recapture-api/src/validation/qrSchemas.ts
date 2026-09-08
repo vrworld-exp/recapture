@@ -49,6 +49,22 @@ export const mintQrBatchSchema = z
         () => ({ message: `count must be at most ${env.QR_BATCH_MAX_SIZE}` })
       ),
     label: z.string().trim().min(1, 'label is required').max(120, 'label must be at most 120 characters'),
+    /**
+     * Hand the whole run to one staff member as it is minted.
+     *
+     * OPTIONAL, and absent means "nobody" rather than "everybody" — an admin who
+     * has not decided who is carrying a batch must be able to mint it anyway,
+     * because the codes are going to a printer either way and the holder is a
+     * fact about a folder, not about the print run.
+     *
+     * Shape-checked here, EXISTENCE checked in the route before anything is
+     * minted. A 24-hex string is the cheapest way to reject a malformed id
+     * without importing mongoose into the validation layer.
+     */
+    assignToUserId: z
+      .string()
+      .regex(/^[0-9a-fA-F]{24}$/, 'assignToUserId must be a user id')
+      .optional(),
   })
   .strict();
 

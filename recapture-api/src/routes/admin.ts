@@ -76,7 +76,9 @@ import {
 } from '@/validation/qrSchemas';
 import { renderStandeeSheet } from '@/services/standeeSheetService';
 import {
+  assignBatchCodes,
   assignCode,
+  findAssignableRep,
   listAssignableReps,
   unassignCode,
 } from '@/services/standeeAssignmentService';
@@ -1058,30 +1060,84 @@ router.post(
  * every future activation hands out. Body `{count, label}`; `count` is bounded
  * by QR_BATCH_MAX_SIZE in the schema, not here.
  *
- * The codes come back UNASSIGNED and resolve to nothing. Analytics carries the
- * hashed actor and the batch SIZE only — never a code, which is a public
- * identifier for one restaurant's menu.
+ * The codes come back UNASSIGNED unless `assignToUserId` names a staff member,
+ * in which case the whole run is handed to them in one write — see below.
+ * Analytics carries the hashed actor and the batch SIZE only — never a code,
+ * which is a public identifier for one restaurant's menu.
+ *
+ * ⚠ THE REP IS RESOLVED BEFORE ANYTHING IS MINTED, and that ordering is the
+ * whole safety argument for doing this in one endpoint. A picker left open while
+ * a role was revoked hands us a stale id; if that were discovered AFTER the
+ * mint, the admin would be looking at an error over a batch that does exist,
+ * and the obvious reaction — press Mint again — commits a second physical print
+ * run. Nothing is created until the holder is known to be real.
  */
 router.post(
   '/qr-batches',
   requireRole('ADMIN'),
   validateBody(mintQrBatchSchema),
   asyncHandler(async (req, res) => {
-    const { count, label } = req.body as MintQrBatchInput;
+    const { count, label, assignToUserId } = req.body as MintQrBatchInput;
     const userId = req.user!.userId;
 
+    // ── 1) Prove the holder exists, while nothing has been committed ─────────
+    let rep = null;
+    if (assignToUserId) {
+      rep = await findAssignableRep(new Types.ObjectId(assignToUserId));
+      if (!rep) {
+        // The same 404 shape the single-code assignment uses. Not a 400: the id
+        // was well-formed, it just does not name someone who can hold a standee.
+        res.status(404).json({
+          status: 'error',
+          code: 'REP_NOT_FOUND',
+          message: 'That staff member was not found, or cannot hold standees.',
+        });
+        return;
+      }
+    }
+
+    // ── 2) The print run ────────────────────────────────────────────────────
     const { batchId, minted } = await mintBatch({
       count,
       label,
       createdByUserId: new Types.ObjectId(userId),
     });
 
+    // ── 3) The holder, which must never cost us the batch ───────────────────
+    // Assignment is ADVISORY (see standeeAssignmentService's header): it changes
+    // what each side can SEE and gates nothing. So a failure here is not worth
+    // failing a mint over — the codes exist, they are correct, and they can be
+    // handed out afterwards. Propagating it would give the admin a 500 over a
+    // batch that was created, which is the one outcome that leads to a duplicate
+    // print run.
+    let assignedTo = null;
+    if (rep) {
+      try {
+        await assignBatchCodes({
+          batchId,
+          repUserId: new Types.ObjectId(rep.id),
+          actorUserId: new Types.ObjectId(userId),
+        });
+        assignedTo = rep;
+      } catch (err) {
+        console.warn('[qr-batches] minted but could not assign; codes are unaffected', err);
+      }
+    }
+
     track(AnalyticsEvent.QR_BATCH_MINTED, {
       actor_id_hash: hashIdentifier(userId),
       batch_size: minted,
+      assigned_on_mint: assignedTo !== null,
     });
 
-    res.status(201).json({ status: 'success', batchId: batchId.toString(), minted });
+    res.status(201).json({
+      status: 'success',
+      batchId: batchId.toString(),
+      minted,
+      // Echoed back so the screen can confirm WHO got them, rather than the
+      // admin having to open the batch to find out whether it worked.
+      assignedTo,
+    });
   })
 );
 

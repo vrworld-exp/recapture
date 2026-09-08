@@ -88,18 +88,32 @@ class AdminStandeesNotifier extends AutoDisposeNotifier<AdminStandeesState> {
   /// Returns the new batch's id so the screen can push straight into it — the
   /// admin minted because they want codes NOW, and making them find the run
   /// they just created in a list is a step for no reason.
-  Future<String?> mint({required int count, required String label}) async {
+  Future<String?> mint({
+    required int count,
+    required String label,
+    String? assignToUserId,
+  }) async {
     if (state.minting) return null;
     state = state.copyWith(minting: true, failure: null, notice: null);
 
     try {
-      final result = await _repo.mint(count: count, label: label);
+      final result = await _repo.mint(
+        count: count,
+        label: label,
+        assignToUserId: assignToUserId,
+      );
       if (_disposed) return null;
       await load();
       if (_disposed) return null;
+      // NAMES THE HOLDER FROM THE RESPONSE, not from what was asked for.
+      // The mint deliberately survives a failed assignment, so "for Ravi"
+      // is only said when the server reports it actually happened.
+      final holder = result.assignedTo?.label;
       state = state.copyWith(
         minting: false,
-        notice: 'Minted ${result.minted} standee codes.',
+        notice: holder == null
+            ? 'Minted ${result.minted} standee codes.'
+            : 'Minted ${result.minted} standee codes for $holder.',
       );
       return result.batchId;
     } on CatalogFailure catch (failure) {

@@ -56,7 +56,17 @@ abstract interface class AdminStandeeRepository {
   Future<List<QrBatchSummary>> batches();
 
   /// Mints a run. `count` is bounded server-side by QR_BATCH_MAX_SIZE.
-  Future<QrMintResult> mint({required int count, required String label});
+  /// Mints a run. count is bounded server-side by QR_BATCH_MAX_SIZE.
+  ///
+  /// [assignToUserId] hands the whole run to one staff member as it is
+  /// created, which is the point: an admin sending a rep out with twenty
+  /// standees should not assign twenty rows one at a time. Omit it to mint
+  /// unassigned stock.
+  Future<QrMintResult> mint({
+    required int count,
+    required String label,
+    String? assignToUserId,
+  });
 
   /// One keyset page of a batch's codes, sorted by code.
   ///
@@ -115,11 +125,22 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
       });
 
   @override
-  Future<QrMintResult> mint({required int count, required String label}) =>
+  Future<QrMintResult> mint({
+    required int count,
+    required String label,
+    String? assignToUserId,
+  }) =>
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/admin/qr-batches',
-          data: {'count': count, 'label': label},
+          data: {
+            'count': count,
+            'label': label,
+            // OMITTED, not null, when nobody was picked: the request body
+            // is strict server-side, and an explicit null is a different
+            // request from an absent key.
+            if (assignToUserId != null) 'assignToUserId': assignToUserId,
+          },
         );
         final body = res.data;
         final batchId = body?['batchId'];
@@ -129,9 +150,13 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
             message: 'Something went wrong. Please try again.',
           );
         }
+        final assignedTo = body?['assignedTo'];
         return QrMintResult(
           batchId: batchId,
           minted: (body?['minted'] as num?)?.toInt() ?? 0,
+          assignedTo: assignedTo is Map<String, dynamic>
+              ? StandeeAssignee.fromMap(assignedTo)
+              : null,
         );
       });
 

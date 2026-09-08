@@ -292,8 +292,19 @@ class QrCodePage {
 
 /// What a mint produced.
 class QrMintResult {
-  const QrMintResult({required this.batchId, required this.minted});
+  const QrMintResult({
+    required this.batchId,
+    required this.minted,
+    this.assignedTo,
+  });
 
   final String batchId;
   final int minted;
+
+  /// Who the whole run was handed to, when the admin chose someone.
+  ///
+  /// Echoed back by the server rather than assumed from what was sent: the
+  /// mint deliberately survives a failed assignment, so the screen must
+  /// confirm what happened rather than what was asked for.
+  final StandeeAssignee? assignedTo;
 }
