@@ -546,6 +546,23 @@ export const catalogProductParamsSchema = z
 export type CatalogProductParams = z.infer<typeof catalogProductParamsSchema>;
 
 /**
+ * `/rep/catalogs/:id/categories/:categoryId` — the category twin of the above.
+ *
+ * Its own shape for the same reason: `.strict()` on each of these is what makes
+ * a typo in a route path fail loudly instead of arriving as an ignored extra
+ * key, so the two-id routes get one schema per pair rather than a shared loose
+ * one.
+ */
+export const catalogCategoryParamsSchema = z
+  .object({
+    id: objectId('catalog id'),
+    categoryId: objectId('category id'),
+  })
+  .strict();
+
+export type CatalogCategoryParams = z.infer<typeof catalogCategoryParamsSchema>;
+
+/**
  * GET /catalog/qr query.
  *
  * `size` is CLAMPED by the renderer rather than rejected here — a client asking

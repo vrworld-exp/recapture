@@ -23,6 +23,16 @@ Commands for Flutter :------------->
 
 
 
+------------------ Accounts and their roles ------------------------>>>>
+
+
+9264981073 : Admin 
+9264981074 : Modle Artist
+9264981075 : user
+9264981076 : Sale Rep
+
+
+
 
 
 

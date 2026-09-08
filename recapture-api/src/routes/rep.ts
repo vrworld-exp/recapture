@@ -37,8 +37,12 @@ import {
   brandingBytesQuerySchema,
   brandingCommitSchema,
   brandingUploadUrlSchema,
+  catalogCategoryParamsSchema,
   catalogProductParamsSchema,
+  createCategorySchema,
   createProductSchema,
+  reorderSchema,
+  updateCategorySchema,
   productImageBytesQuerySchema,
   productImageUploadUrlSchema,
   updateBusinessProfileSchema,
@@ -78,7 +82,13 @@ import {
   storeBrandingImageBytes,
   updateBusinessProfile,
 } from '@/services/catalogService';
-import { listCategories } from '@/services/catalogCategoriesService';
+import {
+  createCategory,
+  deleteCategory,
+  listCategories,
+  reorderCategories,
+  updateCategory,
+} from '@/services/catalogCategoriesService';
 import {
   PRODUCT_IMAGE_CONTENT_TYPES,
   sniffProductImageContentType,
@@ -249,15 +259,31 @@ router.get(
   })
 );
 
-/**
- * GET /rep/catalogs/:id/categories — the sections the public page will have.
- *
- * READ-ONLY on this surface, and that is the whole design: a rep previews a menu
- * grouped the way the owner grouped it, and can move a dish between EXISTING
- * sections from the dish editor. Creating, renaming, reordering and deleting
- * categories stay owner-only — they reshape a page the restaurant lives with
- * long after the visit ends.
- */
+// ── The restaurant's sections, on their behalf ────────────────────────
+//
+// THE GAP THIS CLOSES. These routes were READ-ONLY, on the reasoning that
+// categories reshape a page the restaurant lives with long after the visit ends
+// and so belong to the owner. That reasoning assumed the sections EXISTED. They
+// do not: `activate` creates a catalog and no categories at all, so a
+// rep-activated restaurant has zero of them, and the category picker in the dish
+// editor offered exactly one choice — Uncategorized — on every restaurant a rep
+// had ever signed up. Every dish landed in one unnamed heap, the public page
+// rendered as a single flat list with no sections to navigate, and the only way
+// out was for the OWNER to sign in and build the menu structure the rep had just
+// spent an hour filling.
+//
+// So the whole set is delegated now, not just the read. Each route DELEGATES to
+// the owner service with the restaurant's userId, exactly as the product and
+// profile routes do — `findOwnedCatalog` resolves one catalog per user, so
+// passing the owner's id is passing the restaurant's catalog. Nothing in
+// catalogCategoriesService knows a rep exists.
+//
+// The delegation grant remains the whole authority: `resolveDelegatedCatalog`
+// gates every one of them, a revoked rep loses all five on the next request, and
+// a rep who is not delegated cannot tell these routes apart from a nonexistent
+// catalog.
+
+/** GET /rep/catalogs/:id/categories — the sections the public page will have. */
 router.get(
   '/catalogs/:id/categories',
   asyncHandler(async (req, res) => {
@@ -272,6 +298,174 @@ router.get(
       status: 'success',
       categories: result.categories,
       uncategorizedCount: result.uncategorizedCount,
+    });
+  })
+);
+
+/** POST /rep/catalogs/:id/categories — a new section on the restaurant's menu. */
+router.post(
+  '/catalogs/:id/categories',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = createCategorySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const ownerUserId = String(catalog.userId);
+    const result = await createCategory(ownerUserId, parsed.data);
+
+    if (result.outcome === 'NO_CATALOG') return notDelegated(res);
+    if (result.outcome === 'DUPLICATE_NAME') {
+      return fail(
+        res,
+        409,
+        'DUPLICATE_NAME',
+        'A category with that name already exists on this menu.'
+      );
+    }
+
+    // The OWNER's hash, for the same reason rep-publish uses it: the event
+    // answers "how much structure does this restaurant's menu have", and a rep's
+    // id would scatter one restaurant's sections across every rep who ever
+    // worked it.
+    track(AnalyticsEvent.CATALOG_CATEGORY_CREATED, {
+      user_id_hash: hashIdentifier(ownerUserId),
+      category_id: result.category.id,
+    });
+
+    res.status(201).json({ status: 'success', category: result.category });
+  })
+);
+
+// STATIC BEFORE :categoryId. `/categories/reorder` would otherwise be matched by
+// the PATCH/DELETE routes below with `categoryId: 'reorder'` — which objectId()
+// rejects, so it fails rather than acting on the wrong row, but a not-found for
+// a route that exists is still the wrong answer. Same ordering rule as
+// catalog.ts.
+router.post(
+  '/catalogs/:id/categories/reorder',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = reorderSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const result = await reorderCategories(String(catalog.userId), parsed.data.ids);
+
+    if (result.outcome === 'NO_CATALOG') return notDelegated(res);
+    if (result.outcome === 'ID_SET_MISMATCH') {
+      return fail(
+        res,
+        400,
+        'ID_SET_MISMATCH',
+        'Send every category id exactly once. Reload and try again.'
+      );
+    }
+
+    res.status(200).json({ status: 'success', categories: result.categories });
+  })
+);
+
+/** PATCH /rep/catalogs/:id/categories/:categoryId — rename, or reposition one. */
+router.patch(
+  '/catalogs/:id/categories/:categoryId',
+  asyncHandler(async (req, res) => {
+    const params = catalogCategoryParamsSchema.safeParse(req.params);
+    // A malformed id answers as "not yours", never as a 400 — the same
+    // enumeration promise every other /rep route makes.
+    if (!params.success) return notDelegated(res);
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, params.data.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = updateCategorySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const result = await updateCategory(
+      String(catalog.userId),
+      params.data.categoryId,
+      parsed.data
+    );
+
+    if (result.outcome === 'NO_CATALOG') return notDelegated(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'NOT_FOUND', 'Category not found.');
+    }
+    if (result.outcome === 'DUPLICATE_NAME') {
+      return fail(
+        res,
+        409,
+        'DUPLICATE_NAME',
+        'A category with that name already exists on this menu.'
+      );
+    }
+
+    res.status(200).json({ status: 'success', category: result.category });
+  })
+);
+
+/**
+ * DELETE /rep/catalogs/:id/categories/:categoryId — remove a section.
+ *
+ * THE DISHES SURVIVE. `deleteCategory` moves them to Uncategorized rather than
+ * deleting them, and `movedProductCount` comes back so the rep screen can say
+ * "3 dishes moved to Uncategorized" — deleting a grouping must never look like
+ * it deleted the things inside it, least of all to someone doing it on another
+ * business's menu.
+ */
+router.delete(
+  '/catalogs/:id/categories/:categoryId',
+  asyncHandler(async (req, res) => {
+    const params = catalogCategoryParamsSchema.safeParse(req.params);
+    if (!params.success) return notDelegated(res);
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, params.data.id);
+    if (!catalog) return notDelegated(res);
+
+    const ownerUserId = String(catalog.userId);
+    const result = await deleteCategory(ownerUserId, params.data.categoryId);
+
+    if (result.outcome === 'NO_CATALOG') return notDelegated(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'NOT_FOUND', 'Category not found.');
+    }
+
+    track(AnalyticsEvent.CATALOG_CATEGORY_DELETED, {
+      user_id_hash: hashIdentifier(ownerUserId),
+      category_id: params.data.categoryId,
+      moved_product_count: result.movedProductCount,
+    });
+
+    res.status(200).json({
+      status: 'success',
+      movedProductCount: result.movedProductCount,
     });
   })
 );

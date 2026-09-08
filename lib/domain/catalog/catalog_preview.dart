@@ -41,6 +41,7 @@ class CatalogPreview {
     required this.sections,
     required this.products,
     required this.gates,
+    this.emptySectionTitles = const <String>[],
   });
 
   final Catalog catalog;
@@ -53,6 +54,17 @@ class CatalogPreview {
   /// Category blocks in their set order, Uncategorized last. Empty categories
   /// are dropped: the public page has no tab for a section with nothing in it.
   final List<CatalogPreviewSection> sections;
+
+  /// Sections that EXIST but have nothing in them, in their set order.
+  ///
+  /// They are absent from [sections] on purpose — the public page has no
+  /// heading for a section with no products, so a preview that showed one would
+  /// be previewing a page that will not exist. But their absence is confusing in
+  /// exactly the moment it matters most: somebody who has just created
+  /// "Drinks", opened the preview, and cannot find it has every reason to think
+  /// the create failed. So the titles ride along, and the page names them in one
+  /// quiet line rather than rendering them as sections.
+  final List<String> emptySectionTitles;
 
   /// Every LIVE product, flat, in catalog order. What the gate evaluation ran
   /// over, and what the counts are derived from.
@@ -112,6 +124,14 @@ class CatalogPreview {
           ),
     ];
 
+    // Named here, in the same pass and from the same list, so "shown as a
+    // section" and "named as empty" cannot both be true or both be false for
+    // one category.
+    final emptyTitles = [
+      for (final category in ordered)
+        if (_inCategory(live, category.id).isEmpty) category.name,
+    ];
+
     // NOTHING MAY FALL OUT OF THE PREVIEW. A product whose `categoryId` names a
     // category this list does not carry — a category deleted on another device,
     // a list read a moment before a rename — is not uncategorized, but it is
@@ -143,6 +163,7 @@ class CatalogPreview {
         catalogName: catalog.name,
         products: live,
       ),
+      emptySectionTitles: emptyTitles,
     );
   }
 

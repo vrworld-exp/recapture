@@ -88,6 +88,22 @@ class RepCatalogDetailScreen extends ConsumerWidget {
                 context.push('${AppRoutes.repCatalogs}/$catalogId/preview'),
           ),
           IconButton(
+            key: const ValueKey('rep_menu_sections'),
+            icon: const Icon(Icons.category_outlined),
+            tooltip: 'Menu sections',
+            onPressed: () async {
+              await context.push('${AppRoutes.repCatalogs}/$catalogId/sections');
+              if (!context.mounted) return;
+              // A rename or a delete changes the section every dish row and the
+              // preview reads. The category list is autoDispose and re-reads
+              // itself; the DISHES carry a categoryId that a delete may just
+              // have moved, so they are re-read too.
+              await ref
+                  .read(repCatalogProductsProvider(catalogId).notifier)
+                  .refresh();
+            },
+          ),
+          IconButton(
             key: const ValueKey('rep_restaurant_details'),
             icon: const Icon(Icons.storefront_outlined),
             tooltip: 'Restaurant details',

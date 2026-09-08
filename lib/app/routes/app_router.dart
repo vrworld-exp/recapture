@@ -28,6 +28,7 @@ import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
 import '../../presentation/screens/rep/rep_dish_editor_screen.dart';
 import '../../presentation/screens/rep/rep_menu_preview_screen.dart';
+import '../../presentation/screens/rep/rep_sections_screen.dart';
 import '../../presentation/screens/rep/rep_catalogs_screen.dart';
 import '../../presentation/screens/rep/rep_standees_screen.dart';
 import '../../presentation/screens/projects/create_project_screen.dart';
@@ -191,6 +192,13 @@ abstract final class AppRoutes {
   /// The restaurant's whole page as a customer will meet it.
   static const repCatalogPreview = '/rep/catalogs/:id/preview';
 
+  /// The menu's structure: the sections dishes are filed into.
+  ///
+  /// `sections` rather than `categories`, matching every word the rep surface
+  /// puts on screen — "category" is the API's noun and the owner's, and a rep
+  /// reading their own screens should meet one word for one thing.
+  static const repCatalogSections = '/rep/catalogs/:id/sections';
+
   // ── Admin (standee inventory, /admin/standees) ────────────────────────────
   // Gated on isAdmin in the router's redirect below. NOT the whole /admin
   // subtree: the staff project routes below it are MODEL_ARTIST surfaces, and
@@ -263,6 +271,7 @@ abstract final class AppRouteNames {
   static const repDishDetail = 'repDishDetail';
   static const repCatalogDetails = 'repCatalogDetails';
   static const repCatalogPreview = 'repCatalogPreview';
+  static const repCatalogSections = 'repCatalogSections';
   static const adminStandees = 'adminStandees';
   static const adminBatchDetail = 'adminBatchDetail';
   static const previewGallery = 'previewGallery';
@@ -604,6 +613,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.repCatalogPreview,
         name: AppRouteNames.repCatalogPreview,
         builder: (context, state) => RepMenuPreviewScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogSections,
+        name: AppRouteNames.repCatalogSections,
+        builder: (context, state) => RepSectionsScreen(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),

@@ -29,6 +29,7 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart'
 import 'package:recapture/application/catalog/qr_download_file.dart';
 import 'package:recapture/data/repositories/admin_standee_repository.dart'
     show StandeeQrFormat;
+import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
@@ -43,11 +44,30 @@ import 'rep_repo_catalog_defaults.dart';
 
 /// One recorded create, so a test can assert WHAT was authored, not just that
 /// something was.
-typedef _CreatedDish = ({ProductType type, String name, String? modelId, String? imageKey});
+typedef _CreatedDish = ({
+  ProductType type,
+  String name,
+  String? modelId,
+  String? imageKey,
+  String? categoryId,
+});
 
 class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
   final List<_CreatedDish> created = [];
   final List<Uint8List> uploaded = [];
+
+  /// The menu's sections. Empty by default — the state every rep-activated
+  /// restaurant starts in, and the one the section picker was added to get out
+  /// of. Answered rather than left to the mixin's throw, because the add-dish
+  /// form reads it on every build now.
+  List<CatalogCategory> storedCategories = const [];
+
+  @override
+  Future<CatalogCategoryList> categories(String catalogId) async =>
+      CatalogCategoryList(
+        categories: storedCategories,
+        uncategorizedCount: 0,
+      );
 
   @override
   Future<CatalogProduct> createProduct(
@@ -58,8 +78,10 @@ class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
     double? price,
     String? sourceModelId,
     String? imageKey,
+    String? categoryId,
   }) async {
     created.add((
+      categoryId: categoryId,
       type: type,
       name: name,
       modelId: sourceModelId,
@@ -187,6 +209,22 @@ class _FakeImagePicker implements ProductImagePicker {
       );
 }
 
+/// Pumps on a surface tall enough to hold the whole form.
+///
+/// Same reasoning and the same numbers as `add_product_test`'s `_pump`: the
+/// form is a ListView and builds only what is on screen, so once the section
+/// field was added the submit button was genuinely not in the tree at the
+/// default 800x600 surface. Scrolling in each test would work too, but it would
+/// make these tests about scrolling rather than about what gets authored.
+Future<void> _pump(WidgetTester tester, Widget app) async {
+  tester.view.physicalSize = const Size(1200, 3200);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  await tester.pumpWidget(app);
+  await tester.pumpAndSettle();
+}
+
 Widget _app(
   _FakeRepRepository repo, {
   required RepCapabilities caps,
@@ -224,7 +262,7 @@ void main() {
   group('the source list', () {
     for (final (name, caps) in [('mobile', _mobile), ('web', _web)]) {
       testWidgets('$name offers three, capture included', (tester) async {
-        await tester.pumpWidget(_app(_FakeRepRepository(), caps: caps));
+        await _pump(tester, _app(_FakeRepRepository(), caps: caps));
 
         expect(_source(RepDishSource.captureNow), findsOneWidget);
         expect(_source(RepDishSource.fromCapture), findsOneWidget);
@@ -234,7 +272,7 @@ void main() {
 
     testWidgets('a build that cannot capture omits the source ENTIRELY',
         (tester) async {
-      await tester.pumpWidget(_app(_FakeRepRepository(), caps: _fallback));
+      await _pump(tester, _app(_FakeRepRepository(), caps: _fallback));
 
       // findsNothing, not a disabled tile. An offered-but-dead source would be
       // a promise the target cannot keep.
@@ -250,7 +288,7 @@ void main() {
     for (final (name, caps) in [('mobile', _mobile), ('web', _web)]) {
       testWidgets('$name creates an image-only dish', (tester) async {
         final repo = _FakeRepRepository();
-        await tester.pumpWidget(_app(repo, caps: caps));
+        await _pump(tester, _app(repo, caps: caps));
 
         await tester.tap(_source(RepDishSource.photo));
         await tester.pumpAndSettle();
@@ -277,11 +315,72 @@ void main() {
     }
   });
 
+  group('the dish is filed on the way in', () {
+    testWidgets('sends the section the rep picked with the create',
+        (tester) async {
+      // BEFORE THIS the form had no section field at all: every dish a rep
+      // added was created uncategorized, and filing it meant reopening it in
+      // the editor afterwards — a second trip that, on a menu with no sections
+      // to begin with, essentially nobody made.
+      final repo = _FakeRepRepository()
+        ..storedCategories = const [
+          CatalogCategory(id: 'cat_starters', name: 'Starters', position: 0),
+        ];
+      await _pump(tester, _app(repo, caps: _web));
+
+      await tester.tap(_source(RepDishSource.photo));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('rep_dish_pick_photo')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('rep_dish_name_field')),
+        'Paneer Tikka',
+      );
+
+      await tester.tap(find.byKey(const ValueKey('rep_add_dish_section')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('rep_section_option_cat_starters')),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('rep_dish_submit')));
+      await tester.pumpAndSettle();
+
+      expect(repo.created.single.categoryId, 'cat_starters');
+    });
+
+    testWidgets('sends no section when the rep did not pick one',
+        (tester) async {
+      // Uncategorized is a real answer, not an omission — and it stays the
+      // default, because guessing the first section would file dishes into
+      // "Starters" all evening.
+      final repo = _FakeRepRepository()
+        ..storedCategories = const [
+          CatalogCategory(id: 'cat_starters', name: 'Starters', position: 0),
+        ];
+      await _pump(tester, _app(repo, caps: _web));
+
+      await tester.tap(_source(RepDishSource.photo));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('rep_dish_pick_photo')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('rep_dish_name_field')),
+        'Paneer Tikka',
+      );
+      await tester.tap(find.byKey(const ValueKey('rep_dish_submit')));
+      await tester.pumpAndSettle();
+
+      expect(repo.created.single.categoryId, isNull);
+    });
+  });
+
   group('what the server would certainly refuse is caught here', () {
     testWidgets('a photo dish with no photo does not become a request',
         (tester) async {
       final repo = _FakeRepRepository();
-      await tester.pumpWidget(_app(repo, caps: _web));
+      await _pump(tester, _app(repo, caps: _web));
 
       await tester.tap(_source(RepDishSource.photo));
       await tester.pumpAndSettle();
@@ -300,7 +399,7 @@ void main() {
     testWidgets('a 3D dish with no capture does not become a request',
         (tester) async {
       final repo = _FakeRepRepository();
-      await tester.pumpWidget(_app(repo, caps: _web));
+      await _pump(tester, _app(repo, caps: _web));
 
       await tester.enterText(
         find.byKey(const ValueKey('rep_dish_name_field')),
@@ -315,7 +414,7 @@ void main() {
 
     testWidgets('a nameless dish does not become a request', (tester) async {
       final repo = _FakeRepRepository();
-      await tester.pumpWidget(_app(repo, caps: _web));
+      await _pump(tester, _app(repo, caps: _web));
 
       await tester.tap(_source(RepDishSource.photo));
       await tester.pumpAndSettle();

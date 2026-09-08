@@ -25,6 +25,7 @@ import { Types } from 'mongoose';
 
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogCategory } from '@/models/CatalogCategory';
+import { CatalogDelegation } from '@/models/CatalogDelegation';
 import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun, type ICatalogPublishRun } from '@/models/CatalogPublishRun';
 import { Job } from '@/models/Job';
@@ -133,6 +134,41 @@ function gateProduct(product: ICatalogProduct): PublishGate[] {
 }
 
 /**
+ * Every id whose projects may hold a source model for this catalog: the OWNER,
+ * plus every rep with a LIVE delegation on it.
+ *
+ * THE REPS ARE NOT A COURTESY — they are the only thing that makes a
+ * rep-authored catalog publishable at all. `POST /rep/catalogs/:id/products`
+ * passes `capturedByUserId` into `resolveOwnedModel`, which widens ownership by
+ * exactly that id, because the rep shoots the dish on their own phone: the
+ * Project, and therefore the ProjectModel, belongs to the REP while the catalog
+ * belongs to the RESTAURANT. A gate that only ever asked about the owner
+ * therefore refused, permanently, a product it had itself just accepted — the
+ * dish showed a finished model and a thumbnail in the app and still returned
+ * PRODUCT_MODEL_NOT_READY on every publish, with nothing on screen to explain
+ * it. This function is that same widening, read at publish time.
+ *
+ * The DELEGATION is the widening key rather than a column on the product,
+ * because the delegation grant IS the audit trail for rep authorship — a
+ * second owner column on `CatalogProduct` would be a fact nothing else in the
+ * system reads. The cost is that revoking a rep re-blocks the dishes they
+ * captured; that is the honest reading of "this rep may no longer act on this
+ * catalog", and it surfaces as a gate the owner can see rather than silently.
+ *
+ * A stranger is still refused: no delegation, no widening.
+ */
+async function modelOwnerIds(
+  ownerId: Types.ObjectId,
+  catalogId: Types.ObjectId
+): Promise<Types.ObjectId[]> {
+  const grants = await CatalogDelegation.find({ catalogId, revokedAt: null })
+    .select({ repUserId: 1 })
+    .lean()
+    .exec();
+  return [ownerId, ...grants.map((grant) => grant.repUserId)];
+}
+
+/**
  * Are the ProjectModels behind the 3D products real, finished, and the caller's?
  *
  * One query for all of them rather than one per product: a fifty-product
@@ -142,7 +178,8 @@ function gateProduct(product: ICatalogProduct): PublishGate[] {
  * publish is the moment it stops being merely stored and starts being served.
  */
 async function gateSourceModels(
-  userId: Types.ObjectId,
+  ownerId: Types.ObjectId,
+  catalogId: Types.ObjectId,
   products: readonly ICatalogProduct[]
 ): Promise<PublishGate[]> {
   const withModels = products.filter(
@@ -161,9 +198,12 @@ async function gateSourceModels(
   // product-create time — `createdByUserId` is the ACTOR, and a staff-generated
   // model legitimately carries a staff id while belonging to the owner's
   // project. Checking the actor would refuse every staff-built model.
+  //
+  // The delegation read is only paid once there is a 3D product to justify it,
+  // which is why it sits here rather than in evaluatePublishGates.
   const ownedProjects = await Project.find({
     _id: { $in: models.map((model) => model.projectId) },
-    userId,
+    userId: { $in: await modelOwnerIds(ownerId, catalogId) },
     deletedAt: null,
   })
     .select({ _id: 1 })
@@ -355,7 +395,7 @@ export async function evaluatePublishGates(
   // The two database-backed gates go together rather than one after the other:
   // they read different collections and neither depends on the other's answer.
   const [modelGates, categoryGates] = await Promise.all([
-    gateSourceModels(catalog.userId, live),
+    gateSourceModels(catalog.userId, catalog._id as Types.ObjectId, live),
     gateCatalogCategories(catalog._id as Types.ObjectId, live),
   ]);
   gates.push(...modelGates, ...categoryGates);

@@ -41,6 +41,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_capabilities.dart';
+import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../application/rep/web_dish_camera.dart';
 import '../../../application/projects/projects_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
@@ -50,6 +51,7 @@ import '../../../domain/entities/product_type.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/model_picker_field.dart';
+import '../../widgets/rep/rep_section_picker.dart';
 import 'rep_web_capture_screen.dart';
 
 /// Which source the rep is authoring from. Distinct from [ProductType] on
@@ -73,6 +75,11 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
   RepDishSource _source = RepDishSource.fromCapture;
   String? _selectedProjectId;
   String? _selectedModelId;
+
+  /// The section the dish will be filed into. Null is Uncategorized, and is the
+  /// honest default: a rep who has not chosen has not chosen, and guessing the
+  /// first section for them would file dishes into "Starters" all evening.
+  String? _categoryId;
   PickedProductImage? _image;
   String? _failureMessage;
   bool _submitting = false;
@@ -207,6 +214,10 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
         name: _nameController.text.trim(),
         sourceModelId: _source == RepDishSource.photo ? null : _selectedModelId,
         imageKey: imageKey,
+        // FILED ON THE WAY IN. Before this the dish was created uncategorized
+        // and the rep had to reopen it in the editor to place it — which, on a
+        // menu with no sections to begin with, essentially nobody did.
+        categoryId: _categoryId,
       );
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -226,6 +237,8 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
         'MODEL_NOT_READY' =>
           'That capture is still processing. Pick another, or wait a moment.',
         'MODEL_NOT_FOUND' => 'That capture is no longer available.',
+        'CATEGORY_NOT_FOUND' =>
+          'That menu section no longer exists. Pick another.',
         'DUPLICATE_NAME' =>
           'This restaurant already has a dish with that name.',
         'CATALOG_NOT_FOUND' =>
@@ -308,6 +321,35 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
                     : null,
               ),
 
+              // ── Section ───────────────────────────────────────────────────
+              const SizedBox(height: AppSpacing.xxl),
+              Text(
+                'Menu section',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              ref.watch(repCategoriesProvider(widget.catalogId)).when(
+                    // A list still loading must not read as "this menu has no
+                    // sections" — that invites the rep past the field, and past
+                    // it is exactly where every dish ended up before.
+                    loading: () => const _InlineNote('Loading sections…'),
+                    error: (_, __) => const _InlineNote(
+                      "Couldn't load the sections. The dish will be added "
+                      'without one, and you can file it afterwards.',
+                    ),
+                    data: (list) => RepSectionPicker(
+                      fieldKey: const ValueKey('rep_add_dish_section'),
+                      catalogId: widget.catalogId,
+                      categories: list.categories,
+                      value: _categoryId,
+                      enabled: !_submitting,
+                      onChanged: (value) => setState(() {
+                        _categoryId = value;
+                        _failureMessage = null;
+                      }),
+                    ),
+                  ),
+
               if (_failureMessage != null) ...[
                 const SizedBox(height: AppSpacing.lg),
                 Text(
@@ -333,6 +375,23 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
       ),
     );
   }
+}
+
+/// A quiet line under a field, for a state that is neither a value nor an error
+/// the rep can act on.
+class _InlineNote extends StatelessWidget {
+  const _InlineNote(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Text(
+        text,
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: AppColors.textSecondary, height: 1.4),
+      );
 }
 
 /// The source list. Renders exactly what it is given — the platform gate lives

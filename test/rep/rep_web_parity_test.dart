@@ -67,6 +67,7 @@ class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
     double? price,
     String? sourceModelId,
     String? imageKey,
+    String? categoryId,
   }) async =>
       throw UnimplementedError();
 

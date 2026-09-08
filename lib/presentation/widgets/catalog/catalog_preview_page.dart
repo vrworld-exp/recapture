@@ -212,6 +212,33 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
             ),
           ),
       ],
+      // WHY THE EMPTY ONES ARE NAMED RATHER THAN DRAWN. A section with nothing
+      // in it gets no heading on the public page, so drawing one here would
+      // preview a page that will not exist. Saying nothing at all is worse
+      // though: somebody who has just made "Drinks" and cannot find it in the
+      // preview reads that as the create having failed. One line answers both.
+      if (preview.emptySectionTitles.isNotEmpty)
+        Padding(
+          key: const ValueKey('preview_empty_sections'),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.xl,
+            AppSpacing.lg,
+            AppSpacing.sm,
+          ),
+          child: Text(
+            preview.emptySectionTitles.length == 1
+                ? '"${preview.emptySectionTitles.single}" is empty, so it will '
+                    'not appear on the page until it has something in it.'
+                : '${preview.emptySectionTitles.length} sections are empty '
+                    '(${preview.emptySectionTitles.join(', ')}), so they will '
+                    'not appear on the page until they have something in them.',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: AppColors.textMuted, height: 1.4),
+          ),
+        ),
     ];
   }
 }

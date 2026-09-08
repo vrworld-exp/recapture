@@ -44,6 +44,8 @@ import { CatalogDelegation } from '@/models/CatalogDelegation';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun } from '@/models/CatalogPublishRun';
 import { Job } from '@/models/Job';
+import { Project } from '@/models/Project';
+import { ProjectModel } from '@/models/ProjectModel';
 import { QrCode } from '@/models/QrCode';
 import { QrCodeAssignment } from '@/models/QrCodeAssignment';
 import { RateWindow } from '@/models/RateWindow';
@@ -112,6 +114,8 @@ afterEach(async () => {
     CatalogProduct.deleteMany({}),
     CatalogPublishRun.deleteMany({}),
     Job.deleteMany({}),
+    Project.deleteMany({}),
+    ProjectModel.deleteMany({}),
     QrCode.deleteMany({}),
     QrCodeAssignment.deleteMany({}),
     RateWindow.deleteMany({}),
@@ -181,6 +185,40 @@ async function addPhotoDish(
     .set(rep.auth)
     .send({ type: 'IMAGE_ONLY', name, imageKey: key });
   expect(res.status).toBe(201);
+}
+
+/**
+ * A finished capture sitting in SOMEBODY's project, ready to be linked.
+ *
+ * `ownerOfCapture` is the whole point of the parameter: pass the rep and you
+ * get the real rep flow (the dish was shot on the rep's phone, so the Project
+ * is theirs); pass a stranger and you get the case the gate must still refuse.
+ */
+async function makeCapture(ownerOfCapture: string, name: string): Promise<string> {
+  const project = await Project.create({
+    userId: new Types.ObjectId(ownerOfCapture),
+    name: `${name} capture`,
+    objectSize: 'MEDIUM',
+    mode: 'GUIDED',
+  });
+  const model = await ProjectModel.create({
+    projectId: project._id,
+    jobId: new Types.ObjectId(),
+    source: 'meshy',
+    status: 'SUCCEEDED',
+    createdByUserId: new Types.ObjectId(ownerOfCapture),
+    createdByRole: 'USER',
+    artifacts: {
+      glbKey: `dev/x/y/models/${name}/model.glb`,
+      cdnUrls: {
+        glb: `https://cdn.example.com/${name}.glb`,
+        // The preview is what clears PRODUCT_THUMBNAIL_MISSING, so its absence
+        // could not be mistaken here for the model gate under test.
+        preview: `https://cdn.example.com/${name}.jpg`,
+      },
+    },
+  });
+  return model.id as string;
 }
 
 describe('the gap: a photo-only restaurant can be put live by the rep', () => {
@@ -306,6 +344,120 @@ describe('the delegation gate', () => {
 
     // The grant is read per request, so a revoke is effective at once.
     expect(res.status).toBe(404);
+  });
+});
+
+describe('a dish the rep captured on their own phone', () => {
+  // THE BUG THIS PINS. `POST /rep/catalogs/:id/products` widens ownership by
+  // `capturedByUserId` because the rep shoots the dish on their own phone — the
+  // Project, and so the ProjectModel, is the REP's while the catalog is the
+  // RESTAURANT's. The publish gate re-derived ownership without that widening,
+  // so it refused, on every attempt and forever, a product it had itself just
+  // accepted: the dish showed a finished model and a thumbnail in the app and
+  // publish answered PRODUCT_MODEL_NOT_READY with nothing on screen to explain
+  // why. Linking and publishing now ask the same question.
+  it('publishes rather than blocking on PRODUCT_MODEL_NOT_READY', async () => {
+    const { rep, catalogId } = await activated('EEEE1111', '+919876500011', 'Green Grill');
+    const modelId = await makeCapture(rep.id, 'trimmer');
+
+    const created = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products`)
+      .set(rep.auth)
+      .send({ type: 'THREE_D', name: 'Trimmer With Box', sourceModelId: modelId });
+    expect(created.status).toBe(201);
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish`)
+      .set(rep.auth);
+
+    expect(res.status).toBe(202);
+    expect(res.body.queued).toBe(true);
+  });
+
+  it('lets the OWNER publish it too, not just the rep who shot it', async () => {
+    // The rep leaves; the owner signs in later and taps Publish. Same catalog,
+    // same dish, same widening — the gate keys off the delegation on the
+    // catalog, not off who is holding the phone this time.
+    const { rep, catalogId, owner } = await activated(
+      'EEEE2222',
+      '+919876500012',
+      'Amber House'
+    );
+    const modelId = await makeCapture(rep.id, 'kettle');
+    await request(app)
+      .post(`/rep/catalogs/${catalogId}/products`)
+      .set(rep.auth)
+      .send({ type: 'THREE_D', name: 'Kettle', sourceModelId: modelId })
+      .expect(201);
+
+    const res = await request(app).post('/catalog/publish').set(owner.auth).send({});
+
+    expect(res.status).toBe(202);
+  });
+
+  it('still refuses a model belonging to nobody who may touch this catalog', async () => {
+    // The widening is exactly one step wide. A stranger's capture has no
+    // delegation behind it and is refused as before — this is the test that
+    // fails if the fix is ever loosened into "any SUCCEEDED model will do".
+    const { rep, catalogId } = await activated('EEEE3333', '+919876500013', 'Ivory Diner');
+    const stranger = await makeUser('USER');
+    const modelId = await makeCapture(stranger.id, 'stolen');
+
+    // Linking is refused at the door, so the row is planted directly: the gate,
+    // not createProduct, is what this test is about.
+    const catalog = await Catalog.findById(catalogId).lean().exec();
+    await CatalogProduct.create({
+      catalogId: new Types.ObjectId(catalogId),
+      userId: catalog!.userId,
+      type: 'THREE_D',
+      name: 'Stolen Chair',
+      position: 0,
+      sourceModelId: new Types.ObjectId(modelId),
+      modelStatus: 'READY',
+      assets: {
+        glbUrl: 'https://cdn.example.com/stolen.glb',
+        thumbnailUrl: 'https://cdn.example.com/stolen.jpg',
+      },
+    });
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish`)
+      .set(rep.auth);
+
+    expect(res.status).toBe(422);
+    expect(res.body.gates.map((g: { code: string }) => g.code)).toContain(
+      'PRODUCT_MODEL_NOT_READY'
+    );
+  });
+
+  it('re-blocks the dish once the delegation behind it is revoked', async () => {
+    // The honest cost of keying off the delegation, written down rather than
+    // discovered. Revoking a rep says "this rep may no longer act on this
+    // catalog", and their captures stop qualifying — as a gate the owner can
+    // see, not a silent change.
+    const { rep, catalogId, owner } = await activated(
+      'EEEE4444',
+      '+919876500014',
+      'Copper Pot'
+    );
+    const modelId = await makeCapture(rep.id, 'lamp');
+    await request(app)
+      .post(`/rep/catalogs/${catalogId}/products`)
+      .set(rep.auth)
+      .send({ type: 'THREE_D', name: 'Lamp', sourceModelId: modelId })
+      .expect(201);
+
+    await CatalogDelegation.updateMany(
+      { catalogId: new Types.ObjectId(catalogId) },
+      { $set: { revokedAt: new Date() } }
+    );
+
+    const res = await request(app).post('/catalog/publish').set(owner.auth).send({});
+
+    expect(res.status).toBe(422);
+    expect(res.body.gates.map((g: { code: string }) => g.code)).toContain(
+      'PRODUCT_MODEL_NOT_READY'
+    );
   });
 });
 

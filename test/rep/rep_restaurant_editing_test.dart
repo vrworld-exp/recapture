@@ -143,6 +143,71 @@ class FakeRepRepository implements RepRepository {
         uncategorizedCount: 0,
       );
 
+  // ── Sections ──────────────────────────────────────────────────────────────
+  //
+  // Real in-memory behaviour rather than `throw UnimplementedError()`: the
+  // section picker CREATES now, and a fake that threw would make the widget
+  // test for that assert on a crash instead of on the new row.
+
+  /// Names this fake was asked to create, in order. What a test asserts on when
+  /// it cares that the create was attempted at all.
+  final List<String> createdCategories = [];
+
+  /// Set to a code to make the next create fail with it — the duplicate-name
+  /// path the picker reports beside the field.
+  String? createCategoryFailureCode;
+
+  @override
+  Future<CatalogCategory> createCategory(String catalogId, String name) async {
+    if (createCategoryFailureCode case final code?) {
+      throw CatalogFailure(code: code, message: 'nope');
+    }
+    createdCategories.add(name);
+    final created = CatalogCategory(
+      id: 'cat_${storedCategories.length + 1}',
+      name: name,
+      position: storedCategories.length,
+    );
+    storedCategories = [...storedCategories, created];
+    return created;
+  }
+
+  @override
+  Future<CatalogCategory> renameCategory(
+    String catalogId,
+    String categoryId,
+    String name,
+  ) async {
+    final renamed = storedCategories
+        .firstWhere((c) => c.id == categoryId)
+        .copyWith(name: name);
+    storedCategories = [
+      for (final c in storedCategories) if (c.id == categoryId) renamed else c,
+    ];
+    return renamed;
+  }
+
+  @override
+  Future<int> deleteCategory(String catalogId, String categoryId) async {
+    final removed = storedCategories.firstWhere((c) => c.id == categoryId);
+    storedCategories = [
+      for (final c in storedCategories)
+        if (c.id != categoryId) c,
+    ];
+    return removed.productCount;
+  }
+
+  @override
+  Future<void> reorderCategories(
+    String catalogId,
+    List<String> orderedIds,
+  ) async {
+    storedCategories = [
+      for (final id in orderedIds)
+        storedCategories.firstWhere((c) => c.id == id),
+    ];
+  }
+
   @override
   Future<BusinessProfile> profile(String catalogId) async => storedProfile;
 
@@ -243,6 +308,7 @@ class FakeRepRepository implements RepRepository {
     double? price,
     String? sourceModelId,
     String? imageKey,
+    String? categoryId,
   }) async =>
       throw UnimplementedError();
 
@@ -460,6 +526,113 @@ void main() {
       // silently clear a price the rep never went near.
       expect(patch.priceUntouched, isTrue);
       expect(patch.categoryUntouched, isTrue);
+    });
+
+    /// Scrolls the section field into view and opens it.
+    ///
+    /// The ensureVisible is load-bearing, not defensive: the editor's form
+    /// scrolls, the field sits below the fold at the default test surface, and
+    /// a tap at an off-screen point is a WARNING rather than a failure — so
+    /// without this the menu silently never opens and the assertion that fails
+    /// is three lines further down, about something else.
+    Future<void> _openSectionPicker(WidgetTester tester) async {
+      final field = find.byKey(const ValueKey('rep_dish_section'));
+      await tester.ensureVisible(field);
+      await tester.pumpAndSettle();
+      await tester.tap(field);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('moves the dish to another section the rep picks',
+        (tester) async {
+      // A SECOND section, because the golden dish already sits in the first:
+      // re-picking the section a dish is already in is not a change, and a test
+      // that did it would assert on a save that correctly never happened.
+      final repo = FakeRepRepository();
+      repo.storedCategories = [
+        ...repo.storedCategories,
+        const CatalogCategory(id: 'cat_mains', name: 'Mains', position: 1),
+      ];
+      await tester.pumpWidget(harness(
+        repo,
+        const RepDishEditorScreen(catalogId: kCatalogId, productId: kDishId),
+      ));
+      await tester.pumpAndSettle();
+
+      await _openSectionPicker(tester);
+      await tester.tap(
+        find.byKey(const ValueKey('rep_section_option_cat_mains')),
+      );
+      await tester.pumpAndSettle();
+      await tapButton(tester, find.byKey(const ValueKey('rep_dish_save')));
+
+      final patch = repo.dishPatches.single;
+      expect(patch.categoryUntouched, isFalse);
+      expect(patch.categoryId, 'cat_mains');
+    });
+
+    testWidgets('creates a section from inside the picker and selects it',
+        (tester) async {
+      // THE WHOLE POINT OF PUTTING CREATE IN THE PICKER. A rep-activated
+      // restaurant has no sections, so the first dish of every visit needs one
+      // invented before it can be filed. Sending the rep to a separate screen
+      // and back, mid-edit, is how dishes ended up uncategorized instead.
+      final repo = FakeRepRepository()..storedCategories = [];
+      await tester.pumpWidget(harness(
+        repo,
+        const RepDishEditorScreen(catalogId: kCatalogId, productId: kDishId),
+      ));
+      await tester.pumpAndSettle();
+
+      await _openSectionPicker(tester);
+      await tester.tap(find.byKey(const ValueKey('rep_section_option_new')));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('rep_new_section_name')),
+        'Starters',
+      );
+      await tester.tap(find.byKey(const ValueKey('rep_new_section_create')));
+      await tester.pumpAndSettle();
+
+      expect(repo.createdCategories, ['Starters']);
+
+      // SELECTED, not merely created. Making the rep reopen the list and choose
+      // the name they just typed is a step that exists only because it was
+      // easier to write that way.
+      await tapButton(tester, find.byKey(const ValueKey('rep_dish_save')));
+      final patch = repo.dishPatches.single;
+      expect(patch.categoryUntouched, isFalse);
+      expect(patch.categoryId, repo.storedCategories.single.id);
+    });
+
+    testWidgets('says so when the section name is already taken',
+        (tester) async {
+      final repo = FakeRepRepository()
+        ..createCategoryFailureCode = 'DUPLICATE_NAME';
+      await tester.pumpWidget(harness(
+        repo,
+        const RepDishEditorScreen(catalogId: kCatalogId, productId: kDishId),
+      ));
+      await tester.pumpAndSettle();
+
+      await _openSectionPicker(tester);
+      await tester.tap(find.byKey(const ValueKey('rep_section_option_new')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('rep_new_section_name')),
+        'Chairs',
+      );
+      await tester.tap(find.byKey(const ValueKey('rep_new_section_create')));
+      await tester.pumpAndSettle();
+
+      // OUR sentence for the code — never the server's own message.
+      expect(
+        find.text('This menu already has a section with that name.'),
+        findsOneWidget,
+      );
+      // And the dish is untouched: a failed create must not silently move it.
+      expect(repo.dishPatches, isEmpty);
     });
 
     testWidgets('an emptied price is an explicit null, not an absence',

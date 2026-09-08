@@ -12,6 +12,8 @@
 // part worth sharing, and it already is: [CatalogPreview.compose] holds every
 // ordering, grouping and gate rule, and both providers hand it the same four
 // arguments. What differs is only where the four came from.
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/catalog_failure.dart';
@@ -37,14 +39,143 @@ final repCatalogDocumentProvider =
   (ref, catalogId) => ref.read(repRepositoryProvider).catalog(catalogId),
 );
 
-/// The sections the restaurant's public page will have.
+/// The sections one delegated restaurant's public page will have, and the
+/// writes that shape them.
 ///
-/// Read-only on this surface, which is the server's rule too — there is no
-/// delegated route that creates, renames or reorders a category. A rep files a
-/// dish into a section the owner made, and never reshapes the page itself.
-final repCategoriesProvider =
-    FutureProvider.autoDispose.family<CatalogCategoryList, String>(
-  (ref, catalogId) => ref.read(repRepositoryProvider).categories(catalogId),
+/// WRITABLE, where it used to be a bare read. The old rule — a rep files a dish
+/// into a section the OWNER made — quietly assumed the owner had made any:
+/// `activate` creates a catalog and no categories at all, so on every restaurant
+/// a rep signed up the picker offered Uncategorized and nothing else, every dish
+/// landed in one unnamed heap, and the preview rendered a flat list with no
+/// sections to navigate. A rep cannot file into sections that do not exist, so
+/// the sections are theirs to build.
+///
+/// Mirrors [CatalogCategoriesNotifier] deliberately, down to which mutations are
+/// optimistic: create, rename and delete adopt the server's own row because the
+/// wait is imperceptible, and only [reorder] moves first, because a drag that
+/// does not land under the finger reads as a failed gesture.
+///
+/// autoDispose and keyed by catalog, like every other rep provider: a rep works
+/// several restaurants in a day and a kept-alive list would show one
+/// restaurant's sections on another's screen.
+class RepCategoriesNotifier
+    extends AutoDisposeFamilyAsyncNotifier<CatalogCategoryList, String> {
+  RepRepository get _repo => ref.read(repRepositoryProvider);
+
+  @override
+  Future<CatalogCategoryList> build(String arg) => _repo.categories(arg);
+
+  /// Re-reads without emitting `AsyncLoading`, so a picker's options do not
+  /// vanish and reappear underneath an open menu.
+  Future<void> refresh() async {
+    try {
+      state = AsyncData(await _repo.categories(arg));
+    } catch (error, stack) {
+      // A failed background refresh must not blank a list the rep is reading.
+      if (state.valueOrNull == null) state = AsyncError(error, stack);
+    }
+  }
+
+  /// Creates a section, appended at the end — where the server puts it too.
+  ///
+  /// Throws [CatalogFailure]; `DUPLICATE_NAME` is the server's verdict and the
+  /// caller shows it beside the field rather than pre-checking a local list that
+  /// another device may already have changed.
+  Future<CatalogCategory> create(String name) async {
+    final created = await _repo.createCategory(arg, name);
+    final current = _list;
+    state = AsyncData(CatalogCategoryList(
+      categories: [...current.categories, created],
+      uncategorizedCount: current.uncategorizedCount,
+    ));
+    return created;
+  }
+
+  /// Renames one.
+  Future<CatalogCategory> rename(String id, String name) async {
+    final updated = await _repo.renameCategory(arg, id, name);
+    state = AsyncData(CatalogCategoryList(
+      categories: [
+        for (final category in _list.categories)
+          if (category.id == id) updated else category,
+      ],
+      uncategorizedCount: _list.uncategorizedCount,
+    ));
+    return updated;
+  }
+
+  /// Deletes one and returns how many dishes the SERVER moved to Uncategorized.
+  ///
+  /// That number is the one to report, and it is not always the one the
+  /// confirmation showed: `productCount` counts only live dishes, while the
+  /// delete moves archived ones too. The row goes at once — the rep asked for
+  /// it — and the counts are re-read, because the uncategorized bucket's size is
+  /// a server aggregate this notifier must not try to recompute.
+  Future<int> delete(String id) async {
+    final moved = await _repo.deleteCategory(arg, id);
+    state = AsyncData(CatalogCategoryList(
+      categories: [
+        for (final category in _list.categories)
+          if (category.id != id) category,
+      ],
+      uncategorizedCount: _list.uncategorizedCount,
+    ));
+    unawaited(refresh());
+    return moved;
+  }
+
+  /// Moves the section at [oldIndex] to [newIndex], optimistically.
+  ///
+  /// [newIndex] follows the `ReorderableListView` convention — counted BEFORE
+  /// the dragged row is removed — so the list hands its raw indices straight
+  /// here. Returns the index the row LANDED on, or null when nothing moved.
+  ///
+  /// The server takes the FULL ordered id list and rejects anything else with
+  /// `ID_SET_MISMATCH`, so a failure means nothing moved: the rollback is
+  /// unconditional, and is followed by a re-read because the likeliest cause of
+  /// a mismatch is the owner having reordered on their own phone first.
+  Future<int?> reorder(int oldIndex, int newIndex) async {
+    final previous = _list;
+    final categories = previous.categories;
+    if (oldIndex < 0 || oldIndex >= categories.length) return null;
+
+    var target = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    if (target < 0) target = 0;
+    if (target >= categories.length) target = categories.length - 1;
+    if (target == oldIndex) return null;
+
+    final reordered = [...categories];
+    reordered.insert(target, reordered.removeAt(oldIndex));
+    // Positions are renumbered to the array index server-side; mirroring that
+    // locally stops a later in-place update re-sorting the list.
+    final optimistic = [
+      for (var i = 0; i < reordered.length; i++)
+        reordered[i].copyWith(position: i),
+    ];
+    state = AsyncData(CatalogCategoryList(
+      categories: optimistic,
+      uncategorizedCount: previous.uncategorizedCount,
+    ));
+
+    try {
+      await _repo.reorderCategories(arg, [for (final c in optimistic) c.id]);
+      return target;
+    } on CatalogFailure {
+      state = AsyncData(previous);
+      unawaited(refresh());
+      rethrow;
+    }
+  }
+
+  /// The current list, or an empty one while the first load is in flight.
+  CatalogCategoryList get _list =>
+      state.valueOrNull ?? CatalogCategoryList.empty;
+}
+
+/// One delegated restaurant's sections, keyed by catalog id.
+final repCategoriesProvider = AsyncNotifierProvider.autoDispose
+    .family<RepCategoriesNotifier, CatalogCategoryList, String>(
+  RepCategoriesNotifier.new,
 );
 
 /// The composed draft of one delegated restaurant's public page.

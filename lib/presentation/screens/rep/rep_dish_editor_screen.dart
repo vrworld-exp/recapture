@@ -11,7 +11,11 @@
 // table?" — before they save rather than after they publish.
 //
 // DELIBERATELY NARROWER THAN THE OWNER'S EDITOR. No archive, no delete, no
-// duplicate, no model swap, no tags, no featured star. Those either have no
+// duplicate, no model swap, no tags, no featured star. (The menu SECTION is
+// here, and can now be created from here — see [RepSectionPicker]. That is not
+// a widening of scope so much as the removal of a dead end: a rep-activated
+// restaurant has no sections at all, so a picker that could only choose among
+// existing ones could only ever choose Uncategorized.) Those either have no
 // delegated route behind them or are decisions about a catalog the restaurant
 // lives with long after the visit; a rep changes what is wrong on the table in
 // front of them. The fields that ARE here are the ones a rep is asked to fix
@@ -30,7 +34,6 @@ import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_products_repository.dart'
     show kCatalogUnchanged;
-import '../../../domain/entities/catalog_category.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
 import '../../../domain/entities/product_type.dart';
@@ -40,6 +43,7 @@ import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/preview_product_card.dart';
+import '../../widgets/rep/rep_section_picker.dart';
 
 /// Width at or above which the preview sits BESIDE the form instead of above
 /// it.
@@ -477,7 +481,9 @@ class _DishFormState extends ConsumerState<_DishForm> {
             error: (_, __) => const _InlineNote(
               "Couldn't load the sections. The dish keeps the one it has.",
             ),
-            data: (list) => _SectionPicker(
+            data: (list) => RepSectionPicker(
+              fieldKey: const ValueKey('rep_dish_section'),
+              catalogId: widget.catalogId,
               categories: list.categories,
               value: _categoryId,
               enabled: !_saving,
@@ -555,52 +561,6 @@ class _DishFormState extends ConsumerState<_DishForm> {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// The section a dish sits in on the public page.
-///
-/// Uncategorized is a real, selectable option and not an absence: moving a dish
-/// OUT of a section is something a rep does, and it has to be expressible.
-class _SectionPicker extends StatelessWidget {
-  const _SectionPicker({
-    required this.categories,
-    required this.value,
-    required this.enabled,
-    required this.onChanged,
-  });
-
-  final List<CatalogCategory> categories;
-  final String? value;
-  final bool enabled;
-  final ValueChanged<String?> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    // A value the list does not carry — a section deleted on another device, or
-    // renamed a moment ago — would make DropdownButton assert. Falling back to
-    // Uncategorized shows the truth the dish will have if saved, rather than
-    // crashing the screen over a stale id.
-    final known = categories.any((c) => c.id == value);
-
-    return DropdownButtonFormField<String?>(
-      key: const ValueKey('rep_dish_section'),
-      initialValue: known ? value : null,
-      isExpanded: true,
-      decoration: const InputDecoration(border: OutlineInputBorder()),
-      items: [
-        const DropdownMenuItem<String?>(
-          value: null,
-          child: Text('Uncategorized'),
-        ),
-        for (final category in categories)
-          DropdownMenuItem<String?>(
-            value: category.id,
-            child: Text(category.name, overflow: TextOverflow.ellipsis),
-          ),
-      ],
-      onChanged: enabled ? onChanged : null,
     );
   }
 }

@@ -336,6 +336,38 @@ void main() {
       expect(preview.sections.map((s) => s.title), ['Starters']);
     });
 
+    test('but the empty one is still NAMED, so it cannot look like it vanished',
+        () {
+      // The other half of the rule above. Dropping the section is right — the
+      // public page will not render a heading with nothing under it — but
+      // saying nothing at all reads as "the section I just made did not save".
+      final preview = compose(
+        categories: [
+          category('c1', name: 'Starters', position: 0),
+          category('c2', name: 'Drinks', position: 1),
+          category('c3', name: 'Desserts', position: 2),
+        ],
+        products: [
+          inCategory(product('p1', thumbnailUrl: 'https://cdn/a.jpg'), 'c1'),
+        ],
+      );
+
+      expect(preview.sections.map((s) => s.title), ['Starters']);
+      // In their set order, like the sections themselves.
+      expect(preview.emptySectionTitles, ['Drinks', 'Desserts']);
+    });
+
+    test('a category with products is never named as empty', () {
+      final preview = compose(
+        categories: [category('c1', name: 'Starters', position: 0)],
+        products: [
+          inCategory(product('p1', thumbnailUrl: 'https://cdn/a.jpg'), 'c1'),
+        ],
+      );
+
+      expect(preview.emptySectionTitles, isEmpty);
+    });
+
     test('archived products are not previewed onto a page they never reach',
         () {
       final preview = compose(
@@ -514,6 +546,30 @@ void main() {
       expect(find.text('Mains'), findsWidgets);
       expect(find.text('Soup'), findsOneWidget);
       expect(find.text('Steak'), findsOneWidget);
+    });
+
+    testWidgets('names a section that exists but has nothing in it yet',
+        (tester) async {
+      await tester.pumpWidget(harness(
+        catalogRepo: FakePreviewCatalogRepo(categories: [
+          category('c1', name: 'Starters', position: 0),
+          category('c2', name: 'Drinks', position: 1),
+        ]),
+        productsRepo: FakeProductsRepository(
+          (_) async => pageOf([
+            inCategory(
+                product('p1', name: 'Soup', thumbnailUrl: 'https://cdn/a.jpg'),
+                'c1'),
+          ]),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Not rendered as a section — the public page has no heading for it...
+      expect(find.text('Starters'), findsWidgets);
+      // ...but named, so somebody who just created it can see it saved.
+      expect(find.byKey(const ValueKey('preview_empty_sections')),
+          findsOneWidget);
     });
 
     testWidgets('an empty catalog previews the BRANDED page a customer gets',

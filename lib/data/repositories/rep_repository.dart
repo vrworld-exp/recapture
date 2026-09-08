@@ -80,6 +80,10 @@ abstract interface class RepRepository {
   ///
   /// An image-only dish carries [imageKey] instead, and the upload therefore
   /// comes FIRST — [uploadImageBytes] or [createImageSlot], then this.
+  ///
+  /// [categoryId] files the dish on the way in. Null means Uncategorized, which
+  /// is a real answer and not an omission — it is where a dish goes when the rep
+  /// has not decided yet.
   Future<CatalogProduct> createProduct(
     String catalogId, {
     required ProductType type,
@@ -88,6 +92,7 @@ abstract interface class RepRepository {
     double? price,
     String? sourceModelId,
     String? imageKey,
+    String? categoryId,
   });
 
   /// Uploads an image through the API and returns its committed key.
@@ -162,9 +167,35 @@ abstract interface class RepRepository {
 
   /// The restaurant's sections, in their set order.
   ///
-  /// READ-ONLY on this surface by design — a rep previews and files dishes into
-  /// the sections the owner made, and never reshapes the page itself.
+  /// WRITABLE on this surface, and it has to be. `activate` seeds no categories
+  /// at all, so a rep-signed restaurant starts with none — a read-only list here
+  /// meant the dish editor's picker offered Uncategorized and nothing else on
+  /// every restaurant a rep ever set up, and the public page rendered as one
+  /// flat heap until the owner signed in and built the sections by hand.
   Future<CatalogCategoryList> categories(String catalogId);
+
+  /// Creates a section. Throws [CatalogFailure] with `DUPLICATE_NAME` when the
+  /// menu already has one by that name — the server's verdict, shown beside the
+  /// field rather than guessed at from a local list that may be stale.
+  Future<CatalogCategory> createCategory(String catalogId, String name);
+
+  /// Renames one.
+  Future<CatalogCategory> renameCategory(
+    String catalogId,
+    String categoryId,
+    String name,
+  );
+
+  /// Deletes a section and returns how many dishes moved to Uncategorized.
+  ///
+  /// The count is the whole point of the return type: the rep is deleting a
+  /// grouping on someone else's menu, and the confirmation must never let that
+  /// look like it deleted the dishes inside it.
+  Future<int> deleteCategory(String catalogId, String categoryId);
+
+  /// Writes a new section order. Send the FULL ordered id list — the server
+  /// answers a partial set with `ID_SET_MISMATCH` rather than guessing.
+  Future<void> reorderCategories(String catalogId, List<String> orderedIds);
 
   /// The restaurant's business profile: name, contact block, branding urls.
   Future<BusinessProfile> profile(String catalogId);
@@ -336,6 +367,7 @@ class RemoteRepRepository implements RepRepository {
     double? price,
     String? sourceModelId,
     String? imageKey,
+    String? categoryId,
   }) =>
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -347,6 +379,10 @@ class RemoteRepRepository implements RepRepository {
             if (price != null) 'price': price,
             if (sourceModelId != null) 'sourceModelId': sourceModelId,
             if (imageKey != null) 'imageKey': imageKey,
+            // OMITTED when null rather than sent as null: the create schema
+            // treats an absent categoryId as Uncategorized already, and sending
+            // an explicit null would be a second way to say the same thing.
+            if (categoryId != null) 'categoryId': categoryId,
           },
         );
         final product = res.data?['product'];
@@ -439,6 +475,55 @@ class RemoteRepRepository implements RepRepository {
           },
         );
       });
+
+  @override
+  Future<CatalogCategory> createCategory(String catalogId, String name) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/categories',
+          data: {'name': name},
+        );
+        return _categoryFrom(res.data);
+      });
+
+  @override
+  Future<CatalogCategory> renameCategory(
+    String catalogId,
+    String categoryId,
+    String name,
+  ) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/categories/$categoryId',
+          data: {'name': name},
+        );
+        return _categoryFrom(res.data);
+      });
+
+  @override
+  Future<int> deleteCategory(String catalogId, String categoryId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.delete<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/categories/$categoryId',
+        );
+        final moved = res.data?['movedProductCount'];
+        return moved is num && moved >= 0 ? moved.toInt() : 0;
+      });
+
+  @override
+  Future<void> reorderCategories(String catalogId, List<String> orderedIds) =>
+      mapCatalogErrors(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/categories/reorder',
+          data: {'ids': orderedIds},
+        );
+      });
+
+  CatalogCategory _categoryFrom(Map<String, dynamic>? body) {
+    final category = body?['category'];
+    if (category is! Map<String, dynamic>) throw _malformed;
+    return CatalogCategory.fromMap(category);
+  }
 
   @override
   Future<BusinessProfile> profile(String catalogId) =>

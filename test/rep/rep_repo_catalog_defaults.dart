@@ -43,6 +43,34 @@ mixin RepRepoCatalogDefaults implements RepRepository {
       throw UnimplementedError('rep categories are not exercised by this test');
 
   @override
+  Future<CatalogCategory> createCategory(String catalogId, String name) =>
+      throw UnimplementedError(
+        'rep category create is not exercised by this test',
+      );
+
+  @override
+  Future<CatalogCategory> renameCategory(
+    String catalogId,
+    String categoryId,
+    String name,
+  ) =>
+      throw UnimplementedError(
+        'rep category rename is not exercised by this test',
+      );
+
+  @override
+  Future<int> deleteCategory(String catalogId, String categoryId) =>
+      throw UnimplementedError(
+        'rep category delete is not exercised by this test',
+      );
+
+  @override
+  Future<void> reorderCategories(String catalogId, List<String> orderedIds) =>
+      throw UnimplementedError(
+        'rep category reorder is not exercised by this test',
+      );
+
+  @override
   Future<BusinessProfile> profile(String catalogId) =>
       throw UnimplementedError('rep profile read is not exercised by this test');
 

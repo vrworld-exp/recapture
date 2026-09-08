@@ -246,6 +246,267 @@ describe('the gate covers every new route', () => {
   });
 });
 
+describe('the menu sections, built by the rep', () => {
+  // WHAT WAS BROKEN. These routes were read-only, on the reasoning that a
+  // category outlives the visit and so belongs to the owner. But `activate`
+  // seeds NO categories, so a rep-signed restaurant had zero of them and the
+  // rule reduced to "the rep may choose among nothing": every dish landed
+  // uncategorized and the public page rendered one flat heap. The first test
+  // is the whole feature.
+  it('starts with no sections at all — the state that made this necessary', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+
+    const res = await request(app)
+      .get(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.categories).toEqual([]);
+  });
+
+  it('creates one, and the OWNER reads it back through their own route', async () => {
+    const { catalogId, rep, ownerAuth } = await activated('ABCD2345');
+
+    const created = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' });
+
+    expect(created.status).toBe(201);
+    expect(created.body.category.name).toBe(toCatalogSlug('Starters'));
+
+    // THE ASSERTION THAT CATCHES THE OWNERSHIP BUG. Reading back through the
+    // owner's route proves the row landed on the RESTAURANT's catalog and not
+    // on some catalog of the rep's own.
+    const owned = await request(app).get('/catalog/categories').set(ownerAuth);
+    expect(owned.status).toBe(200);
+    expect(owned.body.categories.map((c: { name: string }) => c.name)).toEqual([
+      toCatalogSlug('Starters'),
+    ]);
+  });
+
+  it('refuses a second section with the same name', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' })
+      .expect(201);
+
+    const again = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' });
+
+    // Mirage rejects a duplicate (name, restaurant) outright, so catching it
+    // here — while the rep is still looking at the menu — is the whole point.
+    expect(again.status).toBe(409);
+    expect(again.body.code).toBe('DUPLICATE_NAME');
+  });
+
+  it('files a dish into a section at CREATE time', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const section = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' })
+      .expect(201);
+
+    const dish = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products`)
+      .set(rep.auth)
+      .send({
+        type: 'IMAGE_ONLY',
+        name: 'Papad',
+        imageKey: imageKey(catalogId),
+        categoryId: section.body.category.id,
+      });
+
+    expect(dish.status).toBe(201);
+    // The dish carries the section from the moment it exists — no second trip
+    // through the editor, which is the trip nobody made.
+    const stored = await CatalogProduct.findById(dish.body.product.id).exec();
+    expect(String(stored!.categoryId)).toBe(section.body.category.id);
+  });
+
+  it('renames one', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const created = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Startrs' })
+      .expect(201);
+
+    const renamed = await request(app)
+      .patch(`/rep/catalogs/${catalogId}/categories/${created.body.category.id}`)
+      .set(rep.auth)
+      .send({ name: 'Starters' });
+
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.category.name).toBe(toCatalogSlug('Starters'));
+  });
+
+  it('reorders them, and /categories reads back in the new order', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const ids: string[] = [];
+    for (const name of ['Starters', 'Mains', 'Drinks']) {
+      const res = await request(app)
+        .post(`/rep/catalogs/${catalogId}/categories`)
+        .set(rep.auth)
+        .send({ name })
+        .expect(201);
+      ids.push(res.body.category.id);
+    }
+
+    const reordered = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories/reorder`)
+      .set(rep.auth)
+      .send({ ids: [ids[2], ids[0], ids[1]] });
+
+    expect(reordered.status).toBe(200);
+
+    const list = await request(app)
+      .get(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth);
+    expect(list.body.categories.map((c: { id: string }) => c.id)).toEqual([
+      ids[2],
+      ids[0],
+      ids[1],
+    ]);
+  });
+
+  it('routes /reorder to reorder and not to the :categoryId handler', async () => {
+    // STATIC BEFORE PARAMETERISED. If the PATCH/DELETE routes were declared
+    // first, `reorder` would arrive as a categoryId — this is the test that
+    // fails if somebody moves them.
+    const { catalogId, rep } = await activated('ABCD2345');
+    const created = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' })
+      .expect(201);
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories/reorder`)
+      .set(rep.auth)
+      .send({ ids: [created.body.category.id] });
+
+    expect(res.status).toBe(200);
+  });
+
+  it('deletes one and MOVES its dishes rather than deleting them', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const section = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' })
+      .expect(201);
+    const categoryId = section.body.category.id;
+
+    const dish = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products`)
+      .set(rep.auth)
+      .send({
+        type: 'IMAGE_ONLY',
+        name: 'Papad',
+        imageKey: imageKey(catalogId),
+        categoryId,
+      })
+      .expect(201);
+
+    const deleted = await request(app)
+      .delete(`/rep/catalogs/${catalogId}/categories/${categoryId}`)
+      .set(rep.auth);
+
+    expect(deleted.status).toBe(200);
+    // The count the rep's confirmation reads back.
+    expect(deleted.body.movedProductCount).toBe(1);
+
+    // THE DISH SURVIVES, uncategorized. Deleting a grouping must never delete
+    // the things inside it — least of all on somebody else's menu.
+    const stored = await CatalogProduct.findById(dish.body.product.id).exec();
+    expect(stored).not.toBeNull();
+    expect(stored!.categoryId).toBeNull();
+    // Absent or null both mean "not soft-deleted"; the schema leaves the field
+    // unset rather than writing an explicit null, and either is the answer this
+    // test is about.
+    expect(stored!.deletedAt ?? null).toBeNull();
+  });
+
+  it('bumps draftRevision on every section write', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const before = await draftRevisionOf(catalogId);
+
+    await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' })
+      .expect(201);
+
+    // Still a DRAFT. If this did not move, the "nothing is live yet" line the
+    // rep reads before publishing would be wrong in the direction that matters.
+    expect(await draftRevisionOf(catalogId)).toBeGreaterThan(before);
+  });
+
+  it('refuses a stranger every one of the five', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const created = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' })
+      .expect(201);
+    const categoryId = created.body.category.id;
+    const stranger = await makeUser('SALES_REP');
+
+    const responses = [
+      await request(app)
+        .get(`/rep/catalogs/${catalogId}/categories`)
+        .set(stranger.auth),
+      await request(app)
+        .post(`/rep/catalogs/${catalogId}/categories`)
+        .set(stranger.auth)
+        .send({ name: 'Theirs' }),
+      await request(app)
+        .post(`/rep/catalogs/${catalogId}/categories/reorder`)
+        .set(stranger.auth)
+        .send({ ids: [categoryId] }),
+      await request(app)
+        .patch(`/rep/catalogs/${catalogId}/categories/${categoryId}`)
+        .set(stranger.auth)
+        .send({ name: 'Theirs' }),
+      await request(app)
+        .delete(`/rep/catalogs/${catalogId}/categories/${categoryId}`)
+        .set(stranger.auth),
+    ];
+
+    for (const res of responses) expect(res.status).toBe(404);
+
+    // And nothing moved.
+    const rows = await CatalogCategory.find({
+      catalogId: new Types.ObjectId(catalogId),
+      deletedAt: null,
+    }).exec();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.name).toBe(toCatalogSlug('Starters'));
+  });
+
+  it('loses all five the moment the delegation is revoked', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    await CatalogDelegation.updateMany(
+      { catalogId: new Types.ObjectId(catalogId) },
+      { $set: { revokedAt: new Date() } }
+    );
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Starters' });
+
+    // The grant is read per request, so a revoke is effective at once.
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("the restaurant's details, edited by the rep", () => {
   it('writes the contact block onto the RESTAURANT and the owner reads it back', async () => {
     const { catalogId, rep, ownerAuth } = await activated('ABCD2345');
