@@ -14,6 +14,7 @@
 // sentence comes from `sync_error_copy.dart`. That is what makes "no raw Mirage
 // prose can reach the UI" a property of the code rather than a rule somebody
 // has to keep remembering — there is no field the text could arrive in.
+import 'catalog_names.dart';
 import '../entities/catalog_json.dart';
 import '../entities/catalog_status.dart';
 import '../entities/product_sync_status.dart';
@@ -196,7 +197,11 @@ class PublishProductStatus {
   final String id;
 
   /// The product's own name — the OWNER's catalog content, not upstream text.
+  /// STORED form (an underscore slug); [displayName] is what goes on screen.
   final String name;
+
+  /// The name as a person reads it.
+  String get displayName => catalogDisplayName(name);
 
   final ProductType type;
   final ProductSyncStatus syncStatus;

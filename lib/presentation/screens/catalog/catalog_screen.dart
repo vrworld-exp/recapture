@@ -90,7 +90,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
 
     CatalogFeedback.confirm(
       CatalogFeedback.of(context),
-      '${created.name} is ready. Add your first product.',
+      '${created.displayName} is ready. Add your first product.',
     );
   }
 
@@ -115,9 +115,10 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
     CatalogFeedback.confirm(
       messenger,
       summary.wasPublished
-          ? '${catalog.name} and its public page were deleted. '
+          ? '${catalog.displayName} and its public page were deleted. '
               'Create a new catalog to start over.'
-          : '${catalog.name} was deleted. Create a new catalog to start over.',
+          : '${catalog.displayName} was deleted. '
+              'Create a new catalog to start over.',
     );
   }
 
@@ -474,7 +475,7 @@ class _CatalogHeaderCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(catalog.name, style: textTheme.titleLarge),
+                child: Text(catalog.displayName, style: textTheme.titleLarge),
               ),
               IconButton(
                 tooltip: 'Business profile',

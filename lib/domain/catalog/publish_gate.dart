@@ -218,7 +218,8 @@ List<PublishGate> evaluateDraftGates({
 /// client one deploy behind under-claims instead of inventing a 3D blocker.
 List<PublishGate> _gateProduct(CatalogProduct product) {
   final id = product.id;
-  final name = product.name;
+  // What the message prints and what the row is called on screen.
+  final name = product.displayName;
   final hasThumbnail = product.thumbnailUrl?.isNotEmpty ?? false;
 
   if (product.type.supportsThreeD) {
@@ -269,10 +270,11 @@ List<PublishGate> _gateDuplicateNames(List<CatalogProduct> products) {
         for (final product in group)
           PublishGate(
             code: PublishGateCode.productNameDuplicate,
-            message: 'More than one product is called "${product.name}". '
+            message:
+                'More than one product is called "${product.displayName}". '
                 'Rename one of them.',
             productId: product.id,
-            productName: product.name,
+            productName: product.displayName,
           ),
   ];
 }

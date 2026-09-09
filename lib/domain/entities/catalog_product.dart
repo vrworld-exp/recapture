@@ -1,4 +1,5 @@
 // lib/domain/entities/catalog_product.dart
+import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 import 'product_availability.dart';
 import 'product_model_status.dart';
@@ -49,7 +50,18 @@ class CatalogProduct {
 
   final String id;
   final ProductType type;
+
+  /// The STORED name — a lowercase underscore slug ("chicken_biryani"), because
+  /// the name doubles as a URL segment and an S3 key prefix on Mirage.
+  ///
+  /// Send this to the API and compare with it; never PRINT it. [displayName] is
+  /// what goes on a screen — see domain/catalog/catalog_names.dart.
   final String name;
+
+  /// The name as a person reads it ("chicken biryani"), which is also what the
+  /// public menu prints.
+  String get displayName => catalogDisplayName(name);
+
   final String? description;
 
   /// Null means no price set — deliberately not 0, which would read as "free".

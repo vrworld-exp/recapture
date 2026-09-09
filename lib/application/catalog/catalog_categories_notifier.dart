@@ -181,7 +181,9 @@ final categoryNameProvider = Provider.family<String?, String?>((ref, id) {
   final list = ref.watch(catalogCategoriesProvider).valueOrNull;
   if (list == null) return null;
   for (final category in list.categories) {
-    if (category.id == id) return category.name;
+    // The DISPLAY form: every caller of this provider puts the answer on a
+    // screen.
+    if (category.id == id) return category.displayName;
   }
   return null;
 });

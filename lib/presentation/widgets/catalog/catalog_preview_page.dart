@@ -434,7 +434,7 @@ class _PageHeader extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      preview.catalog.name,
+                      preview.catalog.displayName,
                       style: textTheme.titleLarge,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,

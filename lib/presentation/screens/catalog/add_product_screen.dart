@@ -182,7 +182,7 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
 
       CatalogFeedback.confirm(
         CatalogFeedback.of(context),
-        '${product.name} was added to your catalog.',
+        '${product.displayName} was added to your catalog.',
       );
       navigateBack(context);
     } catch (error) {

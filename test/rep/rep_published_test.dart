@@ -166,12 +166,14 @@ void main() {
       expect(container.read(repPublishedProvider).standees, hasLength(1));
     });
 
-    test('prefers the business name and falls back to the slug', () {
+    test('prefers the business name and falls back to the readable catalog name',
+        () {
       expect(_row('A', business: 'Blue Cafe').displayName, 'Blue Cafe');
       // `name` is slugged server-side because it doubles as the Mirage key, so
-      // rows created before the app sent a business name read as the slug —
-      // ugly and honest, rather than blank.
-      expect(_row('A').displayName, 'blue_cafe');
+      // rows created before the app sent a business name fall back to it — but
+      // DE-SLUGGED, the way the public menu prints it. The underscore is an
+      // internal detail and must never reach a screen.
+      expect(_row('A').displayName, 'blue cafe');
     });
 
     test('a failure shows an error state rather than an empty list', () async {

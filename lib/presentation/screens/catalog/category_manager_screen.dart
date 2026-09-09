@@ -22,6 +22,7 @@ import '../../../application/catalog/catalog_categories_notifier.dart';
 import '../../../application/catalog/category_candidates_notifier.dart';
 import '../../../application/catalog/category_products_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
+import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog_category.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_type.dart';
@@ -293,7 +294,7 @@ class _CategoryList extends ConsumerWidget {
         .valueOrNull
         ?.categories
         .elementAtOrNull(oldIndex)
-        ?.name;
+        ?.displayName;
     await _writeOrder(messenger, container, oldIndex, newIndex, name: name);
   }
 
@@ -392,7 +393,7 @@ class _CreateCategoryFieldState extends ConsumerState<_CreateCategoryField> {
           await ref.read(catalogCategoriesProvider.notifier).create(name);
       if (!mounted) return;
       _controller.clear();
-      CatalogFeedback.confirm(messenger, '${created.name} added.');
+      CatalogFeedback.confirm(messenger, '${created.displayName} added.');
     } on CatalogFailure catch (failure) {
       // A duplicate name is the SERVER's verdict — it owns uniqueness within the
       // catalog — so the sentence for its code lands beside the field the user
@@ -544,7 +545,7 @@ class _CategoryRow extends ConsumerWidget {
                   SizedBox(width: touch ? AppSpacing.sm : AppSpacing.md),
                   Expanded(
                     child: Text(
-                      category.name,
+                      category.displayName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodyLarge,
@@ -590,7 +591,7 @@ class _RenameField extends ConsumerStatefulWidget {
 
 class _RenameFieldState extends ConsumerState<_RenameField> {
   late final TextEditingController _controller =
-      TextEditingController(text: widget.category.name);
+      TextEditingController(text: widget.category.displayName);
   String? _error;
   bool _busy = false;
 
@@ -602,7 +603,15 @@ class _RenameFieldState extends ConsumerState<_RenameField> {
 
   Future<void> _submit() async {
     final name = _controller.text.trim();
-    if (name == widget.category.name) {
+    // Compared as SLUGS. The field holds the display form ("Main Course") and
+    // the row holds the stored one ("main_course"), so raw equality let a
+    // retype through as a rename — the PATCH then stored the same value and the
+    // toast still said "Renamed to…" over a row that had not moved.
+    if (!catalogNameChanged(
+      name,
+      widget.category.name,
+      maxLength: kMaxCategoryNameLength,
+    )) {
       widget.onDone();
       return;
     }
@@ -622,7 +631,10 @@ class _RenameFieldState extends ConsumerState<_RenameField> {
     });
     final messenger = CatalogFeedback.of(context);
     try {
-      await ref
+      // The SERVER's row, not the typed text: the name is normalised on the way
+      // in, so reporting what was typed would promise a spelling the catalog
+      // does not hold.
+      final renamed = await ref
           .read(catalogCategoriesProvider.notifier)
           .rename(widget.category.id, name);
       if (!mounted) return;
@@ -630,7 +642,8 @@ class _RenameFieldState extends ConsumerState<_RenameField> {
       // change goes out with the next publish like every other draft edit.
       CatalogFeedback.confirm(
         messenger,
-        'Renamed to $name. Customers see it after you publish.',
+        'Renamed to ${renamed.displayName}. '
+        'Customers see it after you publish.',
       );
       widget.onDone();
     } on CatalogFailure catch (failure) {
@@ -881,15 +894,15 @@ Future<void> showDeleteCategoryDialog(
     CatalogFeedback.confirm(
       messenger,
       moved == 0
-          ? '${category.name} deleted.'
-          : '${category.name} deleted. '
+          ? '${category.displayName} deleted.'
+          : '${category.displayName} deleted. '
               '${_countLabel(moved)} moved to ${destination.label}.',
     );
   } on CatalogFailure catch (failure) {
     CatalogFeedback.failure(
       messenger,
       failure,
-      subject: '${category.name} could not be deleted',
+      subject: '${category.displayName} could not be deleted',
     );
   }
 }
@@ -957,7 +970,7 @@ class _DeleteCategoryDialogState extends State<_DeleteCategoryDialog> {
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.md),
       ),
-      title: Text('Delete ${widget.category.name}?',
+      title: Text('Delete ${widget.category.displayName}?',
           style: theme.textTheme.titleLarge),
       content: SingleChildScrollView(
         child: Column(
@@ -981,7 +994,7 @@ class _DeleteCategoryDialogState extends State<_DeleteCategoryDialog> {
               ),
               for (final other in widget.others)
                 _DestinationTile(
-                  label: other.name,
+                  label: other.displayName,
                   selected: _destinationId == other.id,
                   onTap: () => setState(() => _destinationId = other.id),
                 ),
@@ -1012,7 +1025,7 @@ class _DeleteCategoryDialogState extends State<_DeleteCategoryDialog> {
                   ? 'Uncategorized'
                   : widget.others
                       .firstWhere((c) => c.id == _destinationId)
-                      .name,
+                      .displayName,
             ),
           ),
           child: Text(empty ? 'Delete' : 'Move and delete'),
@@ -1292,11 +1305,11 @@ class _SelectionBar extends StatelessWidget {
             for (final category in categories)
               if (category.id != selection.id)
                 ListTile(
-                  title: Text(category.name),
+                  title: Text(category.displayName),
                   onTap: () => Navigator.of(sheetContext).pop(
                     _DeleteChoice(
                       categoryId: category.id,
-                      label: category.name,
+                      label: category.displayName,
                     ),
                   ),
                 ),
@@ -1436,7 +1449,7 @@ class _AddProductsSheetState extends ConsumerState<_AddProductsSheet> {
       for (final category
           in ref.watch(catalogCategoriesProvider).valueOrNull?.categories ??
               const <CatalogCategory>[])
-        category.id: category.name,
+        category.id: category.displayName,
     };
 
     return Padding(
@@ -1693,7 +1706,7 @@ class _ProductRow extends StatelessWidget {
         controlAffinity: ListTileControlAffinity.leading,
         onChanged: onChanged,
         title: Text(
-          product.name,
+          product.displayName,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodyMedium,

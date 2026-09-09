@@ -76,7 +76,9 @@ class CategoryCandidatesState {
     final needle = query.toLowerCase();
     return [
       for (final product in items)
-        if (product.name.toLowerCase().contains(needle)) product,
+        // Matched on the DISPLAY name: the stored one is underscore-separated,
+        // so a typed "chicken bir" would never find "chicken_biryani".
+        if (product.displayName.toLowerCase().contains(needle)) product,
     ];
   }
 

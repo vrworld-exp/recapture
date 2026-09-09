@@ -616,6 +616,32 @@ do not remove it).
   `byDevice`, `topCategories` and `topZoomed` are cross-client panels that must
   never be spread into a per-business response.
 
+### Catalog names: STORED as a slug, SHOWN de-slugged
+
+- **Every catalog, category and product name is stored as a lowercase underscore
+  slug** — `"Chicken Biryani"` → `chicken_biryani`. The name doubles as the
+  public URL segment and as an S3 key prefix on Mirage, neither of which
+  tolerates a space. Three files implement the same rule and must stay in
+  lockstep: `recapture-api/src/utils/catalogNames.ts` (applied at the Zod
+  boundary, so a service never sees an un-slugged name),
+  `mirage-be/src/helper/helper.js`, and `lib/domain/catalog/catalog_names.dart`.
+- **The underscore is an INTERNAL detail and must never reach a screen.** Print
+  `displayName` (`CatalogProduct`, `CatalogCategory`, `Catalog`,
+  `BusinessProfile`, `PublishProductStatus`, `TopProduct`), and seed every name
+  INPUT with it too. Mirage's public menu already does this
+  (`mirage-fe/src/helper/removeCharacters.ts`); a screen that prints `.name`
+  raw is out of step with the page the customer sees.
+- **⚠ NEVER decide "did this name change?" with `typed != stored`.** The field
+  holds the display form and the row holds the slug, so raw equality is dirty
+  from the moment a screen opens — and it lets a retype through as a rename that
+  the server then normalises back to the value already stored. The save reports
+  success, the row does not move, and nothing reaches the menu because nothing
+  changed. Use `catalogNameChanged(typed, stored, maxLength: …)`, which compares
+  slugs and therefore also gets the honest answer for case- and
+  separator-only edits.
+- **Report the SERVER's name back, not the typed one.** A confirmation built
+  from what the user typed promises a spelling the catalog does not hold.
+
 ### S3 key scheme (capture jobs)
 - **One builder, one parser: `utils/s3Keys.ts`.** Inline key templates anywhere
   else are a bug. The exact scheme:

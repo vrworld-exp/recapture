@@ -19,6 +19,7 @@
 // Parsed field by field like every other catalog entity: these DTOs are
 // hand-synced with the backend's, so a client one deploy behind must render
 // zeroes rather than throw on a key it has not heard of.
+import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 
 /// The window a report covers, as the server resolved it.
@@ -301,7 +302,12 @@ class TopProduct {
   /// unlinkable.
   final String? catalogProductId;
 
+  /// The name Mirage reported — the STORED slug form. [displayName] is what
+  /// goes on the dashboard.
   final String name;
+
+  /// The name as a person reads it, matching the catalog and the public menu.
+  String get displayName => catalogDisplayName(name);
   final TopProductKind kind;
   final int views;
   final int arViews;

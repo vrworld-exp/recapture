@@ -7,6 +7,7 @@
 // QrCodeRow), `src/services/standeeAssignmentService.ts` (AssignableRep,
 // RepStandeeRow) and `src/models/types/qr.types.ts` (QR_CODE_STATES) — there is
 // no shared package, per AGENTS.md §0.1.
+import '../catalog/catalog_names.dart';
 import 'user_role.dart';
 
 /// Lifecycle of one physical standee, mirroring the backend's `QR_CODE_STATES`.
@@ -339,7 +340,12 @@ class RepPublishedStandee {
   /// restaurant must not read as two different names on two rep screens.
   String get displayName {
     final business = businessName?.trim();
-    return business == null || business.isEmpty ? name : business;
+    // The catalog name is STORED as a slug; the business name is not. De-slug
+    // the fallback so one restaurant does not read as "cafe_mocha" here and
+    // "cafe mocha" on the public menu.
+    return business == null || business.isEmpty
+        ? catalogDisplayName(name)
+        : business;
   }
 
   static RepPublishedStandee fromMap(Map<String, dynamic> map) =>

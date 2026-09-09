@@ -1,4 +1,5 @@
 // lib/domain/entities/rep_activation.dart
+import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 import 'catalog_status.dart';
 
@@ -109,7 +110,12 @@ class RepCatalogSummary {
   /// What the rep should see under the name.
   String get displayName {
     final business = businessName?.trim();
-    return business == null || business.isEmpty ? name : business;
+    // The catalog name is STORED as a slug; the business name is not. De-slug
+    // the fallback so one restaurant does not read as "cafe_mocha" here and
+    // "cafe mocha" on the public menu.
+    return business == null || business.isEmpty
+        ? catalogDisplayName(name)
+        : business;
   }
 
   factory RepCatalogSummary.fromMap(Map<String, dynamic> map) =>

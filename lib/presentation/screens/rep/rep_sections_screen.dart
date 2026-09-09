@@ -30,6 +30,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
+import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog_category.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_message.dart';
@@ -83,9 +84,21 @@ class _RepSectionsScreenState extends ConsumerState<RepSectionsScreen> {
   Future<void> _rename(CatalogCategory category) async {
     final name = await _askForName(
       title: 'Rename section',
-      initial: category.name,
+      initial: category.displayName,
     );
-    if (name == null || name == category.name) return;
+    // Compared as SLUGS: the prompt is seeded with the display form, so raw
+    // equality would send "Main Course" as a rename of "main_course" — a PATCH
+    // that normalises straight back to what is already stored, leaving the row
+    // and the public menu untouched while the screen behaved as though it had
+    // renamed something.
+    if (name == null ||
+        !catalogNameChanged(
+          name,
+          category.name,
+          maxLength: kMaxCategoryNameLength,
+        )) {
+      return;
+    }
 
     setState(() => _busyId = category.id);
     try {
@@ -102,7 +115,7 @@ class _RepSectionsScreenState extends ConsumerState<RepSectionsScreen> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         backgroundColor: AppColors.surface1,
-        title: Text('Delete "${category.name}"?'),
+        title: Text('Delete "${category.displayName}"?'),
         content: Text(
           // THE DISHES SURVIVE, and the sentence says so before the tap rather
           // than after it. `productCount` is the live count; the server may move
@@ -135,10 +148,11 @@ class _RepSectionsScreenState extends ConsumerState<RepSectionsScreen> {
       final moved = await _notifier.delete(category.id);
       _report(
         moved == 0
-            ? 'Deleted "${category.name}".'
+            ? 'Deleted "${category.displayName}".'
             : moved == 1
-                ? 'Deleted "${category.name}". 1 dish moved to Uncategorized.'
-                : 'Deleted "${category.name}". $moved dishes moved to '
+                ? 'Deleted "${category.displayName}". '
+                    '1 dish moved to Uncategorized.'
+                : 'Deleted "${category.displayName}". $moved dishes moved to '
                     'Uncategorized.',
       );
     } on CatalogFailure catch (failure) {
@@ -343,7 +357,7 @@ class _SectionRow extends StatelessWidget {
             index: index,
             child: const Icon(Icons.drag_handle, color: AppColors.textMuted),
           ),
-          title: Text(category.name, overflow: TextOverflow.ellipsis),
+          title: Text(category.displayName, overflow: TextOverflow.ellipsis),
           subtitle: Text(
             count == 0
                 ? 'Empty'

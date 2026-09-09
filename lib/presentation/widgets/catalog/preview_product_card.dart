@@ -302,7 +302,7 @@ class _Caption extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                product.name,
+                product.displayName,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: textTheme.titleMedium?.copyWith(

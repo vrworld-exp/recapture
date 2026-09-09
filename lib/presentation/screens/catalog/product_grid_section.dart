@@ -318,7 +318,7 @@ class _ProductFilterBar extends ConsumerWidget {
         if (categories != null) ...[
           for (final category in categories.categories)
             _CatalogFilterChip(
-              label: category.name,
+              label: category.displayName,
               selected: query.categoryId == category.id,
               onSelected: (selected) =>
                   notifier.setCategory(selected ? category.id : null),

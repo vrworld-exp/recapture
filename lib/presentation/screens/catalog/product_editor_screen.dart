@@ -28,6 +28,7 @@ import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_products_repository.dart'
     show kCatalogUnchanged;
+import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog_category.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
@@ -198,8 +199,12 @@ class _ProductEditorForm extends ConsumerStatefulWidget {
 
 class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
   final _formKey = GlobalKey<FormState>();
+  // Seeded with the DISPLAY form, not the stored slug. The user typed
+  // "Chicken Biryani"; showing them "chicken_biryani" is what made them retype
+  // it, and a retype slugs back to the value already stored — a save that
+  // changes nothing while the UI says it saved.
   late final TextEditingController _name =
-      TextEditingController(text: widget.product.name);
+      TextEditingController(text: widget.product.displayName);
   late final TextEditingController _description =
       TextEditingController(text: widget.product.description ?? '');
   late final TextEditingController _price = TextEditingController(
@@ -239,7 +244,15 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
 
   // ── Dirty tracking ────────────────────────────────────────────────────────
 
-  bool get _nameChanged => _name.text.trim() != widget.product.name;
+  /// Compared as SLUGS, because the field holds the display form and the
+  /// product holds the stored one. Raw equality reported "changed" the moment
+  /// the screen opened, left the form permanently dirty, and made every
+  /// case-or-separator-only edit look like a rename that then did nothing.
+  bool get _nameChanged => catalogNameChanged(
+        _name.text,
+        widget.product.name,
+        maxLength: kMaxProductNameLength,
+      );
   bool get _descriptionChanged =>
       _description.text.trim() != (widget.product.description ?? '');
   bool get _priceChanged => _parsedPrice() != widget.product.price;
@@ -306,7 +319,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       setUnsavedChangesWarning(false);
       CatalogFeedback.confirm(
         CatalogFeedback.of(context),
-        '${updated.name} saved. Customers see this after you publish.',
+        '${updated.displayName} saved. Customers see this after you publish.',
       );
       // The form is rebuilt from the server's product by the ValueKey on the
       // parent, so the fields re-seed and nothing is left marked dirty.
@@ -314,7 +327,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       if (!mounted) return;
       setState(() => _failureMessage = CatalogFeedback.failureText(
             failure,
-            subject: '${widget.product.name} could not be saved',
+            subject: '${widget.product.displayName} could not be saved',
           ));
     }
   }
@@ -387,7 +400,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
 
       CatalogFeedback.confirm(
         CatalogFeedback.of(context),
-        'Duplicated as "${copy.name}".',
+        'Duplicated as "${copy.displayName}".',
       );
       // Straight to the copy: a duplicate the user cannot see is a duplicate
       // they press again. pushReplacement, so back still lands on the grid
@@ -403,7 +416,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       if (!mounted) return;
       setState(() => _failureMessage = CatalogFeedback.failureText(
             failure,
-            subject: '${widget.product.name} could not be duplicated',
+            subject: '${widget.product.displayName} could not be duplicated',
           ));
     }
   }
@@ -1075,7 +1088,7 @@ class _CategoryField extends ConsumerWidget {
                 DropdownMenuItem<String?>(
                   value: category.id,
                   child: Text(
-                    category.name,
+                    category.displayName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),

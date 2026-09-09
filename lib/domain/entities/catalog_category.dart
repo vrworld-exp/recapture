@@ -1,4 +1,5 @@
 // lib/domain/entities/catalog_category.dart
+import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 import 'product_sync_status.dart';
 
@@ -24,7 +25,15 @@ class CatalogCategory {
   });
 
   final String id;
+
+  /// The STORED name — a lowercase underscore slug ("main_course"). Send this to
+  /// the API and compare with it; never PRINT it. [displayName] is what goes on
+  /// a screen — see domain/catalog/catalog_names.dart.
   final String name;
+
+  /// The name as a person reads it ("main course"), matching what the public
+  /// menu prints for the same tab.
+  String get displayName => catalogDisplayName(name);
 
   /// Sort key within the catalog. Sparse and server-assigned; the client sends a
   /// full ordered id list to reorder rather than computing positions itself.

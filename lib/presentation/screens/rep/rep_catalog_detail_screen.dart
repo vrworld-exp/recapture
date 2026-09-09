@@ -262,7 +262,7 @@ class _DishRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      product.name,
+                      product.displayName,
                       style: const TextStyle(
                         fontSize: AppTypography.sizeHeadline,
                         fontWeight: FontWeight.w600,

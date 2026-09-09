@@ -335,7 +335,7 @@ class BulkSelectionNotifier extends Notifier<BulkSelectionState> {
     // and a report that can only say "3 products failed" is not a report.
     final names = {
       for (final product in ref.read(catalogProductsProvider).items)
-        product.id: product.name,
+        product.id: product.displayName,
     };
 
     state = state.copyWith(isRunning: true);

@@ -7,6 +7,7 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/catalog_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_repository.dart';
+import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
@@ -73,12 +74,14 @@ class _DeleteCatalogDialogState extends ConsumerState<DeleteCatalogDialog> {
 
   void _onTyped() => setState(() => _failureMessage = null);
 
-  /// Case- and whitespace-insensitive: the user is retyping a name they can see,
-  /// and this is a speed bump against a misplaced tap — not an auth check. A
-  /// stricter match would only punish someone who is already sure.
+  /// Matched through the SLUG, which is case-, space- and separator-insensitive
+  /// by construction: the user is retyping a name they can see, and this is a
+  /// speed bump against a misplaced tap — not an auth check. Comparing slugs
+  /// also means the prompt can show the readable form while the stored form
+  /// still arms it.
   bool get _isArmed =>
-      _confirmController.text.trim().toLowerCase() ==
-      widget.catalog.name.trim().toLowerCase();
+      catalogSlug(_confirmController.text).isNotEmpty &&
+      !catalogNameChanged(_confirmController.text, widget.catalog.name);
 
   Future<void> _submit() async {
     if (_submitting || !_isArmed) return;
@@ -142,7 +145,7 @@ class _DeleteCatalogDialogState extends ConsumerState<DeleteCatalogDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'This deletes ${catalog.name} and everything in it. '
+                'This deletes ${catalog.displayName} and everything in it. '
                 'It cannot be undone.',
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: AppColors.textSecondary, height: 1.5),
@@ -177,8 +180,8 @@ class _DeleteCatalogDialogState extends ConsumerState<DeleteCatalogDialog> {
               ],
               const SizedBox(height: AppSpacing.xxl),
               AppTextField(
-                label: 'Type "${catalog.name}" to confirm',
-                hint: catalog.name,
+                label: 'Type "${catalog.displayName}" to confirm',
+                hint: catalog.displayName,
                 controller: _confirmController,
                 autofocus: true,
                 enabled: !_submitting,

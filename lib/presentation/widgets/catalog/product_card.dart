@@ -146,7 +146,7 @@ class ProductCard extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        product.name,
+                        product.displayName,
                         // Two lines then an ellipsis: a 120-character product
                         // name is legal server-side, and unbounded text in a
                         // grid cell is an overflow, not a long name.
@@ -249,7 +249,7 @@ class ProductCard extends StatelessWidget {
   /// One sentence a screen reader can say instead of five separate labels.
   String _semanticLabel(String? price) {
     final parts = <String>[
-      product.name,
+      product.displayName,
       product.type.label,
       if (price != null) price,
       if (product.availability == ProductAvailability.outOfStock) 'Out of stock',

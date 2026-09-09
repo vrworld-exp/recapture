@@ -127,7 +127,7 @@ class _RepSectionPickerState extends ConsumerState<RepSectionPicker> {
           selectedItemBuilder: (context) => [
             const Text('Uncategorized'),
             for (final category in widget.categories)
-              Text(category.name, overflow: TextOverflow.ellipsis),
+              Text(category.displayName, overflow: TextOverflow.ellipsis),
             // The action is never a selection, so it needs no closed-state
             // rendering — only its slot, to keep the two lists aligned.
             const SizedBox.shrink(),
@@ -142,7 +142,8 @@ class _RepSectionPickerState extends ConsumerState<RepSectionPicker> {
               DropdownMenuItem<String?>(
                 key: ValueKey('rep_section_option_${category.id}'),
                 value: category.id,
-                child: Text(category.name, overflow: TextOverflow.ellipsis),
+                child: Text(category.displayName,
+                    overflow: TextOverflow.ellipsis),
               ),
             const DropdownMenuItem<String?>(
               key: ValueKey('rep_section_option_new'),

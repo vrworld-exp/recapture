@@ -1,4 +1,5 @@
 // lib/domain/entities/catalog.dart
+import '../catalog/catalog_names.dart';
 import 'business_profile.dart';
 import 'catalog_json.dart';
 import 'catalog_status.dart';
@@ -67,8 +68,14 @@ class Catalog {
 
   final String id;
 
-  /// The storefront title customers see.
+  /// The storefront title customers see, in its STORED form — a lowercase
+  /// underscore slug ("cafe_mocha"), because it doubles as the public URL
+  /// segment. Send this to the API and compare with it; never PRINT it.
   final String name;
+
+  /// The storefront title as a person reads it ("cafe mocha") — what the public
+  /// menu prints, and what belongs on every screen here.
+  String get displayName => catalogDisplayName(name);
 
   final String? businessName;
   final BusinessContact? contact;

@@ -119,7 +119,7 @@ class CatalogPreview {
             when items.isNotEmpty)
           CatalogPreviewSection(
             id: category.id,
-            title: category.name,
+            title: category.displayName,
             products: items,
           ),
     ];
@@ -129,7 +129,7 @@ class CatalogPreview {
     // one category.
     final emptyTitles = [
       for (final category in ordered)
-        if (_inCategory(live, category.id).isEmpty) category.name,
+        if (_inCategory(live, category.id).isEmpty) category.displayName,
     ];
 
     // NOTHING MAY FALL OUT OF THE PREVIEW. A product whose `categoryId` names a

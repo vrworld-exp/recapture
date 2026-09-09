@@ -201,7 +201,11 @@ class _ProfileFormState extends ConsumerState<_ProfileForm> {
   final _formKey = GlobalKey<FormState>();
 
   late final Map<String, TextEditingController> _fields = {
-    'name': TextEditingController(text: widget.profile.name),
+    // The DISPLAY form. The storefront title is stored as a slug
+    // ("cafe_mocha"); seeding the field with that is what made owners retype it
+    // as "Cafe Mocha" — a save that normalises straight back to what was
+    // already there, so the catalog header and the public menu never moved.
+    'name': TextEditingController(text: widget.profile.displayName),
     'businessName':
         TextEditingController(text: widget.profile.businessName ?? ''),
     'phone': TextEditingController(text: _contact?.phone ?? ''),

@@ -137,7 +137,7 @@ Future<bool> archiveProduct(
     CatalogFeedback.failure(
       messenger,
       failure,
-      subject: '${product.name} could not be archived',
+      subject: '${product.displayName} could not be archived',
       onRetry: () => archiveProduct(messenger, container, product),
     );
     return false;
@@ -162,14 +162,14 @@ Future<bool> restoreProduct(
     _adopt(container, product.id);
     CatalogFeedback.confirm(
       messenger,
-      '${product.name} is back in your catalog.',
+      '${product.displayName} is back in your catalog.',
     );
     return true;
   } on CatalogFailure catch (failure) {
     CatalogFeedback.failure(
       messenger,
       failure,
-      subject: '${product.name} could not be restored',
+      subject: '${product.displayName} could not be restored',
       onRetry: () =>
           restoreProduct(messenger, container, product, index: index),
     );
@@ -194,7 +194,7 @@ Future<bool> deleteProduct(
 ) async {
   final confirmed = await showTypedConfirmDialog(
     context,
-    title: 'Delete ${product.name}?',
+    title: 'Delete ${product.displayName}?',
     body: 'This removes the product from ReCapture for good, along with its '
         'photo or 3D model. It cannot be undone.',
     warnings: [
@@ -202,7 +202,10 @@ Future<bool> deleteProduct(
         'This product is live. It will be removed from your public catalog '
             'the next time you publish.',
     ],
-    confirmationText: product.name,
+    // The DISPLAY form — it is what the dialog prints and what the user can
+    // see on the card behind it. Asking them to type the underscored storage
+    // form would be asking for a name nothing on screen shows.
+    confirmationText: product.displayName,
   );
   if (!confirmed) return false;
 
@@ -218,7 +221,7 @@ Future<bool> deleteProduct(
     CatalogFeedback.failure(
       messenger,
       failure,
-      subject: '${product.name} could not be deleted',
+      subject: '${product.displayName} could not be deleted',
     );
     return false;
   }
@@ -230,14 +233,14 @@ String _archivedMessage(ProviderContainer container, CatalogProduct product) {
   final live = product.syncStatus == ProductSyncStatus.synced
       ? ' It leaves your public catalog at the next publish.'
       : '';
-  return '${product.name} archived.$live${_emptyCatalogNote(container)}';
+  return '${product.displayName} archived.$live${_emptyCatalogNote(container)}';
 }
 
 String _deletedMessage(ProviderContainer container, CatalogProduct product) {
   final live = product.syncStatus == ProductSyncStatus.synced
       ? ' It will be removed from your public catalog at the next publish.'
       : '';
-  return '${product.name} deleted.$live${_emptyCatalogNote(container)}';
+  return '${product.displayName} deleted.$live${_emptyCatalogNote(container)}';
 }
 
 /// The sentence appended when that was the last product.

@@ -178,7 +178,7 @@ class _ChangeModelFormState extends ConsumerState<_ChangeModelForm> {
 
       CatalogFeedback.confirm(
         CatalogFeedback.of(context),
-        '${updated.name} now uses the model you picked. '
+        '${updated.displayName} now uses the model you picked. '
         'Customers will see this after you publish.',
       );
       navigateBack(context);
@@ -210,7 +210,7 @@ class _ChangeModelFormState extends ConsumerState<_ChangeModelForm> {
         child: ListView(
           padding: const EdgeInsets.all(AppSpacing.screenPadding),
           children: [
-            Text(product.name, style: theme.textTheme.titleLarge),
+            Text(product.displayName, style: theme.textTheme.titleLarge),
             const SizedBox(height: AppSpacing.xs),
             Text(
               'Pick a different model for this product. Its files are copied '

@@ -1,4 +1,5 @@
 // lib/domain/entities/business_profile.dart
+import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 
 /// Maximum lengths, mirrored from the backend Zod bounds (`catalogSchemas.ts`)
@@ -161,8 +162,13 @@ class BusinessProfile {
   /// The catalog this profile belongs to.
   final String id;
 
-  /// The storefront title — becomes the public catalog's name on publish.
+  /// The storefront title — becomes the public catalog's name on publish, in
+  /// its STORED form (a lowercase underscore slug). Never PRINT it directly.
   final String name;
+
+  /// The storefront title as a person reads it, and as the public menu prints
+  /// it. This is what seeds the name field on the profile form.
+  String get displayName => catalogDisplayName(name);
 
   final String? businessName;
   final BusinessContact? contact;

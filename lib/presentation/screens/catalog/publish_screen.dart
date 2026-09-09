@@ -592,7 +592,7 @@ class _FailureRow extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(product.name, style: textTheme.bodyMedium),
+        Text(product.displayName, style: textTheme.bodyMedium),
         const SizedBox(height: AppSpacing.xs),
         Text(
           copy.message,
@@ -882,7 +882,7 @@ class _ProductList extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    product.name,
+                    product.displayName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: textTheme.bodyMedium?.copyWith(

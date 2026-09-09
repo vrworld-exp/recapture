@@ -155,7 +155,7 @@ Future<void> promptBulkCategory(
           SimpleDialogOption(
             onPressed: () =>
                 Navigator.of(context).pop(_CategoryChoice(category.id)),
-            child: Text(category.name),
+            child: Text(category.displayName),
           ),
       ],
     ),

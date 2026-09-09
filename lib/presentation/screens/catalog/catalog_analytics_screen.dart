@@ -794,7 +794,7 @@ class _TopProductRow extends StatelessWidget {
                   children: [
                     Flexible(
                       child: Text(
-                        row.name,
+                        row.displayName,
                         style: textTheme.bodyMedium
                             ?.copyWith(color: AppColors.textPrimary),
                         maxLines: 2,

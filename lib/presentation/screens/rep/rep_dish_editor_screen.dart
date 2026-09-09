@@ -34,6 +34,7 @@ import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_products_repository.dart'
     show kCatalogUnchanged;
+import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
 import '../../../domain/entities/product_type.dart';
@@ -122,7 +123,10 @@ class _DishForm extends ConsumerStatefulWidget {
 class _DishFormState extends ConsumerState<_DishForm> {
   final _formKey = GlobalKey<FormState>();
 
-  late final _name = TextEditingController(text: widget.dish.name);
+  // The DISPLAY form. Seeding with the stored slug ("chicken_biryani") is what
+  // made reps retype the name — and a retype normalises back to what is already
+  // stored, so the save changed nothing while the screen said it had.
+  late final _name = TextEditingController(text: widget.dish.displayName);
   late final _description =
       TextEditingController(text: widget.dish.description ?? '');
   late final _price = TextEditingController(
@@ -185,7 +189,13 @@ class _DishFormState extends ConsumerState<_DishForm> {
   static String _priceText(double value) =>
       value == value.roundToDouble() ? value.toStringAsFixed(0) : '$value';
 
-  bool get _nameChanged => _name.text.trim() != widget.dish.name;
+  /// Compared as SLUGS — the field holds the display form and the dish holds
+  /// the stored one, so raw equality is dirty from the moment the screen opens.
+  bool get _nameChanged => catalogNameChanged(
+        _name.text,
+        widget.dish.name,
+        maxLength: kMaxProductNameLength,
+      );
   bool get _descriptionChanged =>
       _description.text.trim() != (widget.dish.description ?? '');
   bool get _priceChanged => _parsedPrice() != widget.dish.price;
