@@ -168,6 +168,76 @@ export async function exportBatchCsv(batchId: Types.ObjectId): Promise<string | 
   return codes.map((c) => `${c.code},${resolverUrlFor(c.code)}`).join('\n');
 }
 
+/** A batch is longer than one sheet request will render. See STANDEE_SHEET_MAX_CODES. */
+export class QrBatchTooLargeError extends Error {
+  constructor(
+    readonly printable: number,
+    readonly limit: number
+  ) {
+    super(`Batch has ${printable} printable codes, over the ${limit} sheet limit`);
+    this.name = 'QrBatchTooLargeError';
+  }
+}
+
+/** What the printable batch sheet is rendered from. */
+export interface BatchSheetSource {
+  label: string;
+  /** Every code that will appear, sorted, each with the URL its square encodes. */
+  items: { code: string; url: string }[];
+  /**
+   * Retired codes left off the sheet.
+   *
+   * REPORTED, NOT SILENT. A retired standee was replaced, so printing one hands
+   * somebody a sheet that resolves to the fallback page — the single-code
+   * endpoint refuses one outright for that reason. A whole batch cannot be
+   * refused over one dead code, so they are skipped instead; but "I asked for 50
+   * and got 48" reads as a bug unless something says why, and by the time the
+   * PDF is open the admin has no way to find out.
+   */
+  skippedRetired: number;
+}
+
+/**
+ * Everything the printable batch sheet needs, in the SAME order as
+ * [exportBatchCsv] and [listBatchCodes] — so card 3 of the sheet, line 3 of the
+ * vendor CSV and row 3 of the admin screen are the same standee.
+ *
+ * Returns null when the batch does not exist, mirroring the other two.
+ *
+ * THROWS [QrBatchTooLargeError] rather than rendering a batch past
+ * STANDEE_SHEET_MAX_CODES: every code on the sheet is an independently encoded
+ * and compressed bitmap, so the ceiling mint (10,000) is tens of seconds of CPU
+ * and hundreds of megabytes held in one response. Refusing with a number the
+ * admin can read beats a request that times out behind a spinner.
+ */
+export async function loadBatchSheet(batchId: Types.ObjectId): Promise<BatchSheetSource | null> {
+  // Fail BEFORE the reads, exactly as exportBatchCsv does — and for a sharper
+  // reason here: this output goes straight onto paper.
+  assertResolverConfigured();
+
+  const batch = await QrBatch.findById(batchId).lean().exec();
+  if (!batch) return null;
+
+  const codes = await QrCode.find(
+    { batchId, deletedAt: null },
+    { code: 1, state: 1 }
+  )
+    .sort({ code: 1 })
+    .lean()
+    .exec();
+
+  const printable = codes.filter((c) => c.state !== 'RETIRED');
+  if (printable.length > env.STANDEE_SHEET_MAX_CODES) {
+    throw new QrBatchTooLargeError(printable.length, env.STANDEE_SHEET_MAX_CODES);
+  }
+
+  return {
+    label: batch.label,
+    items: printable.map((c) => ({ code: c.code, url: resolverUrlFor(c.code) })),
+    skippedRetired: codes.length - printable.length,
+  };
+}
+
 /**
  * Looks up one code by its printed form. Normalises first, so a malformed code
  * costs zero database round trips — which is what keeps the public resolver's

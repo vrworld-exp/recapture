@@ -476,11 +476,40 @@ do not remove it).
   so reassignment closes a row and opens a new one). Who is *carrying* a standee
   is a mutable fact about the present with no downstream reader, so reassignment
   is a plain field overwrite. Do not add a second ledger for it.
-- **Two doors to the same sheet, one composer.** `GET /admin/qr-codes/:code/qr`
-  (ADMIN, any code) and `GET /rep/standees/:code/qr` (the holder only) both go
-  through `services/standeeSheetService.ts`, which owns `STANDEE_TAGLINE` and the
-  RETIRED refusal. A rep-printed standee and an admin-printed one must be the
-  same physical object; a second renderer is how that stops being true.
+- **Three doors to the same sheet, one composer.** `GET /admin/qr-codes/:code/qr`
+  (ADMIN, any code), `GET /rep/standees/:code/qr` (the holder only) and
+  `GET /admin/qr-batches/:batchId/sheet` (ADMIN, the whole run) all go through
+  `services/standeeSheetService.ts`, which owns `STANDEE_TAGLINE` and the RETIRED
+  rule. A rep-printed standee, an admin-printed one and one cut off a batch sheet
+  must be the same physical object; a second renderer is how that stops being
+  true. The LAYOUT differs between the one-up sheet and the batch grid; what is
+  printed on a card does not.
+- **The batch sheet: the square is a FIXED PHYSICAL SIZE and is never scaled.**
+  `STANDEE_SHEET_QR_INCHES` (1.67in, ~501px at 300dpi) is the edge the standee
+  artwork was cut for. A QR printed smaller than the distance it is scanned from
+  is a standee that does not work, and that is discovered by a diner at a table
+  after the paper is cut. So `computeSheetLayout` clamps
+  `STANDEE_SHEET_COLUMNS`/`_ROWS` **down** to whatever fits (2 × 3 = six per A4
+  by default) rather than shrinking the code. Never invert that trade.
+- **RETIRED codes are SKIPPED on a batch sheet, not refused.** The single-code
+  endpoints answer `409 CODE_RETIRED` because rendering one hands somebody a dead
+  sheet; a whole batch cannot be refused over one dead code. The count comes back
+  in `X-Standee-Sheet-Skipped-Retired` (and `-Standees`/`-Pages`) because the body
+  is the PDF — all three are in `app.ts`'s CORS `exposedHeaders`, without which
+  the **web** admin silently loses the "2 retired were skipped" line. An
+  *entirely* retired batch is `409 NOTHING_TO_PRINT`; a run past
+  `STANDEE_SHEET_MAX_CODES` is `409 BATCH_TOO_LARGE` (recovery is the vendor CSV,
+  not a retry — both codes have client copy in `catalog_error_copy.dart`).
+- **PDFs are still written by hand, now out of `services/pdfPrimitives.ts`.** One
+  module counts bytes for the xref table; `catalogQrService` (one-up) and
+  `standeeSheetPdf` (grid) both use it. Do not add a PDF library — every one
+  worth using stamps a `CreationDate`, which breaks the byte-identity two renders
+  of the same code are required to have.
+- **Captions are ASCII-folded (`asciiFold`) before they are drawn.** Nothing
+  embeds a font or declares an `/Encoding`, so a base-14 font reads one byte per
+  glyph and a UTF-8 caption prints one glyph per byte. The batch label is free
+  text and the house shape the mint dialog suggests (`Vendor A — Oct 2026,
+  run 3`) contains an em dash, so this is load-bearing, not cosmetic.
 - **The rep download is scoped by ASSIGNMENT, not by role.** `findRepStandee`
   puts the rep id in the query, and a code the rep does not hold answers the
   same `404 CODE_NOT_FOUND` a nonexistent code gives — a rep must not be able to

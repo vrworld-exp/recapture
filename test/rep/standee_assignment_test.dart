@@ -142,6 +142,10 @@ class _FakeAdminRepo implements AdminStandeeRepository {
   @override
   Future<QrDownloadFile> batchCsv(String batchId) async =>
       throw UnimplementedError();
+
+  @override
+  Future<BatchSheetDownload> batchSheet(String batchId) async =>
+      throw UnimplementedError();
 }
 
 class _FakeRepRepo with RepRepoCatalogDefaults implements RepRepository {

@@ -5,6 +5,12 @@
 // The list answers ONE question — "have we got codes left to hand out" — so the
 // row leads with what is available rather than with the run's size. An admin
 // opens this because a rep is about to go out, not to audit a print order.
+//
+// THE DOWNLOAD SITS ON THE ROW, not only inside the batch. Getting a run onto
+// paper is the second thing an admin does with a batch — right after minting it
+// — and it needs nothing from the code list, so making them open the batch to
+// find the button would be a step for no one. One press produces one PDF: six
+// standees to an A4 page, cut guides, as many pages as the run needs.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -38,7 +44,14 @@ class AdminStandeesScreen extends ConsumerWidget {
         CatalogFeedback.failure(
           messenger,
           failure,
-          subject: 'The batch could not be minted',
+          // WHICH action failed, read from the transition rather than from the
+          // failure's code: a download and a mint can fail with the same code
+          // (an offline device, a missing resolver origin), and telling an
+          // admin their batch could not be minted when they pressed Download
+          // sends them to re-mint a run that already exists.
+          subject: previous?.downloadingSheetFor != null
+              ? 'That sheet could not be saved'
+              : 'The batch could not be minted',
         );
       } else if (next.notice != null) {
         CatalogFeedback.confirm(messenger, next.notice!);
@@ -74,7 +87,18 @@ class AdminStandeesScreen extends ConsumerWidget {
                     itemCount: batches.length,
                     separatorBuilder: (_, __) =>
                         const SizedBox(height: AppSpacing.sm),
-                    itemBuilder: (_, i) => _BatchTile(batch: batches[i]),
+                    itemBuilder: (_, i) => _BatchTile(
+                      batch: batches[i],
+                      downloading: state.isDownloadingSheet(batches[i].id),
+                      // Blocked while ANY sheet is in flight, matching the
+                      // notifier: two overlapping downloads would race to
+                      // report which one the confirmation is about.
+                      onDownload: state.downloadingSheetFor != null
+                          ? null
+                          : () => ref
+                              .read(adminStandeesProvider.notifier)
+                              .deliverSheet(batches[i].id),
+                    ),
                   ),
           ),
         ),
@@ -104,9 +128,19 @@ class AdminStandeesScreen extends ConsumerWidget {
 }
 
 class _BatchTile extends StatelessWidget {
-  const _BatchTile({required this.batch});
+  const _BatchTile({
+    required this.batch,
+    required this.downloading,
+    required this.onDownload,
+  });
 
   final QrBatchSummary batch;
+
+  /// This row's sheet is being fetched — one row spins, not the whole list.
+  final bool downloading;
+
+  /// Null while another row is downloading, so two cannot overlap.
+  final VoidCallback? onDownload;
 
   @override
   Widget build(BuildContext context) {
@@ -156,6 +190,18 @@ class _BatchTile extends StatelessWidget {
                     ],
                   ],
                 ),
+              ),
+              IconButton(
+                key: ValueKey('admin_batch_sheet_${batch.id}'),
+                tooltip: 'Download printable standee sheets',
+                onPressed: downloading ? null : onDownload,
+                icon: downloading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.picture_as_pdf_outlined),
               ),
               const Icon(Icons.chevron_right, color: AppColors.textMuted),
             ],

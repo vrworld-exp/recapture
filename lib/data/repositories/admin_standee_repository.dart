@@ -35,6 +35,16 @@ abstract final class AdminStandeeErrorCodes {
   /// which of the two it was.
   static const repNotFound = 'REP_NOT_FOUND';
 
+  /// The batch is bigger than one printable sheet request will render.
+  ///
+  /// Worth its own sentence for the same reason [resolverNotConfigured] is:
+  /// the recovery is a DIFFERENT button (the vendor CSV), not a retry, and an
+  /// admin who saw a generic failure would press this one again.
+  static const batchTooLarge = 'BATCH_TOO_LARGE';
+
+  /// Every code in the batch is retired, so the sheet would be blank paper.
+  static const nothingToPrint = 'NOTHING_TO_PRINT';
+
   static const notFound = 'NOT_FOUND';
   static const invalidRequest = 'INVALID_REQUEST';
 }
@@ -49,6 +59,28 @@ enum StandeeQrFormat {
   pdf;
 
   String get apiValue => name;
+}
+
+/// A whole batch's printable sheet, and what the server says is on it.
+///
+/// The counts arrive as `X-Standee-Sheet-*` RESPONSE HEADERS because the body
+/// is already the PDF — there is nowhere in it to put them. They are not
+/// decoration: `skippedRetired` is the only thing that explains a batch of 50
+/// printing 48 cards, and without it a correct sheet reads as a short one.
+class BatchSheetDownload {
+  const BatchSheetDownload({
+    required this.file,
+    required this.standees,
+    required this.pages,
+    required this.skippedRetired,
+  });
+
+  final QrDownloadFile file;
+
+  /// Cards actually on the sheet. Retired codes are not among them.
+  final int standees;
+  final int pages;
+  final int skippedRetired;
 }
 
 abstract interface class AdminStandeeRepository {
@@ -86,6 +118,20 @@ abstract interface class AdminStandeeRepository {
 
   /// The print vendor's CSV for a whole batch.
   Future<QrDownloadFile> batchCsv(String batchId);
+
+  /// THE WHOLE BATCH as one printable PDF — six standees to an A4 page, with
+  /// cut guides, as many pages as the run needs.
+  ///
+  /// The other half of [standeeFile], which renders ONE code. That is right for
+  /// sending a rep a single standee and absurd for a run of fifty: fifty
+  /// presses, fifty near-identical files, fifty sheets of paper for fifty
+  /// squares.
+  ///
+  /// Throws [CatalogFailure] with [AdminStandeeErrorCodes.batchTooLarge] for a
+  /// run past the server's per-request ceiling (the recovery is the vendor CSV,
+  /// not a retry) and [AdminStandeeErrorCodes.nothingToPrint] when every code
+  /// in the batch is retired.
+  Future<BatchSheetDownload> batchSheet(String batchId);
 
   /// Everyone an admin may hand a standee to.
   ///
@@ -212,7 +258,7 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
         fallbackName: 'standee-$code.${format.apiValue}',
         fallbackMime:
             format == StandeeQrFormat.png ? 'image/png' : 'application/pdf',
-      );
+      ).then((res) => res.file);
 
   @override
   Future<List<SalesRepSummary>> salesReps() => mapCatalogErrors(() async {
@@ -283,7 +329,30 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
         '/admin/qr-batches/$batchId/export',
         fallbackName: 'qr-batch.csv',
         fallbackMime: 'text/csv',
-      );
+      ).then((res) => res.file);
+
+  @override
+  Future<BatchSheetDownload> batchSheet(String batchId) async {
+    final res = await _bytes(
+      '/admin/qr-batches/$batchId/sheet',
+      fallbackName: 'standee-sheet.pdf',
+      fallbackMime: 'application/pdf',
+    );
+
+    return BatchSheetDownload(
+      file: res.file,
+      // Defaulted rather than demanded. These headers only describe the file for
+      // a sentence afterwards; a proxy that strips them, or a browser that has
+      // not been told to expose them, must not turn a good download into an
+      // error. A zero simply drops that clause from what the screen says.
+      standees: _headerInt(res.headers, 'x-standee-sheet-standees'),
+      pages: _headerInt(res.headers, 'x-standee-sheet-pages'),
+      skippedRetired: _headerInt(res.headers, 'x-standee-sheet-skipped-retired'),
+    );
+  }
+
+  static int _headerInt(Headers headers, String name) =>
+      int.tryParse(headers.value(name) ?? '') ?? 0;
 
   /// The shared bytes-mode GET.
   ///
@@ -291,7 +360,11 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
   /// so without [withDecodedBody] a 409 CODE_RETIRED or RESOLVER_NOT_CONFIGURED
   /// arrives as an undecodable byte array and collapses into a generic sentence
   /// — and those two codes carry the only two things an admin can act on.
-  Future<QrDownloadFile> _bytes(
+  ///
+  /// Returns the HEADERS alongside the file because the batch sheet's counts
+  /// travel in them: the body is the PDF, so there is nowhere else they could
+  /// go. Callers that do not need them drop them at the call site.
+  Future<({QrDownloadFile file, Headers headers})> _bytes(
     String path, {
     Map<String, dynamic>? query,
     required String fallbackName,
@@ -312,12 +385,16 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
         );
       }
 
-      return QrDownloadFile(
-        bytes: Uint8List.fromList(data),
-        fileName:
-            fileNameFromDisposition(res.headers.value('content-disposition')) ??
-                fallbackName,
-        mimeType: res.headers.value(Headers.contentTypeHeader) ?? fallbackMime,
+      return (
+        file: QrDownloadFile(
+          bytes: Uint8List.fromList(data),
+          fileName: fileNameFromDisposition(
+                res.headers.value('content-disposition'),
+              ) ??
+              fallbackName,
+          mimeType: res.headers.value(Headers.contentTypeHeader) ?? fallbackMime,
+        ),
+        headers: res.headers,
       );
     } on DioException catch (error) {
       throw CatalogFailure.fromDio(withDecodedBody(error));

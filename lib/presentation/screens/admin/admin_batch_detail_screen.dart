@@ -7,7 +7,13 @@
 // QR it renders is byte-identical to the one a vendor would print, because both
 // come from the same server-side composer.
 //
-// PER BATCH — the vendor CSV, unchanged since stage 2.
+// PER BATCH — two files. The vendor CSV, unchanged since stage 2, and the
+// PRINTABLE SHEET: the whole run laid out six standees to an A4 page with cut
+// guides, as many pages as it takes. They are not alternatives. The CSV is for
+// a print shop that will manufacture standees; the sheet is for the office
+// printer, today, and it is what makes a fifty-code batch usable before a
+// vendor is engaged — the per-code download would be fifty presses and fifty
+// sheets of paper for fifty squares.
 //
 // A retired code offers NEITHER. Reprinting one produces a sheet that resolves
 // to the fallback page, and the whole cost of that lands after somebody has
@@ -80,6 +86,19 @@ class AdminBatchDetailScreen extends ConsumerWidget {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.person_add_alt_1_outlined),
+          ),
+          IconButton(
+            key: const ValueKey('admin_batch_sheet'),
+            tooltip: 'Download printable standee sheets',
+            onPressed:
+                state.downloadingSheet ? null : notifier.deliverBatchSheet,
+            icon: state.downloadingSheet
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.picture_as_pdf_outlined),
           ),
           IconButton(
             key: const ValueKey('admin_batch_csv'),

@@ -22,18 +22,40 @@
 //   • the PNG comes from `sharp`, which is already a dependency (AGENTS.md
 //     requires exactly one libvips copy in the tree, so adding a second image
 //     library would be a real hazard, not just extra weight);
-//   • the PDF is written BY HAND below. A single page holding one image is a
-//     few hundred bytes of syntax, and a PDF library would be a second
-//     dependency for it — plus every one worth using stamps a CreationDate,
-//     which would break byte-identity on its own.
-import QRCode from 'qrcode';
-import zlib from 'zlib';
+//   • the PDF is written BY HAND, out of `pdfPrimitives`. A single page holding
+//     one image is a few hundred bytes of syntax, and a PDF library would be a
+//     second dependency for it — plus every one worth using stamps a
+//     CreationDate, which would break byte-identity on its own.
+//
+// The low-level half of that last point moved to `services/pdfPrimitives.ts`
+// when the batch standee sheet (`services/standeeSheetPdf.ts`) became a second
+// hand-written layout. Nothing about the output changed: this file still decides
+// what a catalog's sheet looks like, and the xref arithmetic is now counted in
+// one place instead of two.
 import sharp from 'sharp';
 
-/** Fixed rendering parameters. Changing any of these changes every issued code. */
-export const QR_ERROR_CORRECTION = 'M' as const;
-/** Modules of white margin. Four is the spec's minimum for reliable scanning. */
-export const QR_QUIET_ZONE = 4;
+import {
+  A4_HEIGHT_PT,
+  A4_WIDTH_PT,
+  assemblePdf,
+  codeInkWidth,
+  contentStreamObject,
+  HELVETICA_BOLD_OBJECT,
+  HELVETICA_OBJECT,
+  imageXObject,
+  matrixFor,
+  pdfText,
+  proportionalInkWidth,
+  QR_ERROR_CORRECTION,
+  QR_QUIET_ZONE,
+  qrBitmap1Bit,
+  type QrBitmap,
+} from '@/services/pdfPrimitives';
+
+// Re-exported because this module was their home before the split, and both are
+// part of "what every issued code looks like" rather than of PDF plumbing.
+export { QR_ERROR_CORRECTION, QR_QUIET_ZONE };
+
 export const QR_DEFAULT_SIZE = 1024;
 export const QR_MIN_SIZE = 256;
 export const QR_MAX_SIZE = 2048;
@@ -42,30 +64,6 @@ export const QR_MAX_SIZE = 2048;
 export function clampQrSize(requested: number | undefined): number {
   if (requested === undefined || !Number.isFinite(requested)) return QR_DEFAULT_SIZE;
   return Math.min(QR_MAX_SIZE, Math.max(QR_MIN_SIZE, Math.round(requested)));
-}
-
-/**
- * The QR module matrix for [text], quiet zone included.
- *
- * `QRCode.create` is the encoder and nothing more: it returns the bit matrix and
- * leaves rendering to us. That separation is what lets the PNG be produced by
- * sharp — one image library in the tree — and what makes the output a pure
- * function of the text.
- */
-function matrixFor(text: string): { size: number; isDark: (x: number, y: number) => boolean } {
-  const qr = QRCode.create(text, { errorCorrectionLevel: QR_ERROR_CORRECTION });
-  const inner = qr.modules.size;
-  const size = inner + QR_QUIET_ZONE * 2;
-
-  return {
-    size,
-    isDark(x, y) {
-      const mx = x - QR_QUIET_ZONE;
-      const my = y - QR_QUIET_ZONE;
-      if (mx < 0 || my < 0 || mx >= inner || my >= inner) return false;
-      return Boolean(qr.modules.get(mx, my));
-    },
-  };
 }
 
 /**
@@ -103,107 +101,23 @@ async function renderPng(text: string, size: number): Promise<Buffer> {
 
 // ── PDF ─────────────────────────────────────────────────────────────────────
 
-const A4_WIDTH_PT = 595.28;
-const A4_HEIGHT_PT = 841.89;
-
-/** PDF strings escape exactly three characters. */
-function pdfText(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-}
-
-/**
- * Packs the matrix as a 1-BIT bitmap, `scale` device pixels per module.
- *
- * ⚠ ONE BIT, NOT EIGHT, AND FLATE, NOT JPEG. The PDF used to embed the greyscale
- * PNG re-encoded as a JPEG (`/DCTDecode`), on the reasoning that every reader
- * supports it. Every reader does — and JPEG is a frequency-domain codec applied
- * to the worst possible input: an image made entirely of hard black/white edges.
- * Even at quality 100 it rings, so each module got a grey halo and the printed
- * sheet looked washed out and fuzzy rather than like a QR code.
- *
- * A 1-bit image cannot be anything but pure black and pure white — there is no
- * value between 0 and 1 to be wrong — and Flate is lossless, so what is printed
- * is exactly the matrix. It is also far smaller: this whole image compresses to
- * a few hundred bytes, against tens of kilobytes of JPEG.
- *
- * The upscale is here rather than left to the viewer because `/Interpolate` is
- * only a HINT — a reader is free to smooth anyway, and a smoothed QR is one a
- * phone has to work harder to read. Blowing each module up to a block of
- * identical pixels means there is nothing left to smooth.
- */
-function qrBitmap1Bit(
-  matrix: { size: number; isDark: (x: number, y: number) => boolean },
-  scale: number
-): { data: Buffer; side: number } {
-  const side = matrix.size * scale;
-  const rowBytes = Math.ceil(side / 8);
-  // 0xff = every bit set = every pixel WHITE. DeviceGray 1-bit reads 0 as black
-  // and 1 as white, so dark modules clear their bit below.
-  const data = Buffer.alloc(rowBytes * side, 0xff);
-
-  for (let y = 0; y < side; y++) {
-    const my = (y / scale) | 0;
-    for (let x = 0; x < side; x++) {
-      if (matrix.isDark((x / scale) | 0, my)) {
-        data[y * rowBytes + (x >> 3)]! &= ~(0x80 >> (x & 7));
-      }
-    }
-  }
-
-  return { data, side };
-}
-
 /** Point size of the printed code. Large enough to read across a table. */
 const CODE_SIZE = 30;
 
 /** Device pixels per QR module inside the PDF. See qrBitmap1Bit. */
 const PDF_MODULE_SCALE = 8;
 
-/**
- * Helvetica-Bold advance widths, in 1/1000 em, for exactly the glyphs a code can
- * contain — the QR alphabet is uppercase and digits only.
- *
- * From the Adobe AFM metrics for one of the base-14 fonts, so these are the real
- * numbers the reader will use, not estimates. A table rather than an average
- * because the range here is wide (a `W` is 944 against a `J` at 556): averaging
- * puts an eight-character code visibly off-centre.
- */
-const HELVETICA_BOLD_WIDTHS: Readonly<Record<string, number>> = {
-  '0': 556, '1': 556, '2': 556, '3': 556, '4': 556,
-  '5': 556, '6': 556, '7': 556, '8': 556, '9': 556,
-  A: 722, B: 722, C: 722, D: 722, E: 667, F: 611, G: 778, H: 722,
-  J: 556, K: 722, M: 833, N: 722, P: 667, Q: 778, R: 722, S: 667,
-  T: 611, V: 667, W: 944, X: 667, Y: 667, Z: 611,
-};
-
 /** Extra space between the code's characters, in points at [CODE_SIZE]. */
 const CODE_LETTER_SPACING = 4;
 
-/**
- * Half the ink width of the printed code, for centring it by hand.
- *
- * Exact, because every glyph a code can contain is in the table above and the
- * letter spacing is known. `n - 1` gaps, not `n`: PDF's `Tc` adds space after
- * every glyph including the last, but that trailing gap is not ink and counting
- * it would shift the code left by half a space.
- */
+/** Half the ink width of the printed code, for centring it by hand. */
 function halfCodeWidth(code: string, fontSize: number): number {
-  const glyphs = [...code].reduce(
-    (total, ch) => total + (HELVETICA_BOLD_WIDTHS[ch] ?? 600),
-    0
-  );
-  const ink = (glyphs / 1000) * fontSize + Math.max(0, code.length - 1) * CODE_LETTER_SPACING;
-  return ink / 2;
+  return codeInkWidth(code, fontSize, CODE_LETTER_SPACING) / 2;
 }
 
-/**
- * Half the width of a proportional line, for centring the tagline.
- *
- * An average is fine here and not for the code: this line is prose a reader
- * glances at, where a few points either way is invisible.
- */
+/** Half the width of a proportional line, for centring the tagline. */
 function halfWidth(text: string, fontSize: number): number {
-  return (text.length * fontSize * 0.52) / 2;
+  return proportionalInkWidth(text, fontSize) / 2;
 }
 
 /**
@@ -227,7 +141,7 @@ function halfWidth(text: string, fontSize: number): number {
  * the test pins.
  */
 function buildPdf(
-  image: { data: Buffer; side: number },
+  image: QrBitmap,
   caption: { primary: string; secondary: string; primaryCode: boolean }
 ): Buffer {
   const qrSide = 360;
@@ -272,67 +186,18 @@ function buildPdf(
     'ET',
   ].join('\n');
 
-  // Deterministic: zlib.deflateSync with fixed settings gives the same bytes for
-  // the same input, which is what keeps two renders of one code byte-identical.
-  const compressed = zlib.deflateSync(image.data, { level: 9 });
-
-  const objects: Buffer[] = [
+  return assemblePdf([
     Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
     Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
     Buffer.from(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4_WIDTH_PT} ${A4_HEIGHT_PT}] ` +
         '/Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R /F2 7 0 R >> >> /Contents 4 0 R >>'
     ),
-    Buffer.concat([
-      Buffer.from(`<< /Length ${Buffer.byteLength(content)} >>\nstream\n`),
-      Buffer.from(content),
-      Buffer.from('\nendstream'),
-    ]),
-    Buffer.concat([
-      Buffer.from(
-        `<< /Type /XObject /Subtype /Image /Width ${image.side} /Height ${image.side} ` +
-          '/ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate false ' +
-          `/Filter /FlateDecode /Length ${compressed.byteLength} >>\nstream\n`
-      ),
-      compressed,
-      Buffer.from('\nendstream'),
-    ]),
-    Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'),
-    Buffer.from('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>'),
-  ];
-
-  const header = Buffer.from('%PDF-1.4\n');
-  const chunks: Buffer[] = [header];
-  const offsets: number[] = [];
-  let cursor = header.byteLength;
-
-  objects.forEach((body, index) => {
-    const chunk = Buffer.concat([
-      Buffer.from(`${index + 1} 0 obj\n`),
-      body,
-      Buffer.from('\nendobj\n'),
-    ]);
-    offsets.push(cursor);
-    chunks.push(chunk);
-    cursor += chunk.byteLength;
-  });
-
-  const xref = [
-    'xref',
-    `0 ${objects.length + 1}`,
-    '0000000000 65535 f ',
-    ...offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n `),
-    'trailer',
-    `<< /Size ${objects.length + 1} /Root 1 0 R >>`,
-    'startxref',
-    String(cursor),
-    '%%EOF',
-    // No /Info dictionary, and therefore no CreationDate — the one thing a PDF
-    // library would add that would break byte-identity between two renders.
-  ].join('\n');
-
-  chunks.push(Buffer.from(xref));
-  return Buffer.concat(chunks);
+    contentStreamObject(content),
+    imageXObject(image),
+    Buffer.from(HELVETICA_OBJECT),
+    Buffer.from(HELVETICA_BOLD_OBJECT),
+  ]);
 }
 
 // ── The service ─────────────────────────────────────────────────────────────

@@ -45,7 +45,20 @@ const corsOptions: CorsOptions = {
   // the downloaded QR file, and `ETag` to send back as `If-None-Match` and skip
   // a re-render. Without this the QR endpoint works but the download is called
   // "qr" with no extension and the cache never hits.
-  exposedHeaders: ['Content-Disposition', 'ETag'],
+  //
+  // The `X-Standee-Sheet-*` trio is the batch sheet's out-of-band answer to
+  // "what did I just download": how many standees, over how many pages, and how
+  // many retired codes were left off. The body is the PDF, so there is nowhere
+  // else to put it — and without the exposure the web admin silently loses the
+  // "2 retired were skipped" line that stops a short-looking sheet reading as a
+  // bug. Native is unaffected either way; browsers are the ones that filter.
+  exposedHeaders: [
+    'Content-Disposition',
+    'ETag',
+    'X-Standee-Sheet-Standees',
+    'X-Standee-Sheet-Pages',
+    'X-Standee-Sheet-Skipped-Retired',
+  ],
 };
 
 export function createApp(): express.Express {

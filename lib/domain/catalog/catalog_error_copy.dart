@@ -93,6 +93,18 @@ const Map<String, CatalogErrorCopy> _copy = {
     'The download was cancelled or blocked.',
     'Try again, or photograph the code on screen.',
   ),
+  // ── The printable batch sheet (admin) ─────────────────────────────────────
+  // Both refusals name a DIFFERENT button as the way out, which is exactly why
+  // they cannot be left to fall through to "try again in a moment": an admin
+  // following that advice presses the same button and gets the same refusal.
+  'BATCH_TOO_LARGE': CatalogErrorCopy(
+    'This batch is too big to lay out as printable sheets in one go.',
+    'Download the print vendor CSV instead.',
+  ),
+  'NOTHING_TO_PRINT': CatalogErrorCopy(
+    'Every code in this batch has been retired, so the sheet would be blank.',
+    'Mint a replacement batch.',
+  ),
   'ID_SET_MISMATCH': CatalogErrorCopy(
     'This list changed somewhere else while you were reordering it.',
     'Refresh, then drag again.',

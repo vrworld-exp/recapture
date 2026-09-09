@@ -18,7 +18,8 @@
 // call this with a record they have already decided the caller is entitled to.
 import type { IQrCode } from '@/models/QrCode';
 import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
-import { resolverUrlFor } from '@/services/qrCodeService';
+import { resolverUrlFor, slugifyBatchLabel, type BatchSheetSource } from '@/services/qrCodeService';
+import { buildStandeeSheetPdf, computeSheetLayout } from '@/services/standeeSheetPdf';
 
 /** The line printed under every standee code. */
 export const STANDEE_TAGLINE = 'Created for mirage menu';
@@ -83,5 +84,48 @@ export async function renderStandeeSheet(params: {
     filename: rendered.filename,
     url,
     size,
+  };
+}
+
+export interface RenderedBatchSheet {
+  body: Buffer;
+  contentType: string;
+  filename: string;
+  /** Cards actually on the sheet — retired codes are not among them. */
+  standees: number;
+  pages: number;
+  /** Retired codes left off, so the caller can say so rather than look short. */
+  skippedRetired: number;
+}
+
+/**
+ * A WHOLE BATCH as one printable PDF — the third caller, and the reason this
+ * module's "one composer" rule earns its keep.
+ *
+ * It prints the SAME two lines under every square as the one-code sheet does,
+ * from the same [STANDEE_TAGLINE] constant, because a standee cut off a batch
+ * sheet and a standee printed one-up are the same physical object and must not
+ * start saying different things. The layout differs; what is on a card does not.
+ *
+ * Takes a [BatchSheetSource] the caller has already loaded and been authorized
+ * for — same contract as [renderStandeeSheet], which takes a record rather than
+ * a code. Nothing here knows who may print a batch.
+ */
+export function renderBatchStandeeSheet(source: BatchSheetSource): RenderedBatchSheet {
+  const layout = computeSheetLayout();
+
+  return {
+    body: buildStandeeSheetPdf({
+      items: source.items,
+      tagline: STANDEE_TAGLINE,
+      label: source.label,
+    }),
+    contentType: 'application/pdf',
+    // Named for the batch, like the vendor CSV beside it — an admin with a
+    // downloads folder of these has to tell one print run from another unopened.
+    filename: `standee-sheet-${slugifyBatchLabel(source.label)}.pdf`,
+    standees: source.items.length,
+    pages: Math.max(1, Math.ceil(source.items.length / layout.perPage)),
+    skippedRetired: source.skippedRetired,
   };
 }

@@ -135,6 +135,29 @@ class _FakeRepo implements AdminStandeeRepository {
     );
   }
 
+  // ── The printable batch sheet ─────────────────────────────────────────────
+  /// What the server reports is on the sheet. The counts travel as response
+  /// headers, so they are scripted independently of the bytes.
+  int sheetStandees = 6;
+  int sheetPages = 1;
+  int sheetSkippedRetired = 0;
+
+  @override
+  Future<BatchSheetDownload> batchSheet(String batchId) async {
+    filesFor.add('sheet:$batchId');
+    if (fileThrows != null) throw fileThrows!;
+    return BatchSheetDownload(
+      file: QrDownloadFile(
+        bytes: Uint8List.fromList([6, 7]),
+        fileName: 'standee-sheet-vendor-a-run-1.pdf',
+        mimeType: 'application/pdf',
+      ),
+      standees: sheetStandees,
+      pages: sheetPages,
+      skippedRetired: sheetSkippedRetired,
+    );
+  }
+
   // ── Assignment ───────────────────────────────────────────────────────────
   List<SalesRepSummary> repList = const [];
   CatalogFailure? assignThrows;
@@ -663,6 +686,167 @@ group('assigning a whole batch', () {
     });
   });
 
+
+  group('the printable batch sheet', () {
+    test('delivers the PDF from the batch list row, without opening the batch',
+        () async {
+      final repo = _FakeRepo();
+      final deliverer = _FakeDeliverer();
+      final container = _containerWith(repo, deliverer);
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(adminStandeesProvider.notifier).deliverSheet('b1');
+
+      // Bulk download is the whole point of this button: one press, one file.
+      expect(repo.filesFor, ['sheet:b1']);
+      expect(deliverer.delivered.single.mimeType, 'application/pdf');
+      expect(container.read(adminStandeesProvider).downloadingSheetFor, isNull);
+    });
+
+    test('says what is in the file, because the PDF cannot', () async {
+      final repo = _FakeRepo()
+        ..sheetStandees = 48
+        ..sheetPages = 8
+        ..sheetSkippedRetired = 2;
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(adminStandeesProvider.notifier).deliverSheet('b1');
+
+      // "48 standees" against a run of 50 reads as a bug until something says
+      // why — and by the time the PDF is open there is nowhere left to say it.
+      expect(
+        container.read(adminStandeesProvider).notice,
+        'Saved 48 standees over 8 pages. 2 retired and were skipped.',
+      );
+    });
+
+    test('leaves the skipped clause off when nothing was skipped', () async {
+      final repo = _FakeRepo()
+        ..sheetStandees = 6
+        ..sheetPages = 1;
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(adminStandeesProvider.notifier).deliverSheet('b1');
+
+      expect(
+        container.read(adminStandeesProvider).notice,
+        'Saved 6 standees over 1 page.',
+      );
+    });
+
+    test('a download with no counts still confirms, rather than saying zero',
+        () async {
+      // The counts are RESPONSE HEADERS. A proxy that strips them, or a browser
+      // that was not told to expose them, must not turn a good download into
+      // "Saved 0 standees over 0 pages."
+      final repo = _FakeRepo()
+        ..sheetStandees = 0
+        ..sheetPages = 0;
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(adminStandeesProvider.notifier).deliverSheet('b1');
+
+      final state = container.read(adminStandeesProvider);
+      expect(state.notice, 'Printable sheet saved.');
+      expect(state.failure, isNull);
+    });
+
+    test('a refused sheet surfaces its typed code and keeps the list', () async {
+      final repo = _FakeRepo()
+        ..fileThrows = const CatalogFailure(
+          code: 'BATCH_TOO_LARGE',
+          message: 'too big',
+        );
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(adminStandeesProvider.notifier).deliverSheet('b1');
+
+      final state = container.read(adminStandeesProvider);
+      // The screen branches on the code — BATCH_TOO_LARGE's recovery is a
+      // DIFFERENT button (the vendor CSV), so a generic sentence would send the
+      // admin back to press this one again.
+      expect(state.failure?.code, 'BATCH_TOO_LARGE');
+      expect(state.downloadingSheetFor, isNull);
+      // A failed download must not blank the list the admin is looking at.
+      expect(state.batches.valueOrNull, hasLength(1));
+    });
+
+    test('a dismissed share sheet becomes one mapped sentence', () async {
+      final deliverer = _FakeDeliverer()..throws = true;
+      final container = _containerWith(_FakeRepo(), deliverer);
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(adminStandeesProvider.notifier).deliverSheet('b1');
+
+      final state = container.read(adminStandeesProvider);
+      expect(state.failure?.code, 'QR_SAVE_FAILED');
+      expect(state.batches.valueOrNull, hasLength(1));
+    });
+
+    test('one row spins, and a second download cannot start over it', () async {
+      final repo = _FakeRepo();
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      final notifier = container.read(adminStandeesProvider.notifier);
+      final first = notifier.deliverSheet('b1');
+      // Mid-flight: this row is marked, the other is not.
+      expect(container.read(adminStandeesProvider).isDownloadingSheet('b1'), isTrue);
+      expect(container.read(adminStandeesProvider).isDownloadingSheet('b2'), isFalse);
+
+      await notifier.deliverSheet('b2');
+      await first;
+
+      // The second press is dropped rather than queued — two overlapping
+      // downloads would race to report which one the confirmation is about.
+      expect(repo.filesFor, ['sheet:b1']);
+    });
+
+    test('the batch detail screen offers the same file', () async {
+      final repo = _FakeRepo()..sheetPages = 3;
+      final deliverer = _FakeDeliverer();
+      final container = _containerWith(repo, deliverer);
+      final provider = adminBatchCodesProvider('b7');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).deliverBatchSheet();
+
+      expect(repo.filesFor, contains('sheet:b7'));
+      expect(deliverer.delivered.single.mimeType, 'application/pdf');
+      final state = container.read(provider);
+      expect(state.downloadingSheet, isFalse);
+      expect(state.notice, 'Saved 6 standees over 3 pages.');
+    });
+
+    test('the sheet and the CSV are separate spinners, not one', () async {
+      final container = _containerWith(_FakeRepo(), _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      final notifier = container.read(provider.notifier);
+      final sheet = notifier.deliverBatchSheet();
+
+      // Two buttons side by side producing two different files. One spinner
+      // across both would leave an admin unable to tell which they are waiting
+      // for — on a batch of fifty the sheet is much the slower.
+      expect(container.read(provider).downloadingSheet, isTrue);
+      expect(container.read(provider).downloadingCsv, isFalse);
+      await sheet;
+    });
+  });
 
   group('the state vocabulary', () {
     test('only an unassigned code counts as available', () {

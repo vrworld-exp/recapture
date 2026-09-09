@@ -1,5 +1,18 @@
 
 
+1. 
+upadte name of product, category and restaurant name is not reflecting inside catalog and on mirage menu, that i got feedback so check it and if it is then fix it.
+
+
+
+2. For Miarge ::::::::::::::::-------------------->>>>>>>>>
+On mirage menu share btn is working good, but currently it is getting the url from the urlbar, that need to change it, it should get like domainName/res_name update this logic, so user able to get right url and readable url while sharing.
+
+
+
+
+
+
 
 
 

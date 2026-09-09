@@ -469,6 +469,51 @@ const envSchema = z.object({
     .transform((v) => (v ? v.replace(/\/+$/, '') : v)),
   /** Largest single mint. Bounds one bad admin request, not total inventory. */
   QR_BATCH_MAX_SIZE: z.coerce.number().int().positive().max(10_000).default(2_000),
+
+  // ── The printable batch sheet (GET /admin/qr-batches/:id/sheet) ────────────
+  // Everything about how a standee lands on paper is a SETTING, because it is
+  // the one thing here that gets decided by holding a printed sheet rather than
+  // by reading code. See services/standeeSheetPdf.ts for the layout these feed.
+  /**
+   * The printed edge of one QR square, in INCHES — the whole point of the sheet.
+   *
+   * 1.67in at 300dpi is ~501px, the size the standee artwork was cut for. It is
+   * a PHYSICAL measurement and the codes are never scaled to fit the page: the
+   * grid gives way instead (fewer per sheet), because a QR printed smaller than
+   * the camera distance it was chosen for is a standee that does not scan.
+   */
+  STANDEE_SHEET_QR_INCHES: z.coerce.number().positive().max(6).default(1.67),
+  /**
+   * Raster density of the embedded square: pixels = inches × dpi.
+   *
+   * Sets how many device pixels each QR module is blown up to before the PDF
+   * embeds it, NOT how the printer is driven. 300 is the floor for print work;
+   * below it the module edges land between printer dots and the square goes
+   * soft, which is the failure that only shows up on paper.
+   */
+  STANDEE_SHEET_QR_DPI: z.coerce.number().int().positive().max(1_200).default(300),
+  /**
+   * Cards per A4 page, as a grid. 2 × 3 = six, the shape the sheet was designed
+   * around: big enough to be worth a sheet of paper, sparse enough that there is
+   * room to cut between them.
+   *
+   * CLAMPED DOWN to whatever actually fits once QR_INCHES is applied — a grid
+   * that overflowed the page would silently print codes half off the edge, and
+   * that is discovered at the print shop. Raising these never overrides the
+   * physical size; it only asks for more per sheet if there is room.
+   */
+  STANDEE_SHEET_COLUMNS: z.coerce.number().int().positive().max(8).default(2),
+  STANDEE_SHEET_ROWS: z.coerce.number().int().positive().max(10).default(3),
+  /**
+   * Most codes one sheet request will render.
+   *
+   * A REQUEST BOUND, not an inventory one — the same role QR_BATCH_MAX_SIZE
+   * plays for minting. Every code on the sheet is an independently encoded and
+   * compressed bitmap, so a 10,000-code batch is tens of seconds of CPU and
+   * hundreds of megabytes held in one response. The endpoint refuses such a
+   * batch with a message naming this number rather than trying and timing out.
+   */
+  STANDEE_SHEET_MAX_CODES: z.coerce.number().int().positive().max(5_000).default(500),
   /** Per-rep activation rate window — see utils/rateLimit.ts. */
   ACTIVATION_MAX_PER_WINDOW: z.coerce.number().int().positive().default(30),
   ACTIVATION_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),

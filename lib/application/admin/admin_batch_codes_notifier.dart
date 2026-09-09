@@ -33,6 +33,7 @@ class AdminBatchCodesState {
     this.busyCode,
     this.bulkBusy = false,
     this.downloadingCsv = false,
+    this.downloadingSheet = false,
     this.failure,
     this.notice,
   });
@@ -57,6 +58,14 @@ class AdminBatchCodesState {
 
   final bool downloadingCsv;
 
+  /// The whole batch's printable sheet is being fetched.
+  ///
+  /// ITS OWN FLAG, not shared with [downloadingCsv]. They are two buttons side
+  /// by side producing two different files, and one spinner across both would
+  /// leave an admin unable to tell which download they are waiting for — on a
+  /// batch of fifty the sheet is much the slower of the two.
+  final bool downloadingSheet;
+
   /// A failed action. Separate from [codes] so a refused render leaves the list
   /// on screen — the admin's next move is usually to pick a different code.
   final CatalogFailure? failure;
@@ -74,6 +83,7 @@ class AdminBatchCodesState {
     Object? busyCode = _unset,
     bool? bulkBusy,
     bool? downloadingCsv,
+    bool? downloadingSheet,
     Object? failure = _unset,
     Object? notice = _unset,
   }) =>
@@ -86,6 +96,7 @@ class AdminBatchCodesState {
             identical(busyCode, _unset) ? this.busyCode : busyCode as String?,
         bulkBusy: bulkBusy ?? this.bulkBusy,
         downloadingCsv: downloadingCsv ?? this.downloadingCsv,
+        downloadingSheet: downloadingSheet ?? this.downloadingSheet,
         failure: identical(failure, _unset)
             ? this.failure
             : failure as CatalogFailure?,
@@ -325,6 +336,51 @@ class AdminBatchCodesNotifier
       onFail: (s, failure) =>
           s.copyWith(downloadingCsv: false, failure: failure),
     );
+  }
+
+  /// Fetches the WHOLE batch as one printable PDF and hands it to the platform.
+  ///
+  /// The bulk counterpart of [deliverStandee]. That one is right for sending a
+  /// rep a single code; for a run of fifty it is fifty presses, fifty
+  /// near-identical files and fifty sheets of paper for fifty squares.
+  ///
+  /// The sheet is captured on the way through so the confirmation can say what
+  /// is actually in the file — the counts arrive as response headers, not in
+  /// the body, and by the time the PDF is open there is nowhere left to say it.
+  Future<void> deliverBatchSheet() async {
+    if (state.downloadingSheet) return;
+    state = state.copyWith(downloadingSheet: true, failure: null, notice: null);
+
+    BatchSheetDownload? sheet;
+    await _deliver(
+      () async {
+        final fetched = await _repo.batchSheet(arg);
+        sheet = fetched;
+        return fetched.file;
+      },
+      onDone: (s) =>
+          s.copyWith(downloadingSheet: false, notice: _sheetNotice(sheet)),
+      onFail: (s, failure) =>
+          s.copyWith(downloadingSheet: false, failure: failure),
+    );
+  }
+
+  /// The confirmation, which NAMES THE SKIPPED CODES when there were any.
+  ///
+  /// Same reasoning as [_bulkNotice]: "48 standees" against a batch of 50 reads
+  /// as a bug; the same sentence with "2 retired" after it reads as the system
+  /// working.
+  ///
+  /// Degrades to a bare confirmation when the counts did not arrive. They are
+  /// response headers, and a proxy that strips them — or a browser that was not
+  /// told to expose them — must not turn a good download into "Saved 0
+  /// standees".
+  String _sheetNotice(BatchSheetDownload? sheet) {
+    if (sheet == null || sheet.standees == 0) return 'Printable sheet saved.';
+    final pages = sheet.pages == 1 ? '1 page' : '${sheet.pages} pages';
+    final head = 'Saved ${sheet.standees} standees over $pages.';
+    if (sheet.skippedRetired == 0) return head;
+    return '$head ${sheet.skippedRetired} retired and were skipped.';
   }
 
   /// Fetch → deliver → settle, with the two failure shapes both surfaces need.

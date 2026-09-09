@@ -61,8 +61,10 @@ import {
   findByCode,
   listBatchCodes,
   listBatches,
+  loadBatchSheet,
   mintBatch,
   slugifyBatchLabel,
+  QrBatchTooLargeError,
   QrResolverNotConfiguredError,
 } from '@/services/qrCodeService';
 import {
@@ -74,7 +76,8 @@ import {
   type AssignStandeeInput,
   type MintQrBatchInput,
 } from '@/validation/qrSchemas';
-import { renderStandeeSheet } from '@/services/standeeSheetService';
+import { renderBatchStandeeSheet, renderStandeeSheet } from '@/services/standeeSheetService';
+import { StandeeSheetLayoutError } from '@/services/standeeSheetPdf';
 import {
   assignBatchCodes,
   unassignBatchCodes,
@@ -1197,6 +1200,149 @@ router.get(
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.status(200).send(csv);
+  })
+);
+
+/**
+ * GET /admin/qr-batches/:batchId/sheet — the whole batch, ready to print.
+ *
+ * THE OTHER HALF OF THE PILOT PATH. `GET /admin/qr-codes/:code/qr` renders ONE
+ * standee, which is right for sending a rep a single code and absurd for a run
+ * of fifty: fifty presses, fifty near-identical files, fifty sheets of paper for
+ * fifty squares. This is one file — six standees to an A4 page by default, with
+ * cut guides — that an admin sends straight to a printer.
+ *
+ * ⚠ The squares are a FIXED PHYSICAL SIZE (STANDEE_SHEET_QR_INCHES, 1.67in) and
+ * are never scaled to fit more on a page. See `services/standeeSheetPdf.ts` for
+ * why that is the one thing the layout will not trade.
+ *
+ * ADMIN-ONLY, matching the CSV export beside it rather than the router-level
+ * MODEL_ARTIST: this is the full list of a run's public identifiers, same as the
+ * CSV, just rendered.
+ *
+ * RETIRED CODES ARE SKIPPED, not refused. The single-code endpoint answers 409
+ * for a retired code because rendering it hands somebody one dead sheet; a batch
+ * cannot be refused over one dead code, so they come off the sheet and the count
+ * is reported in `X-Standee-Sheet-Skipped-Retired` — a batch of 50 that prints
+ * 48 reads as a bug unless something says why, and the PDF cannot say it.
+ *
+ * NOT TRACKED, for the same reason the single-code render is not: a few events a
+ * year from a handful of staff, whose only interesting property (the codes) is
+ * barred from analytics.
+ */
+router.get(
+  '/qr-batches/:batchId/sheet',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const { batchId } = req.params;
+    if (!Types.ObjectId.isValid(batchId)) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid batch id',
+      });
+      return;
+    }
+
+    let source;
+    try {
+      source = await loadBatchSheet(new Types.ObjectId(batchId));
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'RESOLVER_NOT_CONFIGURED',
+          message: 'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment',
+        });
+        return;
+      }
+      if (err instanceof QrBatchTooLargeError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'BATCH_TOO_LARGE',
+          message:
+            `This batch has ${err.printable} codes. A printable sheet covers up to ` +
+            `${err.limit} at a time — use the vendor CSV for a run this size.`,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    if (source === null) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'Batch not found',
+      });
+      return;
+    }
+
+    // A batch whose every code is retired would render blank paper. Refused
+    // rather than delivered, for the same reason one retired code is.
+    if (source.items.length === 0) {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOTHING_TO_PRINT',
+        message: 'Every code in this batch is retired. Mint replacements instead.',
+      });
+      return;
+    }
+
+    // ── The conditional check happens BEFORE any rendering ──────────────────
+    // Unlike the single-code sheet, where rendering first and comparing after
+    // costs one small square, this endpoint's work scales with the batch: five
+    // hundred encodes and five hundred deflates, thrown away to answer 304. The
+    // ETag is a function of the source, so it can be computed without it.
+    //
+    // Keyed on everything that changes the bytes: which codes are on the sheet,
+    // in order, and the geometry they are laid out with. STATE and HOLDER are
+    // deliberately absent for the same reason as the single-code sheet —
+    // activating or reassigning a standee does not alter one pixel. A
+    // RETIREMENT does, by taking a card off, and the code list already carries
+    // that.
+    const etag = strongETag({
+      codes: source.items.map((item) => item.code),
+      urls: source.items.map((item) => item.url),
+      layout: [
+        env.STANDEE_SHEET_QR_INCHES,
+        env.STANDEE_SHEET_QR_DPI,
+        env.STANDEE_SHEET_COLUMNS,
+        env.STANDEE_SHEET_ROWS,
+      ],
+      label: source.label,
+    });
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
+      res.status(304).end();
+      return;
+    }
+
+    let sheet;
+    try {
+      sheet = renderBatchStandeeSheet(source);
+    } catch (err) {
+      if (err instanceof StandeeSheetLayoutError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'SHEET_LAYOUT_INVALID',
+          message: err.message,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    // What the client says out loud after the download: "48 standees over 8
+    // pages, 2 retired and skipped". None of it is in the PDF, and none of it
+    // fits in a body that is already the file.
+    res.setHeader('X-Standee-Sheet-Standees', String(sheet.standees));
+    res.setHeader('X-Standee-Sheet-Pages', String(sheet.pages));
+    res.setHeader('X-Standee-Sheet-Skipped-Retired', String(sheet.skippedRetired));
+    res.setHeader('Content-Type', sheet.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${sheet.filename}"`);
+    res.status(200).send(sheet.body);
   })
 );
 
