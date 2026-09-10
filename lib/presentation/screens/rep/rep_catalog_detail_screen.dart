@@ -21,6 +21,14 @@
 // Until they existed a rep could add dishes and publish, and could not fix a
 // single thing they had got wrong — the owner had to sign in later and do it,
 // which on a pilot visit means the page goes live wrong or does not go live.
+//
+// AND EVERY ONE OF THOSE EDITS LANDS IN A DRAFT, WHICH THE BOTTOM BAR NOW SAYS.
+// Renaming a dish, replacing its photo or model, changing the restaurant's own
+// name or branding — none of it reaches a customer until a publish. The bar
+// used to be a single button reading "Publish the menu" whether there were
+// twenty unsent edits behind it or none, so a rep who corrected a price and
+// walked out had nothing on screen telling them the correction was still in
+// the draft. See [_PublishBar].
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -33,8 +41,11 @@ import '../../../application/rep/rep_catalogs_notifier.dart';
 import '../../../application/rep/rep_publish_notifier.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../../domain/entities/catalog.dart';
 import '../../../domain/entities/catalog_product.dart';
+import '../../../domain/entities/catalog_status.dart';
 import '../../../domain/entities/product_model_status.dart';
+import '../../../utils/extensions.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 
@@ -46,7 +57,6 @@ class RepCatalogDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final products = ref.watch(repCatalogProductsProvider(catalogId));
-    final publish = ref.watch(repPublishProvider(catalogId));
 
     ref.listen<RepPublishState>(repPublishProvider(catalogId), (prev, next) {
       final failure = next.failure;
@@ -88,22 +98,6 @@ class RepCatalogDetailScreen extends ConsumerWidget {
                 context.push('${AppRoutes.repCatalogs}/$catalogId/preview'),
           ),
           IconButton(
-            key: const ValueKey('rep_menu_sections'),
-            icon: const Icon(Icons.category_outlined),
-            tooltip: 'Menu sections',
-            onPressed: () async {
-              await context.push('${AppRoutes.repCatalogs}/$catalogId/sections');
-              if (!context.mounted) return;
-              // A rename or a delete changes the section every dish row and the
-              // preview reads. The category list is autoDispose and re-reads
-              // itself; the DISHES carry a categoryId that a delete may just
-              // have moved, so they are re-read too.
-              await ref
-                  .read(repCatalogProductsProvider(catalogId).notifier)
-                  .refresh();
-            },
-          ),
-          IconButton(
             key: const ValueKey('rep_restaurant_details'),
             icon: const Icon(Icons.storefront_outlined),
             tooltip: 'Restaurant details',
@@ -141,28 +135,7 @@ class RepCatalogDetailScreen extends ConsumerWidget {
       // keeps the FAB; publishing happens once, at the end of the visit. Two
       // floating buttons would also put the rarer, irreversible-feeling one
       // under the thumb that has been tapping the other all visit.
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: AppButton(
-            key: const ValueKey('rep_publish_button'),
-            label: 'Publish the menu',
-            isLoading: publish.publishing,
-            onPressed: publish.publishing
-                ? null
-                : () async {
-                    await ref
-                        .read(repPublishProvider(catalogId).notifier)
-                        .publish();
-                    // The status the list renders moves on publish, so the
-                    // rep sees the change rather than having to pull down.
-                    await ref
-                        .read(repCatalogProductsProvider(catalogId).notifier)
-                        .refresh();
-                  },
-          ),
-        ),
-      ),
+      bottomNavigationBar: _PublishBar(catalogId: catalogId),
       body: SafeArea(
         child: RefreshIndicator(
           onRefresh: () =>
