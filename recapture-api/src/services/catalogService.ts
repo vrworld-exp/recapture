@@ -69,6 +69,21 @@ export interface CatalogDto {
   lastPublishedAt: string | null;
   /** True while a publish run holds the catalog — the client disables Publish. */
   isPublishing: boolean;
+  /**
+   * True when authoring writes have landed SINCE the in-flight run planned —
+   * `draftRevision > run.snapshotRevision`. False whenever nothing is running.
+   *
+   * WHY `hasUnpublishedChanges` CANNOT ANSWER THIS. That flag compares against
+   * `publishedRevision`, which only moves at finalize, so it is true for the
+   * whole duration of EVERY run — including one that carries the draft
+   * perfectly. A client using it to decide whether to re-offer Publish would
+   * re-offer it during every publish, and the rep would learn to ignore it.
+   *
+   * The run planned from a SNAPSHOT (see publishSnapshot.ts), so an edit made
+   * after that instant is genuinely not in the run and genuinely needs another
+   * publish. This is the only field that says so.
+   */
+  hasChangesSincePublishStarted: boolean;
   counts: CatalogCountsDto;
   updatedAt: string;
   createdAt: string;
@@ -114,8 +129,20 @@ async function countsFor(catalogId: Types.ObjectId): Promise<CatalogCountsDto> {
   return { products, archivedProducts, categories };
 }
 
-/** The ONE catalog DTO mapper — every catalog response serializes through here. */
-export function toCatalogDto(c: ICatalog, counts: CatalogCountsDto): CatalogDto {
+/**
+ * The ONE catalog DTO mapper — every catalog response serializes through here.
+ *
+ * [publishSnapshotRevision] is the in-flight run's `snapshotRevision`, or null
+ * when nothing is running or the caller did not load it. Null reads as "no
+ * changes since the run planned", which is the answer that keeps a caller who
+ * cannot cheaply load the run — a create, where nothing can be running yet —
+ * from claiming a staleness it has not checked.
+ */
+export function toCatalogDto(
+  c: ICatalog,
+  counts: CatalogCountsDto,
+  publishSnapshotRevision: number | null = null
+): CatalogDto {
   return {
     id: c.id as string,
     name: c.name,
@@ -127,18 +154,38 @@ export function toCatalogDto(c: ICatalog, counts: CatalogCountsDto): CatalogDto 
     hasUnpublishedChanges: c.draftRevision > c.publishedRevision,
     lastPublishedAt: c.lastPublishedAt ? c.lastPublishedAt.toISOString() : null,
     isPublishing: Boolean(c.activePublishRunId),
+    hasChangesSincePublishStarted:
+      Boolean(c.activePublishRunId) &&
+      publishSnapshotRevision !== null &&
+      c.draftRevision > publishSnapshotRevision,
     counts,
     updatedAt: c.updatedAt.toISOString(),
     createdAt: c.createdAt.toISOString(),
   };
 }
 
-/** Loads the caller's catalog as a DTO, or null when they have none yet. */
+/**
+ * Loads the caller's catalog as a DTO, or null when they have none yet.
+ *
+ * The extra run read happens ONLY while a publish holds the catalog, which is a
+ * few seconds per visit — and it is what lets a rep who edits a dish mid-publish
+ * be told the running publish will not carry it. Every other read pays nothing.
+ */
 export async function getCatalog(userId: string): Promise<CatalogDto | null> {
   const catalog = await findOwnedCatalog(userId);
   if (!catalog) return null;
 
-  return toCatalogDto(catalog, await countsFor(catalog._id as Types.ObjectId));
+  const [counts, activeRun] = await Promise.all([
+    countsFor(catalog._id as Types.ObjectId),
+    catalog.activePublishRunId
+      ? CatalogPublishRun.findById(catalog.activePublishRunId)
+          .select({ snapshotRevision: 1 })
+          .lean()
+          .exec()
+      : Promise.resolve(null),
+  ]);
+
+  return toCatalogDto(catalog, counts, activeRun?.snapshotRevision ?? null);
 }
 
 /**

@@ -124,6 +124,11 @@ class RepCatalogDetailScreen extends ConsumerWidget {
           // immediately rather than up to one poll interval later.
           await context.push('/rep/catalogs/$catalogId/dishes/new');
           if (!context.mounted) return;
+          // A NEW DISH IS A DRAFT CHANGE. The list re-reads itself below; the
+          // publish bar reads the catalog document, which carries the
+          // server-derived draft flag, so that has to be re-read too or the
+          // bar goes on claiming everything is live.
+          ref.invalidate(repCatalogDocumentProvider(catalogId));
           await ref
               .read(repCatalogProductsProvider(catalogId).notifier)
               .refresh();
@@ -131,15 +136,17 @@ class RepCatalogDetailScreen extends ConsumerWidget {
         icon: const Icon(Icons.add),
         label: const Text('Add a dish'),
       ),
-      // A BOTTOM BAR, NOT A SECOND FAB. "Add a dish" is the repeated action and
-      // keeps the FAB; publishing happens once, at the end of the visit. Two
-      // floating buttons would also put the rarer, irreversible-feeling one
-      // under the thumb that has been tapping the other all visit.
+      // The publish bar, and the line above it saying what is still a draft.
+      // See [_PublishBar].
       bottomNavigationBar: _PublishBar(catalogId: catalogId),
       body: SafeArea(
         child: RefreshIndicator(
-          onRefresh: () =>
-              ref.read(repCatalogProductsProvider(catalogId).notifier).refresh(),
+          onRefresh: () {
+            ref.invalidate(repCatalogDocumentProvider(catalogId));
+            return ref
+                .read(repCatalogProductsProvider(catalogId).notifier)
+                .refresh();
+          },
           child: products.when(
             loading: () => const Center(child: AppLoadingIndicator()),
             error: (_, __) => _Message(
@@ -177,6 +184,9 @@ class RepCatalogDetailScreen extends ConsumerWidget {
                           '${items[i].id}',
                         );
                         if (!context.mounted) return;
+                        // An edited name, price, photo or model is a draft
+                        // change — same reason as the add-dish FAB above.
+                        ref.invalidate(repCatalogDocumentProvider(catalogId));
                         await ref
                             .read(
                                 repCatalogProductsProvider(catalogId).notifier)
@@ -188,6 +198,284 @@ class RepCatalogDetailScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+}
+
+/// The bottom bar: what is waiting to go live, and the one button that sends it.
+///
+/// A BOTTOM BAR, NOT A SECOND FAB. "Add a dish" is the repeated action and keeps
+/// the FAB; publishing happens once, at the end of the visit. Two floating
+/// buttons would also put the rarer, irreversible-feeling one under the thumb
+/// that has been tapping the other all visit.
+///
+/// THE LINE ABOVE THE BUTTON IS THE POINT. A rep edits a draft all visit — dish
+/// names, photos, models, the restaurant's own name and branding — and none of
+/// it reaches a customer until a publish. With a fixed "Publish the menu" label
+/// and nothing else, the screen looked identical with twenty unsent edits and
+/// with none, so the one question a rep has on the way out the door ("did that
+/// price fix actually go up?") had no answer on the screen that owed it one.
+///
+/// SERVER-DERIVED, NEVER DIFFED. [Catalog.hasUnpublishedChanges] comes off the
+/// draft/published revision counters; the client must not try to recompute it
+/// by comparing anything locally, because a badge that disagrees with the
+/// publish it describes is worse than no badge at all. The detail screen
+/// re-reads the document after every edit that can move the flag.
+///
+/// WHILE THE DOCUMENT IS UNREAD, THE BAR CLAIMS NOTHING AND THE BUTTON STILL
+/// WORKS. Loading, or a failed read, shows no state line and leaves a live
+/// "Publish now" — the same "we cannot tell → assume there are drafts" rule
+/// [Catalog.fromMap] applies to the flag itself. Wrongly hiding the state tells
+/// a rep their edits are live when they are not; wrongly showing it costs one
+/// redundant publish, and a disabled button would cost them the visit.
+class _PublishBar extends ConsumerWidget {
+  const _PublishBar({required this.catalogId});
+
+  final String catalogId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final catalog = ref.watch(repCatalogDocumentProvider(catalogId)).valueOrNull;
+    final publish = ref.watch(repPublishProvider(catalogId));
+
+    // KEEPING THE RUN WATCH ALIVE FROM HERE, not from the notifier's build.
+    // A run can start without this device asking — a 3D model finishing
+    // generation publishes on its own, and so does the owner on their phone —
+    // so "something is publishing" arrives as a document change, and this is
+    // where document changes land. The notifier makes the call idempotent.
+    ref.listen(repCatalogDocumentProvider(catalogId), (_, next) {
+      final loaded = next.valueOrNull;
+      if (loaded == null) return;
+      ref
+          .read(repPublishProvider(catalogId).notifier)
+          .watchRunIfPublishing(isPublishing: loaded.isPublishing);
+    });
+
+    // A run THIS device started, or one the server says already holds the
+    // catalog: a rep who backed out and came straight back must meet the same
+    // "Publishing…" rather than a button offering to start a second run.
+    final running = publish.publishing || (catalog?.isPublishing ?? false);
+    final pending = catalog?.hasUnpublishedChanges ?? true;
+    final isLive = catalog?.status.isLive ?? false;
+
+    // THE CASE THIS BAR WAS REBUILT FOR. A run is going, and edits landed after
+    // it planned — so the menu about to go live is not the one on this screen.
+    // Publish is re-offered, mid-run, because pressing it is the only thing
+    // that gets those edits live and the rep has no other way to know.
+    final staleRun = catalog?.hasChangesSincePublishStarted ?? false;
+
+    // Nothing drafted AND already live is the one state with nothing to send.
+    // Nothing drafted and NOT live still publishes — that is a page which was
+    // taken offline, and putting it back is exactly this button's job.
+    final canPublish = running
+        ? staleRun && !publish.queuedBehindRun && !publish.publishing
+        : pending || !isLive;
+
+    final label = !canPublish && running
+        ? 'Publishing…'
+        : canPublish
+            ? 'Publish now'
+            : 'Published (live)';
+
+    // The spinner belongs to OUR request, not to any run. A rep looking at a
+    // stale run needs to read "Publish now" on a button they can press, and a
+    // spinner over it would say the opposite.
+    final showsSpinner = publish.publishing || (running && !canPublish);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (catalog != null) ...[
+              _PublishStateLine(
+                catalog: catalog,
+                running: running,
+                staleRun: staleRun,
+                queuedBehindRun: publish.queuedBehindRun,
+              ),
+              const SizedBox(height: AppSpacing.md),
+            ],
+            if (publish.queuedBehindRun) ...[
+              // An escape from a republish the rep did not mean to queue. It
+              // shows only while one is queued, so the ordinary visit never
+              // meets it.
+              TextButton(
+                key: const ValueKey('rep_cancel_queued_republish'),
+                onPressed: () => ref
+                    .read(repPublishProvider(catalogId).notifier)
+                    .cancelQueuedRepublish(),
+                child: const Text("Don't republish — leave them in the draft"),
+              ),
+              const SizedBox(height: AppSpacing.xs),
+            ],
+            AppButton(
+              key: const ValueKey('rep_publish_button'),
+              label: label,
+              isLoading: showsSpinner,
+              onPressed: !canPublish
+                  ? null
+                  : () async {
+                      await ref
+                          .read(repPublishProvider(catalogId).notifier)
+                          .publish();
+                      // Both halves of this screen move on a publish: the
+                      // status the dish rows render, and the draft flag this
+                      // bar reads — which is the whole reason the button was
+                      // pressed, so it must not be the stale one.
+                      ref.invalidate(repCatalogDocumentProvider(catalogId));
+                      await ref
+                          .read(repCatalogProductsProvider(catalogId).notifier)
+                          .refresh();
+                    },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One line saying what is not live yet, and since when.
+///
+/// "Draft changes not yet live" is the OWNER's wording, from the catalog header
+/// (feature 38), reused here on purpose: a rep and an owner on the phone about
+/// the same restaurant should be reading the same words for the same state.
+class _PublishStateLine extends StatelessWidget {
+  const _PublishStateLine({
+    required this.catalog,
+    required this.running,
+    required this.staleRun,
+    required this.queuedBehindRun,
+  });
+
+  final Catalog catalog;
+
+  /// A publish run holds the catalog — from this device or any other.
+  final bool running;
+
+  /// That run planned before the rep's latest edits, so it will not carry them.
+  final bool staleRun;
+
+  /// We have taken responsibility for republishing when the run clears.
+  final bool queuedBehindRun;
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, color, title, detail) = _describe();
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      key: const ValueKey('rep_publish_state'),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surface1,
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: textTheme.bodyMedium
+                      ?.copyWith(color: color, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detail,
+                  style: textTheme.bodySmall
+                      ?.copyWith(color: AppColors.textSecondary, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Every state this bar can be in, most urgent first.
+  (IconData, Color, String, String) _describe() {
+    final published = catalog.lastPublishedAt;
+
+    if (running) {
+      // ── The three mid-run states ────────────────────────────────────────
+      if (queuedBehindRun) {
+        return (
+          Icons.pending_actions,
+          AppColors.royalGold,
+          'Your changes are queued.',
+          'The publish already running does not include them. Yours starts '
+              'the moment it finishes — keep this screen open.',
+        );
+      }
+      if (staleRun) {
+        // NOT reassurance. A rep reading "Publishing…" here would leave
+        // believing the edit they just made is on its way, and it is not.
+        return (
+          Icons.warning_amber_rounded,
+          AppColors.warning,
+          'Your latest changes are NOT in this publish.',
+          'A publish started before you made them and cannot pick them up. '
+              'Press Publish now and they go up right after it.',
+        );
+      }
+      return (
+        Icons.sync,
+        AppColors.royalGold,
+        'Publishing…',
+        'The customer page updates in about a minute.',
+      );
+    }
+
+    if (catalog.hasUnpublishedChanges) {
+      // NOT the same sentence twice. A restaurant that has never been live and
+      // one that is live with edits behind it both have drafts, but only the
+      // second one has something a customer can already see — and a rep who
+      // reads "not yet live" on a page that IS live goes looking for a bug.
+      return published == null
+          ? (
+              Icons.schedule,
+              AppColors.warning,
+              'Nothing is live yet.',
+              'Your dishes and the restaurant details go live the first time '
+                  'you publish.',
+            )
+          : (
+              Icons.schedule,
+              AppColors.warning,
+              'Draft changes not yet live.',
+              'Dish names, photos, 3D models and the restaurant details stay '
+                  'in the draft until you publish. Last published '
+                  '${published.timeAgo}.',
+            );
+    }
+
+    // Nothing drafted. Live and offline are different answers, and the button
+    // beside this line differs with them too.
+    return catalog.status.isLive
+        ? (
+            Icons.check_circle_outline,
+            AppColors.success,
+            'Everything is live.',
+            published == null
+                ? 'Nothing is waiting to be published.'
+                : 'Published ${published.timeAgo}. Nothing is waiting to go up.',
+          )
+        : (
+            Icons.visibility_off_outlined,
+            AppColors.textMuted,
+            'This page is offline.',
+            'Nothing is drafted. Publish to put it back in front of customers.',
+          );
   }
 }
 

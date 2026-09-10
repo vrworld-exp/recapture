@@ -46,9 +46,12 @@ class CatalogCounts {
 ///     counters. True from the moment a catalog is created (nothing is live yet),
 ///     and true again after any edit. It stays true after a PARTIAL publish,
 ///     because some products really did not make it.
-///   • [isPublishing] — a publish run currently holds the catalog. The Publish
-///     button is disabled while this is true; a second run would race Mirage's
-///     non-atomic writes, and the server answers 409 anyway.
+///   • [isPublishing] — a publish run currently holds the catalog. A second run
+///     would race Mirage's non-atomic writes, and the server answers 409 anyway.
+///   • [hasChangesSincePublishStarted] — edits landed after that run planned, so
+///     it will not carry them. This is the one that decides whether Publish is
+///     worth re-offering DURING a run; [hasUnpublishedChanges] cannot, because
+///     it is true for the whole of every run.
 class Catalog {
   const Catalog({
     required this.id,
@@ -57,6 +60,7 @@ class Catalog {
     required this.hasUnpublishedChanges,
     required this.isPublishing,
     required this.isProvisioned,
+    this.hasChangesSincePublishStarted = false,
     this.businessName,
     this.contact,
     this.publicUrl,
@@ -101,6 +105,23 @@ class Catalog {
   /// A publish run is in flight right now (feature 36).
   final bool isPublishing;
 
+  /// Edits have landed SINCE the in-flight run planned, so that run will not
+  /// carry them. False whenever nothing is running.
+  ///
+  /// NOT derivable from [hasUnpublishedChanges]. That one compares against
+  /// `publishedRevision`, which only moves at finalize, so it is true for the
+  /// whole duration of every run — including one carrying the draft perfectly.
+  /// This compares against the run's own snapshot, which is the only comparison
+  /// that separates "already going up" from "needs another publish".
+  ///
+  /// DEFAULTS TO FALSE WHEN ABSENT, unlike [hasUnpublishedChanges]. An API that
+  /// predates the field cannot tell us, and the safe reading of silence here is
+  /// the opposite one: assuming staleness would re-offer Publish during every
+  /// publish, on every restaurant, and teach a rep that the bar is noise. The
+  /// cost of assuming false is bounded — the moment the run ends,
+  /// [hasUnpublishedChanges] tells the truth again and the bar catches up.
+  final bool hasChangesSincePublishStarted;
+
   final DateTime? lastPublishedAt;
   final CatalogCounts counts;
   final DateTime? updatedAt;
@@ -135,6 +156,8 @@ class Catalog {
       // are not; wrongly showing it costs one redundant publish.
       hasUnpublishedChanges: map['hasUnpublishedChanges'] != false,
       isPublishing: map['isPublishing'] == true,
+      hasChangesSincePublishStarted:
+          map['hasChangesSincePublishStarted'] == true,
       lastPublishedAt: catalogDate(map['lastPublishedAt']),
       counts: rawCounts is Map<String, dynamic>
           ? CatalogCounts.fromMap(rawCounts)
@@ -157,6 +180,7 @@ class Catalog {
         'isProvisioned': isProvisioned,
         'hasUnpublishedChanges': hasUnpublishedChanges,
         'isPublishing': isPublishing,
+        'hasChangesSincePublishStarted': hasChangesSincePublishStarted,
         'lastPublishedAt': lastPublishedAt?.toIso8601String(),
         'counts': counts.toMap(),
         'updatedAt': updatedAt?.toIso8601String(),
@@ -170,6 +194,7 @@ class Catalog {
     CatalogStatus? status,
     bool? hasUnpublishedChanges,
     bool? isPublishing,
+    bool? hasChangesSincePublishStarted,
     CatalogCounts? counts,
     DateTime? updatedAt,
   }) =>
@@ -186,6 +211,8 @@ class Catalog {
         isProvisioned: isProvisioned,
         hasUnpublishedChanges: hasUnpublishedChanges ?? this.hasUnpublishedChanges,
         isPublishing: isPublishing ?? this.isPublishing,
+        hasChangesSincePublishStarted:
+            hasChangesSincePublishStarted ?? this.hasChangesSincePublishStarted,
         lastPublishedAt: lastPublishedAt,
         counts: counts ?? this.counts,
         updatedAt: updatedAt ?? this.updatedAt,
