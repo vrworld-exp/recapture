@@ -8,6 +8,8 @@
 // file with an identical throwing stub. A fake mixes these in and overrides
 // only what its test actually drives — so the next repository addition touches
 // this file, not seven others.
+import 'dart:typed_data';
+
 import 'package:recapture/data/repositories/live_projects_repository.dart'
     show AdminDeleteMode, AutoGenerationRequest, ModelUploadSlot;
 import 'package:recapture/data/repositories/projects_repository.dart'
@@ -16,6 +18,7 @@ import 'package:recapture/data/repositories/projects_repository.dart'
         OwnerGenerationRequestResult,
         OwnerModelState;
 import 'package:recapture/domain/entities/project_model.dart';
+import 'package:recapture/domain/entities/project_owner.dart';
 
 /// Model-generation members of `LiveProjectsRepository`.
 mixin FakeModelGenerationDefaults {
@@ -99,6 +102,22 @@ mixin FakeModelSubmissionDefaults {
     String key,
   ) async =>
       throw UnimplementedError('not used here');
+}
+
+/// The ADMIN "Created by" members of `LiveProjectsRepository` — the owner
+/// identity behind a live project and that person's picture.
+///
+/// The avatar defaults to a benign `null` ("this account has no picture")
+/// rather than a throw, following [FakeProjectModelDefaults]: it is a read that
+/// only makes the label render LESS, so a fake that reaches it by accident
+/// should degrade to initials, not blow up an unrelated test. The IDENTITY
+/// throws, because a test that reaches THAT by accident is a test rendering a
+/// sheet it did not mean to open.
+mixin FakeProjectOwnerDefaults {
+  Future<ProjectOwnerDetail> owner(String userId) async =>
+      throw UnimplementedError('not used here');
+
+  Future<Uint8List?> ownerAvatarBytes(String userId) async => null;
 }
 
 /// ADMIN curation members of `LiveProjectsRepository`.

@@ -134,6 +134,38 @@ do not remove it).
   **export manifest**, an ADMIN-only photo soft-delete, and the **Meshy model
   generation** surface (below). Staff DTOs carry an opaque `ownerId` — **never**
   owner phone/email. The client learns its own role via `GET /auth/me`.
+- **"Created by" — the ONE unmasked-contact exception, ADMIN-only.** An admin
+  looking at a bad capture needs to reach the person who made it, and a mask
+  cannot be dialled. So:
+  - `GET /admin/projects` adds a compact **`owner`** (`{id, displayName,
+    hasAvatar}`) to each item **when the caller is ADMIN** — enough for the
+    Live-projects card's "Created by" label, and **no identifier, not even a
+    mask**. Below ADMIN the field is **absent** and the opaque `ownerId` is all
+    staff get. Absent is also what an owner id that no longer resolves produces,
+    so the client falls back to the opaque line rather than rendering a blank.
+  - `GET /admin/users/:id` (`requireRole('ADMIN')`, `services/adminUsersService.ts`)
+    is the **only route in this API that answers with a RAW phone/email**. It is
+    bounded on every side: ADMIN-only, **on demand** (one person per call — never
+    decorating a list), metered per admin (`ADMIN_USER_LOOKUP_*`), audited
+    (`admin_project_owner_viewed`, hashed ids + a `contact_channels` enum — note
+    the prop NAME: `has_phone`/`has_email` would be stripped by the emit layer
+    and drop the whole audit event), and answered with `Cache-Control: no-store`.
+    **Widening any of those bounds is a PII policy decision and belongs in this
+    file first.**
+  - `GET /admin/users/:id/avatar/bytes` proxies that person's picture. **Bytes,
+    not the presigned `avatarUrl`**, for the reason `GET /auth/me/avatar/bytes`
+    exists: the raw bucket serves no CORS, so a presigned URL renders on the apk
+    and shows nothing at all on web. One route serves both builds. The key comes
+    from the user document — there is no `?key=`, and adding one would make this
+    an arbitrary-object reader for the private bucket.
+  - Client: `ProjectOwnerSummary` / `ProjectOwnerDetail`
+    (`domain/entities/project_owner.dart`) are two types on purpose — the summary
+    is list-safe, the detail is not. `projectOwnerProvider` is **autoDispose with
+    no keepAlive** so the raw contact lives exactly as long as the sheet showing
+    it; the avatar provider IS kept alive, because a picture is not the thing
+    being bounded. Nothing is persisted to Hive, logged, or sent to analytics.
+    Guardrails: `tests/admin-project-owner.test.ts` +
+    `test/projects/live_project_owner_test.dart`.
 - **`GET`/`PATCH /auth/me` are MASKED-ONLY, not PII-free.** The raw phone/email
   still never leaves the API. The account snapshot adds `contactMasked`
   (`+91 ••••• ••210` / `a•••@gmail.com`), `contactChannel`, and an optional
@@ -934,6 +966,9 @@ flutter run                                                 # dev flavor
   validation/HTTP/state lib.
 - **Don't** hardcode secrets or tunables — they go through `env.ts` + `.env.example`.
 - **Don't** log raw PII; hash identifiers via `hashIdentifier`.
+- **Don't widen the raw-contact exception.** `GET /admin/users/:id` is the one
+  route that ships an unmasked phone/email, and it is ADMIN-only, one-at-a-time,
+  metered and audited. Everything else masks — reuse `utils/maskIdentifier.ts`.
 - **Don't** make auth/ownership errors distinguishable at the boundary.
 - **Do** keep the Project DTO identical across `GET /projects` and
   `POST /projects` (and in sync with the Flutter `Project` entity) — they share

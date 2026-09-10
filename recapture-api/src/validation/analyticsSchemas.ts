@@ -69,6 +69,7 @@ export const AnalyticsEvent = {
   PROJECT_PHOTOS_DELETED: 'project_photos_deleted',
   ADMIN_PROJECT_DELETED: 'admin_project_deleted',
   ADMIN_ACCESS_DENIED: 'admin_access_denied',
+  ADMIN_PROJECT_OWNER_VIEWED: 'admin_project_owner_viewed',
   // ── Meshy AI model generation (staff-triggered) ───────────────────────────
   MODEL_GENERATION_REQUESTED: 'model_generation_requested',
   MODEL_GENERATION_DECLINED: 'model_generation_declined',
@@ -711,6 +712,30 @@ const adminAccessDeniedProps = z
   })
   .strict();
 
+/**
+ * An ADMIN opened the identity behind a live project (GET /admin/users/:id) —
+ * the ONE route that answers with a raw phone/email, so the read is audited.
+ *
+ * That makes the PROPS a place a leak would be easy and catastrophic: both ids
+ * are HASHED with the one hashing util, and neither the identifier nor the
+ * display name appears here in any form. `contact_channels` says only WHICH
+ * KINDS of identifier the account had — enough to know what an admin could see,
+ * worth nothing to anyone who reads the event.
+ *
+ * ⚠ Its NAME is deliberate. The emit layer strips any prop whose name contains
+ * 'phone' or 'email' (utils/analytics.ts), so the obvious `has_phone`/`has_email`
+ * pair would be dropped and this event would arrive as a strict-schema failure
+ * — an audit trail that silently stops existing. One enum, one safe name.
+ */
+const adminProjectOwnerViewedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    subject_id_hash: z.string().min(1),
+    subject_role: z.enum(USER_ROLES),
+    contact_channels: z.enum(['none', 'sms', 'mail', 'both']),
+  })
+  .strict();
+
 // ── Artist photo-upload projects ─────────────────────────────────────────────
 //
 // NON-PII ONLY, and in particular: no S3 keys and no presigned URLs. A
@@ -947,6 +972,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PROJECT_PHOTOS_DELETED]: projectPhotosDeletedProps,
   [AnalyticsEvent.ADMIN_PROJECT_DELETED]: adminProjectDeletedProps,
   [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
+  [AnalyticsEvent.ADMIN_PROJECT_OWNER_VIEWED]: adminProjectOwnerViewedProps,
   [AnalyticsEvent.MODEL_GENERATION_REQUESTED]: modelGenerationRequestedProps,
   [AnalyticsEvent.MODEL_GENERATION_DECLINED]: modelGenerationDeclinedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,

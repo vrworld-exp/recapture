@@ -93,6 +93,18 @@ const envSchema = z.object({
   /** Sliding window for the export cap (seconds). */
   ADMIN_EXPORT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // ── Owner identity lookup (GET /admin/users/:id) ───────────────────────────
+  //
+  // The ONE route that answers with a raw phone/email, so it is metered as well
+  // as audited: an admin opening the people behind the projects they are
+  // looking at stays far under this, while anything walking the list to harvest
+  // contact details hits it. Generous on purpose — this is a scraping bound,
+  // not a usage budget.
+  /** Max owner-identity reads one admin may make per window. */
+  ADMIN_USER_LOOKUP_MAX_PER_WINDOW: z.coerce.number().int().positive().default(60),
+  /** Sliding window for the owner-identity cap (seconds). */
+  ADMIN_USER_LOOKUP_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // ── Profile pictures (/auth/me/avatar — docs/prompts/profile-avatar-prompt.md) ─
   /**
    * Hard ceiling on a stored avatar object, in bytes. The client downscales to

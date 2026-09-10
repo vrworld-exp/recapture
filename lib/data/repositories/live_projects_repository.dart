@@ -1,10 +1,13 @@
 // lib/data/repositories/live_projects_repository.dart
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/generation_trace.dart';
 import '../../domain/entities/live_project.dart';
 import '../../domain/entities/project_model.dart';
+import '../../domain/entities/project_owner.dart';
 import '../remote/api_client.dart';
 
 /// Friendly failure buckets for the staff Live-projects surface — the UI
@@ -183,6 +186,26 @@ abstract interface class LiveProjectsRepository {
   /// putting a duplicate in the owner's list.
   /// Throws [LiveProjectsException].
   Future<ProjectModelView> submitUploadedModel(String projectId, String key);
+
+  /// ADMIN-only: the full identity behind a live project — name, role, and the
+  /// RAW email/phone — for the "Created by" sheet.
+  ///
+  /// The ONE unmasked contact payload this app fetches. Call it when an admin
+  /// opens one person, never to decorate a list: the server meters it and
+  /// audits every read. Nothing it returns may be logged, persisted or sent to
+  /// analytics. Throws [LiveProjectsException] (forbidden when the account is
+  /// not ADMIN / notFound when the account is gone / rateLimited / network).
+  Future<ProjectOwnerDetail> owner(String userId);
+
+  /// ADMIN-only: that person's profile picture as IMAGE BYTES, or null when
+  /// they have none.
+  ///
+  /// BYTES, not a presigned URL, and that is what makes the label work on WEB
+  /// as well as the apk: the avatar bucket serves no CORS, so a browser cannot
+  /// fetch a presigned avatar URL as an image at all. "No picture" is a normal
+  /// answer, not a failure — the caller draws initials.
+  /// Throws [LiveProjectsException] for anything that is not a 404.
+  Future<Uint8List?> ownerAvatarBytes(String userId);
 
   /// ADMIN-only: deletes [projectId] — [AdminDeleteMode.soft] hides it
   /// (recoverable), [AdminDeleteMode.hard] permanently erases the project,
@@ -576,6 +599,38 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
         '/projects/$projectId/models/$modelId/optimize',
       );
     } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<ProjectOwnerDetail> owner(String userId) async {
+    try {
+      final res = await _dio.get<Map<String, dynamic>>('/admin/users/$userId');
+      final owner = ProjectOwnerDetail.tryFrom(res.data?['user']);
+      if (owner == null) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return owner;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<Uint8List?> ownerAvatarBytes(String userId) async {
+    try {
+      final res = await _dio.get<List<int>>(
+        '/admin/users/$userId/avatar/bytes',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final data = res.data;
+      return data == null || data.isEmpty ? null : Uint8List.fromList(data);
+    } on DioException catch (e) {
+      // The route 404s for "never set one" AND for "the pointer outlived the
+      // object". Neither is a failure worth surfacing: the label draws
+      // initials, which is what it would have drawn anyway.
+      if (e.response?.statusCode == 404) return null;
       throw _translate(e);
     }
   }

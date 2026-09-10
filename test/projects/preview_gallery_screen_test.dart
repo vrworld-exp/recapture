@@ -36,7 +36,8 @@ class _FakeRepo
         FakeAutoGenerationDefaults,
         FakeModelOptimizeDefaults,
         FakeOwnerModelListDefaults,
-        FakeModelSubmissionDefaults
+        FakeModelSubmissionDefaults,
+        FakeProjectOwnerDefaults
     implements LiveProjectsRepository {
   Map<String, dynamic> photosResult = const {};
   LiveProjectsException? photosFail;

@@ -10,10 +10,12 @@ import { Types } from 'mongoose';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
 import { requireRole } from '@/middleware/requireRole';
+import { hasRoleAtLeast } from '@/models/User';
 import { validateBody } from '@/middleware/validate';
 import {
   adminListProjectsQuerySchema,
   adminProjectIdParamsSchema,
+  adminUserIdParamsSchema,
   adminDeletePhotosBodySchema,
   adminDeleteProjectBodySchema,
   adminCreateModelBodySchema,
@@ -25,6 +27,10 @@ import {
   type AdminSubmitModelBody,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
+import {
+  getAdminUserDetail,
+  readUserAvatarBytes,
+} from '@/services/adminUsersService';
 import {
   listAllCapturedProjects,
   getAdminProjectDetail,
@@ -104,6 +110,12 @@ router.use(requireRole('MODEL_ARTIST'));
  * explicit `?status=` narrows to one ProjectStatus. Cursor pagination is the
  * owner list's exact scheme (updatedAt DESC, _id DESC keyset). Items carry an
  * opaque `ownerId` — no owner phone/email anywhere in this payload.
+ *
+ * FOR AN ADMIN each item also carries a compact `owner` (display name + "has a
+ * picture") so the Live-projects list can label who captured it. That is the
+ * whole widening: still no identifier of any kind here, masked or otherwise —
+ * contact details are a separate, audited call (GET /admin/users/:id). A
+ * MODEL_ARTIST sees the field absent and the opaque `ownerId` it always saw.
  */
 router.get(
   '/projects',
@@ -132,10 +144,15 @@ router.get(
       cursor = decoded;
     }
 
+    // requireRole resolved the role from a FRESH DB read, so a revoked admin
+    // stops receiving owner names on their very next page — no token lag.
+    const isAdmin = hasRoleAtLeast(req.user!.role ?? 'MODEL_ARTIST', 'ADMIN');
+
     const { items, nextCursor } = await listAllCapturedProjects(
       parsed.data.limit,
       cursor,
-      parsed.data.status
+      parsed.data.status,
+      isAdmin
     );
 
     track(AnalyticsEvent.ADMIN_PROJECTS_LISTED, {
@@ -190,6 +207,144 @@ router.get(
       job: detail.job,
       model,
     });
+  })
+);
+
+/** Which KINDS of contact an account carried, for the owner-view audit event.
+ * Deliberately not a pair of booleans — see the event's schema note. */
+function contactChannelsOf(user: { email: string | null; phone: string | null }):
+  | 'none'
+  | 'sms'
+  | 'mail'
+  | 'both' {
+  if (user.phone !== null && user.email !== null) return 'both';
+  if (user.phone !== null) return 'sms';
+  if (user.email !== null) return 'mail';
+  return 'none';
+}
+
+/**
+ * GET /admin/users/:id — the identity behind a live project: name, role, and
+ * the RAW email/phone.
+ *
+ * ADMIN-ONLY, with its own requireRole('ADMIN') above the router's
+ * MODEL_ARTIST gate — the same shape as the destructive curation routes, and
+ * for a comparable reason: this is the ONE route in the API that answers with
+ * an unmasked contact identifier. Everything else ships a mask
+ * (utils/maskIdentifier.ts). The exception exists because an admin looking at a
+ * bad capture needs to CONTACT the person who made it, and a mask cannot be
+ * dialled; the reasoning and its bounds live in services/adminUsersService.ts.
+ *
+ * Metered per admin (a scraping bound — see env.ADMIN_USER_LOOKUP_*) and
+ * AUDITED: the analytics event carries HASHED ids and booleans only, never the
+ * identifier and never the name.
+ *
+ * A project's `ownerId` is the id to call this with; anything unresolvable is a
+ * plain 404, so a row that outlived its account reads as "no longer exists".
+ */
+router.get(
+  '/users/:id',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const params = adminUserIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid user id',
+      });
+      return;
+    }
+
+    const rate = await consumeRateWindow(
+      `admin-user-lookup:${req.user!.userId}`,
+      env.ADMIN_USER_LOOKUP_MAX_PER_WINDOW,
+      env.ADMIN_USER_LOOKUP_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many lookups. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const user = await getAdminUserDetail(params.data.id);
+    if (!user) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'This account no longer exists.',
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.ADMIN_PROJECT_OWNER_VIEWED, {
+      actor_id_hash: hashIdentifier(req.user!.userId),
+      subject_id_hash: hashIdentifier(user.id),
+      subject_role: user.role,
+      // WHICH KINDS of identifier existed, never the values — and note the prop
+      // name: `has_phone`/`has_email` would be stripped by the emit layer and
+      // take the whole audit event down with them. See the event's schema note.
+      contact_channels: contactChannelsOf(user),
+    });
+
+    // Private and uncacheable: this body carries an unmasked identifier, so no
+    // shared cache and no browser disk copy may hold it.
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ status: 'success', user });
+  })
+);
+
+/**
+ * GET /admin/users/:id/avatar/bytes — that person's profile picture, proxied.
+ *
+ * BYTES rather than the presigned `avatarUrl` the account snapshot uses, for
+ * the reason already documented on GET /auth/me/avatar/bytes and the admin
+ * photo-bytes proxy: the raw bucket serves no CORS, so the Flutter WEB build
+ * cannot render a presigned URL as an image at all. One route therefore serves
+ * the apk and the web build alike.
+ *
+ * The key is read from the USER DOCUMENT, never from the caller — there is no
+ * `?key=` here, and adding one would turn this into an arbitrary-object reader
+ * for the private bucket.
+ *
+ * "No picture" and "the pointer outlived the object" are the same 404: the
+ * client falls back to initials for both, and a face photo is not worth a
+ * distinguishing error code.
+ */
+router.get(
+  '/users/:id/avatar/bytes',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const params = adminUserIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid user id',
+      });
+      return;
+    }
+
+    const avatar = await readUserAvatarBytes(params.data.id);
+    if (avatar.outcome === 'absent') {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'No profile picture set.',
+      });
+      return;
+    }
+
+    // Private: authenticated, personal imagery — never a shared cache. The
+    // short max-age is what keeps a scrolled list from re-fetching the same
+    // face on every rebuild.
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('Content-Type', avatar.contentType);
+    res.status(200).send(avatar.body);
   })
 );
 

@@ -35,7 +35,8 @@ class _FakeRepo
         FakeModelOptimizeDefaults,
         FakeOwnerModelListDefaults,
         FakePreviewBrowseDefaults,
-        FakeModelSubmissionDefaults
+        FakeModelSubmissionDefaults,
+        FakeProjectOwnerDefaults
     implements LiveProjectsRepository {
   /// (projectId, wire mode, confirmName) per deleteProject call.
   final List<(String, String, String)> deletes = [];

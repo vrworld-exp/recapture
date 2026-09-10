@@ -1,4 +1,5 @@
 // lib/domain/entities/live_project.dart
+import 'project_owner.dart';
 import 'project_status.dart';
 
 /// One row of the staff-only Live projects list (`GET /admin/projects`):
@@ -12,6 +13,7 @@ class LiveProject {
     required this.status,
     required this.updatedAt,
     required this.ownerId,
+    this.owner,
     this.totalPhotos = 0,
     this.modelCount = 0,
   });
@@ -24,6 +26,17 @@ class LiveProject {
   /// Opaque owner id (a Mongo id string) — displayed truncated, never a name
   /// or contact detail.
   final String ownerId;
+
+  /// WHO captured this, for the ADMIN-only "Created by" label.
+  ///
+  /// Null for a MODEL_ARTIST (the server omits the field for anyone below
+  /// ADMIN) and for an account that no longer exists. Both cases fall back to
+  /// the [ownerIdShort] line the card has always shown — the label is an
+  /// upgrade to that line, never a replacement that can render empty.
+  ///
+  /// Carries NO contact detail, by construction: those live one tap away on a
+  /// separate, audited call. See [ProjectOwnerSummary].
+  final ProjectOwnerSummary? owner;
 
   /// Photos in the latest finalized upload (`stats.totalPhotos`).
   final int totalPhotos;
@@ -55,6 +68,7 @@ class LiveProject {
       updatedAt: DateTime.tryParse((map['updatedAt'] ?? '').toString()) ??
           DateTime.now(),
       ownerId: (map['ownerId'] ?? '').toString(),
+      owner: ProjectOwnerSummary.tryFrom(map['owner']),
       totalPhotos: rawPhotos is num && rawPhotos >= 0 ? rawPhotos.toInt() : 0,
       modelCount: rawModels is num && rawModels >= 0 ? rawModels.toInt() : 0,
     );

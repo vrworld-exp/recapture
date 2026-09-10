@@ -32,6 +32,19 @@ export const adminProjectIdParamsSchema = z
   .strict();
 
 /**
+ * `:id` param for GET /admin/users/:id and its /avatar/bytes — the OWNER of a
+ * live project, looked up by the id the list DTO already carries. A separate
+ * schema from {@link adminProjectIdParamsSchema} despite the identical shape:
+ * these are different id SPACES, and one message that says "project" for a user
+ * route is the kind of drift a shared schema makes invisible.
+ */
+export const adminUserIdParamsSchema = z
+  .object({
+    id: z.string().regex(OBJECT_ID_RE, 'Invalid user id'),
+  })
+  .strict();
+
+/**
  * Body for DELETE /admin/projects/:id/photos: the RELATIVE keys (exactly as the
  * export manifest emits them, e.g. `images/EYE/eye_0001.jpg`) to soft-delete.
  * At least one, bounded to a job's object count ceiling so one request can't ask

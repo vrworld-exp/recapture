@@ -33,7 +33,8 @@ class _FakeRepo
         FakeAutoGenerationDefaults,
         FakeModelOptimizeDefaults,
         FakeOwnerModelListDefaults,
-        FakeModelSubmissionDefaults
+        FakeModelSubmissionDefaults,
+        FakeProjectOwnerDefaults
     implements LiveProjectsRepository {
   _FakeRepo({this.models = const []});
 

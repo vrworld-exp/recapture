@@ -40,7 +40,8 @@ class _FakeRepo
         FakeModelOptimizeDefaults,
         FakeOwnerModelListDefaults,
         FakePreviewBrowseDefaults,
-        FakeAdminDeleteDefaults
+        FakeAdminDeleteDefaults,
+        FakeProjectOwnerDefaults
     implements LiveProjectsRepository {
   _FakeRepo({this.maxBytes = 128 * 1024 * 1024, this.commitFailure});
 

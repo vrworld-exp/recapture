@@ -50,7 +50,8 @@ class _FakeRepo
         FakeAutoGenerationDefaults,
         FakeModelOptimizeDefaults,
         FakePreviewBrowseDefaults,
-        FakeModelSubmissionDefaults
+        FakeModelSubmissionDefaults,
+        FakeProjectOwnerDefaults
     implements LiveProjectsRepository {
   _FakeRepo(this.models);
 

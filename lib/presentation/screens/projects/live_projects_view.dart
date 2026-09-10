@@ -12,6 +12,7 @@ import '../../../application/projects/model_generation_request_notifier.dart';
 import '../../../application/projects/project_export_service.dart';
 import '../../../data/repositories/live_projects_repository.dart';
 import '../../../domain/entities/live_project.dart';
+import '../../../domain/entities/project_owner.dart';
 import '../../../domain/entities/project_status.dart';
 import '../../../utils/analytics.dart';
 import '../../../utils/extensions.dart';
@@ -20,6 +21,7 @@ import '../../widgets/app_card.dart';
 import '../../widgets/app_status_pill.dart';
 import 'admin_delete_project_dialog.dart';
 import 'model_building_screen.dart';
+import 'project_owner_sheet.dart';
 
 /// Staff-only "Live projects" tab body: every user's captured
 /// (upload-finalized) project, newest first, with a per-project Export action
@@ -327,6 +329,15 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
                 // Null (affordance hidden) for MODEL_ARTIST — delete is the
                 // ADMIN curation tool for bad captures.
                 onDelete: isAdmin ? () => _delete(project) : null,
+                // The "Created by" label. Gated TWICE, and both gates are
+                // real: the server omits `owner` for anyone below ADMIN, and
+                // isAdmin fails CLOSED on a failed role fetch. A MODEL_ARTIST
+                // — or an admin whose role could not be read — keeps the
+                // opaque owner line the card has always shown.
+                onOwner: isAdmin && project.owner != null
+                    ? () => showProjectOwnerSheet(context,
+                        owner: project.owner!)
+                    : null,
               );
             },
           ),
@@ -361,6 +372,7 @@ class _LiveProjectCard extends StatelessWidget {
     this.isGenerating = false,
     this.onSubmitModel,
     this.onDelete,
+    this.onOwner,
   });
 
   final LiveProject project;
@@ -392,6 +404,15 @@ class _LiveProjectCard extends StatelessWidget {
   /// OPTIONAL delete action — non-null for ADMIN only (same null-hides-it
   /// pattern as [onModels]); opens the soft/hard confirmation dialog.
   final VoidCallback? onDelete;
+
+  /// OPTIONAL "Created by" action — non-null only when the caller is ADMIN AND
+  /// the row resolved an owner; opens the identity sheet.
+  ///
+  /// Null does NOT hide the line here, unlike every other optional above: it
+  /// falls back to the opaque `Owner …a1b2c3` the card has always shown. The
+  /// line is not an affordance, it is a fact about the row, and a MODEL_ARTIST
+  /// must not lose it just because they cannot see the name behind it.
+  final VoidCallback? onOwner;
 
   bool get _exportable =>
       project.status == ProjectStatus.processing ||
@@ -438,7 +459,13 @@ class _LiveProjectCard extends StatelessWidget {
                       style: muted,
                     ),
                     const SizedBox(height: AppSpacing.xs),
-                    Text('Owner ${project.ownerIdShort}', style: muted),
+                    if (onOwner != null && project.owner != null)
+                      _CreatedByLabel(
+                        owner: project.owner!,
+                        onTap: onOwner!,
+                      )
+                    else
+                      Text('Owner ${project.ownerIdShort}', style: muted),
                   ],
                 ),
               ),
@@ -536,6 +563,60 @@ class _LiveProjectCard extends StatelessWidget {
             ],
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// The ADMIN-only "Created by" chip: the capturer's picture, their name, and a
+/// hint that there is more behind it.
+///
+/// It replaces the opaque `Owner …a1b2c3` line rather than sitting beside it —
+/// an admin who can see the name has no use for the truncated id, and two owner
+/// lines on one card is noise. The id is still one tap away, at the top of the
+/// sheet, for the rare case of talking to the backend about a row.
+///
+/// A CHIP, not a button: it sits inside the card's text column, where a real
+/// button would compete with Preview/Export/Generate for the eye. The tap
+/// target is padded out to a comfortable size regardless.
+class _CreatedByLabel extends StatelessWidget {
+  const _CreatedByLabel({required this.owner, required this.onTap});
+
+  final ProjectOwnerSummary owner;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context)
+        .textTheme
+        .bodySmall
+        ?.copyWith(color: AppColors.textMuted);
+
+    return InkWell(
+      key: ValueKey('live_owner_${owner.id}'),
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(AppRadius.xs),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            OwnerAvatar(owner: owner, size: 20),
+            const SizedBox(width: AppSpacing.sm),
+            // Flexible, not Expanded: the chip hugs a short name instead of
+            // stretching a hairline of empty tap target across the card.
+            Flexible(
+              child: Text(
+                'Created by ${owner.displayLabel}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: muted,
+              ),
+            ),
+            const SizedBox(width: AppSpacing.xs),
+            const Icon(Icons.info_outline, size: 13, color: AppColors.textMuted),
+          ],
+        ),
       ),
     );
   }

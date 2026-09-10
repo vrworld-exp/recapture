@@ -5,9 +5,15 @@
 // ADMIN-only curation mutations: the photo soft-delete and the project
 // soft/hard delete (both confirmation-gated at the route).
 //
-// PII stance (v1): staff see an OPAQUE `ownerId` — never the owner's phone or
-// email. The DTO is the exact owner-facing Project DTO plus that ownerId, so
-// the two lists can never drift in shape.
+// PII stance: staff see an OPAQUE `ownerId` — never the owner's phone or email.
+// The DTO is the exact owner-facing Project DTO plus that ownerId, so the two
+// lists can never drift in shape.
+//
+// ONE ADDITION, ADMIN-ONLY: when the caller is ADMIN the list also carries a
+// compact `owner` (display name + "has a picture"), so the Live-projects list
+// can say WHO captured each project. Still no phone and no email — those are a
+// separate, audited call (services/adminUsersService.ts), which is where the
+// reasoning for the whole exception is written down.
 import { Types, type FilterQuery } from 'mongoose';
 import { Project, type IProject, type ProjectStatus } from '@/models/Project';
 import {
@@ -32,12 +38,27 @@ import {
 } from '@/services/s3ObjectStore';
 import { BUCKET_ARTIFACTS } from '@/config/s3';
 import type { AdminDeleteMode } from '@/validation/adminSchemas';
+import { summarizeOwners, type AdminOwnerSummary } from '@/services/adminUsersService';
 import { encodeCursor, type ProjectCursor } from '@/utils/cursor';
 import { env } from '@/config/env';
 
 /** The owner-facing Project DTO + the opaque owner id (never phone/email). */
 export interface AdminProjectListItem extends ProjectListItem {
   ownerId: string;
+  /**
+   * WHO captured this, for the ADMIN-only "Created by" label — name + whether
+   * they have a picture, and NOTHING that identifies them off-platform.
+   *
+   * Present only when the caller is ADMIN (the route decides; see
+   * `includeOwner` on {@link listAllCapturedProjects}). A MODEL_ARTIST gets the
+   * field absent and keeps the opaque [ownerId] it always had. Absent — not
+   * null — is also what an id that no longer resolves produces, so a deleted
+   * account degrades to the opaque id rather than to an empty name.
+   *
+   * Contact details are deliberately NOT here: they live one tap away on
+   * GET /admin/users/:id. See the PII block in services/adminUsersService.ts.
+   */
+  owner?: AdminOwnerSummary;
 }
 
 /**
@@ -92,7 +113,8 @@ export interface AdminListProjectsResult {
 export async function listAllCapturedProjects(
   limit: number,
   cursor?: ProjectCursor,
-  statusOverride?: ProjectStatus
+  statusOverride?: ProjectStatus,
+  includeOwner = false
 ): Promise<AdminListProjectsResult> {
   const filter: FilterQuery<IProject> = {
     status: statusOverride ? statusOverride : { $in: [...LIVE_PROJECT_STATUSES] },
@@ -119,8 +141,16 @@ export async function listAllCapturedProjects(
   // One aggregation for the page, not one per row.
   const counts = await countSucceededModelsByProject(page.map((p) => p._id as Types.ObjectId));
 
+  // Same rule for the owners: ONE de-duplicated query for the page, and only
+  // when the caller is allowed to see them at all.
+  const owners = includeOwner
+    ? await summarizeOwners(page.map((p) => p.userId.toHexString()))
+    : null;
+
   return {
-    items: page.map((p) => toAdminItem(p, counts.get(p.id as string) ?? 0)),
+    items: page.map((p) =>
+      toAdminItem(p, counts.get(p.id as string) ?? 0, owners?.get(p.userId.toHexString()))
+    ),
     nextCursor,
   };
 }
@@ -700,6 +730,17 @@ export async function findModelSourceJobById(
   return findExportableJobById(projectId, jobId);
 }
 
-function toAdminItem(p: IProject, modelCount = 0): AdminProjectListItem {
-  return { ...toProjectListItem(p, modelCount), ownerId: p.userId.toHexString() };
+function toAdminItem(
+  p: IProject,
+  modelCount = 0,
+  owner?: AdminOwnerSummary
+): AdminProjectListItem {
+  return {
+    ...toProjectListItem(p, modelCount),
+    ownerId: p.userId.toHexString(),
+    // Spread-if-present rather than `owner: owner ?? null`: the field is ABSENT
+    // for a non-ADMIN caller and for an id that no longer resolves, and a
+    // client that never sees the key cannot mistake it for "no name".
+    ...(owner ? { owner } : {}),
+  };
 }
