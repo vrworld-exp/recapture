@@ -17,7 +17,7 @@ User have role : Admin and Artist, they should get an option to submit the 3d mo
 
 
 
-⌛4.
+✅4.
 User have role Admin should able to see that who created this project (which user) inside live project section on every project, there shoud be a lebel telling created by userImg , when admin click on this btn he/she able to see full details about user like name and userImg and emial/phone number by a pop ui coming from the bottom.
 For both apk and web.
 
