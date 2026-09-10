@@ -7,6 +7,7 @@ import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
 import '../../domain/entities/catalog_category.dart';
 import '../auth/auth_notifier.dart';
+import 'catalog_notifier.dart';
 
 /// Owns the catalog's categories — the ONE list every surface that names a
 /// category reads from: the grid's category filter chips, the product editor's
@@ -68,6 +69,7 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
       categories: [...current.categories, created],
       uncategorizedCount: current.uncategorizedCount,
     ));
+    _refreshCatalogHeader();
     return created;
   }
 
@@ -85,6 +87,7 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
       ],
       uncategorizedCount: _list.uncategorizedCount,
     ));
+    _refreshCatalogHeader();
     return updated;
   }
 
@@ -106,6 +109,7 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
       uncategorizedCount: _list.uncategorizedCount,
     ));
     unawaited(refresh());
+    _refreshCatalogHeader();
     return moved;
   }
 
@@ -152,12 +156,30 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
 
     try {
       await _repo.reorderCategories([for (final c in optimistic) c.id]);
+      _refreshCatalogHeader();
       return target;
     } on CatalogFailure {
       state = AsyncData(previous);
       unawaited(refresh());
       rethrow;
     }
+  }
+
+  /// Re-reads the catalog document behind the header — its counts and its
+  /// server-derived "Draft changes not yet live" badge.
+  ///
+  /// EVERY WRITE IN THIS FILE MOVES THAT BADGE. Creating, renaming, deleting or
+  /// reordering a section bumps `draftRevision` server-side exactly as a product
+  /// edit does — sections are part of what the public page renders. Nothing else
+  /// re-read it: the category manager is pushed over the catalog screen and that
+  /// screen deliberately refreshes nothing on return (the chips and the picker
+  /// share this notifier), so a user who reorganised their whole menu came back
+  /// to a header insisting there was nothing to publish.
+  ///
+  /// Best-effort: the write has already succeeded, and a dropped refresh must
+  /// not be reported as a failed edit.
+  void _refreshCatalogHeader() {
+    ref.read(catalogProvider.notifier).refresh().catchError((_) {});
   }
 
   /// The current list, or an empty one while the first load is in flight.

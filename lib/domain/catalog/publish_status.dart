@@ -270,6 +270,23 @@ class PublishStatus {
   /// A run is holding the catalog right now.
   bool get isPublishing => activeRunId != null;
 
+  /// Every blocker left is one TIME clears — a preview image still rendering, a
+  /// model still generating — so the catalog becomes publishable on its own
+  /// with the user doing nothing.
+  ///
+  /// This is what tells the publish screen to keep watching when no run is in
+  /// flight. Without it the checklist is a still photograph: a user who uploads
+  /// a product photo, opens Publish and waits is looking at an hourglass row
+  /// and a disabled button that will never change, however long they sit there,
+  /// because the only thing that re-reads the status is a pull-to-refresh — a
+  /// gesture that does not exist on a desktop browser.
+  ///
+  /// ALL of them, not any: a gate the user must act on means the screen is
+  /// waiting on the USER, and polling on their behalf would neither clear it nor
+  /// tell them anything. Empty gates is not waiting either — that is ready.
+  bool get isWaitingOnGates =>
+      gates.isNotEmpty && gates.every((gate) => gate.code.resolvesItself);
+
   /// Whether Publish is worth offering. The server re-checks all of it; this
   /// only avoids a press that is guaranteed to come back 422 or 409.
   bool get canPublish => !isPublishing && gates.isEmpty;

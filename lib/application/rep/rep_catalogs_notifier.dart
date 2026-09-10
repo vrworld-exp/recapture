@@ -5,6 +5,7 @@ import '../../data/repositories/rep_repository.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/rep_activation.dart';
 import '../common/pending_poll_loop.dart';
+import 'rep_restaurant_notifier.dart';
 
 /// The catalogs this rep may currently act on.
 ///
@@ -83,10 +84,32 @@ class RepCatalogProductsNotifier
 
   /// One poll. Never throws and never blanks the list: a dropped request on
   /// restaurant wifi leaves the dishes on screen and the next tick tries again.
+  ///
+  /// A TICK THAT LANDS A MODEL ALSO MOVES THE PUBLISH BAR. When generation
+  /// finishes, the backend promotes the dish and bumps the catalog's
+  /// `draftRevision` — the row becomes 3D and the restaurant now has a draft
+  /// change. The bar under this list reads [repCatalogDocumentProvider] for
+  /// that flag, and every OTHER thing that invalidates it is a route return.
+  /// A rep watching a model finish is navigating nowhere, so without the
+  /// invalidate below the dish turns 3D while the bar goes on saying the menu
+  /// is fully published.
   Future<bool> _tick() async {
     try {
+      final before = {
+        for (final product in state.valueOrNull ?? const <CatalogProduct>[])
+          if (product.isModelPending) product.id,
+      };
       final products = await ref.read(repRepositoryProvider).products(arg);
       state = AsyncData(products);
+
+      // Only when something actually SETTLED — a tick where every pending dish
+      // is still pending changed nothing server-side either, and invalidating
+      // on each one would re-fetch the catalog document for the whole length of
+      // a generation.
+      if (products.any((p) => before.contains(p.id) && !p.isModelPending)) {
+        ref.invalidate(repCatalogDocumentProvider(arg));
+      }
+
       return products.any((p) => p.isModelPending);
     } catch (_) {
       final current = state.valueOrNull ?? const <CatalogProduct>[];

@@ -11,6 +11,7 @@ import '../../data/repositories/rep_repository.dart';
 import '../../domain/catalog/catalog_scope.dart';
 import '../../domain/entities/business_profile.dart';
 import '../auth/auth_notifier.dart';
+import '../rep/rep_restaurant_notifier.dart';
 import 'catalog_notifier.dart';
 
 /// Where a branding upload has got to.
@@ -297,16 +298,33 @@ class BusinessProfileNotifier
   /// Every write here bumps `draftRevision` server-side, so the catalog's
   /// "Draft changes not yet live" badge and its header name both move.
   ///
-  /// OWNER SCOPE ONLY. [catalogProvider] is the signed-in user's own catalog,
-  /// and for a rep that is a different restaurant — or none at all. Refreshing
-  /// it after a delegated write would re-read the wrong document and, on the one
-  /// screen whose job is to say what is not live yet, would say it about
-  /// something else.
+  /// ONE BADGE, TWO DOCUMENTS, AND THE SCOPE PICKS WHICH. [catalogProvider] is
+  /// the signed-in user's OWN catalog, and for a rep that is a different
+  /// restaurant — or none at all. Refreshing it after a delegated write would
+  /// re-read the wrong document and, on the one screen whose job is to say what
+  /// is not live yet, would say it about something else.
+  ///
+  /// But "not the owner's" is not the same as "nothing". A delegated write moves
+  /// the DELEGATED catalog's draft revision, and this screen's own banner reads
+  /// that document ([repCatalogDocumentProvider]) — as does the publish bar on
+  /// the restaurant behind it. Refreshing neither is how a rep replaced the
+  /// restaurant's cover photo and was told, by the line directly under it, that
+  /// there was nothing waiting to publish. So the rep branch invalidates the
+  /// document it actually affected.
+  ///
+  /// INVALIDATE, not refresh: it is a `FutureProvider`, and an invalidate is a
+  /// no-op for a family key nobody is watching — which is the common case, since
+  /// a rep may reach this form from a route that never mounted the header.
   ///
   /// Best-effort: the write already succeeded, and a failed refresh must not be
   /// reported as though the save failed.
   void _refreshCatalog() {
-    if (_disposed || arg.isDelegated) return;
+    if (_disposed) return;
+    final catalogId = _catalogId;
+    if (catalogId != null) {
+      ref.invalidate(repCatalogDocumentProvider(catalogId));
+      return;
+    }
     unawaited(ref.read(catalogProvider.notifier).refresh().catchError((_) {}));
   }
 }

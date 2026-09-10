@@ -132,9 +132,18 @@ class FakeRepRepository implements RepRepository {
 
   // ── The delegated catalog ─────────────────────────────────────────────────
 
+  /// Every read of the delegated catalog DOCUMENT, counted.
+  ///
+  /// That document carries `hasUnpublishedChanges`, which is what every "not
+  /// live yet" line on the rep surface hangs off, so this number is how a test
+  /// asks whether a write actually told the header about itself.
+  int catalogCalls = 0;
+
   @override
-  Future<Catalog> catalog(String catalogId) async =>
-      Catalog.fromMap({...golden.catalogGolden(), 'id': catalogId});
+  Future<Catalog> catalog(String catalogId) async {
+    catalogCalls++;
+    return Catalog.fromMap({...golden.catalogGolden(), 'id': catalogId});
+  }
 
   @override
   Future<CatalogCategoryList> categories(String catalogId) async =>

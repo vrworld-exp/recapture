@@ -215,6 +215,13 @@ class FakeCatalogRepository
 
   final List<CatalogCategory> categories;
 
+  /// Every `fetch()`, counted.
+  ///
+  /// This is how a test asks "was the catalog header re-read?" — the header's
+  /// counts and its server-derived "Draft changes not yet live" badge both come
+  /// off this one call, and every authoring write is supposed to move them.
+  int fetchCalls = 0;
+
   @override
   Future<CatalogCategoryList> listCategories() async => CatalogCategoryList(
         categories: categories,
@@ -222,7 +229,10 @@ class FakeCatalogRepository
       );
 
   @override
-  Future<Catalog?> fetch() async => Catalog.fromMap(golden.catalogGolden());
+  Future<Catalog?> fetch() async {
+    fetchCalls++;
+    return Catalog.fromMap(golden.catalogGolden());
+  }
 
   @override
   Future<Catalog> create({required String name, String? businessName}) =>

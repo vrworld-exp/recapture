@@ -26,6 +26,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_link_service.dart';
 import 'package:recapture/application/catalog/publish_notifier.dart';
+import 'package:recapture/application/common/pending_poll_loop.dart';
 import 'package:recapture/application/connectivity/connectivity_providers.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
@@ -54,6 +55,15 @@ Widget harness(
             .overrideWithValue(links ?? FakeLinkActions()),
       ],
       child: const MaterialApp(home: PublishScreen()),
+    );
+
+/// The Publish button itself — `publish_cta` is a wrapper, and `onPressed` is
+/// what says whether the press would do anything.
+ElevatedButton _ctaOf(WidgetTester tester) => tester.widget<ElevatedButton>(
+      find.descendant(
+        of: find.byKey(const ValueKey('publish_cta')),
+        matching: find.byType(ElevatedButton),
+      ),
     );
 
 /// The notifier behind the screen currently on `tester`.
@@ -368,6 +378,179 @@ void main() {
       ));
       await tester.pump(const Duration(seconds: 10));
       await tester.pumpAndSettle();
+    });
+  });
+
+  group('the gate wait', () {
+    // A GATE THAT ONLY TIME CAN CLEAR IS STILL A REASON TO KEEP LOOKING.
+    //
+    // The loop used to run for one thing only: a publish RUN. So a user who
+    // uploaded a product photo and opened Publish while its preview image was
+    // still rendering met an hourglass row and a disabled button that would
+    // never change — the status that would have unblocked it was never asked
+    // for again. On a phone a pull-to-refresh eventually rescues them; on a
+    // desktop browser that gesture does not exist at all, so the screen is
+    // simply stuck until a page reload.
+    Map<String, dynamic> generating() => statusPayload(
+          gates: [
+            gatePayload(
+              code: 'PRODUCT_THUMBNAIL_MISSING',
+              message: '"Chair" is still generating its preview image.',
+              productId: 'p1',
+              productName: 'Chair',
+            ),
+          ],
+        );
+
+    testWidgets('re-checks while the only blocker clears itself, and unlocks '
+        'Publish when it does', (tester) async {
+      final repo = FakePublishRepository(status: generating());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+      expect(repo.statusCalls, 1);
+      expect(_ctaOf(tester).onPressed, isNull, reason: 'a gate is outstanding');
+
+      // The asset lands between one re-check and the next.
+      repo.setStatus(statusPayload(gates: const []));
+      await tester.pump(kPendingPollInitialInterval);
+      expect(repo.statusCalls, 2);
+      await tester.pumpAndSettle();
+
+      // THE POINT OF THE WHOLE FIX: the user did nothing and the button woke up.
+      expect(_ctaOf(tester).onPressed, isNotNull);
+      expect(find.byKey(const ValueKey('publish_gate_checklist')), findsNothing);
+
+      // And having cleared, it stops — nothing left to watch.
+      final settled = repo.statusCalls;
+      await tester.pump(const Duration(minutes: 2));
+      expect(repo.statusCalls, settled);
+    });
+
+    testWidgets("says the wait is not the user's to action", (tester) async {
+      final repo = FakePublishRepository(status: generating());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      // "Fix these" is the wrong instruction when the answer is to sit still.
+      expect(find.textContaining('Nothing for you to do'), findsOneWidget);
+      expect(
+        find.textContaining('fixing everything here is enough'),
+        findsNothing,
+      );
+    });
+
+    testWidgets("does NOT poll when the blocker is the user's to fix",
+        (tester) async {
+      final repo = FakePublishRepository(
+        status: statusPayload(
+          gates: [
+            gatePayload(
+              code: 'PRODUCT_NAME_DUPLICATE',
+              message: 'More than one product is called "Chair".',
+              productId: 'p1',
+            ),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+      expect(repo.statusCalls, 1);
+
+      // Nothing will change until the user renames something, and asking the
+      // server the same question every few seconds will not make them.
+      await tester.pump(const Duration(minutes: 2));
+      expect(repo.statusCalls, 1);
+      expect(find.textContaining('Nothing for you to do'), findsNothing);
+    });
+
+    testWidgets('a self-clearing gate beside one the user must fix is not a '
+        'wait', (tester) async {
+      final repo = FakePublishRepository(
+        status: statusPayload(
+          gates: [
+            gatePayload(
+              code: 'PRODUCT_THUMBNAIL_MISSING',
+              message: '"Chair" is still generating its preview image.',
+              productId: 'p1',
+            ),
+            gatePayload(
+              code: 'CATALOG_NAME_MISSING',
+              message: 'Give your catalog a name before publishing.',
+            ),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+
+      // The screen is waiting on the USER. Polling would neither clear the name
+      // gate nor tell them anything they cannot already see.
+      await tester.pump(const Duration(minutes: 2));
+      expect(repo.statusCalls, 1);
+    });
+
+    testWidgets('a ready catalog is at rest', (tester) async {
+      final repo = FakePublishRepository(status: statusPayload(gates: const []));
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+      await tester.pump(const Duration(minutes: 2));
+
+      expect(repo.statusCalls, 1,
+          reason: 'nothing to watch for on a catalog that can publish now');
+    });
+
+    testWidgets('the wait pauses with the tab and catches up on show',
+        (tester) async {
+      final repo = FakePublishRepository(status: generating());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+      final beforeHiding = repo.statusCalls;
+
+      notifierOf(tester).debugSetHidden(true);
+      await tester.pump(const Duration(minutes: 1));
+      expect(repo.statusCalls, beforeHiding,
+          reason: 'a hidden browser tab throttles timers unpredictably; '
+              'the wait must not be trusted to keep time there');
+
+      // Back on screen, the first thing shown should be the truth, not the
+      // frame from before — the asset may well have finished while it was away.
+      repo.setStatus(statusPayload(gates: const []));
+      notifierOf(tester).debugSetHidden(false);
+      await tester.pumpAndSettle();
+      expect(repo.statusCalls, beforeHiding + 1);
+    });
+
+    testWidgets('gives up eventually rather than polling a forgotten tab all '
+        'afternoon', (tester) async {
+      final repo = FakePublishRepository(status: generating());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+
+      // Well past the cap at the ceiling cadence. A loop with no cap would keep
+      // a rate-limited endpoint busy for a screen nobody is reading.
+      for (var i = 0; i < 200; i++) {
+        await tester.pump(kPendingPollMaxInterval);
+      }
+      final capped = repo.statusCalls;
+      expect(capped, lessThan(150));
+
+      await tester.pump(const Duration(minutes: 30));
+      expect(repo.statusCalls, capped);
+
+      // A user who comes back and asks gets a fresh window — the cap is there
+      // to stop an unattended tab, not to punish someone still watching.
+      await notifierOf(tester).refresh();
+      await tester.pump(kPendingPollInitialInterval);
+      expect(repo.statusCalls, greaterThan(capped + 1));
+      await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+      await tester.pump();
     });
   });
 

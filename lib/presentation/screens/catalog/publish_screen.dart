@@ -350,6 +350,7 @@ class _Body extends StatelessWidget {
                   const SizedBox(height: AppSpacing.md),
                   _GateChecklist(
                     gates: status.gates,
+                    isWaiting: status.isWaitingOnGates,
                     onFix: onFixGate,
                     onOpenPreview: onOpenPreview,
                   ),
@@ -675,11 +676,16 @@ class _SuccessCard extends ConsumerWidget {
 class _GateChecklist extends StatelessWidget {
   const _GateChecklist({
     required this.gates,
+    required this.isWaiting,
     required this.onFix,
     required this.onOpenPreview,
   });
 
   final List<PublishGate> gates;
+
+  /// Nothing here is the user's to fix — the screen is re-checking on its own.
+  final bool isWaiting;
+
   final ValueChanged<PublishGate> onFix;
   final VoidCallback onOpenPreview;
 
@@ -704,8 +710,17 @@ class _GateChecklist extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(
-            'This is the same check the server runs, so fixing everything here '
-            'is enough.',
+            // SAY WHICH KIND OF WAIT THIS IS. Every remaining blocker clearing
+            // itself is a different instruction from "go and fix these": the
+            // user's job is to do nothing, and a checklist that does not say so
+            // reads as a list they are failing to action. It also promises the
+            // re-check the notifier is now actually performing, so nobody
+            // reloads the page to find out whether their photo finished.
+            isWaiting
+                ? 'Nothing for you to do — these finish on their own. This '
+                    'page re-checks and unlocks Publish as soon as they do.'
+                : 'This is the same check the server runs, so fixing everything '
+                    'here is enough.',
             style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
           ),
           const SizedBox(height: AppSpacing.md),

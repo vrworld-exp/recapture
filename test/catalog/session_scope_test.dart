@@ -23,7 +23,6 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/entities/auth_session.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
-import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 
 import 'product_grid_test.dart' show FakeCatalogRepository, pageOf, product;
@@ -41,14 +40,9 @@ class _StubAuth extends AuthNotifier {
 class _CountingCatalogRepo extends FakeCatalogRepository {
   _CountingCatalogRepo() : super(categories: const <CatalogCategory>[]);
 
-  int fetchCalls = 0;
+  // `fetchCalls` is INHERITED — the shared fake counts its own reads now, and a
+  // second counter here would shadow it and drift.
   int listCategoriesCalls = 0;
-
-  @override
-  Future<Catalog?> fetch() {
-    fetchCalls++;
-    return super.fetch();
-  }
 
   @override
   Future<CatalogCategoryList> listCategories() {

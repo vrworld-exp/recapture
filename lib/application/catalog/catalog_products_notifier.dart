@@ -11,6 +11,7 @@ import '../../domain/entities/product_availability.dart';
 import '../../domain/entities/product_type.dart';
 import '../auth/auth_notifier.dart';
 import '../common/pending_poll_loop.dart';
+import 'catalog_notifier.dart';
 
 /// The category filter value that means "products with no category".
 ///
@@ -680,12 +681,30 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
 
     try {
       await _repo.reorder([for (final item in optimistic) item.id]);
+      // A REORDER IS AN AUTHORING WRITE. The server bumps `draftRevision` for
+      // it exactly as it does for an edit, so the header's "Draft changes not
+      // yet live" badge has moved — and nothing else on this screen re-reads
+      // the catalog after a drag. Without this the user rearranges their menu,
+      // sees no badge, and believes the order they are looking at is the one
+      // customers already have.
+      _refreshCatalogHeader();
     } on CatalogFailure {
       // Rollback is unconditional: the server rejects a mismatched id set
       // wholesale, so a failure means NOTHING moved.
       if (!_disposed) state = state.copyWith(items: previous);
       rethrow;
     }
+  }
+
+  /// Re-reads the catalog document behind the header — its counts and its
+  /// server-derived "Draft changes not yet live" badge.
+  ///
+  /// Best-effort by design: the write it follows has already succeeded, and a
+  /// dropped refresh must never be reported as a failed edit. The next
+  /// pull-to-refresh reconciles it.
+  void _refreshCatalogHeader() {
+    if (_disposed) return;
+    ref.read(catalogProvider.notifier).refresh().catchError((_) {});
   }
 
   // ── Watching a model finish ───────────────────────────────────────────────
@@ -722,10 +741,24 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
   /// wifi leaves the loaded items exactly as they are and the next tick tries
   /// again. A permanent failure runs out the loop's own cap rather than
   /// reporting an error for something the rep did not ask for.
+  ///
+  /// A TICK THAT LANDS A MODEL ALSO MOVES THE HEADER. When a model finishes,
+  /// the backend PROMOTES the product — it flips the row to 3D and bumps the
+  /// catalog's `draftRevision`, because what the public page should show has
+  /// changed. That bump is the entire "Draft changes not yet live" signal, and
+  /// this loop is the only thing on screen watching for the moment it happens:
+  /// the user is sitting on the grid, not navigating, so no route return will
+  /// re-read the catalog for them. Without the refresh below the card turns 3D
+  /// while the badge stays dark, which reads as "this is already live".
   Future<bool> _pollModels() async {
     if (_disposed) return false;
     final generation = _generation;
     final query = state.query;
+    // Captured BEFORE the read: these are the rows a promotion could land on.
+    final wasPending = {
+      for (final item in state.items)
+        if (item.isModelPending) item.id,
+    };
 
     try {
       final page = await _repo.list(
@@ -748,6 +781,16 @@ class CatalogProductsNotifier extends Notifier<CatalogProductsState> {
             if (!state.items.any((existing) => existing.id == item.id)) item,
         ],
       );
+
+      // Only when something actually SETTLED. A tick where every pending row is
+      // still pending changed nothing server-side either, and refreshing the
+      // catalog on each one would put a second request on the same cadence for
+      // the whole length of a generation.
+      final settled = state.items.any(
+        (item) => wasPending.contains(item.id) && !item.isModelPending,
+      );
+      if (settled) _refreshCatalogHeader();
+
       return _hasPendingModels;
     } on CatalogFailure {
       // Last-good-state. Keep waiting against what is already on screen.

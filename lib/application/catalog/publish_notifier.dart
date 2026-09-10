@@ -28,6 +28,8 @@ import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/catalog_failure.dart';
+import '../common/pending_poll_loop.dart'
+    show kPendingPollInitialInterval, kPendingPollMaxInterval;
 import '../../data/repositories/catalog_repository.dart';
 import '../../domain/catalog/publish_gate.dart';
 import '../../domain/catalog/publish_request_result.dart';
@@ -48,6 +50,32 @@ const List<Duration> _pollBackoff = [
   Duration(seconds: 5),
   Duration(seconds: 8),
 ];
+
+/// How long to wait between re-checks while the ONLY thing blocking a publish
+/// is an asset still being generated (a preview image, a 3D model).
+///
+/// A DIFFERENT WAIT FROM A RUN'S, and deliberately slower. A run is a thing the
+/// user just started and is watching happen; this is a background job that was
+/// already under way when they got here and typically takes minutes. The same
+/// numbers the rest of the app uses for exactly this wait — see
+/// [kPendingPollInitialInterval] — so the checklist and the grid's
+/// "3D generating…" badge clear at the same sort of moment rather than one
+/// lagging the other by a cadence nobody chose.
+const List<Duration> _gateBackoff = [
+  kPendingPollInitialInterval,
+  Duration(seconds: 5),
+  Duration(seconds: 8),
+  kPendingPollMaxInterval,
+];
+
+/// How many gate re-checks before giving up and leaving it to a pull-to-refresh.
+///
+/// At the cadence above this is roughly fifteen minutes — past the backend's own
+/// generation timeout, after which the asset turns FAILED and waiting longer
+/// cannot help. Polling forever would keep a rate-limited endpoint busy for a
+/// tab someone left open and walked away from, which is the third failure mode
+/// this file's header is about.
+const int _gatePollCap = 100;
 
 /// What the publish screen renders.
 ///
@@ -126,9 +154,23 @@ class PublishScreenState {
 
 const Object _unset = Object();
 
+/// Why the loop is running.
+///
+/// The two waits differ in cadence and in how long they are worth continuing,
+/// so the loop has to know which one it is in — a run is watched closely and
+/// ends; a generating asset is watched patiently and might never finish.
+enum _PollReason { run, gates }
+
 class PublishNotifier extends AutoDisposeNotifier<PublishScreenState> {
   Timer? _poll;
   int _pollAttempt = 0;
+  _PollReason _pollReason = _PollReason.run;
+
+  /// Gate re-checks performed, against [_gatePollCap]. Counted separately from
+  /// [_pollAttempt], which is only a position in a backoff table and is reset
+  /// every time the screen comes back into view — a cap that reset with it
+  /// would not be a cap.
+  int _gatePolls = 0;
   bool _disposed = false;
   AppLifecycleListener? _lifecycle;
 
@@ -176,13 +218,29 @@ class PublishNotifier extends AutoDisposeNotifier<PublishScreenState> {
   /// First load and explicit retry. Shows the loading state; there is nothing
   /// behind it yet.
   Future<void> reload() async {
+    _restartGateWait();
     state = state.copyWith(status: const AsyncLoading());
     await _loadStatus();
   }
 
   /// Re-reads without blanking the screen — the poll loop, pull-to-refresh, and
   /// the return from a screen where the user fixed a gate.
-  Future<void> refresh() => _loadStatus();
+  ///
+  /// An EXPLICIT re-read reopens the gate window. The cap exists to stop a
+  /// forgotten tab polling all afternoon, not to punish a user who came back and
+  /// asked; a pull-to-refresh or a return from the screen where they fixed
+  /// something is that user, and leaving them capped would mean the checklist
+  /// never updates itself again for the life of the screen.
+  Future<void> refresh() {
+    _restartGateWait();
+    return _loadStatus();
+  }
+
+  /// Puts the gate wait back to its opening cadence with a full cap.
+  void _restartGateWait() {
+    _gatePolls = 0;
+    if (_pollReason == _PollReason.gates) _pollAttempt = 0;
+  }
 
   Future<void> _loadStatus() async {
     try {
@@ -213,23 +271,63 @@ class PublishNotifier extends AutoDisposeNotifier<PublishScreenState> {
   // ── Polling ───────────────────────────────────────────────────────────────
 
   /// Starts, continues or stops the loop to match [status].
+  ///
+  /// TWO REASONS TO KEEP LOOKING, and the second one is the whole point of this
+  /// method being more than a null check on `activeRunId`:
+  ///
+  ///   1. A RUN IS IN FLIGHT — the progress line has to move.
+  ///   2. NO RUN, BUT THE ONLY BLOCKERS CLEAR THEMSELVES — a preview image is
+  ///      rendering or a model is generating. The catalog becomes publishable
+  ///      with the user doing nothing, and the moment it does is exactly what
+  ///      they opened this screen to see. Stopping here is how a user who
+  ///      uploaded a product photo sat in front of a permanently disabled
+  ///      Publish button: the status that would have unblocked it was never
+  ///      asked for.
+  ///
+  /// Anything else — ready to publish, or blocked on something the USER has to
+  /// fix — is a resting state. Nothing will change without them, so the loop
+  /// stops rather than asking the same question forever.
   void _syncPollingTo(PublishStatus status) {
     final inFlight = status.isPublishing || (status.run?.state.isInFlight ?? false);
-    if (!inFlight) {
-      // TERMINAL. Stop, and reset the backoff so the next run starts responsive
-      // again instead of inheriting the last one's eight-second cadence.
-      _cancelPoll();
-      _pollAttempt = 0;
+    if (inFlight) {
+      // A run supersedes a gate wait, and it resets that wait's cap: whatever
+      // the screen was waiting on before, it is now watching something else.
+      if (_pollReason != _PollReason.run) {
+        _pollReason = _PollReason.run;
+        _pollAttempt = 0;
+      }
+      _gatePolls = 0;
+      _scheduleNextPoll();
       return;
     }
-    _scheduleNextPoll();
+
+    if (status.isWaitingOnGates && _gatePolls < _gatePollCap) {
+      // Coming off a run into a wait restarts the backoff — the two tables are
+      // read with the same counter, and a gate wait inheriting a run's position
+      // would open at its ceiling.
+      if (_pollReason != _PollReason.gates) {
+        _pollReason = _PollReason.gates;
+        _pollAttempt = 0;
+      }
+      _scheduleNextPoll();
+      return;
+    }
+
+    // AT REST. Stop, and reset the backoff so the next run starts responsive
+    // again instead of inheriting the last one's eight-second cadence.
+    _cancelPoll();
+    _pollAttempt = 0;
+    _pollReason = _PollReason.run;
   }
 
   void _scheduleNextPoll() {
     _poll?.cancel();
     if (_disposed || state.isPollingPaused) return;
-    final delay = _pollBackoff[min(_pollAttempt, _pollBackoff.length - 1)];
+    final backoff =
+        _pollReason == _PollReason.gates ? _gateBackoff : _pollBackoff;
+    final delay = backoff[min(_pollAttempt, backoff.length - 1)];
     _pollAttempt++;
+    if (_pollReason == _PollReason.gates) _gatePolls++;
     _poll = Timer(delay, () {
       if (_disposed) return;
       _loadStatus();
