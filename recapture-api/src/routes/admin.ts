@@ -21,6 +21,8 @@ import {
   adminModelIdParamsSchema,
   adminModelImageUploadsBodySchema,
   adminPhotoBytesQuerySchema,
+  adminSubmitModelBodySchema,
+  type AdminSubmitModelBody,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
@@ -35,6 +37,8 @@ import {
   approveModel,
   createMeshyModelRequest,
   createModelImageUploadUrls,
+  createModelUploadUrl,
+  submitUploadedModel,
   readProjectPhotoBytes,
   findProjectModelById,
   latestSucceededModel,
@@ -831,6 +835,167 @@ router.post(
       status: 'success',
       uploads: result.uploads,
       expiresAt: result.expiresAt,
+    });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/model/upload-url — a presigned PUT slot for a GLB
+ * the staff user built themselves ("Submit model" on the Live projects list).
+ *
+ * MODEL_ARTIST+ like the rest of this group. Costs no credits and writes
+ * nothing — the record is created by the commit route below — so the guard here
+ * is only its own rate window. The response's `upload.url` is a WRITE bearer
+ * credential: route response only, never a log or an analytics property.
+ */
+router.post(
+  '/projects/:id/model/upload-url',
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `model-upload:${userId}`,
+      env.MODEL_UPLOAD_MAX_PER_WINDOW,
+      env.MODEL_UPLOAD_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many model submissions. Please try again later.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const result = await createModelUploadUrl(params.data.id);
+    if (result.outcome === 'PROJECT_NOT_FOUND') {
+      res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+      return;
+    }
+    if (result.outcome === 'NOT_EXPORTABLE') {
+      res.status(409).json({
+        status: 'error',
+        code: 'NOT_EXPORTABLE',
+        message: 'This project has no finalized upload to attach a model to.',
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.MODEL_UPLOAD_URL_GENERATED, {
+      actor_id_hash: hashIdentifier(userId),
+      project_id_hash: hashIdentifier(result.projectId),
+      job_id_hash: hashIdentifier(result.jobId),
+      ttl_seconds: env.MODEL_UPLOAD_URL_TTL_SECONDS,
+    });
+
+    res.status(200).json({ status: 'success', upload: result.upload });
+  })
+);
+
+/**
+ * POST /admin/projects/:id/model/upload — commit the staged GLB as a model on
+ * this project.
+ *
+ * The bytes are already in S3 (the client PUT them to the slot above); this
+ * validates what landed and promotes it, so the response is the finished model
+ * record and NOT a queued job. That is the whole difference from Create-Model:
+ * there is nothing to generate and nothing to wait for, which is why the client
+ * can show a plain success message and the owner sees the model immediately.
+ */
+router.post(
+  '/projects/:id/model/upload',
+  validateBody(adminSubmitModelBodySchema),
+  asyncHandler(async (req, res) => {
+    const params = adminProjectIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid project id',
+      });
+      return;
+    }
+
+    const body = req.body as AdminSubmitModelBody;
+    const result = await submitUploadedModel({
+      projectId: params.data.id,
+      key: body.key,
+      // The router already gated on MODEL_ARTIST, so the fallback is the
+      // narrowest role that could have reached here — same shape as
+      // Create-Model above, never a widening default.
+      actor: { userId: req.user!.userId, role: req.user!.role ?? 'MODEL_ARTIST' },
+    });
+
+    switch (result.outcome) {
+      case 'PROJECT_NOT_FOUND':
+        res.status(404).json({ status: 'error', code: 'NOT_FOUND', message: 'Project not found.' });
+        return;
+      case 'NOT_EXPORTABLE':
+        res.status(409).json({
+          status: 'error',
+          code: 'NOT_EXPORTABLE',
+          message: 'This project has no finalized upload to attach a model to.',
+        });
+        return;
+      case 'INVALID_KEY':
+        res.status(422).json({
+          status: 'error',
+          code: 'INVALID_KEY',
+          message: 'That upload does not belong to this project.',
+        });
+        return;
+      case 'UPLOAD_MISSING':
+        res.status(409).json({
+          status: 'error',
+          code: 'UPLOAD_MISSING',
+          message: 'That upload is no longer available. Please choose the file again.',
+        });
+        return;
+      case 'TOO_LARGE':
+        res.status(413).json({
+          status: 'error',
+          code: 'PAYLOAD_TOO_LARGE',
+          message: 'That model is too large. Please submit a smaller file.',
+        });
+        return;
+      case 'NOT_A_GLB':
+        res.status(415).json({
+          status: 'error',
+          code: 'UNSUPPORTED_MEDIA_TYPE',
+          message: 'That file is not a .glb model.',
+        });
+        return;
+      case 'STORE_FAILED':
+        res.status(502).json({
+          status: 'error',
+          code: 'STORE_FAILED',
+          message: 'The model could not be stored. Please try submitting it again.',
+        });
+        return;
+      case 'CREATED':
+        break;
+    }
+
+    track(AnalyticsEvent.MODEL_UPLOAD_SUBMITTED, {
+      actor_id_hash: hashIdentifier(req.user!.userId),
+      project_id_hash: hashIdentifier(params.data.id),
+      model_id_hash: hashIdentifier(result.model.id as string),
+      size_bytes: result.model.artifacts?.glbBytes ?? 0,
+    });
+
+    res.status(201).json({
+      status: 'success',
+      model: toProjectModelDto(result.model, new Set<string>()),
     });
   })
 );

@@ -25,7 +25,7 @@ import {
   type AutoGenerationOutcome,
 } from '@/services/autoModelGenerationService';
 import { validateCaptureManifest } from '@/services/manifestValidationService';
-import { MODEL_INPUT_KEY_PREFIX } from '@/services/adminProjectsService';
+import { isReservedJobNamespace } from '@/services/adminProjectsService';
 import { getObjectText, listObjectsUnderPrefix } from '@/services/s3ObjectStore';
 import { runCaptureProcessing } from '@/worker/processors/captureProcessingPipeline';
 import { log } from '@/worker/workerLog';
@@ -65,14 +65,20 @@ export const captureProcessingProcessor: JobProcessor = async (job) => {
   // ── Validate 2: the S3-listed object count under the job's prefix still
   // matches expectedFilesCount exactly (manifest included, same semantics as
   // finalize) — an object deleted since enqueue must not reach the pipeline.
-  // The reserved `model-input/` namespace (staff-edited Meshy input copies,
-  // written AFTER finalize verified the count) is excluded from the count:
-  // those objects are additive session artifacts and must not fail a
-  // re-claimed capture job.
-  const modelInputPrefix = `${upload.rawPrefix}${MODEL_INPUT_KEY_PREFIX}`;
+  // The reserved namespaces (staff-edited Meshy input copies and staged GLB
+  // submissions, both written AFTER finalize verified the count) are excluded
+  // from the count: those objects are additive session artifacts and must not
+  // fail a re-claimed capture job.
   const bundleObjects = (
     await listObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix)
-  ).filter((object) => !object.key.startsWith(modelInputPrefix));
+  ).filter(
+    (object) =>
+      !isReservedJobNamespace(
+        object.key.startsWith(upload.rawPrefix)
+          ? object.key.slice(upload.rawPrefix.length)
+          : object.key
+      )
+  );
   const filesVerified = bundleObjects.length;
   // The SAME listing, re-expressed as keys RELATIVE to rawPrefix
   // (`images/EYE/eye_0001.jpg`) — the shape the auto-selection compares its

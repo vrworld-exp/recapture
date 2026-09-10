@@ -88,6 +88,18 @@ dependencies:
   # capture); iOS reuses the existing NSCameraUsageDescription.
   mobile_scanner: ^7.4.0
 
+  # Picking a .glb off the device for the staff "Submit model" flow.
+  #
+  # Not image_picker: that one only offers images/video, and the file here is a
+  # 3D model. This is the one picker in the tree that opens the general file
+  # browser, and it is the only cross-platform way to do it — on WEB it renders
+  # an `<input type=file accept=".glb">`, on Android the Storage Access
+  # Framework, both with no runtime permission of their own.
+  #
+  # `withData` is set per-platform at the call site (see model_file_picker.dart):
+  # a 100 MiB model must not be read into RAM on a phone just to be uploaded.
+  file_picker: ^12.2.0
+
 dependency_overrides:
   # permission_handler_android 14.0.0 requires AGP 9 / Kotlin 2.3. Its
   # android/build.gradle.kts calls the top-level `kotlin { compilerOptions { … } }`

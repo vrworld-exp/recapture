@@ -320,6 +320,65 @@ export async function copyObject(
 }
 
 /**
+ * Copies one object BETWEEN buckets, server-side. Same single-operation
+ * economics as {@link copyObject} — no bytes transit this process, which is the
+ * whole reason a model-sized GLB can be staged in the raw bucket (the only one
+ * that serves a browser CORS policy for PUT) and then promoted into the
+ * artifacts bucket the CDN fronts.
+ *
+ * Kept SEPARATE from {@link copyObject} rather than adding an optional bucket
+ * argument: a cross-bucket copy crosses the two buckets' opposite access
+ * policies (private capture data ↔ CDN-public deliverables), and that is worth
+ * having to name at the call site.
+ */
+export async function copyObjectAcrossBuckets(
+  sourceBucket: string,
+  sourceKey: string,
+  destBucket: string,
+  destKey: string,
+  contentType?: string
+): Promise<void> {
+  await s3Client.send(
+    new CopyObjectCommand({
+      Bucket: destBucket,
+      CopySource: encodeURI(`${sourceBucket}/${sourceKey}`),
+      Key: destKey,
+      // REPLACE, not COPY: the staged object carries whatever type the presign
+      // signed, and the artifacts bucket's copy is the one the CDN serves.
+      ...(contentType ? { ContentType: contentType, MetadataDirective: 'REPLACE' as const } : {}),
+    })
+  );
+}
+
+/**
+ * Reads the FIRST [byteCount] bytes of an object via a ranged GET.
+ *
+ * For sniffing a file header without paying for the file: a GLB submitted by
+ * staff can be 100 MiB, and {@link getObjectBytes} would pull all of it into
+ * this process to look at twelve magic bytes. Absent (404) is a normal outcome
+ * on the same fail-soft contract as the rest of this module.
+ *
+ * A short object returns whatever it has — S3 clamps the range — so callers must
+ * check the returned length rather than assume [byteCount].
+ */
+export async function getObjectHeadBytes(
+  bucket: string,
+  key: string,
+  byteCount: number
+): Promise<{ outcome: 'absent' } | { outcome: 'ok'; body: Buffer }> {
+  try {
+    const result = await s3Client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: key, Range: `bytes=0-${byteCount - 1}` })
+    );
+    const bytes = await result.Body?.transformToByteArray();
+    return { outcome: 'ok', body: Buffer.from(bytes ?? new Uint8Array()) };
+  } catch (err) {
+    if (isNotFound(err)) return { outcome: 'absent' };
+    throw err;
+  }
+}
+
+/**
  * Deletes one object at (bucket, key). S3 DeleteObject is idempotent — deleting
  * an absent key is a success (204), never a 404 — so this never throws for a
  * missing key.

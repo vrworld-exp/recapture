@@ -74,6 +74,9 @@ export const AnalyticsEvent = {
   MODEL_GENERATION_DECLINED: 'model_generation_declined',
   MODEL_APPROVED: 'model_approved',
   MODEL_IMAGE_UPLOADS_GENERATED: 'model_image_uploads_generated',
+  // ── Staff GLB submission ("Submit model" on a live project) ───────────────
+  MODEL_UPLOAD_URL_GENERATED: 'model_upload_url_generated',
+  MODEL_UPLOAD_SUBMITTED: 'model_upload_submitted',
   // ── Artist photo-upload projects (MODEL_ARTIST) ───────────────────────────
   PHOTO_UPLOAD_SESSION_CREATED: 'photo_upload_session_created',
   PHOTO_UPLOAD_COMMITTED: 'photo_upload_committed',
@@ -503,6 +506,30 @@ const modelImageUploadsGeneratedProps = z
   })
   .strict();
 
+/** A staff user asked for a presigned slot to submit a hand-made GLB into. */
+const modelUploadUrlGeneratedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    job_id_hash: z.string().min(1),
+    ttl_seconds: z.number().int().positive(),
+  })
+  .strict();
+
+/**
+ * A staff GLB submission was committed. `size_bytes` is the point of the event:
+ * it is the only signal for how big hand-made models actually are, which is
+ * what the MODEL_UPLOAD_MAX_BYTES ceiling has to be tuned against.
+ */
+const modelUploadSubmittedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    project_id_hash: z.string().min(1),
+    model_id_hash: z.string().min(1),
+    size_bytes: z.number().int().positive(),
+  })
+  .strict();
+
 /** Staff approved a generated model — the "skip manual creation" signal. */
 const modelApprovedProps = z
   .object({
@@ -924,6 +951,8 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.MODEL_GENERATION_DECLINED]: modelGenerationDeclinedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,
   [AnalyticsEvent.MODEL_IMAGE_UPLOADS_GENERATED]: modelImageUploadsGeneratedProps,
+  [AnalyticsEvent.MODEL_UPLOAD_URL_GENERATED]: modelUploadUrlGeneratedProps,
+  [AnalyticsEvent.MODEL_UPLOAD_SUBMITTED]: modelUploadSubmittedProps,
   [AnalyticsEvent.PHOTO_UPLOAD_SESSION_CREATED]: photoUploadSessionCreatedProps,
   [AnalyticsEvent.PHOTO_UPLOAD_COMMITTED]: photoUploadCommittedProps,
   [AnalyticsEvent.PHOTO_UPLOAD_GENERATION_REQUESTED]: photoUploadGenerationRequestedProps,

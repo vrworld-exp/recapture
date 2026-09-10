@@ -143,6 +143,24 @@ export const adminPhotoBytesQuerySchema = z
 
 export type AdminPhotoBytesQuery = z.infer<typeof adminPhotoBytesQuerySchema>;
 
+/**
+ * Body for POST /admin/projects/:id/model/upload — the "Submit model" commit:
+ * the job-root-RELATIVE key of the GLB the client just PUT into its presigned
+ * slot.
+ *
+ * Shape check only. The authority is the service, which additionally requires
+ * the key to sit inside the reserved `model-upload/` namespace and to name an
+ * object that actually exists, is within the byte ceiling, and opens with the
+ * glTF 2.0 magic — none of which a string test can establish.
+ */
+export const adminSubmitModelBodySchema = z
+  .object({
+    key: z.string().min(1).max(1024),
+  })
+  .strict();
+
+export type AdminSubmitModelBody = z.infer<typeof adminSubmitModelBodySchema>;
+
 /** `:id`/`:modelId` params for the model approve route. */
 export const adminModelIdParamsSchema = z
   .object({

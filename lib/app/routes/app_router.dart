@@ -35,6 +35,7 @@ import '../../presentation/screens/projects/capture_mode_sheet.dart';
 import '../../presentation/screens/projects/project_photos_screen.dart';
 import '../../presentation/screens/projects/preview_gallery_screen.dart';
 import '../../presentation/screens/projects/model_history_screen.dart';
+import '../../presentation/screens/projects/submit_model_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_analytics_screen.dart';
@@ -208,6 +209,11 @@ abstract final class AppRoutes {
   /// Staff-only per-project 3D-model generation history. `:id` = the project id.
   static const modelHistory = '/admin/projects/:id/models';
 
+  /// Staff-only "Submit model": hand a finished .glb to a project you do not
+  /// own. `:id` = the project id; `?name=` carries the project's display name
+  /// from the row that was tapped (see the route builder).
+  static const submitModel = '/admin/projects/:id/submit-model';
+
   /// Staff-only viewer for ONE generated model, resolved by `:modelId` out of
   /// the project's history — the model's only persistent entry point.
   static const modelViewer = '/admin/projects/:id/models/:modelId';
@@ -267,6 +273,7 @@ abstract final class AppRouteNames {
   static const adminBatchDetail = 'adminBatchDetail';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
+  static const submitModel = 'submitModel';
   static const modelViewer = 'modelViewer';
   static const preCapture = 'preCapture';
   static const permissions = 'permissions';
@@ -640,6 +647,25 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (context, state) => FlowBackScope(
           child: ModelHistoryScreen(
             projectId: state.pathParameters['id'] ?? '',
+          ),
+        ),
+      ),
+      // Registered BEFORE `modelViewer`: `/admin/projects/:id/submit-model` is
+      // a sibling of `…/models`, not a `:modelId` under it, and a parameterised
+      // sibling would happily swallow it.
+      //
+      // The project NAME rides on the query string rather than `extra`. It is
+      // the headline of that screen — the only thing telling the artist whose
+      // project they are about to submit to — and `extra` is dropped by a
+      // browser reload, which the web build does have. A cold link without it
+      // degrades to "this project" instead of a blank.
+      GoRoute(
+        path: AppRoutes.submitModel,
+        name: AppRouteNames.submitModel,
+        builder: (context, state) => FlowBackScope(
+          child: SubmitModelScreen(
+            projectId: state.pathParameters['id'] ?? '',
+            projectName: state.uri.queryParameters['name'] ?? '',
           ),
         ),
       ),

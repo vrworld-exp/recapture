@@ -39,10 +39,11 @@ class _FakeProjectsNotifier extends ProjectsNotifier {
       ];
 }
 
-/// Live list with a caller-chosen model count.
+/// Live list with a caller-chosen model count and status.
 class _FakeLiveProjectsNotifier extends LiveProjectsNotifier {
-  _FakeLiveProjectsNotifier(this.modelCount);
+  _FakeLiveProjectsNotifier(this.modelCount, this.status);
   final int modelCount;
+  final ProjectStatus status;
 
   @override
   Future<LiveProjectsState> build() async => LiveProjectsState(
@@ -50,7 +51,7 @@ class _FakeLiveProjectsNotifier extends LiveProjectsNotifier {
           LiveProject(
             id: 'live-1',
             name: 'Someone else’s statue',
-            status: ProjectStatus.completed,
+            status: status,
             updatedAt: DateTime(2026, 7, 10),
             ownerId: 'owner123456',
             totalPhotos: 37,
@@ -65,12 +66,13 @@ Widget _app({
   required bool isStaff,
   int mineModelCount = 0,
   int liveModelCount = 0,
+  ProjectStatus liveStatus = ProjectStatus.completed,
 }) {
   return ProviderScope(
     overrides: [
       projectsProvider.overrideWith(() => _FakeProjectsNotifier(mineModelCount)),
-      liveProjectsProvider
-          .overrideWith(() => _FakeLiveProjectsNotifier(liveModelCount)),
+      liveProjectsProvider.overrideWith(
+          () => _FakeLiveProjectsNotifier(liveModelCount, liveStatus)),
       isStaffProvider.overrideWithValue(isStaff),
       // The Live tab reads the admin flag for its delete affordance; without
       // this override the real userRoleProvider chain would open Hive.
@@ -176,6 +178,44 @@ void main() {
       expect(find.text('Preview'), findsOneWidget);
       expect(find.text('Export'), findsOneWidget);
       expect(find.text('Models'), findsNothing);
+    });
+
+    testWidgets('a viewable model hides the "Processing" pill', (tester) async {
+      // Same rule as the My-projects card: the model IS the deliverable, so a
+      // still-pulsing Processing pill would claim work that already landed.
+      // The pill's label is 'Processing' (no ellipsis) — the ellipsis form
+      // belongs to the owner card's action area, which the Live card has not.
+      await tester.pumpWidget(_app(
+        isStaff: true,
+        liveModelCount: 1,
+        liveStatus: ProjectStatus.processing,
+      ));
+      await _openLiveTab(tester);
+
+      expect(find.text('Someone else’s statue'), findsOneWidget);
+      expect(find.text('Models'), findsOneWidget);
+      expect(find.text('Processing'), findsNothing);
+    });
+
+    testWidgets('processing with no viewable model still shows the pill',
+        (tester) async {
+      await tester.pumpWidget(_app(
+        isStaff: true,
+        liveModelCount: 0,
+        liveStatus: ProjectStatus.processing,
+      ));
+      await _openLiveTab(tester);
+
+      expect(find.text('Processing'), findsOneWidget);
+    });
+
+    testWidgets('a completed project with models keeps its pill',
+        (tester) async {
+      // Only the in-flight claim is the one a model count contradicts.
+      await tester.pumpWidget(_app(isStaff: true, liveModelCount: 2));
+      await _openLiveTab(tester);
+
+      expect(find.text('Completed'), findsOneWidget);
     });
   });
 

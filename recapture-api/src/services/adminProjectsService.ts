@@ -222,6 +222,44 @@ export const DELETED_KEY_PREFIX = 'deleted/';
  */
 export const MODEL_INPUT_KEY_PREFIX = 'model-input/';
 
+/**
+ * The reserved sub-prefix under a job root where a STAFF-SUBMITTED GLB is
+ * staged (`{rawPrefix}model-upload/{sessionId}/model.glb`) before it is promoted
+ * into the artifacts bucket.
+ *
+ * It is staged in the RAW bucket for one reason: that is the only bucket
+ * carrying a browser CORS policy for `PUT` (docs/aws-storage-and-cdn.md), so it
+ * is the only place the WEB build can upload to directly — and a model-sized
+ * body must not be proxied through the API (the avatar bytes-proxy precedent
+ * explicitly stops short of capture-sized payloads). Under the job root, so the
+ * hard-delete purge reaches an abandoned staging object with no special casing.
+ *
+ * Reserved exactly like {@link MODEL_INPUT_KEY_PREFIX}, and for the same
+ * reasons — see {@link isReservedJobNamespace}.
+ */
+export const MODEL_UPLOAD_KEY_PREFIX = 'model-upload/';
+
+/**
+ * Whether a job-root-RELATIVE key belongs to a reserved namespace rather than
+ * to the capture set.
+ *
+ * ONE definition for both reserved prefixes, because the three places that must
+ * agree — the export/photo listing, the capture processor's object-count
+ * re-verification, and the automatic photo selector — are far apart, and a new
+ * namespace that reaches only two of them is a silently broken capture job (a
+ * count that no longer matches `expectedFilesCount`) or a GLB offered to Meshy
+ * as a photo.
+ *
+ * `deleted/` is NOT included: curated-away photos are excluded by some callers
+ * and deliberately counted by others, so it stays an explicit per-site decision.
+ */
+export function isReservedJobNamespace(relativeKey: string): boolean {
+  return (
+    relativeKey.startsWith(MODEL_INPUT_KEY_PREFIX) ||
+    relativeKey.startsWith(MODEL_UPLOAD_KEY_PREFIX)
+  );
+}
+
 /** A job-root object key stripped to its export-relative form. */
 function toRelativeKey(absoluteKey: string, rawPrefix: string): string {
   return absoluteKey.startsWith(rawPrefix) ? absoluteKey.slice(rawPrefix.length) : absoluteKey;
@@ -264,13 +302,12 @@ async function resolveCaptureSet(projectId: string): Promise<ResolvedCaptureSet>
   const { rawBucket, rawPrefix } = job.upload;
   // Reserved namespaces are dropped from the listing: `deleted/` (a curated-away
   // photo never reappears in the export, and `fileCount` reflects the
-  // post-curation truth vs expectedFileCount) and `model-input/` (staff-edited
-  // Meshy input copies are session artifacts, not part of the capture set).
+  // post-curation truth vs expectedFileCount) and the model namespaces
+  // (staff-edited Meshy inputs and staged GLB submissions are session
+  // artifacts, not part of the capture set).
   const objects = (await listObjectsUnderPrefix(rawBucket, rawPrefix)).filter((object) => {
     const relative = toRelativeKey(object.key, rawPrefix);
-    return (
-      !relative.startsWith(DELETED_KEY_PREFIX) && !relative.startsWith(MODEL_INPUT_KEY_PREFIX)
-    );
+    return !relative.startsWith(DELETED_KEY_PREFIX) && !isReservedJobNamespace(relative);
   });
 
   return { outcome: 'RESOLVED', project, job, rawBucket, rawPrefix, objects };

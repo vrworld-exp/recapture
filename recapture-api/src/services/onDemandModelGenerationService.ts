@@ -39,7 +39,7 @@ import { hasRoleAtLeast } from '@/models/User';
 import {
   findExportableJob,
   DELETED_KEY_PREFIX,
-  MODEL_INPUT_KEY_PREFIX,
+  isReservedJobNamespace,
 } from '@/services/adminProjectsService';
 import {
   selectPhotosForAutoGeneration,
@@ -277,9 +277,9 @@ export async function generateModelOnDemand(
   //
   // Soft-deleted photos need no special casing on the CAPTURE path: the delete
   // MOVES the object to `deleted/`, so its original relative key is simply
-  // absent and drops out. The reserved `model-input/` namespace is excluded to
-  // mirror the capture processor — those are staff-edited copies, not capture
-  // photos.
+  // absent and drops out. The reserved model namespaces are excluded to mirror
+  // the capture processor — staff-edited copies and staged GLB submissions are
+  // not capture photos.
   //
   // On the UPLOAD path the pool IS the listing (there is no manifest to
   // intersect against), so both reserved namespaces have to be excluded here or
@@ -288,11 +288,10 @@ export async function generateModelOnDemand(
   // namespace the artist's grid and the owner soft-delete already work in.
   let availableKeys: string[];
   try {
-    const modelInputPrefix = `${upload.rawPrefix}${MODEL_INPUT_KEY_PREFIX}`;
     const relativeKeys = (await listObjectsUnderPrefix(upload.rawBucket, upload.rawPrefix))
-      .filter((object) => !object.key.startsWith(modelInputPrefix))
       .filter((object) => object.key.startsWith(upload.rawPrefix))
-      .map((object) => object.key.slice(upload.rawPrefix.length));
+      .map((object) => object.key.slice(upload.rawPrefix.length))
+      .filter((key) => !isReservedJobNamespace(key));
     availableKeys = isUpload
       ? relativeKeys.filter(
           (key) =>

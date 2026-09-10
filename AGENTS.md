@@ -177,8 +177,9 @@ do not remove it).
 - A model is a **`ProjectModel`** record (`models/ProjectModel.ts`), one per
   generation attempt (full history — artists regenerate, compare, and `approve`
   one). Its **`source`** flag is the origin: `'meshy'` (built) or `'manual'`
-  (RESERVED for the in-house pipeline). The client's "Created by Meshy AI" badge
-  reads that flag and nothing else.
+  (a HUMAN made it — today that means staff SUBMITTED a `.glb`; see below). The
+  client's "Created by Meshy AI" badge reads that flag and nothing else, which
+  is why a submitted model correctly wears no badge with zero client changes.
 - **`source: 'optimized'` is the exception that proves the rule: it is a
   DERIVATIVE, not an origin.** One tap on **Optimize** (staff row action, or the
   owner's viewer) inserts a SECOND `ProjectModel` — `optimizedFrom` naming its
@@ -459,6 +460,56 @@ do not remove it).
 - **`MESHY_API_KEY` is optional in `config/env.ts` and required at WORKER boot**
   (`assertMeshyConfigured()`): only the worker calls Meshy, so the API must not
   fail to boot over a secret it never uses.
+
+### Staff "Submit model" (a hand-made GLB, no generation)
+
+The staff counterpart to Create-Model: a MODEL_ARTIST or ADMIN hands a finished
+`.glb` to a project they do NOT own, from the **Live projects** list. The result
+is an ordinary `SUCCEEDED` `ProjectModel` with `source: 'manual'`, so it reaches
+the owner's `modelCount`, their models list and the project detail's viewer with
+**no owner-facing code involved** — that is the whole design.
+
+- **Two calls, and the bytes never touch the API.**
+  `POST /admin/projects/:id/model/upload-url` presigns a PUT; the client uploads
+  direct to S3; `POST /admin/projects/:id/model/upload` commits the key. The
+  avatar bytes-proxy precedent **does not extend here** for the same reason it
+  does not extend to photo sets: a 100 MiB model would go through a 512 MB
+  instance.
+- **Staged in the RAW bucket, promoted to ARTIFACTS.** `msxr-model-artifacts`
+  serves **no CORS**, so a browser cannot PUT to it at all; `msxr-raw-captures`
+  does (see the web-upload section). So the slot is
+  `{rawPrefix}model-upload/{sessionId}/model.glb` in the raw bucket, and the
+  commit does a **server-side cross-bucket copy** to the record's own
+  `{rawPrefix}models/{modelId}/model.glb`. No bytes transit the API either way.
+- **`model-upload/` is a reserved job namespace**, exactly like `model-input/`.
+  Both are now excluded through ONE predicate — `isReservedJobNamespace()` in
+  `adminProjectsService` — used by the export/photo listing, the capture
+  processor's object-count re-verification, and the automatic photo selector. A
+  namespace that reaches only two of the three is a capture job that fails its
+  own count, or a GLB offered to Meshy as a photo.
+- **The record exists before the copy, and only then goes SUCCEEDED.** The
+  artifacts key is derived from the record id, so the row has to be inserted
+  first; a crash between the two leaves an honest `PROCESSING`/`FAILED` row, never
+  a SUCCEEDED one pointing at a URL that 404s.
+- **The bytes decide what the file is.** `utils/glb.ts` checks the glTF 2.0
+  magic, the container version, and the header's own length field against the
+  object's real size — read through a **ranged GET of 12 bytes**, never by
+  downloading the model. The declared Content-Type and the `.glb` extension are
+  both caller-supplied and prove nothing.
+- **Double-submit is guarded by the staged object, not an Idempotency-Key.** The
+  commit deletes the staging key once promoted, so a replay is `UPLOAD_MISSING`
+  rather than a duplicate model in someone else's list. Two DIFFERENT uploads are
+  two models on purpose — this is a history, like generation.
+- **The project's status is NOT flipped to COMPLETED**, mirroring the Meshy
+  processor, which does not either. What keeps the owner's card honest is the
+  rule that a project with `modelCount > 0` hides a stale `Processing` pill
+  (`ProjectCard._showStatusPill` and its twin on the Live card).
+- Client: `model_file_picker.dart` (file_picker — the only picker in the tree
+  that opens a general file browser; it hands back a **stream**, never bytes),
+  `model_upload_client.dart` (its own interceptor-free Dio — an `Authorization`
+  header BREAKS a presigned signature), `model_submission_notifier.dart`,
+  `submit_model_screen.dart`. Pinned by `test/projects/model_submission_test.dart`
+  and `recapture-api/tests/admin-model-upload.test.ts`.
 
 ### Standee assignment (who is carrying which code)
 

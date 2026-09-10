@@ -42,6 +42,21 @@ enum LiveProjectsFailure {
   /// the copy tells the user to refresh rather than to try again.
   notOptimizable,
 
+  /// 409 UPLOAD_MISSING — the staged `.glb` is not there any more: the PUT
+  /// never landed, the slot expired, or this upload was already submitted.
+  /// Recoverable by picking the file again, which is what the copy says.
+  uploadMissing,
+
+  /// 413 — the submitted model is over the server's byte ceiling.
+  modelTooLarge,
+
+  /// 415 — the bytes are not a glTF 2.0 binary, whatever the file was named.
+  notAModel,
+
+  /// 502 STORE_FAILED — the server could not store the model. Nothing the
+  /// submitter did wrong, and worth retrying as-is.
+  storeFailed,
+
   /// Transport-level failure (offline, timeout).
   network,
 
@@ -152,6 +167,23 @@ abstract interface class LiveProjectsRepository {
   /// Throws [LiveProjectsException].
   Future<void> optimizeOwnerModel(String projectId, String modelId);
 
+  /// STAFF: a presigned slot to upload a hand-made `.glb` into, for the
+  /// "Submit model" flow. Mints no record — the model only exists once
+  /// [submitUploadedModel] is called with the returned key.
+  /// Throws [LiveProjectsException] (notExportable / notFound / rateLimited / …).
+  Future<ModelUploadSlot> createModelUploadSlot(String projectId);
+
+  /// STAFF: commits the `.glb` already PUT to [key]'s slot as a model on
+  /// [projectId], and returns the finished record.
+  ///
+  /// Nothing is queued and nothing is generated: the model is viewable by the
+  /// project's OWNER the moment this returns. Deliberately carries no
+  /// idempotency key — the server deletes the staged object once it promotes
+  /// it, so a replay fails as [LiveProjectsFailure.uploadMissing] rather than
+  /// putting a duplicate in the owner's list.
+  /// Throws [LiveProjectsException].
+  Future<ProjectModelView> submitUploadedModel(String projectId, String key);
+
   /// ADMIN-only: deletes [projectId] — [AdminDeleteMode.soft] hides it
   /// (recoverable), [AdminDeleteMode.hard] permanently erases the project,
   /// its photos and its models. [confirmName] must echo the project's exact
@@ -163,6 +195,45 @@ abstract interface class LiveProjectsRepository {
     required AdminDeleteMode mode,
     required String confirmName,
   });
+}
+
+/// One presigned slot for a staff `.glb` submission, as
+/// `POST /admin/projects/:id/model/upload-url` returns it.
+class ModelUploadSlot {
+  const ModelUploadSlot({
+    required this.key,
+    required this.url,
+    required this.maxBytes,
+  });
+
+  /// The job-root-RELATIVE key to hand back to `submitUploadedModel`. Opaque
+  /// to the client — never parsed, never displayed.
+  final String key;
+
+  /// The presigned PUT target. A WRITE bearer credential for the life of the
+  /// slot: it goes to the upload client and NOWHERE else — not a log, not an
+  /// analytics property, not an error message.
+  final String url;
+
+  /// The server's byte ceiling, so an oversized file is refused at pick time
+  /// rather than after minutes of uploading. The server enforces it again at
+  /// commit; this is the courtesy, not the authority.
+  final int maxBytes;
+
+  static ModelUploadSlot? tryFrom(Object? raw) {
+    if (raw is! Map) return null;
+    final key = raw['key'];
+    final url = raw['url'];
+    if (key is! String || key.isEmpty || url is! String || url.isEmpty) {
+      return null;
+    }
+    final maxBytes = raw['maxBytes'];
+    return ModelUploadSlot(
+      key: key,
+      url: url,
+      maxBytes: maxBytes is num && maxBytes > 0 ? maxBytes.toInt() : 0,
+    );
+  }
 }
 
 /// How an admin project delete behaves — mirrors the backend's SOFT/HARD enum.
@@ -353,6 +424,43 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
   }
 
   @override
+  Future<ModelUploadSlot> createModelUploadSlot(String projectId) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/admin/projects/$projectId/model/upload-url',
+        data: const <String, dynamic>{},
+      );
+      final slot = ModelUploadSlot.tryFrom(res.data?['upload']);
+      if (slot == null) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return slot;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
+  Future<ProjectModelView> submitUploadedModel(
+    String projectId,
+    String key,
+  ) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/admin/projects/$projectId/model/upload',
+        data: {'key': key},
+      );
+      final model = ProjectModelView.tryFromStaffMap(res.data?['model']);
+      if (model == null) {
+        throw const LiveProjectsException(LiveProjectsFailure.server);
+      }
+      return model;
+    } on DioException catch (e) {
+      throw _translate(e);
+    }
+  }
+
+  @override
   Future<AutoGenerationRequest> autoGenerateModel(
     String projectId, {
     bool force = false,
@@ -506,6 +614,20 @@ class RemoteLiveProjectsRepository implements LiveProjectsRepository {
     // property of the request, not a conflicting state).
     if ((status == 409 || status == 422) && code == 'NOT_EXPORTABLE') {
       return const LiveProjectsException(LiveProjectsFailure.notExportable);
+    }
+    // The "Submit model" commit's own refusals. Matched on status + code, so a
+    // 409 from another route can never inherit this copy.
+    if (status == 409 && code == 'UPLOAD_MISSING') {
+      return const LiveProjectsException(LiveProjectsFailure.uploadMissing);
+    }
+    if (status == 413) {
+      return const LiveProjectsException(LiveProjectsFailure.modelTooLarge);
+    }
+    if (status == 415) {
+      return const LiveProjectsException(LiveProjectsFailure.notAModel);
+    }
+    if (status == 502 && code == 'STORE_FAILED') {
+      return const LiveProjectsException(LiveProjectsFailure.storeFailed);
     }
     if (status == 409 && code == 'DISABLED') {
       return const LiveProjectsException(LiveProjectsFailure.generationDisabled);

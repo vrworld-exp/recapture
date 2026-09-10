@@ -118,10 +118,31 @@ and one object for tests to `vi.spyOn(s3Client, 'send')` against.
 | | `msxr-raw-captures` (`BUCKET_RAW`) | `msxr-model-artifacts` (`BUCKET_ARTIFACTS`) |
 |---|---|---|
 | Holds | capture photos, `capture_manifest.json`, **avatars** | `model.glb`, `model.usdz`, `preview.jpg` |
-| Written by | the phone, directly (presigned multipart) | the worker, server-side |
+| Written by | the phone/browser, directly (presigned multipart or PUT) | the worker, server-side — **and the API, on a staff GLB submission** |
 | Read by | API + staff export, via presigned GET | **anyone**, via CloudFront |
 | Public? | **No.** Private, presigned-only | Fronted by the CDN |
 | CORS | `PUT`/`GET`/`HEAD` for browser part-uploads (see below) | n/a (CDN serves it) |
+
+### A staff-submitted GLB is staged in the RAW bucket on purpose
+
+`msxr-model-artifacts` serves **no CORS** — it is written server-side and read
+through the CDN — so the Flutter WEB build cannot presign-PUT into it at all.
+The "Submit model" flow therefore uploads to
+`{rawPrefix}model-upload/{sessionId}/model.glb` in the **raw** bucket (which does
+carry a `PUT`/`GET`/`HEAD` policy, see below) and the API promotes it with a
+**server-side cross-bucket copy** into `{rawPrefix}models/{modelId}/model.glb`,
+deleting the staged object afterwards.
+
+Two things fall out of that and are load-bearing:
+- the staging key sits UNDER the job root, so the project's hard-delete purge
+  collects an abandoned upload with no special casing;
+- `model-upload/` is a **reserved namespace** excluded from the export manifest,
+  the capture processor's object count, and the automatic photo selector — the
+  same treatment `model-input/` gets, through one shared predicate.
+
+The bytes never pass through the API in either direction. Proxying a 100 MiB
+model would be exactly what the avatar bytes-proxy's own note rules out for
+capture-sized payloads.
 
 ### Why two buckets instead of one with prefixes
 

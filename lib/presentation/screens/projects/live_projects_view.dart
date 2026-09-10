@@ -176,6 +176,26 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
     }
   }
 
+  /// Opens the "Submit model" screen for [project].
+  ///
+  /// The name rides on the query string so the screen can head itself with the
+  /// project the artist actually tapped — see the route's own note on why not
+  /// `extra`. A finished submission changes this list's Models gating, so the
+  /// return is treated exactly like a finished generation: re-read the page
+  /// rather than trusting the row we left behind.
+  Future<void> _submitModel(LiveProject project) async {
+    await context.pushNamed(
+      AppRouteNames.submitModel,
+      pathParameters: {'id': project.id},
+      queryParameters: {'name': project.name},
+    );
+    if (!mounted) return;
+    await ref
+        .read(liveProjectsProvider.notifier)
+        .refresh()
+        .catchError((Object e) => _showFailure(e));
+  }
+
   /// Friendly, mapped-only failure copy (no raw codes/URLs — same rule as 9F).
   void _showFailure(Object error) {
     if (!mounted) return;
@@ -296,6 +316,13 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
                 onGenerate: _isExportable(project)
                     ? () => _generate(project)
                     : null,
+                // Same gate as Generate, and for the same reason: the submit
+                // route needs the project's finalized job to attach a model to.
+                // ADMIN and MODEL_ARTIST both get it — this whole view is
+                // already staff-only, and the backend re-checks the role.
+                onSubmitModel: _isExportable(project)
+                    ? () => _submitModel(project)
+                    : null,
                 isGenerating: _generateInFlight.contains(project.id),
                 // Null (affordance hidden) for MODEL_ARTIST — delete is the
                 // ADMIN curation tool for bad captures.
@@ -332,6 +359,7 @@ class _LiveProjectCard extends StatelessWidget {
     this.onModels,
     this.onGenerate,
     this.isGenerating = false,
+    this.onSubmitModel,
     this.onDelete,
   });
 
@@ -354,6 +382,13 @@ class _LiveProjectCard extends StatelessWidget {
   /// is the button's own spinner, NOT the minutes-long Meshy run).
   final bool isGenerating;
 
+  /// OPTIONAL "Submit model" action — opens the screen where staff hand a
+  /// finished `.glb` to this project. Same null-hides-it rule as [onModels].
+  ///
+  /// Deliberately NOT gated on whether the project already has models: a second,
+  /// better model is a legitimate submission, and the list is a history.
+  final VoidCallback? onSubmitModel;
+
   /// OPTIONAL delete action — non-null for ADMIN only (same null-hides-it
   /// pattern as [onModels]); opens the soft/hard confirmation dialog.
   final VoidCallback? onDelete;
@@ -361,6 +396,18 @@ class _LiveProjectCard extends StatelessWidget {
   bool get _exportable =>
       project.status == ProjectStatus.processing ||
       project.status == ProjectStatus.completed;
+
+  /// Whether to render the status pill at all.
+  ///
+  /// Hidden once the project HAS a viewable model AND is still flagged
+  /// "Processing…": the model is the deliverable and it has landed, so a
+  /// perpetually-pulsing amber pill claims work that is already done. Every
+  /// other status keeps its pill. Same rule as `ProjectCard._showStatusPill`
+  /// on the My-projects list — the two surfaces must not disagree about the
+  /// same project.
+  bool get _showStatusPill =>
+      !(project.status == ProjectStatus.processing &&
+          project.hasViewableModels);
 
   @override
   Widget build(BuildContext context) {
@@ -395,10 +442,15 @@ class _LiveProjectCard extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: AppSpacing.sm),
-              AppStatusPill(status: project.status),
+              if (_showStatusPill) ...[
+                const SizedBox(width: AppSpacing.sm),
+                AppStatusPill(status: project.status),
+              ],
               if (onDelete != null) ...[
-                const SizedBox(width: AppSpacing.xs),
+                // A tighter gap after the pill, a full one when the pill is
+                // suppressed and the icon sits straight after the text column.
+                SizedBox(
+                    width: _showStatusPill ? AppSpacing.xs : AppSpacing.sm),
                 IconButton(
                   key: ValueKey('live_delete_${project.id}'),
                   icon: const Icon(Icons.delete_outline, size: 20),
@@ -464,6 +516,21 @@ class _LiveProjectCard extends StatelessWidget {
                   icon: Icons.auto_awesome_outlined,
                   isLoading: isGenerating,
                   onPressed: onGenerate,
+                ),
+              ),
+            ],
+            // Its own full-width row beneath Generate, and in that order on
+            // purpose: generating is the common path, submitting a hand-made
+            // model the deliberate one.
+            if (onSubmitModel != null) ...[
+              const SizedBox(height: AppSpacing.sm),
+              SizedBox(
+                width: double.infinity,
+                child: AppButton.secondary(
+                  key: ValueKey('live_submit_model_${project.id}'),
+                  label: 'Submit model',
+                  icon: Icons.cloud_upload_outlined,
+                  onPressed: onSubmitModel,
                 ),
               ),
             ],

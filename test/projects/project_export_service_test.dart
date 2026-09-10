@@ -22,7 +22,8 @@ class _FakeLiveRepo
         FakeAutoGenerationDefaults,
         FakeModelOptimizeDefaults,
         FakeOwnerModelListDefaults,
-        FakePreviewBrowseDefaults
+        FakePreviewBrowseDefaults,
+        FakeModelSubmissionDefaults
     implements LiveProjectsRepository {
   Map<String, dynamic>? exportResult;
   LiveProjectsException? failWith;

@@ -217,6 +217,33 @@ const envSchema = z.object({
   /** Sliding window for the model-image upload-urls cap (seconds). */
   MODEL_IMAGE_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // ── Staff GLB upload ("Submit model") ──────────────────────────────────────
+  /**
+   * Presigned-PUT TTL for a staff-submitted GLB (seconds). Longer than the
+   * model-image slots because the payload is two orders of magnitude bigger: a
+   * 60 MiB model on a slow uplink needs real time, and an expired signature
+   * mid-transfer costs the artist the whole upload.
+   */
+  MODEL_UPLOAD_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * Hard ceiling on a submitted GLB (bytes), enforced at COMMIT time — a
+   * presign cannot cap a body, exactly as with the avatar and photo-set flows.
+   *
+   * BINARY, NOT DECIMAL, and deliberately BELOW MODEL_OPTIMIZE_MAX_INPUT_BYTES:
+   * a hand-authored model this large is a mistake worth catching at submit
+   * time, not something to discover when the owner's phone tries to download it.
+   */
+  MODEL_UPLOAD_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(128 * 1024 * 1024),
+  /** Max GLB submissions one staff user may make per window. Costs storage and
+   * an owner-visible record, never Meshy credits — so bounded, not scarce. */
+  MODEL_UPLOAD_MAX_PER_WINDOW: z.coerce.number().int().positive().default(30),
+  /** Sliding window for the GLB submission cap (seconds). */
+  MODEL_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+
   // ── Model optimization (docs/prompts/model-optimization-opt-variant.md) ─────
   /**
    * GLB size above which a model is worth optimizing — the ONLY gate on the

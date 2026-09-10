@@ -9,7 +9,7 @@
 // only what its test actually drives — so the next repository addition touches
 // this file, not seven others.
 import 'package:recapture/data/repositories/live_projects_repository.dart'
-    show AdminDeleteMode, AutoGenerationRequest;
+    show AdminDeleteMode, AutoGenerationRequest, ModelUploadSlot;
 import 'package:recapture/data/repositories/projects_repository.dart'
     show
         OwnerGenerationRequestOutcome,
@@ -82,6 +82,22 @@ mixin FakeOwnerModelListDefaults {
 /// drives the gallery overrides this one; a fake that doesn't gets the throw.
 mixin FakePreviewBrowseDefaults {
   Future<Map<String, dynamic>> photos(String projectId) async =>
+      throw UnimplementedError('not used here');
+}
+
+/// The staff "Submit model" members of `LiveProjectsRepository`.
+///
+/// Its own mixin for the same reason the others are: a fake that hand-rolls the
+/// generation members still wants these defaulted, and two mixins cannot both
+/// supply one member.
+mixin FakeModelSubmissionDefaults {
+  Future<ModelUploadSlot> createModelUploadSlot(String projectId) async =>
+      throw UnimplementedError('not used here');
+
+  Future<ProjectModelView> submitUploadedModel(
+    String projectId,
+    String key,
+  ) async =>
       throw UnimplementedError('not used here');
 }
 

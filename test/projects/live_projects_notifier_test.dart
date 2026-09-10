@@ -28,7 +28,8 @@ class _ScriptedLiveRepo
         FakeAutoGenerationDefaults,
         FakeModelOptimizeDefaults,
         FakeOwnerModelListDefaults,
-        FakePreviewBrowseDefaults
+        FakePreviewBrowseDefaults,
+        FakeModelSubmissionDefaults
     implements LiveProjectsRepository {
   /// Pages keyed by cursor (null key = first page).
   final Map<String?, LiveProjectsPage> pages = {};

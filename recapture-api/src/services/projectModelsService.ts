@@ -28,10 +28,19 @@ import {
   findModelSourceJobById,
   isContainedRelativeKey,
   MODEL_INPUT_KEY_PREFIX,
+  MODEL_UPLOAD_KEY_PREFIX,
 } from '@/services/adminProjectsService';
-import { getObjectBytes, headObject, presignObjectPutUrl } from '@/services/s3ObjectStore';
-import { BUCKET_ARTIFACTS } from '@/config/s3';
+import {
+  copyObjectAcrossBuckets,
+  deleteObject,
+  getObjectBytes,
+  getObjectHeadBytes,
+  headObject,
+  presignObjectPutUrl,
+} from '@/services/s3ObjectStore';
+import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
+import { GLB_HEADER_BYTES, isGlbHeader } from '@/utils/glb';
 
 /**
  * Meshy Multi-Image to 3D accepts 1–4 images. We require a MINIMUM of 3: with
@@ -692,6 +701,210 @@ export async function createModelImageUploadUrls(
     uploads,
     expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
   };
+}
+
+// ── Staff GLB submission ("Submit model") ───────────────────────────────────
+//
+// The manual counterpart to Create-Model: an artist who has built (or fixed up)
+// a model by hand hands it to the project's OWNER directly, with no generation
+// in between. It lands as an ordinary SUCCEEDED ProjectModel, which is what
+// makes it appear on every owner surface — the Models list, the project
+// detail's viewer, and the `modelCount` the project card gates on — with no
+// per-surface special casing anywhere.
+//
+// TWO STEPS, not one, and the bytes never touch this API:
+//   1. `createModelUploadUrl` presigns a PUT into the RAW bucket (the only one
+//      serving a browser CORS policy for PUT — the web build cannot upload to
+//      the artifacts bucket at all);
+//   2. `submitUploadedModel` validates what actually landed and promotes it
+//      server-side into the artifacts bucket the CDN fronts.
+// A 100 MiB GLB proxied through the API would be exactly what the avatar
+// bytes-proxy's own doc comment says not to build.
+
+/** The one content type a GLB is ever stored or served as. */
+export const GLB_CONTENT_TYPE = 'model/gltf-binary';
+
+/** The presigned slot a staff GLB submission uploads into. */
+export interface ModelUploadSlot {
+  /** Job-root-RELATIVE key — hand it straight back to {@link submitUploadedModel}. */
+  key: string;
+  /** Presigned PUT URL. A WRITE bearer credential: route response only, never a log. */
+  url: string;
+  expiresAt: string;
+  /**
+   * The commit-time byte ceiling, so the client can refuse an oversized file
+   * before spending minutes uploading it.
+   */
+  maxBytes: number;
+}
+
+export type CreateModelUploadUrlResult =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  | { outcome: 'NOT_EXPORTABLE' }
+  | { outcome: 'CREATED'; projectId: string; jobId: string; upload: ModelUploadSlot };
+
+/**
+ * Presigns ONE PUT slot for a staff-submitted GLB.
+ *
+ * Stateless and cheap, exactly like {@link createModelImageUploadUrls}: a fresh
+ * session id per call, nothing written to the DB, and an abandoned session
+ * leaves one orphaned object that the project's hard-delete purge collects. The
+ * record is created at COMMIT time, not here — a presign nobody uses must not
+ * put a model in the owner's list.
+ */
+export async function createModelUploadUrl(
+  projectId: string
+): Promise<CreateModelUploadUrlResult> {
+  const project = await Project.findOne({
+    _id: new Types.ObjectId(projectId),
+    deletedAt: null,
+  }).exec();
+  if (!project) return { outcome: 'PROJECT_NOT_FOUND' };
+
+  const job = await findExportableJob(projectId);
+  if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
+
+  const { rawBucket, rawPrefix } = job.upload;
+  const ttlSeconds = env.MODEL_UPLOAD_URL_TTL_SECONDS;
+  const key = `${MODEL_UPLOAD_KEY_PREFIX}${randomUUID()}/model.glb`;
+
+  return {
+    outcome: 'CREATED',
+    projectId: project.id as string,
+    jobId: job.id as string,
+    upload: {
+      key,
+      url: await presignObjectPutUrl(rawBucket, `${rawPrefix}${key}`, ttlSeconds, GLB_CONTENT_TYPE),
+      expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
+      maxBytes: env.MODEL_UPLOAD_MAX_BYTES,
+    },
+  };
+}
+
+export type SubmitUploadedModelResult =
+  | { outcome: 'PROJECT_NOT_FOUND' }
+  | { outcome: 'NOT_EXPORTABLE' }
+  /** The key escaped the job root, or is not a staged upload key. */
+  | { outcome: 'INVALID_KEY' }
+  /**
+   * Nothing at that key: the PUT never happened, the presign expired, or this
+   * upload was already submitted (the staged object is removed once promoted).
+   */
+  | { outcome: 'UPLOAD_MISSING' }
+  | { outcome: 'TOO_LARGE'; sizeBytes: number; maxBytes: number }
+  /** The bytes are not a glTF 2.0 binary, whatever the file was called. */
+  | { outcome: 'NOT_A_GLB' }
+  /** S3 refused the promotion — the record is left FAILED, and visible as such. */
+  | { outcome: 'STORE_FAILED'; modelId: string }
+  | { outcome: 'CREATED'; model: IProjectModel };
+
+/**
+ * Promotes a staged GLB into a SUCCEEDED model record on the project.
+ *
+ * WHY A RECORD EXISTS BEFORE THE COPY. The artifacts key is derived from the
+ * record's own id (`{rawPrefix}models/{id}/model.glb` — the same scheme both
+ * worker processors use), so the record has to exist first. It starts
+ * PROCESSING and moves to SUCCEEDED only once the bytes are actually in the
+ * artifacts bucket: a crash in between leaves a PROCESSING row that is honest
+ * about what happened, never a SUCCEEDED row pointing at a URL that 404s.
+ *
+ * `source` is `manual` — a human made this model. That is the distinction the
+ * enum has always drawn against `meshy`, so the owner's viewer correctly shows
+ * no "Created by Maya AI" badge without a single client change.
+ *
+ * DOUBLE-SUBMIT is handled by the staging object itself rather than an
+ * Idempotency-Key: the staged key is deleted once promoted, so a replayed
+ * request finds nothing and returns UPLOAD_MISSING instead of adding a
+ * duplicate model to the owner's list. Two DIFFERENT uploads are two models on
+ * purpose — this is a history, exactly like generation.
+ */
+export async function submitUploadedModel(input: {
+  projectId: string;
+  key: string;
+  actor: ModelActor;
+}): Promise<SubmitUploadedModelResult> {
+  const { projectId, key, actor } = input;
+
+  const project = await Project.findOne({
+    _id: new Types.ObjectId(projectId),
+    deletedAt: null,
+  }).exec();
+  if (!project) return { outcome: 'PROJECT_NOT_FOUND' };
+
+  const job = await findExportableJob(projectId);
+  if (!job || !job.upload) return { outcome: 'NOT_EXPORTABLE' };
+
+  // Fail closed on containment, the same rule Create-Model applies to a photo
+  // key — plus the namespace check, so this route can only ever promote an
+  // object one of ITS OWN presigns created, never an arbitrary capture photo.
+  if (!isContainedRelativeKey(key) || !key.startsWith(MODEL_UPLOAD_KEY_PREFIX)) {
+    return { outcome: 'INVALID_KEY' };
+  }
+
+  const { rawBucket, rawPrefix } = job.upload;
+  const stagedKey = `${rawPrefix}${key}`;
+
+  const head = await headObject(rawBucket, stagedKey);
+  if (head.outcome === 'absent') return { outcome: 'UPLOAD_MISSING' };
+  const sizeBytes = head.contentLength;
+  if (sizeBytes <= 0) return { outcome: 'UPLOAD_MISSING' };
+  if (sizeBytes > env.MODEL_UPLOAD_MAX_BYTES) {
+    return { outcome: 'TOO_LARGE', sizeBytes, maxBytes: env.MODEL_UPLOAD_MAX_BYTES };
+  }
+
+  // Twelve bytes, not the file: the header comes through a ranged GET, so a
+  // 100 MiB model is never pulled into this process just to be identified.
+  const header = await getObjectHeadBytes(rawBucket, stagedKey, GLB_HEADER_BYTES);
+  if (header.outcome === 'absent') return { outcome: 'UPLOAD_MISSING' };
+  if (!isGlbHeader(header.body, sizeBytes)) return { outcome: 'NOT_A_GLB' };
+
+  const record = await ProjectModel.create({
+    projectId: project._id,
+    jobId: job._id,
+    source: 'manual' satisfies ModelSource,
+    status: 'PROCESSING' satisfies ModelStatus,
+    // No photos were selected — nothing generated this. An empty selection is
+    // the truthful answer, and every reader already treats the list as "the
+    // inputs a generation used", which for a submitted model is none.
+    selectedKeys: [],
+    createdByUserId: new Types.ObjectId(actor.userId),
+    createdByRole: actor.role,
+  });
+
+  const modelId = record.id as string;
+  const glbKey = `${rawPrefix}models/${modelId}/model.glb`;
+
+  try {
+    await copyObjectAcrossBuckets(rawBucket, stagedKey, BUCKET_ARTIFACTS, glbKey, GLB_CONTENT_TYPE);
+  } catch {
+    record.status = 'FAILED';
+    record.error = {
+      code: 'MODEL_UPLOAD_STORE_FAILED',
+      message: 'The model could not be stored. Please try submitting it again.',
+    };
+    await record.save();
+    return { outcome: 'STORE_FAILED', modelId };
+  }
+
+  record.status = 'SUCCEEDED';
+  record.artifacts = {
+    glbKey,
+    glbBytes: sizeBytes,
+    cdnUrls: { glb: `${CLOUDFRONT_BASE}/${glbKey}` },
+  };
+  await record.save();
+
+  // Best-effort: the deliverable is already in the artifacts bucket, and a
+  // staged object that outlives its submission is collected with the project.
+  // What this MUST do is make a replayed submit return UPLOAD_MISSING rather
+  // than add a second identical model — so it runs after the record is saved.
+  try {
+    await deleteObject(rawBucket, stagedKey);
+  } catch {
+    // Intentionally ignored — see above.
+  }
+
+  return { outcome: 'CREATED', model: record };
 }
 
 export type ReadProjectPhotoBytesResult =
