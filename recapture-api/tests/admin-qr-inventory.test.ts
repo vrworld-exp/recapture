@@ -412,6 +412,84 @@ describe('what the printed standee sheet actually says', () => {
   });
 });
 
+describe('the mark in the middle of the square', () => {
+  async function oneCode(adminId: string): Promise<string> {
+    const { batchId } = await mintBatch({
+      count: 1,
+      label: 'mark',
+      createdByUserId: new Types.ObjectId(adminId),
+    });
+    return (await QrCode.findOne({ batchId }).lean().exec())!.code;
+  }
+
+  /** How many pixels of a PNG are the mark's red — a bare code has none. */
+  async function redPixels(png: Buffer): Promise<number> {
+    const image = await Jimp.read(png);
+    const { data } = image.bitmap;
+    let count = 0;
+    for (let at = 0; at < data.length; at += 4) {
+      if (data[at]! > 150 && data[at + 1]! < 100 && data[at + 2]! < 100) count++;
+    }
+    return count;
+  }
+
+  it('is drawn into the PNG, in colour, and the code still decodes around it', async () => {
+    const admin = await makeUser('ADMIN');
+    const code = await oneCode(admin.id);
+
+    const res = await request(app)
+      .get(`/admin/qr-codes/${code}/qr`)
+      .query({ format: 'png' })
+      .set(admin.auth)
+      .buffer(true);
+
+    expect(res.status).toBe(200);
+    // A bare code is black and white only; the mark's X is red.
+    expect(await redPixels(res.body)).toBeGreaterThan(0);
+    // THE LOAD-BEARING HALF. The mark sits in a hole punched through the data,
+    // and the code only survives that at error-correction level H. This decodes
+    // the actual bytes a phone would see, artwork and all.
+    expect(await decodeQr(res.body)).toBe(resolverUrlFor(code));
+  });
+
+  it('still decodes at the smallest size the API will render', async () => {
+    const admin = await makeUser('ADMIN');
+    const code = await oneCode(admin.id);
+
+    const res = await request(app)
+      .get(`/admin/qr-codes/${code}/qr`)
+      .query({ format: 'png', size: 1 })
+      .set(admin.auth)
+      .buffer(true);
+
+    // At 256px the mark is a few dozen pixels across and the modules a handful
+    // each — the render where a hole in the data would first stop reading.
+    expect(await decodeQr(res.body)).toBe(resolverUrlFor(code));
+  });
+
+  it('is drawn into the PDF over the same square, from a Flate RGB image', async () => {
+    const admin = await makeUser('ADMIN');
+    const code = await oneCode(admin.id);
+
+    const res = await request(app)
+      .get(`/admin/qr-codes/${code}/qr`)
+      .query({ format: 'pdf' })
+      .set(admin.auth)
+      .responseType('blob');
+    const pdf = res.body.toString('latin1');
+
+    // The artwork is its own XObject, drawn once, clipped to a rounded square
+    // (`W n`) and placed with an equal-axis matrix like the code itself.
+    expect(pdf.match(/\/Logo Do/g)).toHaveLength(1);
+    expect(pdf).toContain('/ColorSpace /DeviceRGB /BitsPerComponent 8');
+    expect(pdf).toContain('W n');
+    // The QR itself is still the 1-bit image the monochrome test above pins,
+    // and nothing on the page is a JPEG.
+    expect(pdf).toContain('/BitsPerComponent 1');
+    expect(pdf).not.toContain('/DCTDecode');
+  });
+});
+
 describe('bulk assignment at mint time', () => {
   it('hands the whole run to one rep in a single call', async () => {
     const admin = await makeUser('ADMIN');

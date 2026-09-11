@@ -63,7 +63,7 @@ import {
   listRepStandees,
   listRepPublishedStandees,
 } from '@/services/standeeAssignmentService';
-import { renderStandeeSheet } from '@/services/standeeSheetService';
+import { renderStandeeSheet, STANDEE_ARTWORK_VERSION } from '@/services/standeeSheetService';
 import { QrResolverNotConfiguredError } from '@/services/qrCodeService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 import {
@@ -1410,9 +1410,15 @@ router.get(
       );
     }
 
-    // The SAME key the admin route uses — url, format, size and nothing else —
-    // so the two endpoints agree that identical bytes have an identical tag.
-    const etag = strongETag({ url: rendered.url, format, size: rendered.size });
+    // The SAME key the admin route uses — url, format, size, artwork version
+    // and nothing else — so the two endpoints agree that identical bytes have
+    // an identical tag.
+    const etag = strongETag({
+      url: rendered.url,
+      format,
+      size: rendered.size,
+      artwork: STANDEE_ARTWORK_VERSION,
+    });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {

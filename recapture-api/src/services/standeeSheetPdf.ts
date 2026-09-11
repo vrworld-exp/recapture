@@ -36,11 +36,15 @@ import {
   HELVETICA_BOLD_OBJECT,
   HELVETICA_OBJECT,
   imageXObject,
+  logoOperators,
   matrixFor,
   pdfText,
   proportionalInkWidth,
   PT_PER_INCH,
   qrBitmap1Bit,
+  rgbImageXObject,
+  type QrMatrix,
+  type RgbBitmap,
 } from '@/services/pdfPrimitives';
 
 // ── Fixed geometry ──────────────────────────────────────────────────────────
@@ -189,15 +193,23 @@ export interface StandeeSheetItem {
   url: string;
 }
 
+/** The page-local name every card draws the mark under; one object behind it. */
+const LOGO_RESOURCE = '/Logo';
+
 /**
  * One card's drawing operators, positioned at its bottom-left corner.
  *
  * `imageName` is the page-local resource (`/Im0`, `/Im1`, …) — names are scoped
  * to the page's own resource dictionary, so card 0 of every page is `/Im0` and
- * only the OBJECT number behind it differs.
+ * only the OBJECT number behind it differs. The mark is [LOGO_RESOURCE] on every
+ * card and every page, and there is exactly one object behind that.
+ *
+ * `matrix` is the one this card's bitmap was packed from — the well is read
+ * off it, so the mark lands where the modules were cleared and nowhere else.
  */
 function drawCard(
   item: StandeeSheetItem,
+  matrix: QrMatrix,
   tagline: string,
   layout: StandeeSheetLayout,
   imageName: string,
@@ -235,6 +247,9 @@ function drawCard(
     `${layout.qrSidePt.toFixed(2)} 0 0 ${layout.qrSidePt.toFixed(2)} ${qrX.toFixed(2)} ${qrY.toFixed(2)} cm`,
     `${imageName} Do`,
     'Q',
+    // The mark, over the well the matrix left white. Same helper as the one-up
+    // sheet, so a card cut off this page carries it at the same proportion.
+    logoOperators(matrix, qrX, qrY, layout.qrSidePt, LOGO_RESOURCE),
     // Tc opens the characters up so each is read on its own — the single biggest
     // legibility win on a string nobody can guess from context. Reset to 0
     // before the tagline, or the spacing leaks into prose and looks broken.
@@ -271,11 +286,16 @@ function drawFooter(text: string): string {
  * The whole batch as a multi-page A4 PDF.
  *
  * OBJECT NUMBERING, which is the only structurally fiddly part: 1 catalog,
- * 2 pages, 3 and 4 the two base fonts, then a page/contents PAIR per page, then
- * every image after that. Fonts come before the pages so their numbers are
- * fixed constants a page dictionary can name; images come last so the first
- * image's number is a function of the page count, which is known before any
- * bitmap is built. Nothing here has to be renumbered when a batch gets longer.
+ * 2 pages, 3 and 4 the two base fonts, 5 the mark, then a page/contents PAIR
+ * per page, then every code image after that. Fonts and the mark come before
+ * the pages so their numbers are fixed constants a page dictionary can name;
+ * code images come last so the first one's number is a function of the page
+ * count, which is known before any bitmap is built. Nothing here has to be
+ * renumbered when a batch gets longer.
+ *
+ * THE MARK IS ONE OBJECT, however many cards there are. Five hundred cards are
+ * five hundred small 1-bit codes and one 320px RGB picture, not five hundred
+ * pictures — every card's content stream names the same resource.
  *
  * Deterministic, like every other PDF in this codebase: the same batch renders
  * byte-identical bytes twice, because nothing timestamps and `imageXObject`
@@ -287,14 +307,24 @@ export function buildStandeeSheetPdf(params: {
   tagline: string;
   /** The batch, named on every page's footer. */
   label: string;
+  /** The mark, already decoded — see `qrLogoForPdf`. */
+  logo: RgbBitmap;
 }): Buffer {
-  const { items, tagline, label } = params;
+  const { items, tagline, label, logo } = params;
   const layout = computeSheetLayout();
   const pageCount = Math.max(1, Math.ceil(items.length / layout.perPage));
 
-  // 1 catalog, 2 pages, 3 /F1, 4 /F2; then two objects per page; then images.
-  const FIRST_PAGE_OBJ = 5;
+  // 1 catalog, 2 pages, 3 /F1, 4 /F2, 5 the mark; then two objects per page;
+  // then the code images.
+  const LOGO_OBJ = 5;
+  const FIRST_PAGE_OBJ = 6;
   const firstImageObj = FIRST_PAGE_OBJ + pageCount * 2;
+
+  // Encoded up front rather than in the image loop below, because a card's
+  // operators need its matrix (for the well) before its bitmap is packed. The
+  // matrices are small — a few hundred booleans behind a closure each — so
+  // holding all of them is nothing like holding all the bitmaps would be.
+  const matrices = items.map((item) => matrixFor(item.url, { logoWell: true }));
 
   const pageObjects: Buffer[] = [];
   const contentObjects: Buffer[] = [];
@@ -318,7 +348,9 @@ export function buildStandeeSheetPdf(params: {
         layout.originY +
         (layout.rows - 1 - row) * (layout.cardHeight + CARD_GUTTER_PT);
 
-      ops.push(drawCard(item, tagline, layout, `/Im${slot}`, x, y));
+      ops.push(
+        drawCard(item, matrices[start + slot]!, tagline, layout, `/Im${slot}`, x, y)
+      );
       resources.push(`/Im${slot} ${firstImageObj + start + slot} 0 R`);
     });
 
@@ -335,7 +367,7 @@ export function buildStandeeSheetPdf(params: {
     pageObjects.push(
       Buffer.from(
         `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4_WIDTH_PT} ${A4_HEIGHT_PT}] ` +
-          `/Resources << /XObject << ${resources.join(' ')} >> ` +
+          `/Resources << /XObject << ${resources.join(' ')} ${LOGO_RESOURCE} ${LOGO_OBJ} 0 R >> ` +
           `/Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentsObj} 0 R >>`
       )
     );
@@ -352,6 +384,7 @@ export function buildStandeeSheetPdf(params: {
     Buffer.from(`<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`),
     Buffer.from(HELVETICA_OBJECT),
     Buffer.from(HELVETICA_BOLD_OBJECT),
+    rgbImageXObject(logo),
   ];
   for (let page = 0; page < pageCount; page++) {
     objects.push(pageObjects[page]!, contentObjects[page]!);
@@ -361,8 +394,7 @@ export function buildStandeeSheetPdf(params: {
   // resident at a time. At 300dpi a card's raw buffer is tens of kilobytes and
   // its Flate form is about one — holding five hundred of the former would be
   // the difference between a large response and an out-of-memory.
-  for (const item of items) {
-    const matrix = matrixFor(item.url);
+  for (const matrix of matrices) {
     // The scale follows FROM the physical size and the DPI setting rather than
     // being a tuning constant: enough whole pixels per module to clear
     // `qrPixels` across the square. Whole, because a fractional scale makes some

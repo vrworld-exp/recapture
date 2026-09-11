@@ -130,11 +130,15 @@ function envelope(res: { body: Buffer }): { code: string; message: string } {
  * `latin1` is one byte per character, so an index into the decoded string is a
  * byte offset into the buffer — which is what makes it safe to find a stream
  * header by regex and then slice the BINARY payload out of the Buffer.
+ *
+ * Matched on `/BitsPerComponent 1` so the MARK — the one 8-bit RGB image the
+ * sheet also carries — is not mistaken for a code. It is not one, and decoding
+ * it as one would put a null in the list below.
  */
 function extractImages(pdf: Buffer): { side: number; raw: Buffer }[] {
   const text = pdf.toString('latin1');
   const header =
-    /<< \/Type \/XObject \/Subtype \/Image \/Width (\d+) \/Height (\d+) [^>]*?\/Length (\d+) >>\nstream\n/g;
+    /<< \/Type \/XObject \/Subtype \/Image \/Width (\d+) \/Height (\d+) \/ColorSpace \/DeviceGray \/BitsPerComponent 1 [^>]*?\/Length (\d+) >>\nstream\n/g;
 
   const images: { side: number; raw: Buffer }[] = [];
   for (let match = header.exec(text); match; match = header.exec(text)) {
@@ -173,6 +177,20 @@ function decodeImage(image: { side: number; raw: Buffer }): string | null {
   }
 
   return jsQR(rgba, image.side, image.side)?.data ?? null;
+}
+
+/**
+ * Every `cm` matrix that places a CODE on the page: `a 0 0 d x y cm` followed
+ * by the code's own `Do`. The mark inside each code is placed the same way but
+ * draws `/Logo`, so a count of these is a count of squares, not of pictures.
+ */
+function codePlacements(pdf: string): RegExpMatchArray[] {
+  return [...pdf.matchAll(/([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm\n\/Im\d+ Do/g)];
+}
+
+/** The same, for the mark. */
+function markPlacements(pdf: string): RegExpMatchArray[] {
+  return [...pdf.matchAll(/([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm\n\/Logo Do/g)];
 }
 
 // ── The load-bearing assertion ──────────────────────────────────────────────
@@ -223,9 +241,14 @@ describe('the printed size of the square', () => {
     // Equal width and height by construction: one number, twice, so nothing
     // downstream can stretch the code into a rectangle.
     expect(pdf).toContain(`${QR_SIDE_PT} 0 0 ${QR_SIDE_PT} `);
-    const squares = [...pdf.matchAll(/([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm/g)];
+    const squares = codePlacements(pdf);
     expect(squares).toHaveLength(2);
     for (const square of squares) expect(square[1]).toBe(square[2]);
+    // The mark inside each code is placed the same way, so it cannot be
+    // stretched any more than the code can.
+    const marks = markPlacements(pdf);
+    expect(marks).toHaveLength(2);
+    for (const mark of marks) expect(mark[1]).toBe(mark[2]);
   });
 
   it('does not scale the square to fit more on a page — the GRID gives way', async () => {
@@ -292,7 +315,7 @@ describe('paging a batch across A4 sheets', () => {
       expect(res.headers['x-standee-sheet-pages']).toBe(String(pages));
       expect(res.headers['x-standee-sheet-standees']).toBe(String(codes));
       // Every code is on the paper exactly once, however many pages that took.
-      expect([...pdf.matchAll(/ 0 0 [\d.]+ [\d.]+ [\d.]+ cm/g)]).toHaveLength(codes);
+      expect(codePlacements(pdf)).toHaveLength(codes);
 
       await QrCode.deleteMany({ batchId });
       await QrBatch.deleteOne({ _id: batchId });
@@ -314,7 +337,7 @@ describe('paging a batch across A4 sheets', () => {
     expect(res.headers['x-standee-sheet-pages']).toBe('1');
     expect(pdf).toContain('/Count 1');
 
-    const squares = [...pdf.matchAll(/([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm/g)];
+    const squares = codePlacements(pdf);
     expect(squares).toHaveLength(9);
     for (const square of squares) expect(square[1]).toBe(QR_SIDE_PT);
 
@@ -351,14 +374,14 @@ describe('paging a batch across A4 sheets', () => {
 
     // The fiddly part of writing a PDF by hand, and the part multi-page makes
     // fiddlier: every offset in the xref must be the exact byte position of its
-    // object. Twenty codes over three pages is 4 + 6 + 20 = 30 of them.
+    // object. Twenty codes over three pages is 4 + 1 (the mark) + 6 + 20 = 31.
     const startxref = Number(
       pdf.slice(pdf.lastIndexOf('startxref') + 9).trim().split('\n')[0]
     );
     expect(pdf.slice(startxref, startxref + 4)).toBe('xref');
 
     const offsets = [...pdf.matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
-    expect(offsets).toHaveLength(30);
+    expect(offsets).toHaveLength(31);
     offsets.forEach((offset, index) => {
       expect(pdf.slice(offset, offset + `${index + 1} 0 obj`.length)).toBe(
         `${index + 1} 0 obj`
@@ -406,6 +429,22 @@ describe('what the card says', () => {
     }
   });
 
+  it('carries the mark in the middle of every square, from ONE object', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 11);
+
+    const res = await fetchSheet(admin.auth, batchId.toString());
+    const pdf = res.body.toString('latin1');
+
+    // Drawn once per card, across both pages...
+    expect(pdf.match(/\/Logo Do/g)).toHaveLength(11);
+    // ...from a single RGB image, however many cards there are. Five hundred
+    // cards must not mean five hundred copies of the artwork.
+    expect(pdf.match(/\/ColorSpace \/DeviceRGB/g)).toHaveLength(1);
+    // And never as a JPEG — flat colour with hard edges, like the code itself.
+    expect(pdf).not.toContain('/DCTDecode');
+  });
+
   it('draws a cut guide around each card', async () => {
     const admin = await makeUser('ADMIN');
     const { batchId } = await seedBatch(admin.id, 2);
@@ -444,7 +483,7 @@ describe('retired codes', () => {
 
     expect(res.status).toBe(200);
     expect(pdf).not.toContain(`(${codes[0]!.code}) Tj`);
-    expect([...pdf.matchAll(/ 0 0 [\d.]+ [\d.]+ [\d.]+ cm/g)]).toHaveLength(4);
+    expect(codePlacements(pdf)).toHaveLength(4);
     // "I asked for 5 and got 4" reads as a bug unless something says why, and by
     // the time the PDF is open there is nowhere left to say it.
     expect(res.headers['x-standee-sheet-skipped-retired']).toBe('1');

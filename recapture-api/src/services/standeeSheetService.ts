@@ -19,10 +19,25 @@
 import type { IQrCode } from '@/models/QrCode';
 import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { resolverUrlFor, slugifyBatchLabel, type BatchSheetSource } from '@/services/qrCodeService';
+import { qrLogoForPdf } from '@/services/qrLogo';
 import { buildStandeeSheetPdf, computeSheetLayout } from '@/services/standeeSheetPdf';
 
 /** The line printed under every standee code. */
 export const STANDEE_TAGLINE = 'Created for mirage menu';
+
+/**
+ * WHAT A STANDEE LOOKS LIKE, as a version, for the ETags.
+ *
+ * Every standee endpoint keys its ETag on the INPUTS to the render — the URL,
+ * the size, the layout settings — because that is cheaper than rendering to
+ * find out. The cost of that shortcut is that a change to the rendering itself
+ * changes none of the inputs, so a client holding last month's sheet keeps
+ * being told 304 and never sees the new one. This token is the missing input:
+ * bump it whenever the drawing changes for the same URL and settings (the mark
+ * appearing in the middle was the first such change), and every cached copy
+ * is stale at once. Bumping it for nothing costs one re-download per client.
+ */
+export const STANDEE_ARTWORK_VERSION = 'mark-1';
 
 export type StandeeSheetFormat = 'png' | 'pdf';
 
@@ -75,6 +90,9 @@ export async function renderStandeeSheet(params: {
     // one line saying what the sheet is, for whoever finds it in a drawer.
     standeeCode: record.code,
     standeeTagline: STANDEE_TAGLINE,
+    // The Mayasabha mark in the middle of the square — the thing that makes a
+    // standee read as ours on a table full of other people's payment codes.
+    logo: true,
   });
 
   return {
@@ -111,14 +129,20 @@ export interface RenderedBatchSheet {
  * for — same contract as [renderStandeeSheet], which takes a record rather than
  * a code. Nothing here knows who may print a batch.
  */
-export function renderBatchStandeeSheet(source: BatchSheetSource): RenderedBatchSheet {
+export async function renderBatchStandeeSheet(
+  source: BatchSheetSource
+): Promise<RenderedBatchSheet> {
   const layout = computeSheetLayout();
+  // Async only for this: the mark is decoded once per process and awaited
+  // here, so the sheet builder itself can stay a pure function of its inputs.
+  const logo = await qrLogoForPdf();
 
   return {
     body: buildStandeeSheetPdf({
       items: source.items,
       tagline: STANDEE_TAGLINE,
       label: source.label,
+      logo,
     }),
     contentType: 'application/pdf',
     // Named for the batch, like the vendor CSV beside it — an admin with a

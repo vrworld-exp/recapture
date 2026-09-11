@@ -43,18 +43,25 @@ import {
   HELVETICA_BOLD_OBJECT,
   HELVETICA_OBJECT,
   imageXObject,
+  logoBox,
+  logoOperators,
   matrixFor,
   pdfText,
   proportionalInkWidth,
   QR_ERROR_CORRECTION,
+  QR_LOGO_ERROR_CORRECTION,
   QR_QUIET_ZONE,
   qrBitmap1Bit,
+  rgbImageXObject,
   type QrBitmap,
+  type QrMatrix,
+  type RgbBitmap,
 } from '@/services/pdfPrimitives';
+import { qrLogoForPdf, qrLogoOverlay } from '@/services/qrLogo';
 
-// Re-exported because this module was their home before the split, and both are
+// Re-exported because this module was their home before the split, and all are
 // part of "what every issued code looks like" rather than of PDF plumbing.
-export { QR_ERROR_CORRECTION, QR_QUIET_ZONE };
+export { QR_ERROR_CORRECTION, QR_LOGO_ERROR_CORRECTION, QR_QUIET_ZONE };
 
 export const QR_DEFAULT_SIZE = 1024;
 export const QR_MIN_SIZE = 256;
@@ -74,9 +81,15 @@ export function clampQrSize(requested: number | undefined): number {
  * blurred QR is one a phone camera has to work harder to read — at small print
  * sizes, one it fails to read at all. sharp's default is a Lanczos-family
  * kernel, so this is a deliberate override, not a default being restated.
+ *
+ * With `logo` the matrix arrives with its well already white (see `matrixFor`)
+ * and the mark is composited into the box inside it AFTER the nearest-neighbour
+ * upscale, so the modules are never resampled and the artwork never is by
+ * `nearest`. The composite lands on whole-module pixel boundaries because the
+ * box is in modules and the scale is a whole number.
  */
-async function renderPng(text: string, size: number): Promise<Buffer> {
-  const matrix = matrixFor(text);
+async function renderPng(text: string, size: number, logo: boolean): Promise<Buffer> {
+  const matrix = matrixFor(text, { logoWell: logo });
   const raw = Buffer.alloc(matrix.size * matrix.size, 0xff);
   for (let y = 0; y < matrix.size; y++) {
     for (let x = 0; x < matrix.size; x++) {
@@ -91,12 +104,19 @@ async function renderPng(text: string, size: number): Promise<Buffer> {
   const scale = Math.max(1, Math.floor(size / matrix.size));
   const rendered = matrix.size * scale;
 
-  return sharp(raw, {
+  let image = sharp(raw, {
     raw: { width: matrix.size, height: matrix.size, channels: 1 },
-  })
-    .resize(rendered, rendered, { kernel: 'nearest' })
-    .png({ compressionLevel: 9, palette: false })
-    .toBuffer();
+  }).resize(rendered, rendered, { kernel: 'nearest' });
+
+  if (logo) {
+    const box = logoBox(matrix);
+    const overlay = await qrLogoOverlay(box.side * scale);
+    // sharp promotes the greyscale base to RGBA for a colour overlay on its
+    // own; nothing outside the box is touched, so the modules stay pure.
+    image = image.composite([{ input: overlay, left: box.x * scale, top: box.y * scale }]);
+  }
+
+  return image.png({ compressionLevel: 9, palette: false }).toBuffer();
 }
 
 // ── PDF ─────────────────────────────────────────────────────────────────────
@@ -139,10 +159,16 @@ function halfWidth(text: string, fontSize: number): number {
  * nothing is licensed). The xref offsets are computed from the actual byte
  * lengths as the file is assembled, which is the only fiddly part and the part
  * the test pins.
+ *
+ * With `logo` there is one more object — the mark as an RGB XObject, numbered
+ * LAST so nothing before it moves — and one more block of operators after the
+ * code, drawing it into the well. `matrix` is the one the bitmap was packed
+ * from; the well's position is read off it, not recomputed.
  */
 function buildPdf(
   image: QrBitmap,
-  caption: { primary: string; secondary: string; primaryCode: boolean }
+  caption: { primary: string; secondary: string; primaryCode: boolean },
+  logo?: { matrix: QrMatrix; artwork: RgbBitmap }
 ): Buffer {
   const qrSide = 360;
   const qrX = (A4_WIDTH_PT - qrSide) / 2;
@@ -171,6 +197,8 @@ function buildPdf(
     `${qrSide} 0 0 ${qrSide} ${qrX.toFixed(2)} ${qrY.toFixed(2)} cm`,
     '/Im0 Do',
     'Q',
+    // The mark goes down AFTER the code, over the well the matrix left white.
+    ...(logo ? [logoOperators(logo.matrix, qrX, qrY, qrSide, '/Logo')] : []),
     `BT ${primaryFont} ${primarySize} Tf`,
     // Tc opens the characters up so each is read on its own — the single
     // biggest legibility win on a string nobody can guess from context. Reset
@@ -186,17 +214,23 @@ function buildPdf(
     'ET',
   ].join('\n');
 
+  // 1 catalog, 2 pages, 3 page, 4 contents, 5 the code, 6 and 7 the fonts, and
+  // 8 the mark when there is one — last, so a plain sheet's numbering is
+  // exactly what it was before the mark existed.
+  const xobjects = logo ? '/Im0 5 0 R /Logo 8 0 R' : '/Im0 5 0 R';
+
   return assemblePdf([
     Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
     Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
     Buffer.from(
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4_WIDTH_PT} ${A4_HEIGHT_PT}] ` +
-        '/Resources << /XObject << /Im0 5 0 R >> /Font << /F1 6 0 R /F2 7 0 R >> >> /Contents 4 0 R >>'
+        `/Resources << /XObject << ${xobjects} >> /Font << /F1 6 0 R /F2 7 0 R >> >> /Contents 4 0 R >>`
     ),
     contentStreamObject(content),
     imageXObject(image),
     Buffer.from(HELVETICA_OBJECT),
     Buffer.from(HELVETICA_BOLD_OBJECT),
+    ...(logo ? [rgbImageXObject(logo.artwork)] : []),
   ]);
 }
 
@@ -247,9 +281,26 @@ export async function renderCatalogQr(params: {
    */
   standeeCode?: string;
   standeeTagline?: string;
+  /**
+   * Draw the Mayasabha mark in the middle of the square.
+   *
+   * ⚠ THIS CHANGES THE PATTERN, not just the picture: a code with the mark is
+   * encoded at level H with a well cleared in its centre, so the same URL
+   * produces a different arrangement of modules than it does without. Both
+   * arrangements decode to the same string — a square already printed keeps
+   * working — but a caller that has promised byte-identity across renders must
+   * pass the same value every time, and a caller whose squares are already on
+   * stickers in the world (the owner's catalog QR) should not flip it on the
+   * printed ones without meaning to.
+   *
+   * The standee sheets pass it; the owner's catalog QR does not, deliberately,
+   * so that surface's bytes are exactly what they were before the mark existed.
+   */
+  logo?: boolean;
 }): Promise<RenderedQr> {
   const size = clampQrSize(params.size);
-  const png = await renderPng(params.publicUrl, size);
+  const logo = params.logo === true;
+  const png = await renderPng(params.publicUrl, size, logo);
   const slug = filenameSlug(params.catalogName);
 
   if (params.format === 'png') {
@@ -259,7 +310,8 @@ export async function renderCatalogQr(params: {
   // Straight from the matrix — the PNG above is not re-encoded into the PDF at
   // all any more. See qrBitmap1Bit for why a JPEG was the wrong container for
   // an image made entirely of hard edges.
-  const bitmap = qrBitmap1Bit(matrixFor(params.publicUrl), PDF_MODULE_SCALE);
+  const matrix = matrixFor(params.publicUrl, { logoWell: logo });
+  const bitmap = qrBitmap1Bit(matrix, PDF_MODULE_SCALE);
 
   return {
     body: buildPdf(
@@ -274,21 +326,10 @@ export async function renderCatalogQr(params: {
             primary: params.catalogName,
             secondary: params.publicUrl,
             primaryCode: false,
-          }
+          },
+      logo ? { matrix, artwork: await qrLogoForPdf() } : undefined
     ),
     contentType: 'application/pdf',
     filename: `${slug}-qr.pdf`,
   };
 }
-
-/**
- * A SEAM, not a feature: feature 34's "put the business logo in the middle" is
- * still an open question (Q12), and the answer changes the error-correction
- * level it needs. Documented here so the next person adds it in one place
- * instead of threading a flag through four.
- *
- * Whoever implements it: raise QR_ERROR_CORRECTION to 'H' FIRST. Punching a hole
- * in a level-M code destroys more codewords than it can recover, and the result
- * scans on the developer's phone and fails on a customer's.
- */
-export const QR_LOGO_SUPPORTED = false;

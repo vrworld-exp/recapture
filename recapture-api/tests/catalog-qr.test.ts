@@ -317,6 +317,31 @@ describe('GET /catalog/qr?format=pdf', () => {
     expect(pdf).toContain('/Subtype /Image');
   });
 
+  it('carries NO mark — this square is already on stickers in the world', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    const publicUrl = await publish(auth);
+
+    const pdf = await request(app).get('/catalog/qr?format=pdf').set(auth).buffer(true);
+    const png = await request(app).get('/catalog/qr?format=png').set(auth).buffer(true);
+
+    // The standee sheets draw the Mayasabha mark in the middle of the code.
+    // That changes the PATTERN (level H, a well cleared in the centre), and an
+    // owner's QR that has been printed must keep rendering the pattern that
+    // was printed. So: one image, no RGB, and a PNG that is black and white.
+    const text = pdf.body.toString('latin1');
+    expect(text.match(/\/Subtype \/Image/g)).toHaveLength(1);
+    expect(text).not.toContain('/DeviceRGB');
+    expect(text).not.toContain('/Logo');
+
+    const image = await Jimp.read(png.body);
+    const { width, height, data } = image.bitmap;
+    const at = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
+    expect(data[at]).toBe(data[at + 1]);
+    expect(data[at + 1]).toBe(data[at + 2]);
+    expect(await decodeQr(png.body)).toBe(publicUrl);
+  });
+
   it('is byte-identical across calls — no embedded creation date', async () => {
     const { id, auth } = await makeUser();
     await seed(id);

@@ -86,7 +86,11 @@ import {
   type AssignStandeeInput,
   type MintQrBatchInput,
 } from '@/validation/qrSchemas';
-import { renderBatchStandeeSheet, renderStandeeSheet } from '@/services/standeeSheetService';
+import {
+  renderBatchStandeeSheet,
+  renderStandeeSheet,
+  STANDEE_ARTWORK_VERSION,
+} from '@/services/standeeSheetService';
 import { StandeeSheetLayoutError } from '@/services/standeeSheetPdf';
 import {
   assignBatchCodes,
@@ -1638,6 +1642,8 @@ router.get(
         env.STANDEE_SHEET_ROWS,
       ],
       label: source.label,
+      // And what a card LOOKS like — the one input the others cannot express.
+      artwork: STANDEE_ARTWORK_VERSION,
     });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
@@ -1648,7 +1654,7 @@ router.get(
 
     let sheet;
     try {
-      sheet = renderBatchStandeeSheet(source);
+      sheet = await renderBatchStandeeSheet(source);
     } catch (err) {
       if (err instanceof StandeeSheetLayoutError) {
         res.status(409).json({
@@ -1850,8 +1856,14 @@ router.get(
     // code's STATE is deliberately absent: activating a standee does not change
     // what it encodes, which is the entire premise of the resolver. Nor is the
     // HOLDER — assigning a standee does not alter one pixel of the sheet, so a
-    // reassignment must not invalidate a cached copy.
-    const etag = strongETag({ url: rendered.url, format, size: rendered.size });
+    // reassignment must not invalidate a cached copy. The ARTWORK version is,
+    // because a change to the drawing is invisible to every other key.
+    const etag = strongETag({
+      url: rendered.url,
+      format,
+      size: rendered.size,
+      artwork: STANDEE_ARTWORK_VERSION,
+    });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {

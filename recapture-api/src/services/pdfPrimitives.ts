@@ -37,13 +37,60 @@ export const PT_PER_INCH = 72;
 
 /** Fixed rendering parameters. Changing any of these changes every issued code. */
 export const QR_ERROR_CORRECTION = 'M' as const;
+/**
+ * The level a code carries when the MARK is punched into its middle.
+ *
+ * ⚠ 'H' IS NOT A PREFERENCE, IT IS THE PRICE OF THE HOLE. Level H can rebuild
+ * up to 30% of its codewords; the well below takes out under a tenth, and the
+ * rest is the margin a printed square needs for a thumb, a coffee ring and a
+ * phone camera at an angle. Punching the same hole in a level-M code (15%)
+ * scans on the developer's phone and fails on a customer's, which is the worst
+ * kind of bug to have in something already glued to a table.
+ */
+export const QR_LOGO_ERROR_CORRECTION = 'H' as const;
 /** Modules of white margin. Four is the spec's minimum for reliable scanning. */
 export const QR_QUIET_ZONE = 4;
+
+/**
+ * The white well the mark sits in, as a fraction of the CODE'S OWN side (quiet
+ * zone excluded), before it is snapped to a whole odd number of modules.
+ *
+ * Three-tenths puts the drawn tile at about a fifth of the printed square,
+ * which is the proportion the payment apps settled on — the square reads as a
+ * QR with a badge in it, not as a logo with some dots around it — and it costs
+ * under 9% of the modules at every version a URL produces (a quarter looked
+ * timid next to a Google Pay code on the same table; it was tried). Odd, so
+ * the well is centred on the grid: the code's side is always odd (21 + 4n),
+ * and an odd well leaves the same whole number of modules on each side of it.
+ */
+export const QR_LOGO_WELL_FRACTION = 0.3;
+
+/**
+ * Modules of white between the well's edge and the artwork.
+ *
+ * The same unit as the quiet zone and for the same reason: a scanner locating
+ * modules wants the dark artwork separated from the dark modules by a stripe
+ * of clean white, and one module is the stripe it already knows how to read
+ * past. It is also what makes the mark look badged rather than pasted on.
+ */
+export const QR_LOGO_WELL_PADDING = 1;
+
+/** A square of modules, top-left origin, quiet zone included in the coordinates. */
+export interface ModuleSquare {
+  x: number;
+  y: number;
+  side: number;
+}
 
 export interface QrMatrix {
   /** Side in MODULES, quiet zone included. */
   size: number;
   isDark(x: number, y: number): boolean;
+  /**
+   * The white well carved for the mark, when the matrix was built with one.
+   * Modules inside it always read light; the artwork is drawn over it later.
+   */
+  well?: ModuleSquare;
 }
 
 /**
@@ -53,21 +100,67 @@ export interface QrMatrix {
  * leaves rendering to us. That separation is what lets the PNG be produced by
  * sharp — one image library in the tree — and what makes the output a pure
  * function of the text.
+ *
+ * With `logoWell` the code is encoded at [QR_LOGO_ERROR_CORRECTION] and a
+ * centred square of modules is CLEARED in the matrix itself, not merely painted
+ * over downstream. That is what makes the hole part of every rendering — the
+ * PNG, the one-up PDF and the batch sheet all raster the same matrix — and it
+ * is what lets a test decode the embedded bitmap and prove the holed code still
+ * reads, rather than proving that a bitmap nobody prints reads.
  */
-export function matrixFor(text: string): QrMatrix {
-  const qr = QRCode.create(text, { errorCorrectionLevel: QR_ERROR_CORRECTION });
+export function matrixFor(text: string, options: { logoWell?: boolean } = {}): QrMatrix {
+  const qr = QRCode.create(text, {
+    errorCorrectionLevel: options.logoWell ? QR_LOGO_ERROR_CORRECTION : QR_ERROR_CORRECTION,
+  });
   const inner = qr.modules.size;
   const size = inner + QR_QUIET_ZONE * 2;
 
+  const well = options.logoWell ? wellFor(inner) : undefined;
+
   return {
     size,
+    well,
     isDark(x, y) {
+      if (
+        well &&
+        x >= well.x &&
+        y >= well.y &&
+        x < well.x + well.side &&
+        y < well.y + well.side
+      ) {
+        return false;
+      }
       const mx = x - QR_QUIET_ZONE;
       const my = y - QR_QUIET_ZONE;
       if (mx < 0 || my < 0 || mx >= inner || my >= inner) return false;
       return Boolean(qr.modules.get(mx, my));
     },
   };
+}
+
+/** The well for a code of `inner` modules a side: the nearest odd size, centred. */
+function wellFor(inner: number): ModuleSquare {
+  const wanted = inner * QR_LOGO_WELL_FRACTION;
+  // Nearest ODD integer to `wanted`. `inner` is odd by the QR spec, so an odd
+  // well leaves equal whole-module margins on both sides and lands on the grid.
+  const side = 2 * Math.round((wanted - 1) / 2) + 1;
+  const offset = QR_QUIET_ZONE + (inner - side) / 2;
+  return { x: offset, y: offset, side };
+}
+
+/**
+ * Where the ARTWORK goes: the well, inset by [QR_LOGO_WELL_PADDING] on each side.
+ *
+ * Throws on a matrix built without a well rather than inventing a place — a
+ * mark drawn over live modules is exactly what the well exists to prevent.
+ */
+export function logoBox(matrix: QrMatrix): ModuleSquare {
+  if (!matrix.well) {
+    throw new Error('logoBox: matrix was built without a logo well');
+  }
+  const { x, y, side } = matrix.well;
+  const pad = QR_LOGO_WELL_PADDING;
+  return { x: x + pad, y: y + pad, side: side - pad * 2 };
 }
 
 export interface QrBitmap {
@@ -121,7 +214,8 @@ export function qrBitmap1Bit(matrix: QrMatrix, scale: number): QrBitmap {
 export function pdfText(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 }
-/**
+
+/**
  * Typographic characters a person actually types, and their ASCII stand-ins.
  *
  * The non-breaking space is written as an escape rather than pasted in: a
@@ -251,6 +345,116 @@ export function imageXObject(image: QrBitmap): Buffer {
     compressed,
     Buffer.from('\nendstream'),
   ]);
+}
+
+export interface RgbBitmap {
+  /** Packed 8-bit RGB, three bytes a pixel, no alpha. */
+  data: Buffer;
+  /** Side in PIXELS. */
+  side: number;
+}
+
+/**
+ * One 8-bit RGB image XObject, Flate-compressed — the container for the MARK.
+ *
+ * Flate and not DCT for the same reason the code itself is: the mark is flat
+ * colour with hard edges, and a JPEG would put a halo round every one of them.
+ * It is heavier than a JPEG — tens of kilobytes rather than a few — but there
+ * is exactly ONE of these per file however many cards are on it, because every
+ * card's content stream names the same object.
+ *
+ * `/Interpolate true`, the opposite of the QR's setting and on purpose: the
+ * artwork is drawn at a fraction of an inch from a few hundred pixels, and a
+ * reader that smooths it is doing the right thing, where a reader that smooths
+ * a module edge is not.
+ */
+export function rgbImageXObject(image: RgbBitmap): Buffer {
+  const compressed = zlib.deflateSync(image.data, { level: 9 });
+  return Buffer.concat([
+    Buffer.from(
+      `<< /Type /XObject /Subtype /Image /Width ${image.side} /Height ${image.side} ` +
+        '/ColorSpace /DeviceRGB /BitsPerComponent 8 /Interpolate true ' +
+        `/Filter /FlateDecode /Length ${compressed.byteLength} >>\nstream\n`
+    ),
+    compressed,
+    Buffer.from('\nendstream'),
+  ]);
+}
+
+/**
+ * Corner radius of the drawn mark, as a fraction of its side.
+ *
+ * A fifth is roughly what a launcher icon gets, which is what this artwork is;
+ * square corners read as a sticker, a circle would crop the wordmark.
+ */
+export const QR_LOGO_CORNER_RADIUS = 0.2;
+
+/** Bézier control-point distance for a quarter circle, as a fraction of the radius. */
+const KAPPA = 0.5523;
+
+/**
+ * A rounded square as PDF path operators, bottom-left at (x, y).
+ *
+ * Four lines and four quarter-circle Béziers, closed. Emitted without a
+ * painting operator so the caller decides whether it is stroked, filled or —
+ * the use here — made the clip path.
+ */
+export function roundedSquarePath(x: number, y: number, side: number, radius: number): string {
+  const r = Math.min(radius, side / 2);
+  const k = r * KAPPA;
+  const x1 = x + side;
+  const y1 = y + side;
+  const f = (n: number): string => n.toFixed(2);
+  return [
+    `${f(x + r)} ${f(y)} m`,
+    `${f(x1 - r)} ${f(y)} l`,
+    `${f(x1 - r + k)} ${f(y)} ${f(x1)} ${f(y + r - k)} ${f(x1)} ${f(y + r)} c`,
+    `${f(x1)} ${f(y1 - r)} l`,
+    `${f(x1)} ${f(y1 - r + k)} ${f(x1 - r + k)} ${f(y1)} ${f(x1 - r)} ${f(y1)} c`,
+    `${f(x + r)} ${f(y1)} l`,
+    `${f(x + r - k)} ${f(y1)} ${f(x)} ${f(y1 - r + k)} ${f(x)} ${f(y1 - r)} c`,
+    `${f(x)} ${f(y + r)} l`,
+    `${f(x)} ${f(y + r - k)} ${f(x + r - k)} ${f(y)} ${f(x + r)} ${f(y)} c`,
+    'h',
+  ].join('\n');
+}
+
+/**
+ * The operators that draw the MARK into a code's well, for a code placed with
+ * its bottom-left at (qrX, qrY) and `qrSidePt` points a side.
+ *
+ * ONE function for both layouts, so a standee cut off a batch sheet carries the
+ * mark at exactly the proportion a one-up sheet does. The well is in module
+ * units on the matrix; this is where they become points, and the ONLY place
+ * the y axis is flipped — the matrix counts rows from the top, PDF user space
+ * counts from the bottom.
+ *
+ * Drawn after the code so it sits over the (already white) well, clipped to a
+ * rounded square, and scaled with an equal-axis `cm` like the code itself so
+ * nothing downstream can stretch it. `imageName` is the page-local resource
+ * the caller registered the RGB XObject under.
+ */
+export function logoOperators(
+  matrix: QrMatrix,
+  qrX: number,
+  qrY: number,
+  qrSidePt: number,
+  imageName: string
+): string {
+  const box = logoBox(matrix);
+  const modulePt = qrSidePt / matrix.size;
+  const side = box.side * modulePt;
+  const x = qrX + box.x * modulePt;
+  const y = qrY + qrSidePt - (box.y + box.side) * modulePt;
+
+  return [
+    'q',
+    roundedSquarePath(x, y, side, side * QR_LOGO_CORNER_RADIUS),
+    'W n',
+    `${side.toFixed(2)} 0 0 ${side.toFixed(2)} ${x.toFixed(2)} ${y.toFixed(2)} cm`,
+    `${imageName} Do`,
+    'Q',
+  ].join('\n');
 }
 
 /**
