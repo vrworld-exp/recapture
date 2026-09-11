@@ -119,8 +119,13 @@ abstract interface class AdminStandeeRepository {
   /// The print vendor's CSV for a whole batch.
   Future<QrDownloadFile> batchCsv(String batchId);
 
-  /// THE WHOLE BATCH as one printable PDF — six standees to an A4 page, with
+  /// THE WHOLE BATCH as one printable PDF — nine standees to an A4 page, with
   /// cut guides, as many pages as the run needs.
+  ///
+  /// The per-page count is the SERVER'S, not this client's: the layout is an
+  /// env-tuned grid that clamps itself to what A4 holds, and both surfaces just
+  /// deliver the bytes. The page count worth showing a user is the one that
+  /// comes back in `X-Standee-Sheet-Pages`, never one computed here.
   ///
   /// The other half of [standeeFile], which renders ONE code. That is right for
   /// sending a rep a single standee and absurd for a run of fifty: fifty

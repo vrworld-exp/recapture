@@ -63,7 +63,7 @@ const CARD_PADDING_PT = 18;
 /** Space between cards, so two cut lines never share a stroke. */
 const CARD_GUTTER_PT = 18;
 
-/** The printed code. Smaller than the one-up sheet's 30pt — six to a page. */
+/** The printed code. Smaller than the one-up sheet's 30pt — nine to a page. */
 const CODE_SIZE = 13;
 /** Opens the characters up so each is read on its own. See buildSheetPdf. */
 const CODE_LETTER_SPACING = 2.5;
@@ -151,6 +151,12 @@ export function computeSheetLayout(): StandeeSheetLayout {
     );
   }
 
+  // ⚠ THE SHIPPED 3 × 3 SITS ALMOST EXACTLY ON THE HORIZONTAL FIT CEILING. At
+  // the default 1.67in square three columns leave about 18pt of slack across
+  // the whole page — so widening CARD_PADDING_PT or CARD_GUTTER_PT by more than
+  // ~9pt each drops the sheet to TWO columns, silently, and the only symptom is
+  // six cards on a page that used to hold nine. Re-check the arithmetic above
+  // before touching either constant.
   const columns = Math.min(env.STANDEE_SHEET_COLUMNS, fitColumns);
   const rows = Math.min(env.STANDEE_SHEET_ROWS, fitRows);
 

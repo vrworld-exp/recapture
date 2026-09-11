@@ -49,15 +49,15 @@ const RESOLVER_BASE = 'https://scan.test';
 const SHEET_DEFAULTS = {
   STANDEE_SHEET_QR_INCHES: 1.67,
   STANDEE_SHEET_QR_DPI: 300,
-  STANDEE_SHEET_COLUMNS: 2,
+  STANDEE_SHEET_COLUMNS: 3,
   STANDEE_SHEET_ROWS: 3,
   STANDEE_SHEET_MAX_CODES: 500,
 } as const;
 
 /** 1.67in × 72pt/in, as the `cm` matrix writes it. */
 const QR_SIDE_PT = '120.24';
-/** Six to a page at the shipped 2 × 3. */
-const PER_PAGE = 6;
+/** Nine to a page at the shipped 3 × 3 — the most A4 holds at 1.67in. */
+const PER_PAGE = 9;
 
 beforeAll(async () => {
   mongod = await MongoMemoryServer.create();
@@ -233,8 +233,8 @@ describe('the printed size of the square', () => {
     const { batchId } = await seedBatch(admin.id, 4);
 
     // A 4in card cannot go two-up on A4 (portrait width is ~8.27in less
-    // margins), so the configured 2 × 3 has to collapse to 1 × 2. What must NOT
-    // happen is the square shrinking to keep six on the page.
+    // margins), so the configured 3 × 3 has to collapse to 1 × 2. What must NOT
+    // happen is the square shrinking to keep nine on the page.
     Object.assign(env, { STANDEE_SHEET_QR_INCHES: 4 });
 
     const res = await fetchSheet(admin.auth, batchId.toString());
@@ -274,7 +274,7 @@ describe('the printed size of the square', () => {
 // ── Pagination ──────────────────────────────────────────────────────────────
 
 describe('paging a batch across A4 sheets', () => {
-  it('adds pages as the batch grows, six to a page', async () => {
+  it('adds pages as the batch grows, nine to a page', async () => {
     const admin = await makeUser('ADMIN');
 
     for (const [codes, pages] of [
@@ -299,6 +299,30 @@ describe('paging a batch across A4 sheets', () => {
     }
   });
 
+  it('puts NINE on a page by default, at the undiminished square', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 9);
+
+    // The shipped grid, asserted on the PAPER rather than on the env default:
+    // nine cards, one page, and every square still 1.67in. Nine-up is only worth
+    // having because it came out of the margins — the moment it comes out of the
+    // code size instead, this is the test that says so.
+    const res = await fetchSheet(admin.auth, batchId.toString());
+    const pdf = res.body.toString('latin1');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-standee-sheet-pages']).toBe('1');
+    expect(pdf).toContain('/Count 1');
+
+    const squares = [...pdf.matchAll(/([\d.]+) 0 0 ([\d.]+) [\d.]+ [\d.]+ cm/g)];
+    expect(squares).toHaveLength(9);
+    for (const square of squares) expect(square[1]).toBe(QR_SIDE_PT);
+
+    // Nine cut guides too: a card the grid cannot fit is a card that is not
+    // drawn, and a page of nine squares with eight boxes would be the tell.
+    expect([...pdf.matchAll(/[\d.]+ [\d.]+ [\d.]+ [\d.]+ re\nS/g)]).toHaveLength(9);
+  });
+
   it('follows the configured grid', async () => {
     const admin = await makeUser('ADMIN');
     const { batchId } = await seedBatch(admin.id, 8);
@@ -306,14 +330,17 @@ describe('paging a batch across A4 sheets', () => {
     Object.assign(env, { STANDEE_SHEET_COLUMNS: 2, STANDEE_SHEET_ROWS: 2 });
     const res = await fetchSheet(admin.auth, batchId.toString());
 
-    // Four to a page → eight codes is two pages, not the default's two-and-a-bit.
+    // Four to a page → eight codes is two pages, not the default's single one.
     expect(res.body.toString('latin1')).toContain('/Count 2');
     expect(res.headers['x-standee-sheet-pages']).toBe('2');
   });
 
   it('keeps every page a valid A4 page with a correct xref', async () => {
     const admin = await makeUser('ADMIN');
-    const { batchId } = await seedBatch(admin.id, 14);
+    // TWENTY: three pages at nine-up, with a part-full last one. The point of
+    // the test is a sheet whose xref spans several pages, so the count follows
+    // the grid rather than staying at the number that used to make three.
+    const { batchId } = await seedBatch(admin.id, 20);
 
     const res = await fetchSheet(admin.auth, batchId.toString());
     const pdf = res.body.toString('latin1');
@@ -324,14 +351,14 @@ describe('paging a batch across A4 sheets', () => {
 
     // The fiddly part of writing a PDF by hand, and the part multi-page makes
     // fiddlier: every offset in the xref must be the exact byte position of its
-    // object. Fourteen codes over three pages is 4 + 6 + 14 = 24 of them.
+    // object. Twenty codes over three pages is 4 + 6 + 20 = 30 of them.
     const startxref = Number(
       pdf.slice(pdf.lastIndexOf('startxref') + 9).trim().split('\n')[0]
     );
     expect(pdf.slice(startxref, startxref + 4)).toBe('xref');
 
     const offsets = [...pdf.matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
-    expect(offsets).toHaveLength(24);
+    expect(offsets).toHaveLength(30);
     offsets.forEach((offset, index) => {
       expect(pdf.slice(offset, offset + `${index + 1} 0 obj`.length)).toBe(
         `${index + 1} 0 obj`
@@ -364,13 +391,15 @@ describe('what the card says', () => {
     // ("Vendor A — Oct 2026, run 3"), so the very first real batch carries one.
     // The base-14 fonts are single-byte and nothing declares an /Encoding, so an
     // unfolded caption would print `â€"` across the footer of every page.
-    const { batchId } = await seedBatch(admin.id, 7, 'Vendor B — Oct run');
+    // TEN, so the run spills onto a second page at the shipped nine-up grid —
+    // a one-page sheet would assert nothing about the "Page n of m" counter.
+    const { batchId } = await seedBatch(admin.id, 10, 'Vendor B — Oct run');
 
     const res = await fetchSheet(admin.auth, batchId.toString());
     const pdf = res.body.toString('latin1');
 
-    expect(pdf).toContain('(Vendor B - Oct run   |   Page 1 of 2   |   7 standees) Tj');
-    expect(pdf).toContain('(Vendor B - Oct run   |   Page 2 of 2   |   7 standees) Tj');
+    expect(pdf).toContain('(Vendor B - Oct run   |   Page 1 of 2   |   10 standees) Tj');
+    expect(pdf).toContain('(Vendor B - Oct run   |   Page 2 of 2   |   10 standees) Tj');
     // Nothing outside printable ASCII survived into the drawn text.
     for (const [, drawn] of pdf.matchAll(/\((.*?)\) Tj/g)) {
       expect(drawn).toMatch(/^[\x20-\x7e]*$/);

@@ -8,7 +8,7 @@
 // come from the same server-side composer.
 //
 // PER BATCH — two files. The vendor CSV, unchanged since stage 2, and the
-// PRINTABLE SHEET: the whole run laid out six standees to an A4 page with cut
+// PRINTABLE SHEET: the whole run laid out nine standees to an A4 page with cut
 // guides, as many pages as it takes. They are not alternatives. The CSV is for
 // a print shop that will manufacture standees; the sheet is for the office
 // printer, today, and it is what makes a fifty-code batch usable before a

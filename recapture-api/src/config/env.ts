@@ -532,16 +532,21 @@ const envSchema = z.object({
    */
   STANDEE_SHEET_QR_DPI: z.coerce.number().int().positive().max(1_200).default(300),
   /**
-   * Cards per A4 page, as a grid. 2 × 3 = six, the shape the sheet was designed
-   * around: big enough to be worth a sheet of paper, sparse enough that there is
-   * room to cut between them.
+   * Cards per A4 page, as a grid. 3 × 3 = nine, the most a 1.67in square fits on
+   * A4 without touching the square: at the shipped card size exactly three
+   * columns and three rows clear the margins, so nine is the grid rather than a
+   * preference. It costs the generous side margins the old 2 × 3 had — the
+   * gutter between cards is unchanged, so there is still the same room to cut
+   * between them; there is just less waste paper down each edge.
    *
    * CLAMPED DOWN to whatever actually fits once QR_INCHES is applied — a grid
    * that overflowed the page would silently print codes half off the edge, and
    * that is discovered at the print shop. Raising these never overrides the
-   * physical size; it only asks for more per sheet if there is room.
+   * physical size; it only asks for more per sheet if there is room. Which also
+   * means nine is not guaranteed: raise QR_INCHES and the grid drops back on its
+   * own.
    */
-  STANDEE_SHEET_COLUMNS: z.coerce.number().int().positive().max(8).default(2),
+  STANDEE_SHEET_COLUMNS: z.coerce.number().int().positive().max(8).default(3),
   STANDEE_SHEET_ROWS: z.coerce.number().int().positive().max(10).default(3),
   /**
    * Most codes one sheet request will render.

@@ -572,8 +572,10 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   artwork was cut for. A QR printed smaller than the distance it is scanned from
   is a standee that does not work, and that is discovered by a diner at a table
   after the paper is cut. So `computeSheetLayout` clamps
-  `STANDEE_SHEET_COLUMNS`/`_ROWS` **down** to whatever fits (2 × 3 = six per A4
-  by default) rather than shrinking the code. Never invert that trade.
+  `STANDEE_SHEET_COLUMNS`/`_ROWS` **down** to whatever fits (3 × 3 = nine per A4
+  by default, which at 1.67in is exactly what the page holds) rather than
+  shrinking the code. Never invert that trade: nine-up came out of the page
+  margins, and the next one would have to come out of the square.
 - **RETIRED codes are SKIPPED on a batch sheet, not refused.** The single-code
   endpoints answer `409 CODE_RETIRED` because rendering one hands somebody a dead
   sheet; a whole batch cannot be refused over one dead code. The count comes back

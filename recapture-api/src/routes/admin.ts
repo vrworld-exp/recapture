@@ -1529,7 +1529,7 @@ router.get(
  * THE OTHER HALF OF THE PILOT PATH. `GET /admin/qr-codes/:code/qr` renders ONE
  * standee, which is right for sending a rep a single code and absurd for a run
  * of fifty: fifty presses, fifty near-identical files, fifty sheets of paper for
- * fifty squares. This is one file — six standees to an A4 page by default, with
+ * fifty squares. This is one file — nine standees to an A4 page by default, with
  * cut guides — that an admin sends straight to a printer.
  *
  * ⚠ The squares are a FIXED PHYSICAL SIZE (STANDEE_SHEET_QR_INCHES, 1.67in) and

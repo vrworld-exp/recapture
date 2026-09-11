@@ -9,7 +9,7 @@
 // THE DOWNLOAD SITS ON THE ROW, not only inside the batch. Getting a run onto
 // paper is the second thing an admin does with a batch — right after minting it
 // — and it needs nothing from the code list, so making them open the batch to
-// find the button would be a step for no one. One press produces one PDF: six
+// find the button would be a step for no one. One press produces one PDF: nine
 // standees to an A4 page, cut guides, as many pages as the run needs.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
