@@ -144,8 +144,9 @@ do not remove it).
     staff get. Absent is also what an owner id that no longer resolves produces,
     so the client falls back to the opaque line rather than rendering a blank.
   - `GET /admin/users/:id` (`requireRole('ADMIN')`, `services/adminUsersService.ts`)
-    is the **only route in this API that answers with a RAW phone/email**. It is
-    bounded on every side: ADMIN-only, **on demand** (one person per call — never
+    answers with a **RAW phone/email**. It was the only route in this API that
+    did; the rep `accountPhone` below is the second, and there are no others. It
+    is bounded on every side: ADMIN-only, **on demand** (one person per call — never
     decorating a list), metered per admin (`ADMIN_USER_LOOKUP_*`), audited
     (`admin_project_owner_viewed`, hashed ids + a `contact_channels` enum — note
     the prop NAME: `has_phone`/`has_email` would be stripped by the emit layer
@@ -166,6 +167,43 @@ do not remove it).
     being bounded. Nothing is persisted to Hive, logged, or sent to analytics.
     Guardrails: `tests/admin-project-owner.test.ts` +
     `test/projects/live_project_owner_test.dart`.
+  - `GET`/`PATCH /rep/catalogs/:id/profile` and `PUT /rep/catalogs/:id/logo`
+    add **`accountPhone`** — the restaurant owner's RAW number — to the profile
+    they answer with. **This is the SECOND exception to the stance above, and it
+    is the amendment that sentence asks for.** It is bounded differently from the
+    admin lookup, on a bound the admin route does not have: `grantDelegation` is
+    called from exactly ONE place (`activationService`), so a rep only ever holds
+    a restaurant **they activated themselves** — meaning they TYPED this number
+    into the activation form. The response hands back a value the caller
+    supplied; it is a receipt, not a disclosure. **If a delegation ever becomes
+    grantable another way — an admin reassigning a restaurant, a rep handing one
+    over — that sentence stops being true and this exception must be
+    re-decided here before the code changes.**
+
+    Why raw rather than the `maskIdentifier` form: the purpose is confirming the
+    restaurant on screen is the client the rep came to see, and a mask fails
+    exactly when two clients share a last-three — the case where being wrong is
+    expensive (a rep authoring a menu into the wrong restaurant). The rest of the
+    admin route's bounds are kept: `Cache-Control: no-store`, and an audit event
+    (`rep_restaurant_account_viewed` — hashed actor and owner ids, the opaque
+    `catalog_id`, and `account_contact` saying only WHETHER a number existed;
+    note the prop name, per the `has_phone` trap in `analyticsSchemas.ts`). It is
+    **not** metered: the delegation is the scraping bound, since a rep can only
+    reach restaurants they signed up.
+
+    **It is READ-ONLY on every surface and must stay that way.**
+    `updateBusinessProfileSchema` is `.strict()`, so a client sending
+    `accountPhone` gets a 400 rather than a silent drop; `BusinessProfile
+    .copyWith` deliberately takes no `accountPhone` parameter, so no local edit
+    can appear to change it. Changing the number a restaurant signs in with is an
+    account action for its owner, not a field on a rep's form. **All three
+    profile-returning rep routes carry the block** — omitting it from any one of
+    them makes the number vanish the first time a rep saves. It never appears on
+    `/catalog/*`: that surface is not delegation-gated. Do not conflate it with
+    `contact.phone`, which is an editable public-menu detail that reaches Mirage.
+    Guardrails: `tests/rep-restaurant-account.test.ts` + the
+    `the restaurant account number` group in
+    `test/rep/rep_restaurant_editing_test.dart`.
 - **`GET`/`PATCH /auth/me` are MASKED-ONLY, not PII-free.** The raw phone/email
   still never leaves the API. The account snapshot adds `contactMasked`
   (`+91 ••••• ••210` / `a•••@gmail.com`), `contactChannel`, and an optional
@@ -573,6 +611,29 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   must be the same physical object; a second renderer is how that stops being
   true. The LAYOUT differs between the one-up sheet and the batch grid; what is
   printed on a card does not.
+- **Two doors to the CATALOG QR, and it is not the standee sheet.**
+  `GET /catalog/qr` (the owner, resolved from their own token) and
+  `GET /rep/catalogs/:id/qr` (a rep, resolved through `resolveDelegatedCatalog`)
+  both hand the stored `publicUrl` to `renderCatalogQr` with the same arguments
+  and the same `strongETag` key, so the bytes and the cache tag are identical by
+  construction — `tests/rep-catalog-qr.test.ts` compares them rather than trusting
+  it. Do not give the rep route its own render, its own filename or its own size
+  clamp: a rep and the restaurant must not be able to print two different
+  squares for one table.
+
+  It is a DIFFERENT object from the standee sheet above. The standee carries the
+  printed code for a rep to read aloud while activating; this carries the menu's
+  own frozen URL for a customer to scan. The client surfaces mirror that split —
+  `RepPublishedScreen` saves standee sheets, `RepCatalogQrScreen` shows the
+  menu's code — and both Flutter screens draw through `QrCodePanel` for the same
+  no-second-renderer reason.
+
+  ONE MORE THING THAT IS EASY TO GET BACKWARDS: a rep activation freezes a
+  `publicUrl` immediately, so the square exists BEFORE the first publish and
+  resolves to the "not live yet" fallback page. The 409 `CATALOG_NOT_PUBLISHED`
+  branch is a guard on a state the rep path does not normally reach, and the QR
+  button on 'My restaurants' is gated on `status.isLive` rather than on the URL
+  — a code that resolves to "not live yet" is not one to show an owner at a table.
 - **The batch sheet: the square is a FIXED PHYSICAL SIZE and is never scaled.**
   `STANDEE_SHEET_QR_INCHES` (1.67in, ~501px at 300dpi) is the edge the standee
   artwork was cut for. A QR printed smaller than the distance it is scanned from

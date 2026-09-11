@@ -35,7 +35,7 @@ import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show ProductImageSlot, kCatalogUnchanged;
 import 'package:recapture/data/repositories/catalog_repository.dart'
-    show BrandingSlot;
+    show BrandingSlot, CatalogQrFormat, CatalogQrImage;
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -138,6 +138,14 @@ class FakeRepRepository implements RepRepository {
   /// live yet" line on the rep surface hangs off, so this number is how a test
   /// asks whether a write actually told the header about itself.
   int catalogCalls = 0;
+
+  @override
+  Future<CatalogQrImage> catalogQr(
+    String catalogId, {
+    CatalogQrFormat format = CatalogQrFormat.png,
+    int? size,
+  }) =>
+      throw UnimplementedError('the QR is not exercised by this suite');
 
   @override
   Future<Catalog> catalog(String catalogId) async {
@@ -801,6 +809,134 @@ void main() {
         findsOneWidget,
       );
       expect(find.byType(PreviewProductCard), findsOneWidget);
+    });
+  });
+
+  // ── The restaurant's account number ────────────────────────────────────────
+  //
+  // The rep-facing half of the raw-phone amendment in AGENTS.md §PII. The server
+  // side is fenced by `tests/rep-restaurant-account.test.ts`; what these pin is
+  // the part a client refactor could quietly break — that the number is SHOWN,
+  // that it is not a field, and that nothing local can appear to change it.
+  group('the restaurant account number', () {
+    /// The delegated profile as the server now answers it.
+    BusinessProfile withAccount(String? phone) => BusinessProfile.fromMap({
+          ...golden.profileGolden(),
+          if (phone != null) 'accountPhone': phone,
+        });
+
+    testWidgets('is shown, in full, on a delegated details screen',
+        (tester) async {
+      final repo = FakeRepRepository(profile: withAccount('+919876543210'));
+      await tester.pumpWidget(harness(
+        repo,
+        const BusinessProfileScreen.delegated(catalogId: kCatalogId),
+      ));
+      await tester.pumpAndSettle();
+
+      // In full and not masked — the whole point is comparing it against a
+      // number the rep is holding, and a shared last-three verifies nothing.
+      expect(find.text('+919876543210'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('rep_account_phone')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('signs in with'), findsOneWidget);
+    });
+
+    testWidgets('is NOT a field — no rep can type into it', (tester) async {
+      final repo = FakeRepRepository(profile: withAccount('+919876543210'));
+      await tester.pumpWidget(harness(
+        repo,
+        const BusinessProfileScreen.delegated(catalogId: kCatalogId),
+      ));
+      await tester.pumpAndSettle();
+
+      // A SelectableText, deliberately: copyable, never editable. The day
+      // somebody "helpfully" makes this an AppTextField, this fails — and the
+      // server's .strict() schema would then reject every save the form made.
+      final field = tester.widget<SelectableText>(
+        find.byKey(const ValueKey('rep_account_phone')),
+      );
+      expect(field.data, '+919876543210');
+
+      // Asserted on the PROPERTY, not on the absence of an EditableText: a
+      // SelectableText builds one of those itself, read-only, so "no
+      // EditableText here" is a check that can only ever fail. `readOnly` is
+      // the thing that would actually flip if this became a field.
+      final editable = tester.widget<EditableText>(
+        find.descendant(
+          of: find.byKey(const ValueKey('rep_account_phone')),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(editable.readOnly, isTrue);
+
+      // And it is not one of the form's fields, so nothing about it can be
+      // typed into, validated or submitted.
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('rep_account_phone')),
+          matching: find.byType(TextFormField),
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('survives a save, and is never sent in the patch',
+        (tester) async {
+      final repo = FakeRepRepository(profile: withAccount('+919876543210'));
+      await tester.pumpWidget(harness(
+        repo,
+        const BusinessProfileScreen.delegated(catalogId: kCatalogId),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextFormField).first, 'Blue Cafe');
+      await tester.pump();
+      await tapButton(tester, find.text('Save profile'));
+
+      // The patch carries what the rep edited and nothing else. `copyWith` has
+      // no accountPhone parameter precisely so a local edit cannot invent one.
+      expect(repo.profilePatches, hasLength(1));
+      expect(repo.storedProfile.accountPhone, '+919876543210');
+      // And it is still on screen, which is the failure a rep would report:
+      // "the number disappeared when I saved".
+      expect(find.text('+919876543210'), findsOneWidget);
+    });
+
+    testWidgets('the OWNER form shows no account row at all', (tester) async {
+      // The owner's own `/catalog/profile` never carries the field, so this is
+      // what a null renders as. An owner knows their own number, and putting a
+      // raw identifier on a route that is not delegation-gated is the thing the
+      // PII stance exists to prevent.
+      final repo = FakeRepRepository(profile: withAccount(null));
+      await tester.pumpWidget(harness(
+        repo,
+        const BusinessProfileScreen.delegated(catalogId: kCatalogId),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('rep_account_phone')), findsNothing);
+      expect(find.textContaining('signs in with'), findsNothing);
+    });
+
+    testWidgets('is not confused with the PUBLIC contact phone',
+        (tester) async {
+      // Two numbers, two meanings. The contact phone is an editable field that
+      // reaches the public menu; the account number is neither. A screen that
+      // merged them would either print an account identifier on a menu or let a
+      // rep change how a client signs in.
+      final repo = FakeRepRepository(profile: withAccount('+919876543210'));
+      await tester.pumpWidget(harness(
+        repo,
+        const BusinessProfileScreen.delegated(catalogId: kCatalogId),
+      ));
+      await tester.pumpAndSettle();
+
+      // The golden's contact phone, still in its own editable field.
+      expect(find.text('+91 90000 00000'), findsOneWidget);
+      expect(find.text('+919876543210'), findsOneWidget);
     });
   });
 }

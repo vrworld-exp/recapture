@@ -70,6 +70,8 @@ export const AnalyticsEvent = {
   ADMIN_PROJECT_DELETED: 'admin_project_deleted',
   ADMIN_ACCESS_DENIED: 'admin_access_denied',
   ADMIN_PROJECT_OWNER_VIEWED: 'admin_project_owner_viewed',
+  // ── Rep field surface (acting on a restaurant's behalf) ───────────────
+  REP_RESTAURANT_ACCOUNT_VIEWED: 'rep_restaurant_account_viewed',
   // ── Meshy AI model generation (staff-triggered) ───────────────────────────
   MODEL_GENERATION_REQUESTED: 'model_generation_requested',
   MODEL_GENERATION_DECLINED: 'model_generation_declined',
@@ -736,6 +738,32 @@ const adminProjectOwnerViewedProps = z
   })
   .strict();
 
+/**
+ * A rep opened a restaurant's details, which carries that restaurant's RAW
+ * account number (GET/PATCH /rep/catalogs/:id/profile) — the SECOND route in
+ * this API that answers with an unmasked identifier, so the read is audited
+ * exactly as the first one is.
+ *
+ * The bound that makes it defensible is `catalog_id` + the delegation behind it:
+ * a rep only ever holds a restaurant they activated themselves, which means they
+ * TYPED this number. The event exists to make that claim auditable rather than
+ * assumed — if a rep is reading restaurants they did not sign up, this is where
+ * it shows.
+ *
+ * ⚠ The same naming trap as [adminProjectOwnerViewedProps]: the emit layer
+ * strips any prop whose name contains 'phone' or 'email', so a `has_phone` here
+ * would be dropped and take the whole audit event down as a strict-schema
+ * failure. `account_contact` says only WHETHER there was a number to show.
+ */
+const repRestaurantAccountViewedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    owner_id_hash: z.string().min(1),
+    account_contact: z.enum(['none', 'sms']),
+  })
+  .strict();
+
 // ── Artist photo-upload projects ─────────────────────────────────────────────
 //
 // NON-PII ONLY, and in particular: no S3 keys and no presigned URLs. A
@@ -973,6 +1001,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.ADMIN_PROJECT_DELETED]: adminProjectDeletedProps,
   [AnalyticsEvent.ADMIN_ACCESS_DENIED]: adminAccessDeniedProps,
   [AnalyticsEvent.ADMIN_PROJECT_OWNER_VIEWED]: adminProjectOwnerViewedProps,
+  [AnalyticsEvent.REP_RESTAURANT_ACCOUNT_VIEWED]: repRestaurantAccountViewedProps,
   [AnalyticsEvent.MODEL_GENERATION_REQUESTED]: modelGenerationRequestedProps,
   [AnalyticsEvent.MODEL_GENERATION_DECLINED]: modelGenerationDeclinedProps,
   [AnalyticsEvent.MODEL_APPROVED]: modelApprovedProps,

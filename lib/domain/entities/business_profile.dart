@@ -154,6 +154,7 @@ class BusinessProfile {
     required this.publicFields,
     this.businessName,
     this.contact,
+    this.accountPhone,
     this.logoUrl,
     this.coverImageUrl,
     this.updatedAt,
@@ -172,6 +173,23 @@ class BusinessProfile {
 
   final String? businessName;
   final BusinessContact? contact;
+
+  /// The raw number this restaurant SIGNS IN with — set once at activation and
+  /// never editable from here.
+  ///
+  /// NOT [BusinessContact.phone], and the two must never be conflated. That one
+  /// is a contact detail the restaurant chooses to print on its public menu, it
+  /// reaches Mirage, and a rep may edit it. This is the account identity: it is
+  /// what the owner will type to sign in, it is on no public page, and there is
+  /// no write path to it on any surface a rep can reach.
+  ///
+  /// DELEGATED SURFACES ONLY — null everywhere else. The owner's own
+  /// `/catalog/profile` does not carry it (an owner knows their own number, and
+  /// `/auth/me` is masked-only by policy), so the row it feeds simply does not
+  /// render there. It exists so a rep can confirm the restaurant in front of
+  /// them is the client they came to see; see AGENTS.md §PII for the bounds it
+  /// is served under.
+  final String? accountPhone;
 
   /// CDN URLs derived server-side from stored S3 keys. Null until an upload has
   /// been committed; the client never builds these itself.
@@ -204,6 +222,9 @@ class BusinessProfile {
       contact: rawContact is Map<String, dynamic>
           ? BusinessContact.fromMap(rawContact)
           : null,
+      // Absent on every owner response, which is the intended shape rather than
+      // a missing field: the row renders off null and the screen shows nothing.
+      accountPhone: catalogText(map['accountPhone']),
       logoUrl: catalogText(map['logoUrl']),
       coverImageUrl: catalogText(map['coverImageUrl']),
       // An absent list means "we know of nothing public" — the UI then marks
@@ -213,6 +234,10 @@ class BusinessProfile {
     );
   }
 
+  /// [accountPhone] is deliberately NOT a parameter. Every caller of this is an
+  /// edit to something the restaurant chose, and the account identity is not one
+  /// of those — leaving it out means no local edit can appear to change the
+  /// number a restaurant signs in with.
   BusinessProfile copyWith({
     String? name,
     String? businessName,
@@ -225,6 +250,7 @@ class BusinessProfile {
         name: name ?? this.name,
         businessName: businessName ?? this.businessName,
         contact: contact ?? this.contact,
+        accountPhone: accountPhone,
         logoUrl: logoUrl ?? this.logoUrl,
         coverImageUrl: coverImageUrl ?? this.coverImageUrl,
         publicFields: publicFields,

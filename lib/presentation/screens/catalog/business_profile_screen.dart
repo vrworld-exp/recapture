@@ -18,6 +18,14 @@
 // This is NOT the account screen. `profile_screen.dart` edits the USER (avatar,
 // display name, masked contact) and lives in a different key space; the business
 // profile lives on the Catalog. The two stay separate.
+//
+// ⚠ TWO PHONE NUMBERS LIVE ON THIS SCREEN and they are not the same thing.
+// `contact.phone` is a detail the restaurant prints on its public menu — it
+// reaches Mirage, and anyone on this form may edit it. [BusinessProfile
+// .accountPhone] is the identity the restaurant SIGNS IN with, arrives only on
+// delegated (rep) responses, is read-only everywhere, and reaches no public page
+// at all. Conflating them would either put an account identifier on a menu or
+// let a rep change how a client signs in.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -405,11 +413,17 @@ class _ProfileFormState extends ConsumerState<_ProfileForm> {
   Widget _fieldColumn(BuildContext context) {
     final profile = widget.profile;
 
+    final accountPhone = profile.accountPhone;
+
     return Form(
       key: _formKey,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (accountPhone != null && accountPhone.isNotEmpty) ...[
+            _AccountPhoneRow(phone: accountPhone),
+            const SizedBox(height: AppSpacing.xxl),
+          ],
           _Field(
             profile: profile,
             path: 'name',
@@ -706,6 +720,88 @@ class _PublishReachBanner extends ConsumerWidget {
                     height: 1.4,
                   ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The restaurant's ACCOUNT NUMBER — read-only, and the first thing on the form.
+///
+/// FIRST because it is the question a rep is asking when they open this screen
+/// on a second visit: am I in the right restaurant? Putting it under the
+/// storefront name would make them scroll to check an identity before they trust
+/// anything above it.
+///
+/// NOT A [_Field], deliberately. That widget captions itself from
+/// `publicFields` — "shown on your public page" / "saved in ReCapture" — and
+/// both sentences are wrong here. This number is neither: it is the account the
+/// restaurant signs in with, it reaches no public page, and it is not a draft
+/// edit waiting on a publish. A wrong caption on a PII row is worse than none.
+///
+/// RENDERED OFF A NON-NULL VALUE, not off the scope. The server decides who is
+/// shown this (delegated responses only — see AGENTS.md §PII), and a client-side
+/// `scope.isDelegated` beside it would be a second, drifting copy of that rule.
+class _AccountPhoneRow extends StatelessWidget {
+  const _AccountPhoneRow({required this.phone});
+
+  final String phone;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.surface1,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.surface2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.lock_outline,
+                size: 14,
+                color: AppColors.textMuted,
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Text(
+                'Restaurant account',
+                style: textTheme.bodySmall?.copyWith(
+                  color: AppColors.textMuted,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // SELECTABLE, not a plain Text: the whole point is comparing it with a
+          // number the rep has somewhere else, and copying beats re-typing
+          // thirteen digits at a counter.
+          SelectableText(
+            phone,
+            key: const ValueKey('rep_account_phone'),
+            style: textTheme.titleMedium?.copyWith(
+              color: AppColors.textPrimary,
+              fontFamily: 'monospace',
+              letterSpacing: 1.1,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            // Says WHY it cannot be changed here, rather than only that it
+            // cannot. A rep who reads "not editable" with no reason files a bug;
+            // one who reads this knows the owner's sign-in is on the other end
+            // of it.
+            'The number this restaurant signs in with, set when the standee was '
+            'activated. Check it against your client before you author the '
+            'menu. It is not editable here and is never shown to customers.',
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
           ),
         ],
       ),

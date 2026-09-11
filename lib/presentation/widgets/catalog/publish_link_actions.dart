@@ -25,11 +25,19 @@ import '../../../application/catalog/catalog_link_service.dart';
 import 'catalog_feedback.dart';
 
 class PublishLinkActions extends ConsumerWidget {
-  const PublishLinkActions({super.key, required this.url});
+  const PublishLinkActions({super.key, required this.url, this.shareSubject});
 
   /// `catalog.publicUrl`, VERBATIM. Never composed, normalised or rebuilt —
   /// every printed QR resolves through it (feature 32).
   final String url;
+
+  /// What the share sheet calls this link.
+  ///
+  /// Defaults to the OWNER's wording, because that is who this widget was
+  /// written for. A rep sharing a restaurant's menu is not sharing "my
+  /// catalog", and on the surfaces where the sender is not the owner the
+  /// restaurant's own name is passed instead.
+  final String? shareSubject;
 
   Future<void> _run(
     BuildContext context,
@@ -73,7 +81,7 @@ class PublishLinkActions extends ConsumerWidget {
             label: const Text('Share'),
             onPressed: () => _run(
               context,
-              () => actions.share(url, subject: 'My catalog'),
+              () => actions.share(url, subject: shareSubject ?? 'My catalog'),
               'Shared.',
             ),
           ),

@@ -18,6 +18,11 @@
 // SAVING IS THE ONE GENUINE PLATFORM SPLIT on this surface: a share sheet on a
 // phone, a blob download in a browser. One repository method fetches the bytes;
 // `catalog_qr_service.dart` decides what happens to them.
+//
+// THE SQUARE ITSELF IS DRAWN BY [QrCodePanel], which the rep's
+// `/rep/catalogs/:id/qr` also uses. The two surfaces show the same physical
+// object — the server renders both from the same frozen URL — so they draw it
+// with the same widget rather than with two copies that could drift.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -27,15 +32,10 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/catalog_notifier.dart';
 import '../../../application/catalog/catalog_qr_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
-import '../../../data/repositories/catalog_repository.dart';
-import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
-import '../../widgets/catalog/publish_link_actions.dart';
-
-/// The QR is square and must stay scannable; past this it is just a big square.
-const double kQrMaxRenderSize = 320;
+import '../../widgets/catalog/qr_code_panel.dart';
 
 class CatalogQrScreen extends ConsumerWidget {
   const CatalogQrScreen({super.key});
@@ -90,124 +90,25 @@ class CatalogQrScreen extends ConsumerWidget {
                   failure: error is CatalogFailure ? error : null,
                   onRetry: () => ref.read(catalogQrProvider.notifier).load(),
                 ),
-                data: (image) => _QrBody(
-                  image: image,
+                data: (image) => QrCodePanel(
+                  bytes: image.bytes,
                   publicUrl: catalog?.publicUrl,
-                  state: state,
+                  savingFormat: state.savingFormat,
                   onSave: (format) =>
                       ref.read(catalogQrProvider.notifier).save(format),
+                  scanCaption: 'Customers scan this to open your catalog.',
+                  // Feature 32, said out loud: this is the promise that makes
+                  // printing worth the money.
+                  permanenceNote:
+                      'This code never changes. Print it once — renaming your '
+                      'catalog, adding products or taking it offline will not '
+                      'break it.',
                 ),
               ),
             ),
           ),
         ),
       ),
-    );
-  }
-}
-
-class _QrBody extends StatelessWidget {
-  const _QrBody({
-    required this.image,
-    required this.publicUrl,
-    required this.state,
-    required this.onSave,
-  });
-
-  final CatalogQrImage image;
-  final String? publicUrl;
-  final CatalogQrState state;
-  final ValueChanged<CatalogQrFormat> onSave;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // WHITE, always, and not a theme token. A QR scanner needs dark modules
-        // on a light field; rendering this on the app's near-black surface
-        // would produce a code that looks right on screen and cannot be read
-        // off it — which is exactly the failure that only shows up in a
-        // restaurant, at the table, with a customer waiting.
-        Center(
-          child: Container(
-            constraints: const BoxConstraints(
-              maxWidth: kQrMaxRenderSize,
-              maxHeight: kQrMaxRenderSize,
-            ),
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(AppRadius.sm),
-            ),
-            child: Image.memory(
-              image.bytes,
-              key: const ValueKey('qr_image'),
-              fit: BoxFit.contain,
-              // The server renders far above display size so a browser print
-              // and a sticker press both have pixels to work with. Let the
-              // engine downscale smoothly rather than nearest-neighbour it into
-              // a moiré.
-              filterQuality: FilterQuality.medium,
-              errorBuilder: (_, __, ___) => const Icon(
-                Icons.broken_image_outlined,
-                color: AppColors.textMuted,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: AppSpacing.xl),
-        Text(
-          'Customers scan this to open your catalog.',
-          textAlign: TextAlign.center,
-          style: textTheme.bodyMedium,
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        Text(
-          // Feature 32, said out loud: this is the promise that makes printing
-          // worth the money.
-          'This code never changes. Print it once — renaming your catalog, '
-          'adding products or taking it offline will not break it.',
-          textAlign: TextAlign.center,
-          style: textTheme.bodySmall
-              ?.copyWith(color: AppColors.textSecondary, height: 1.4),
-        ),
-        if (publicUrl != null && publicUrl!.isNotEmpty) ...[
-          const SizedBox(height: AppSpacing.xl),
-          SelectableText(
-            publicUrl!,
-            key: const ValueKey('qr_public_url'),
-            textAlign: TextAlign.center,
-            style:
-                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          Center(child: PublishLinkActions(url: publicUrl!)),
-        ],
-        const SizedBox(height: AppSpacing.xl),
-        AppButton(
-          key: const ValueKey('qr_save_png'),
-          label: 'Save PNG',
-          icon: Icons.image_outlined,
-          isLoading: state.isSaving(CatalogQrFormat.png),
-          onPressed: state.savingFormat != null
-              ? null
-              : () => onSave(CatalogQrFormat.png),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        AppButton.secondary(
-          key: const ValueKey('qr_save_pdf'),
-          label: 'Save PDF for printing',
-          icon: Icons.picture_as_pdf_outlined,
-          isLoading: state.isSaving(CatalogQrFormat.pdf),
-          onPressed: state.savingFormat != null
-              ? null
-              : () => onSave(CatalogQrFormat.pdf),
-        ),
-      ],
     );
   }
 }

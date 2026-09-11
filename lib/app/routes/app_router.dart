@@ -26,6 +26,7 @@ import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_published_screen.dart';
 import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
+import '../../presentation/screens/rep/rep_catalog_qr_screen.dart';
 import '../../presentation/screens/rep/rep_dish_editor_screen.dart';
 import '../../presentation/screens/rep/rep_menu_preview_screen.dart';
 import '../../presentation/screens/rep/rep_catalogs_screen.dart';
@@ -192,6 +193,16 @@ abstract final class AppRoutes {
   /// The restaurant's whole page as a customer will meet it.
   static const repCatalogPreview = '/rep/catalogs/:id/preview';
 
+  /// The restaurant's own QR code — the square on the table.
+  ///
+  /// The SAME code the owner sees at [catalogQr], for a restaurant a rep holds
+  /// a delegation on: the server renders both from the one frozen public URL,
+  /// so this is a second door to one image rather than a second image. Reached
+  /// from a live row on 'My restaurants', and reachable only there — an
+  /// unpublished restaurant has no code to show, which the screen says rather
+  /// than hides.
+  static const repCatalogQr = '/rep/catalogs/:id/qr';
+
   // ── Admin (standee inventory, /admin/standees) ────────────────────────────
   // Gated on isAdmin in the router's redirect below. NOT the whole /admin
   // subtree: the staff project routes below it are MODEL_ARTIST surfaces, and
@@ -269,6 +280,7 @@ abstract final class AppRouteNames {
   static const repDishDetail = 'repDishDetail';
   static const repCatalogDetails = 'repCatalogDetails';
   static const repCatalogPreview = 'repCatalogPreview';
+  static const repCatalogQr = 'repCatalogQr';
   static const adminStandees = 'adminStandees';
   static const adminBatchDetail = 'adminBatchDetail';
   static const previewGallery = 'previewGallery';
@@ -611,6 +623,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.repCatalogPreview,
         name: AppRouteNames.repCatalogPreview,
         builder: (context, state) => RepMenuPreviewScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogQr,
+        name: AppRouteNames.repCatalogQr,
+        builder: (context, state) => RepCatalogQrScreen(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),

@@ -15,7 +15,8 @@ import '../../domain/entities/qr_code_preflight.dart';
 import '../../domain/entities/qr_standee.dart';
 import 'admin_standee_repository.dart' show StandeeQrFormat;
 import 'bytes_response.dart';
-import 'catalog_repository.dart' show BrandingSlot, BrandingSlotX;
+import 'catalog_repository.dart'
+    show BrandingSlot, BrandingSlotX, CatalogQrFormat, CatalogQrFormatX, CatalogQrImage;
 import 'catalog_products_repository.dart'
     show ProductImageSlot, kCatalogUnchanged;
 import '../../domain/entities/rep_activation.dart';
@@ -147,6 +148,25 @@ abstract interface class RepRepository {
   Future<QrDownloadFile> standeeFile(
     String code, {
     StandeeQrFormat format,
+    int? size,
+  });
+
+  /// The RESTAURANT's own QR code — the square a customer scans to open the
+  /// menu, rendered from the delegated catalog's frozen `publicUrl`.
+  ///
+  /// NOT [standeeFile], and the two are easy to confuse. That one renders the
+  /// printed standee artwork for a code in the rep's own stock, with the eight
+  /// characters on it. This one renders the menu's code, for a restaurant that
+  /// is already live, and is byte-identical to what the owner gets from
+  /// `/catalog/qr` — the server delegates to the same renderer with the same
+  /// URL, so a rep and an owner cannot print two different squares.
+  ///
+  /// Throws [CatalogFailure] with `CATALOG_NOT_PUBLISHED` before the first
+  /// publish: a URL is minted at provisioning and never invented, because a QR
+  /// that resolves to nothing might get printed.
+  Future<CatalogQrImage> catalogQr(
+    String catalogId, {
+    CatalogQrFormat format,
     int? size,
   });
 
@@ -733,6 +753,52 @@ class RemoteRepRepository implements RepRepository {
                 'standee-$code.${format.apiValue}',
         mimeType: res.headers.value(Headers.contentTypeHeader) ??
             (format == StandeeQrFormat.png ? 'image/png' : 'application/pdf'),
+      );
+    } on DioException catch (error) {
+      throw CatalogFailure.fromDio(withDecodedBody(error));
+    }
+  }
+
+  @override
+  Future<CatalogQrImage> catalogQr(
+    String catalogId, {
+    CatalogQrFormat format = CatalogQrFormat.png,
+    int? size,
+  }) async {
+    // NOT mapCatalogErrors, for the reason documented on [standeeFile] above:
+    // `responseType: bytes` applies to FAILURES too, so without withDecodedBody
+    // the 409 CATALOG_NOT_PUBLISHED this endpoint answers before the first
+    // publish arrives as an undecodable byte array and collapses into a generic
+    // sentence — losing the one code the screen renders its whole empty state
+    // from.
+    try {
+      final res = await _dio.get<List<int>>(
+        '/rep/catalogs/$catalogId/qr',
+        queryParameters: {
+          'format': format.apiValue,
+          if (size != null) 'size': size,
+        },
+        options: Options(responseType: ResponseType.bytes),
+      );
+
+      final data = res.data;
+      if (data == null || data.isEmpty) {
+        throw const CatalogFailure(
+          code: 'MALFORMED_RESPONSE',
+          message: 'Something went wrong. Please try again.',
+        );
+      }
+
+      return CatalogQrImage(
+        bytes: Uint8List.fromList(data),
+        contentType: res.headers.value(Headers.contentTypeHeader) ??
+            (format == CatalogQrFormat.png ? 'image/png' : 'application/pdf'),
+        // The server's own filename, so a saved file is named after the
+        // restaurant rather than after whatever the client would have guessed.
+        fileName:
+            fileNameFromDisposition(res.headers.value('content-disposition')) ??
+                'catalog-qr.${format.apiValue}',
+        format: format,
       );
     } on DioException catch (error) {
       throw CatalogFailure.fromDio(withDecodedBody(error));

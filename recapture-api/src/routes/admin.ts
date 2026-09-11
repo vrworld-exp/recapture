@@ -233,9 +233,11 @@ function contactChannelsOf(user: { email: string | null; phone: string | null })
  *
  * ADMIN-ONLY, with its own requireRole('ADMIN') above the router's
  * MODEL_ARTIST gate — the same shape as the destructive curation routes, and
- * for a comparable reason: this is the ONE route in the API that answers with
- * an unmasked contact identifier. Everything else ships a mask
- * (utils/maskIdentifier.ts). The exception exists because an admin looking at a
+ * for a comparable reason: this is one of only TWO routes in the API that answer
+ * with an unmasked contact identifier — the other is the rep's delegated
+ * restaurant profile, bounded by the activation that typed the number (see
+ * AGENTS.md §PII and the account block in routes/rep.ts). Everything else ships
+ * a mask (utils/maskIdentifier.ts). The exception exists because an admin looking at a
  * bad capture needs to CONTACT the person who made it, and a mask cannot be
  * dialled; the reasoning and its bounds live in services/adminUsersService.ts.
  *

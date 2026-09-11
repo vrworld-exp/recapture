@@ -3,13 +3,19 @@
 // "Who made this?" — the OWNER identity behind a live project, for ADMIN only.
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// PII: THIS IS THE ONE DELIBERATE EXCEPTION TO THE MASKED-ONLY RULE.
+// PII: THIS IS A DELIBERATE EXCEPTION TO THE MASKED-ONLY RULE — one of two.
 //
-// Everywhere else in this API a contact identifier leaves as a MASK
+// Almost everywhere in this API a contact identifier leaves as a MASK
 // (utils/maskIdentifier.ts) and never as itself — /auth/me, the sales-rep
 // roster, every staff DTO. {@link getAdminUserDetail} ships the RAW phone and
 // email, because the reason it exists is for an admin to CONTACT the person who
 // captured a project, and a mask cannot be dialled.
+//
+// The OTHER exception is the rep's delegated restaurant profile
+// (`accountPhone`, routes/rep.ts), which rests on a bound this one does not
+// have: the rep typed that number themselves at activation. The two are
+// independent — neither is a precedent for widening the other, and both are
+// enumerated in AGENTS.md §PII.
 //
 // The exception is bounded, and every bound is load-bearing:
 //   • ADMIN only — enforced at the route with its own requireRole('ADMIN')

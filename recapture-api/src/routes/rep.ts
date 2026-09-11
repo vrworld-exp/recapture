@@ -28,6 +28,7 @@ import { requireRole } from '@/middleware/requireRole';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { QrCode } from '@/models/QrCode';
+import { User } from '@/models/User';
 import {
   qrCodeParam,
   repPublishedQuerySchema,
@@ -39,6 +40,7 @@ import {
   brandingUploadUrlSchema,
   catalogCategoryParamsSchema,
   catalogProductParamsSchema,
+  catalogQrQuerySchema,
   createCategorySchema,
   createProductSchema,
   reorderSchema,
@@ -64,6 +66,7 @@ import {
   listRepPublishedStandees,
 } from '@/services/standeeAssignmentService';
 import { renderStandeeSheet, STANDEE_ARTWORK_VERSION } from '@/services/standeeSheetService';
+import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { QrResolverNotConfiguredError } from '@/services/qrCodeService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 import {
@@ -484,6 +487,71 @@ router.delete(
 // Every route below DELEGATES to the owner service with the restaurant's userId,
 // exactly as the product routes do. Nothing here knows what a profile is.
 
+// ── The restaurant's ACCOUNT NUMBER, and why it is here ──────────────────────
+//
+// THE SECOND ROUTE IN THIS API THAT ANSWERS WITH A RAW PHONE. The first is
+// `GET /admin/users/:id`, and AGENTS.md §PII names it as the only one — this
+// pair is the amendment, recorded there with its bounds. Read that entry before
+// widening this any further.
+//
+// WHY IT IS DEFENSIBLE HERE, precisely. A rep sees this number on a restaurant
+// they hold a delegation on, and `grantDelegation` is called from exactly ONE
+// place — `activationService`, on the rep who activated the standee. That rep
+// TYPED this number into the activation form minutes earlier. The response is
+// handing back a value the caller supplied; it is not a disclosure, it is a
+// receipt. The moment a delegation can be granted any other way, that sentence
+// stops being true and this block has to be reconsidered.
+//
+// WHAT IT IS FOR: confirming the restaurant on screen is the client the rep
+// came to see. A masked form would answer that question most of the time and
+// fail exactly when two clients share a last-three, which is the case where
+// being wrong is expensive — a rep authoring a menu into the wrong restaurant.
+//
+// WHAT IT IS NOT: an editable field. There is no write path to it on this
+// surface and there must not be one. It is the identity the restaurant will
+// sign in with, `updateBusinessProfileSchema` is `.strict()` so a client that
+// sent it would be rejected with a 400, and `tests/rep-restaurant-account.test.ts`
+// pins that. Changing the number a restaurant signs in with is an account
+// action for the account's owner, not a field on somebody else's form.
+//
+// The two responses below are `no-store` for the reason the admin route is: a
+// body carrying an unmasked identifier gets no shared cache and no browser disk
+// copy.
+
+/** What the rep surface adds to a delegated profile, and nothing more. */
+interface RestaurantAccount {
+  /** The raw number this restaurant signs in with, or null if it has none. */
+  accountPhone: string | null;
+}
+
+/**
+ * Reads the owner's account number and AUDITS the read.
+ *
+ * Audited on every answer rather than on the first, because "which restaurants
+ * has this rep been looking at" is the question the audit exists to answer, and
+ * a once-per-session event answers a different one.
+ */
+async function restaurantAccountFor(
+  repUserId: string,
+  catalogId: string,
+  ownerUserId: string
+): Promise<RestaurantAccount> {
+  const owner = await User.findById(ownerUserId).select('phone').lean().exec();
+  const accountPhone = owner?.phone ?? null;
+
+  track(AnalyticsEvent.REP_RESTAURANT_ACCOUNT_VIEWED, {
+    actor_id_hash: hashIdentifier(repUserId),
+    catalog_id: catalogId,
+    owner_id_hash: hashIdentifier(ownerUserId),
+    // WHETHER there was a number, never the number. The prop must not be named
+    // anything containing 'phone' — the emit layer strips those and the whole
+    // audit event would fail its strict schema and vanish.
+    account_contact: accountPhone ? 'sms' : 'none',
+  });
+
+  return { accountPhone };
+}
+
 /** GET /rep/catalogs/:id/profile — the restaurant's business profile. */
 router.get(
   '/catalogs/:id/profile',
@@ -495,7 +563,14 @@ router.get(
     const profile = await getBusinessProfile(String(catalog.userId));
     if (!profile) return notDelegated(res);
 
-    res.status(200).json({ status: 'success', profile });
+    const account = await restaurantAccountFor(
+      req.user!.userId,
+      profile.id,
+      String(catalog.userId)
+    );
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ status: 'success', profile: { ...profile, ...account } });
   })
 );
 
@@ -537,7 +612,19 @@ router.patch(
       fields: Object.keys(parsed.data),
     });
 
-    res.status(200).json({ status: 'success', profile: result.profile });
+    // THE SAME BLOCK THE READ RETURNS. The client adopts this response as the
+    // profile, so omitting the account here would make the number disappear the
+    // first time a rep saved an address — and read as the app having lost it.
+    const account = await restaurantAccountFor(
+      req.user!.userId,
+      result.profile.id,
+      String(catalog.userId)
+    );
+
+    res.setHeader('Cache-Control', 'no-store');
+    res
+      .status(200)
+      .json({ status: 'success', profile: { ...result.profile, ...account } });
   })
 );
 
@@ -718,7 +805,19 @@ router.put(
       fields: [parsed.data.slot],
     });
 
-    res.status(200).json({ status: 'success', profile: result.profile });
+    // The account block again, for the same reason the PATCH carries it: this
+    // response REPLACES the profile the rep is looking at, so a logo upload
+    // would otherwise take the account number off the screen with it.
+    const account = await restaurantAccountFor(
+      req.user!.userId,
+      result.profile.id,
+      String(catalog.userId)
+    );
+
+    res.setHeader('Cache-Control', 'no-store');
+    res
+      .status(200)
+      .json({ status: 'success', profile: { ...result.profile, ...account } });
   })
 );
 
@@ -1303,6 +1402,113 @@ router.post(
         });
         return;
     }
+  })
+);
+
+/**
+ * GET /rep/catalogs/:id/qr?format=png|pdf&size=<px> — the restaurant's own QR,
+ * for a rep standing in the restaurant.
+ *
+ * THE OWNER'S ROUTE, DELEGATED — not a second render. `GET /catalog/qr` resolves
+ * the catalog from the caller's own token; this one resolves it from the
+ * delegation grant and then hands the SAME `catalog.publicUrl` to the SAME
+ * `renderCatalogQr` with the same arguments. A rep and the restaurant that owns
+ * the menu therefore print the identical square, which is the only version of
+ * this feature worth having: the two must not be distinguishable once they are
+ * on a table.
+ *
+ * NOT the standee sheet (`/rep/standees/:code/qr`). That renders the printed
+ * CODE — the eight characters a rep reads aloud — on the artwork, and it is
+ * reachable from stock a rep is carrying. This is the menu's own code, reachable
+ * from a restaurant that is already live, and it is what a restaurant reprints
+ * when the table sticker gets wet.
+ *
+ * The rate window is keyed on the REP, not on the restaurant: the limit exists
+ * to protect the renderer from one caller, and a rep opening five restaurants'
+ * codes in a row is one caller.
+ */
+router.get(
+  '/catalogs/:id/qr',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogQrQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const delegated = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!delegated) return notDelegated(res);
+
+    const rate = await consumeRateWindow(
+      `catalog-qr:${req.user!.userId}`,
+      env.CATALOG_QR_MAX_PER_WINDOW,
+      env.CATALOG_QR_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      res.status(429).json({
+        status: 'error',
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please try again shortly.',
+        retryAfter: rate.retryAfter,
+      });
+      return;
+    }
+
+    const catalog = await getCatalog(String(delegated.userId));
+    if (!catalog) return notDelegated(res);
+
+    if (!catalog.publicUrl) {
+      // The owner route's sentence, rewritten for who is reading it: a rep is
+      // being told to finish the visit, not to go and publish their own menu.
+      return fail(
+        res,
+        409,
+        'CATALOG_NOT_PUBLISHED',
+        'Publish this menu first — the QR code is created when it goes live.'
+      );
+    }
+
+    const { format, size } = parsed.data;
+    const clamped = clampQrSize(size);
+
+    // THE OWNER ROUTE'S KEY, unchanged and deliberately so. Same inputs, same
+    // bytes, same tag — a CDN or a client that has one of these cached must hit
+    // on the other, because they are the same image.
+    const etag = strongETag({
+      url: catalog.publicUrl,
+      name: catalog.name,
+      format,
+      size: clamped,
+    });
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
+      res.status(304).end();
+      return;
+    }
+
+    const rendered = await renderCatalogQr({
+      publicUrl: catalog.publicUrl,
+      catalogName: catalog.name,
+      format,
+      size: clamped,
+    });
+
+    track(AnalyticsEvent.CATALOG_QR_RENDERED, {
+      user_id_hash: hashIdentifier(req.user!.userId),
+      catalog_id: catalog.id,
+      format,
+      size: clamped,
+    });
+
+    res.setHeader('Content-Type', rendered.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
+    res.status(200).send(rendered.body);
   })
 );
 

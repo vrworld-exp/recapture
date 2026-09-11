@@ -116,6 +116,27 @@ class _CatalogTile extends StatelessWidget {
                   ],
                 ),
               ),
+              // THE QR ONLY EXISTS ONCE THE MENU IS LIVE, so the button only
+              // exists then too. A code is minted at provisioning and never
+              // invented, and offering the control on a draft row would send a
+              // rep to a screen whose only content is "not yet" — worse than
+              // not offering it, because they would tap it at a table.
+              //
+              // ITS OWN CONTROL, not a step inside the restaurant, for the
+              // reason the published list keeps its download on the row:
+              // showing the customer the code and going in to edit dishes are
+              // two different errands, and the one a rep does standing at the
+              // counter should not start with a detail screen.
+              if (summary.status.isLive)
+                IconButton(
+                  key: ValueKey('rep_catalog_qr_${summary.id}'),
+                  tooltip: 'Show the QR code',
+                  icon: const Icon(Icons.qr_code_2),
+                  color: AppColors.royalGold,
+                  onPressed: () => context.push(
+                    '${AppRoutes.repCatalogs}/${summary.id}/qr',
+                  ),
+                ),
               const Icon(Icons.chevron_right, color: AppColors.textMuted),
             ],
           ),

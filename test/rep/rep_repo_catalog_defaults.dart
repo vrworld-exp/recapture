@@ -16,7 +16,7 @@
 // takes.
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:recapture/data/repositories/catalog_repository.dart'
-    show BrandingSlot;
+    show BrandingSlot, CatalogQrFormat, CatalogQrImage;
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show kCatalogUnchanged;
 import 'package:recapture/domain/entities/qr_standee.dart';
@@ -37,6 +37,16 @@ mixin RepRepoCatalogDefaults implements RepRepository {
   @override
   Future<Catalog> catalog(String catalogId) =>
       throw UnimplementedError('rep catalog read is not exercised by this test');
+
+  @override
+  Future<CatalogQrImage> catalogQr(
+    String catalogId, {
+    CatalogQrFormat format = CatalogQrFormat.png,
+    int? size,
+  }) =>
+      throw UnimplementedError(
+        "rep catalog QR is not exercised by this test",
+      );
 
   @override
   Future<CatalogCategoryList> categories(String catalogId) =>
