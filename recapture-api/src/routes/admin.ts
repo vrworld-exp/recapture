@@ -400,11 +400,15 @@ router.get(
  * GET /admin/projects/:id/export — the presigned-URL export manifest for the
  * project's most recent upload-finalized job.
  *
- * Rate-limited per staff user (the presigned URLs are bearer credentials —
- * generating them should be deliberate, not free). The response's `files[].url`
- * values are the ONLY place a presigned URL may appear: never in logs or
- * analytics (ids there are hashed). Callers that only need to LOOK at the
- * photos want `/photos` + `/photo-bytes` instead — this one is for handing out
+ * NOT rate-limited by default. The Preview gallery's Download and the Live
+ * tab's Export both mint through here, and the old per-user cap (10/hour)
+ * reached staff as "Preview limit reached" after ten downloads — a limit on
+ * looking at photos was never the intent. The window survives only as an
+ * opt-in meter (`ADMIN_EXPORT_MAX_PER_WINDOW` > 0); at the default of 0 it
+ * is skipped entirely. The presigned URLs are still bearer credentials: the
+ * response's `files[].url` values are the ONLY place one may appear — never in
+ * logs or analytics (ids there are hashed). Callers that only need to LOOK at
+ * the photos still want `/photos` + `/photo-bytes`; this one hands out
  * downloadable URLs.
  */
 router.get(
@@ -421,19 +425,22 @@ router.get(
     }
 
     const userId = req.user!.userId;
-    const rate = await consumeRateWindow(
-      `admin-export:${userId}`,
-      env.ADMIN_EXPORT_MAX_PER_WINDOW,
-      env.ADMIN_EXPORT_WINDOW_SECONDS
-    );
-    if (rate.limited) {
-      res.status(429).json({
-        status: 'error',
-        code: 'RATE_LIMITED',
-        message: 'Too many export requests. Please try again later.',
-        retryAfter: rate.retryAfter,
-      });
-      return;
+    // Opt-in only: 0 (the default) means unlimited — see the route note.
+    if (env.ADMIN_EXPORT_MAX_PER_WINDOW > 0) {
+      const rate = await consumeRateWindow(
+        `admin-export:${userId}`,
+        env.ADMIN_EXPORT_MAX_PER_WINDOW,
+        env.ADMIN_EXPORT_WINDOW_SECONDS
+      );
+      if (rate.limited) {
+        res.status(429).json({
+          status: 'error',
+          code: 'RATE_LIMITED',
+          message: 'Too many export requests. Please try again later.',
+          retryAfter: rate.retryAfter,
+        });
+        return;
+      }
     }
 
     const result = await buildProjectExport(params.data.id);

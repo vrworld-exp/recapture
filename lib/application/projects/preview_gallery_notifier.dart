@@ -8,11 +8,13 @@
 // [AdminPhotoImage]), so opening, refreshing and scrolling the gallery cost
 // nothing from the server's per-user export budget.
 //
-// The rate-limited export manifest is fetched only when a DOWNLOAD needs a real
-// presigned url, and the result is cached here until it expires — so a session
-// of downloads costs one token, not one per photo. (The gallery previously drew
-// its thumbnails from that manifest, which is why ten opens exhausted a cap
-// meant for ten exports.)
+// The export manifest is fetched only when a DOWNLOAD needs a real presigned
+// url, and the result is cached here until it expires — so a session of
+// downloads is one request, not one per photo. (The gallery previously drew its
+// thumbnails from that manifest, which is why ten opens exhausted a cap meant
+// for ten exports. That cap is now off by default server-side —
+// `ADMIN_EXPORT_MAX_PER_WINDOW=0` — so previewing and downloading are
+// unlimited; the cache stays because a fresh presign per photo is still waste.)
 //
 // Mutations:
 //   • deletePhoto — soft-delete via the repo, then drop the tile LOCALLY (no
@@ -41,14 +43,17 @@ class PreviewGalleryNotifier
   }
 
   Future<PreviewManifest> _load(String projectId) async {
-    final photos = await ref.read(liveProjectsRepositoryProvider).photos(projectId);
+    final photos =
+        await ref.read(liveProjectsRepositoryProvider).photos(projectId);
     return PreviewManifest.fromPhotosMap(photos);
   }
 
   /// Soft-deletes [photo] and removes it from the in-memory list on success.
   /// Rethrows [LiveProjectsException] on failure (the tile stays put).
   Future<void> deletePhoto(PreviewPhoto photo) async {
-    await ref.read(liveProjectsRepositoryProvider).deletePhotos(arg, [photo.key]);
+    await ref
+        .read(liveProjectsRepositoryProvider)
+        .deletePhotos(arg, [photo.key]);
     final cachedExport = _export;
     if (cachedExport != null) {
       // Keep the download cache honest rather than handing out a presigned url
@@ -72,10 +77,10 @@ class PreviewGalleryNotifier
 
   /// Returns [photo] carrying a still-valid presigned download url.
   ///
-  /// This is the ONLY path that spends the server's export budget. The minted
-  /// manifest covers every photo in the set and is cached until it nears
-  /// expiry, so downloading ten photos in one session costs one token; the
-  /// eleventh, an hour later, costs a second. Returns the original [photo]
+  /// This is the ONLY path that mints presigned urls. The minted manifest
+  /// covers every photo in the set and is cached until it nears expiry, so
+  /// downloading ten photos in one session is one request; the eleventh, an
+  /// hour later, is a second. Returns the original [photo]
   /// (url-less) when its key is absent from the fresh manifest — e.g. deleted
   /// since — so the caller surfaces a mapped failure rather than crashing.
   Future<PreviewPhoto> freshPhotoFor(
@@ -95,10 +100,12 @@ class PreviewGalleryNotifier
     final cached = _export;
     final expiresAt = cached?.expiresAt;
     if (cached == null || expiresAt == null) return null;
-    return expiresAt.isAfter(clock().toUtc().add(_expiryMargin)) ? cached : null;
+    return expiresAt.isAfter(clock().toUtc().add(_expiryMargin))
+        ? cached
+        : null;
   }
 
-  /// Mints a fresh export manifest (spends one rate-limit token) and caches it.
+  /// Mints a fresh export manifest and caches it.
   Future<PreviewManifest> _loadExport() async {
     final export = await ref.read(liveProjectsRepositoryProvider).export(arg);
     final manifest = PreviewManifest.fromExportMap(export);

@@ -88,9 +88,15 @@ const envSchema = z.object({
   // ── Staff export (GET /admin/projects/:id/export) ──────────────────────────
   /** Validity of the presigned GET URLs in an export manifest (seconds). */
   ADMIN_EXPORT_URL_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
-  /** Max export manifests one staff user may generate per window. */
-  ADMIN_EXPORT_MAX_PER_WINDOW: z.coerce.number().int().positive().default(10),
-  /** Sliding window for the export cap (seconds). */
+  /**
+   * Max export manifests one staff user may generate per window. `0` (the
+   * default) DISABLES the window: staff previewing and downloading a project's
+   * photos is meant to be unlimited, and the old cap of 10/hour surfaced to
+   * admins as "Preview limit reached" after ten downloads or exports. Set a
+   * positive value only to re-arm the meter deliberately.
+   */
+  ADMIN_EXPORT_MAX_PER_WINDOW: z.coerce.number().int().nonnegative().default(0),
+  /** Sliding window for the export cap (seconds). Unused while the cap is 0. */
   ADMIN_EXPORT_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
   // ── Owner identity lookup (GET /admin/users/:id) ───────────────────────────
@@ -439,7 +445,7 @@ const envSchema = z.object({
    * How a product's assets reach Mirage.
    *
    *   bytes — read the object out of S3 as a STREAM and pipe it into the
-   *           multipart request. Works against Mirage as it exists today, and
+  equest. Works against Mirage as it exists today, and
    *           costs one round trip of the whole file through this process.
    *   url   — send the ReCapture CloudFront URL and let Mirage fetch it
    *           server-side. Vastly cheaper (a 90 MiB model becomes a message),

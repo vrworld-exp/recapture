@@ -54,7 +54,8 @@ class _FakeRepo
 
   @override
   Future<Map<String, dynamic>> export(String projectId) async =>
-      throw UnimplementedError('the gallery must not mint export urls to browse');
+      throw UnimplementedError(
+          'the gallery must not mint export urls to browse');
 
   @override
   Future<PreviewDeleteResult> deletePhotos(String p, List<String> k) async =>
@@ -272,7 +273,10 @@ void main() {
       // A dialog, not a snackbar — a press that spends credits cannot report
       // its failure in something that fades away on its own.
       expect(find.byKey(const ValueKey('create_model_error')), findsOneWidget);
-      expect(find.textContaining('limit reached'), findsOneWidget);
+      // A 429 on Create Model is an ACTION window, and the copy says so — it
+      // must never call itself a "preview limit": previewing is unlimited.
+      expect(find.textContaining('Too many requests'), findsOneWidget);
+      expect(find.textContaining('Preview limit'), findsNothing);
       expect(find.textContaining('LiveProjectsException'), findsNothing);
       // The selection survives the failure so a retry doesn't start over.
       expect(find.text('3 of 4 selected'), findsOneWidget);
@@ -401,8 +405,7 @@ void main() {
           ),
         );
 
-    testWidgets('a meshy model is badged "Created by Maya AI"',
-        (tester) async {
+    testWidgets('a meshy model is badged "Created by Maya AI"', (tester) async {
       await tester.pumpWidget(app(const ProjectModelView(
         id: 'm1',
         source: ModelSource.meshy,

@@ -7,11 +7,19 @@
 //
 // BROWSING COSTS NOTHING. The grid is listed from the credential-free
 // `/photos` endpoint and every pixel is drawn through the authenticated
-// photo-bytes proxy ([AdminPhotoImage]). Only Download reaches for the
-// rate-limited export manifest, and its notifier caches that until it expires.
-// This screen used to draw its thumbnails from presigned export urls, so ten
-// opens spent a budget meant for ten real exports and the gallery started
-// refusing to load. Do not reintroduce a presigned url as an image source.
+// photo-bytes proxy ([AdminPhotoImage]). Only Download reaches for the export
+// manifest, and its notifier caches that until it expires. This screen used to
+// draw its thumbnails from presigned export urls, so ten opens spent a budget
+// meant for ten real exports and the gallery started refusing to load. Do not
+// reintroduce a presigned url as an image source.
+//
+// PREVIEWING IS UNLIMITED — on the server as well. The export manifest's
+// per-user window is off by default (`ADMIN_EXPORT_MAX_PER_WINDOW=0`), so a
+// staff user downloading from the eleventh project in an hour is not refused
+// either. There is no "preview limit" left to report, which is why the 429
+// copy below no longer claims one: the only windows still reachable from these
+// surfaces guard real spend (Create Model, Optimize), and a 429 from those is
+// worded as what it is.
 //
 // Errors show MAPPED copy only — never a raw code or URL (same rule as 9F /
 // the Live tab).
@@ -67,8 +75,16 @@ const int kMaxModelPhotos = 4;
 String failureCopy(Object error) => switch (error) {
       LiveProjectsException(failure: LiveProjectsFailure.notExportable) =>
         'This project has no finished upload to preview yet.',
-      LiveProjectsException(failure: LiveProjectsFailure.rateLimited) =>
-        'Preview limit reached — try again later.',
+      // Never "Preview limit": previewing photos and models is unlimited, and
+      // a 429 here comes from an ACTION window (Create Model / Optimize). Say
+      // when to retry if the server told us, so the user isn't left guessing.
+      LiveProjectsException(
+        failure: LiveProjectsFailure.rateLimited,
+        retryAfterSeconds: final retry
+      ) =>
+        retry == null
+            ? 'Too many requests right now — try again in a few minutes.'
+            : 'Too many requests right now — try again in ${friendlyWait(retry)}.',
       LiveProjectsException(failure: LiveProjectsFailure.forbidden) =>
         'Your account no longer has staff access.',
       LiveProjectsException(failure: LiveProjectsFailure.network) =>
@@ -79,6 +95,13 @@ String failureCopy(Object error) => switch (error) {
         'This model can’t be optimized — pull down to refresh the list.',
       _ => 'Something went wrong. Please try again.',
     };
+
+/// "$n seconds" under a minute and a half, else whole minutes — the same
+/// rounding the Live tab uses for its retry hints.
+String friendlyWait(int seconds) {
+  if (seconds < 90) return '$seconds seconds';
+  return '${(seconds / 60).ceil()} minutes';
+}
 
 class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
   /// Sizing-only override for the app-bar CTA: everything visual (fill,

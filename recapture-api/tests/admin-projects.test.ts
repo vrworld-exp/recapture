@@ -516,28 +516,51 @@ describe('GET /admin/projects/:id/export', () => {
     ).toBe(409);
   });
 
-  it('429 with retryAfter once the per-user window is exhausted', async () => {
+  it('is UNLIMITED by default: staff can download/export far past the old 10/hour cap', async () => {
+    // The regression this pins: the Preview gallery's Download and the Live
+    // tab's Export both mint through this route, and the old per-user window
+    // reached admins as "Preview limit reached" after ten of them.
+    expect(env.ADMIN_EXPORT_MAX_PER_WINDOW).toBe(0);
     const owner = await makeUser('USER');
     const { auth } = await makeUser('MODEL_ARTIST');
     const project = await makeProject(owner.id, 'COMPLETED');
     await makeFinalizedJob(owner.id, project.id as string);
     mockS3List(48);
 
-    for (let i = 0; i < env.ADMIN_EXPORT_MAX_PER_WINDOW; i++) {
+    for (let i = 0; i < 12; i++) {
       const ok = await request(app).get(`/admin/projects/${project.id}/export`).set(auth);
       expect(ok.status).toBe(200);
     }
+  });
 
-    const limited = await request(app).get(`/admin/projects/${project.id}/export`).set(auth);
-    expect(limited.status).toBe(429);
-    expect(limited.body.code).toBe('RATE_LIMITED');
-    expect(limited.body.retryAfter).toBeGreaterThan(0);
+  it('429 with retryAfter once an OPTED-IN per-user window is exhausted', async () => {
+    const previous = env.ADMIN_EXPORT_MAX_PER_WINDOW;
+    Object.assign(env, { ADMIN_EXPORT_MAX_PER_WINDOW: 3 });
+    try {
+      const owner = await makeUser('USER');
+      const { auth } = await makeUser('MODEL_ARTIST');
+      const project = await makeProject(owner.id, 'COMPLETED');
+      await makeFinalizedJob(owner.id, project.id as string);
+      mockS3List(48);
 
-    // The window is PER USER: another staff account is unaffected.
-    const other = await makeUser('ADMIN');
-    expect(
-      (await request(app).get(`/admin/projects/${project.id}/export`).set(other.auth)).status
-    ).toBe(200);
+      for (let i = 0; i < env.ADMIN_EXPORT_MAX_PER_WINDOW; i++) {
+        const ok = await request(app).get(`/admin/projects/${project.id}/export`).set(auth);
+        expect(ok.status).toBe(200);
+      }
+
+      const limited = await request(app).get(`/admin/projects/${project.id}/export`).set(auth);
+      expect(limited.status).toBe(429);
+      expect(limited.body.code).toBe('RATE_LIMITED');
+      expect(limited.body.retryAfter).toBeGreaterThan(0);
+
+      // The window is PER USER: another staff account is unaffected.
+      const other = await makeUser('ADMIN');
+      expect(
+        (await request(app).get(`/admin/projects/${project.id}/export`).set(other.auth)).status
+      ).toBe(200);
+    } finally {
+      Object.assign(env, { ADMIN_EXPORT_MAX_PER_WINDOW: previous });
+    }
   });
 });
 

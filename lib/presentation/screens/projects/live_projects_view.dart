@@ -21,6 +21,7 @@ import '../../widgets/app_card.dart';
 import '../../widgets/app_status_pill.dart';
 import 'admin_delete_project_dialog.dart';
 import 'model_building_screen.dart';
+import 'preview_gallery_screen.dart' show friendlyWait;
 import 'project_owner_sheet.dart';
 
 /// Staff-only "Live projects" tab body: every user's captured
@@ -93,8 +94,9 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
     if (_exportInFlight.contains(project.id)) return;
     setState(() => _exportInFlight.add(project.id));
     try {
-      final result =
-          await ref.read(projectExportServiceProvider).exportProject(project.id);
+      final result = await ref
+          .read(projectExportServiceProvider)
+          .exportProject(project.id);
       if (!mounted) return;
       final expiry = result.expiresAt;
       final expiryNote = expiry == null
@@ -204,7 +206,9 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
     final message = switch (error) {
       LiveProjectsException(failure: LiveProjectsFailure.notExportable) =>
         'This project has no finished upload to export yet.',
-      LiveProjectsException(failure: LiveProjectsFailure.confirmationMismatch) =>
+      LiveProjectsException(
+        failure: LiveProjectsFailure.confirmationMismatch
+      ) =>
         'The name you typed doesn’t match this project.',
       LiveProjectsException(failure: LiveProjectsFailure.notFound) =>
         'This project no longer exists — pull to refresh.',
@@ -214,7 +218,7 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
       ) =>
         retry == null
             ? 'Export limit reached — try again later.'
-            : 'Export limit reached — try again in ${_friendlyWait(retry)}.',
+            : 'Export limit reached — try again in ${friendlyWait(retry)}.',
       LiveProjectsException(failure: LiveProjectsFailure.forbidden) =>
         'Your account no longer has staff access.',
       LiveProjectsException(failure: LiveProjectsFailure.network) =>
@@ -222,11 +226,6 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
       _ => 'Something went wrong. Please try again.',
     };
     _snack(message);
-  }
-
-  static String _friendlyWait(int seconds) {
-    if (seconds < 90) return '$seconds seconds';
-    return '${(seconds / 60).ceil()} minutes';
   }
 
   /// A project with a finalized upload — the backend's exportable set. Mirrors
@@ -315,16 +314,14 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
                 // Only for a project with a finalized capture — the server
                 // refuses anything else, and a button that always errors is
                 // worse than no button. No isStaff check: this view is staff.
-                onGenerate: _isExportable(project)
-                    ? () => _generate(project)
-                    : null,
+                onGenerate:
+                    _isExportable(project) ? () => _generate(project) : null,
                 // Same gate as Generate, and for the same reason: the submit
                 // route needs the project's finalized job to attach a model to.
                 // ADMIN and MODEL_ARTIST both get it — this whole view is
                 // already staff-only, and the backend re-checks the role.
-                onSubmitModel: _isExportable(project)
-                    ? () => _submitModel(project)
-                    : null,
+                onSubmitModel:
+                    _isExportable(project) ? () => _submitModel(project) : null,
                 isGenerating: _generateInFlight.contains(project.id),
                 // Null (affordance hidden) for MODEL_ARTIST — delete is the
                 // ADMIN curation tool for bad captures.
@@ -335,8 +332,8 @@ class _LiveProjectsViewState extends ConsumerState<LiveProjectsView> {
                 // — or an admin whose role could not be read — keeps the
                 // opaque owner line the card has always shown.
                 onOwner: isAdmin && project.owner != null
-                    ? () => showProjectOwnerSheet(context,
-                        owner: project.owner!)
+                    ? () =>
+                        showProjectOwnerSheet(context, owner: project.owner!)
                     : null,
               );
             },
@@ -426,9 +423,8 @@ class _LiveProjectCard extends StatelessWidget {
   /// other status keeps its pill. Same rule as `ProjectCard._showStatusPill`
   /// on the My-projects list — the two surfaces must not disagree about the
   /// same project.
-  bool get _showStatusPill =>
-      !(project.status == ProjectStatus.processing &&
-          project.hasViewableModels);
+  bool get _showStatusPill => !(project.status == ProjectStatus.processing &&
+      project.hasViewableModels);
 
   @override
   Widget build(BuildContext context) {
@@ -493,8 +489,7 @@ class _LiveProjectCard extends StatelessWidget {
           ),
           if (_exportable) ...[
             const SizedBox(height: AppSpacing.md),
-            const Divider(
-                color: AppColors.disabled, thickness: 0.5, height: 1),
+            const Divider(color: AppColors.disabled, thickness: 0.5, height: 1),
             const SizedBox(height: AppSpacing.md),
             // Expanded slots bound each button's width (AppButton's theme has
             // an infinite minimumSize, so a bare Row child would overflow).
@@ -614,7 +609,8 @@ class _CreatedByLabel extends StatelessWidget {
               ),
             ),
             const SizedBox(width: AppSpacing.xs),
-            const Icon(Icons.info_outline, size: 13, color: AppColors.textMuted),
+            const Icon(Icons.info_outline,
+                size: 13, color: AppColors.textMuted),
           ],
         ),
       ),

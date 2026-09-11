@@ -200,10 +200,16 @@ do not remove it).
   from the caller. Guardrails: `tests/avatar-keys.test.ts` +
   `tests/auth-me-avatar.test.ts`.
 - Export URLs are presigned S3 GETs with TTL `ADMIN_EXPORT_URL_TTL_SECONDS`
-  (default 3600), rate-limited per user via the generic `consumeRateWindow`
-  (`ADMIN_EXPORT_MAX_PER_WINDOW`/`ADMIN_EXPORT_WINDOW_SECONDS`). A presigned URL
-  is a bearer credential: it may appear ONLY in the export response body —
-  never in logs or analytics.
+  (default 3600). **Previewing and downloading a project's photos is
+  UNLIMITED**: the per-user window on `GET /admin/projects/:id/export`
+  (`ADMIN_EXPORT_MAX_PER_WINDOW`/`ADMIN_EXPORT_WINDOW_SECONDS`, via the generic
+  `consumeRateWindow`) is **off by default (`0`)** and only re-armed by setting
+  a positive value. The old default of 10/hour reached staff as "Preview limit
+  reached" after ten Downloads/Exports, which was never the intent — browsing
+  (`/photos` + `/photo-bytes`) was already free, and the client's 429 copy on
+  the photo/model surfaces must never call itself a preview limit. A presigned
+  URL is still a bearer credential: it may appear ONLY in the export response
+  body — never in logs or analytics.
 
 ### 3D models: two origins, one shape
 - A model is a **`ProjectModel`** record (`models/ProjectModel.ts`), one per
