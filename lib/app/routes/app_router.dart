@@ -24,6 +24,7 @@ import '../../presentation/screens/admin/admin_batch_detail_screen.dart';
 import '../../presentation/screens/admin/admin_standees_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_published_screen.dart';
+import '../../presentation/screens/rep/rep_publish_screen.dart';
 import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_qr_screen.dart';
@@ -203,6 +204,11 @@ abstract final class AppRoutes {
   /// than hides.
   static const repCatalogQr = '/rep/catalogs/:id/qr';
 
+  /// The rep's publish screen — the OWNER's [catalogPublish], for a restaurant
+  /// a rep holds a delegation on: the same checklist, the same live progress,
+  /// the same failure list and retry, through the rep's delegated routes.
+  static const repCatalogPublish = '/rep/catalogs/:id/publish';
+
   // ── Admin (standee inventory, /admin/standees) ────────────────────────────
   // Gated on isAdmin in the router's redirect below. NOT the whole /admin
   // subtree: the staff project routes below it are MODEL_ARTIST surfaces, and
@@ -281,6 +287,7 @@ abstract final class AppRouteNames {
   static const repCatalogDetails = 'repCatalogDetails';
   static const repCatalogPreview = 'repCatalogPreview';
   static const repCatalogQr = 'repCatalogQr';
+  static const repCatalogPublish = 'repCatalogPublish';
   static const adminStandees = 'adminStandees';
   static const adminBatchDetail = 'adminBatchDetail';
   static const previewGallery = 'previewGallery';
@@ -630,6 +637,16 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.repCatalogQr,
         name: AppRouteNames.repCatalogQr,
         builder: (context, state) => RepCatalogQrScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      // The publish screen holds a POLL LOOP, which is why it is a real route
+      // rather than a sheet: a browser reload lands back on it with the run
+      // still being watched, exactly as the owner's does.
+      GoRoute(
+        path: AppRoutes.repCatalogPublish,
+        name: AppRouteNames.repCatalogPublish,
+        builder: (context, state) => RepPublishScreen(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),

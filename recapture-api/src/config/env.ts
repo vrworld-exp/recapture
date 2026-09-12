@@ -622,6 +622,14 @@ const envSchema = z.object({
   WORKER_CLAIM_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   /** Jobs one worker instance processes concurrently. */
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  /**
+   * Extra slots, beyond WORKER_CONCURRENCY, reserved for MIRAGE_CATALOG_PUBLISH
+   * jobs. A Meshy generation holds a general slot for up to MESHY_TASK_TIMEOUT_MS,
+   * and with the default concurrency of 2 a publish — which a rep stands at a
+   * table waiting on — used to queue behind two of them for exactly that long.
+   * 0 disables the lane (publish jobs then share the general budget as before).
+   */
+  WORKER_PUBLISH_LANE_SLOTS: z.coerce.number().int().nonnegative().default(1),
   /** Heartbeat log (with queue-depth breakdown) every N polls. */
   WORKER_HEARTBEAT_EVERY_N_POLLS: z.coerce.number().int().positive().default(20),
 });

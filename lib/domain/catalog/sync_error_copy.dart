@@ -129,6 +129,39 @@ const Map<String, SyncErrorCopy> _copy = {
     'The catalog service would not accept this item.',
     'Try again, or edit it and publish again.',
   ),
+
+  // ── RUN-level codes ───────────────────────────────────────────────────────
+  //
+  // Not per-item: these sit on the run itself (`run.error.code`) and describe
+  // why a whole publish ended without putting anything up. Sources:
+  // `worker/processors/mirageCatalogPublishProcessor.ts` (PublishErrorCode)
+  // and `services/catalog/publishRunState.ts` (PUBLISH_ABANDONED). They read
+  // through the same lookup as the per-item codes, so a run failure toast gets
+  // a sentence written for it instead of the per-item fallback above.
+  'PUBLISH_RESTAURANT_UNAVAILABLE': SyncErrorCopy(
+    'Nothing could be published this time.',
+    'Try again in a few minutes.',
+  ),
+  'PUBLISH_STEP_FAILED': SyncErrorCopy(
+    'Publishing stopped unexpectedly.',
+    'Try again in a moment.',
+  ),
+  'PUBLISH_ABANDONED': SyncErrorCopy(
+    'This publish never started.',
+    'Press Publish again.',
+  ),
+  'PUBLISH_CATALOG_MISSING': SyncErrorCopy(
+    'The catalog this publish was for no longer exists.',
+    null,
+  ),
+  'PUBLISH_RUN_MISSING': SyncErrorCopy(
+    'This publish could not be started.',
+    'Press Publish again.',
+  ),
+  'PUBLISH_JOB_MALFORMED': SyncErrorCopy(
+    'This publish could not be started.',
+    'Press Publish again.',
+  ),
 };
 
 /// OUR sentence for a publish-failure [code].

@@ -504,6 +504,16 @@ export const restaurantExecutor: PublishStepExecutor = async (step, context) => 
 
 // ── Requesting a publish ────────────────────────────────────────────────────
 
+/**
+ * Claim priority for the publish job. Every other job type enqueues at the
+ * schema default (0), so a publish is always the next thing a free worker slot
+ * takes — a rep is standing at a table for it, while a Meshy generation or a
+ * model optimisation is background work nobody is watching. The worker's
+ * reserved lane (WORKER_PUBLISH_LANE_SLOTS) covers the case where no general
+ * slot frees up at all; this covers the case where one does.
+ */
+export const PUBLISH_JOB_PRIORITY = 10;
+
 export interface PublishRunDto {
   runId: string;
   state: PublishRunState;
@@ -564,6 +574,7 @@ async function openRun(
     userId: catalog.userId,
     jobType: MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
     state: 'QUEUED',
+    priority: PUBLISH_JOB_PRIORITY,
     payload: {
       catalogId: catalogId.toHexString(),
       publishRunId: runId.toHexString(),
@@ -644,20 +655,40 @@ export async function requestPublish(
   // call once it exists, so calling it here (rather than only inside the run)
   // costs nothing on a republish and lets a NAME_TAKEN reach the user
   // synchronously, with a suggestion, instead of as a failed background run.
+  //
+  // BEST-EFFORT WHEN MIRAGE IS THE PROBLEM. This runs inside the HTTP request,
+  // and a Mirage that is asleep, restarting or unreachable used to surface
+  // here as an unhandled throw — a 500 to a rep whose catalog was perfectly
+  // publishable — or, worse, as the client's own timeout on a request the
+  // server then went on to complete. Nothing about a transport failure is a
+  // fact about the catalog, so it does not decide the request: the run is
+  // queued anyway, and its RESTAURANT CREATE step provisions with the worker's
+  // backoff behind it. Only a retryable failure is swallowed; a terminal or
+  // auth one is still an error the operator has to see.
   let mapping: CatalogMappingDto | undefined;
   if (!catalog.mirageRestaurantId) {
-    const provisioned = await provisionCatalog(catalogId);
-    switch (provisioned.outcome) {
-      case 'NAME_TAKEN':
-        return {
-          outcome: 'NAME_TAKEN',
-          code: CATALOG_NAME_TAKEN,
-          suggestedName: provisioned.suggestedName,
-        };
-      case 'CATALOG_GONE':
-        return { outcome: 'NOT_FOUND' };
-      default:
-        mapping = provisioned.mapping;
+    let provisioned: Awaited<ReturnType<typeof provisionCatalog>> | undefined;
+    try {
+      provisioned = await provisionCatalog(catalogId);
+    } catch (err) {
+      if (!(err instanceof MirageError) || !err.isRetryable) throw err;
+      console.warn(
+        `[catalog] publish: provisioning deferred to the run — ${err.code} (${err.context})`
+      );
+    }
+    if (provisioned) {
+      switch (provisioned.outcome) {
+        case 'NAME_TAKEN':
+          return {
+            outcome: 'NAME_TAKEN',
+            code: CATALOG_NAME_TAKEN,
+            suggestedName: provisioned.suggestedName,
+          };
+        case 'CATALOG_GONE':
+          return { outcome: 'NOT_FOUND' };
+        default:
+          mapping = provisioned.mapping;
+      }
     }
   }
 
@@ -792,6 +823,13 @@ export interface PublishStatusDto {
    * where some products genuinely are not live.
    */
   hasDraftChanges: boolean;
+  /**
+   * Authoring writes landed AFTER the in-flight run planned — the same
+   * `draftRevision > run.snapshotRevision` the catalog DTO reports, here so a
+   * screen watching the run can say "your latest changes are not in this
+   * publish" without a second read. False whenever nothing is running.
+   */
+  hasChangesSincePublishStarted: boolean;
   publicUrl: string | null;
   lastPublishedAt: string | null;
   activeRunId: string | null;
@@ -849,6 +887,14 @@ export async function getPublishStatus(
     status: {
       status: catalog.status,
       hasDraftChanges: catalog.draftRevision > catalog.publishedRevision,
+      // Only ever true against the ACTIVE run: the most recent run is the
+      // active one whenever there is one (openRun creates it last), and a
+      // finished run has nothing left to be stale against.
+      hasChangesSincePublishStarted:
+        Boolean(catalog.activePublishRunId) &&
+        run !== null &&
+        String(run._id) === catalog.activePublishRunId?.toHexString() &&
+        catalog.draftRevision > run.snapshotRevision,
       publicUrl: catalog.publicUrl ?? null,
       lastPublishedAt: catalog.lastPublishedAt?.toISOString() ?? null,
       activeRunId: catalog.activePublishRunId?.toHexString() ?? null,

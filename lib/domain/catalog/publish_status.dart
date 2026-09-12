@@ -232,6 +232,7 @@ class PublishStatus {
   const PublishStatus({
     required this.status,
     required this.hasDraftChanges,
+    this.hasChangesSincePublishStarted = false,
     required this.publicUrl,
     required this.lastPublishedAt,
     required this.activeRunId,
@@ -246,6 +247,14 @@ class PublishStatus {
   /// and published revision counters, never a stored flag and never something
   /// the client recomputes by diffing.
   final bool hasDraftChanges;
+
+  /// Authoring writes landed AFTER the in-flight run planned, so the menu
+  /// about to go live is not the one on screen. Server-derived
+  /// (`draftRevision > run.snapshotRevision`), false whenever nothing is
+  /// running, and DEFAULTS TO FALSE when absent — an API one deploy behind
+  /// simply never raises the warning, and [hasDraftChanges] tells the truth
+  /// again the moment the run ends.
+  final bool hasChangesSincePublishStarted;
 
   /// The frozen public URL, or null before the first publish. Display only:
   /// every printed QR resolves through it, so the client never composes,
@@ -318,6 +327,8 @@ class PublishStatus {
       // are not; wrongly showing it costs one redundant publish. Same rule as
       // Catalog.hasUnpublishedChanges.
       hasDraftChanges: map['hasDraftChanges'] != false,
+      hasChangesSincePublishStarted:
+          map['hasChangesSincePublishStarted'] == true,
       publicUrl: catalogText(map['publicUrl']),
       lastPublishedAt: catalogDate(map['lastPublishedAt']),
       activeRunId: catalogText(map['activeRunId']),

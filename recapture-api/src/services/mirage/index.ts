@@ -14,6 +14,7 @@ export {
   setMirageClient,
   resetMirageClient,
   resetMirageTransport,
+  warmUpMirage,
   mirageClient,
   type MirageClient,
 } from './mirageClient';

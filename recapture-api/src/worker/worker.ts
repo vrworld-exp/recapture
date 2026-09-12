@@ -16,6 +16,7 @@ import {
   markCompleted,
   markFailed,
   markProcessing,
+  renewClaim,
 } from '@/worker/jobQueue';
 import { getProcessor, listRegisteredTypes } from '@/worker/processorRegistry';
 import { log, toError } from '@/worker/workerLog';
@@ -38,6 +39,13 @@ const CLAIM_YIELD_MS = 50;
 const DRAIN_POLL_MS = 250;
 
 /**
+ * How many times per lease the heartbeat renews it. Three, so two consecutive
+ * renewals can be lost (a Mongo blip, an event loop stalled by a CPU-bound
+ * stage) before the lease actually lapses and another poll re-claims the job.
+ */
+const LEASE_RENEWALS_PER_TIMEOUT = 3;
+
+/**
  * Runs the worker until a shutdown signal (SIGTERM/SIGINT, or the config's
  * stopSignal test seam) arrives, then drains in-flight jobs and resolves.
  */
@@ -46,7 +54,12 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
 
   let running = true;
   let pollCount = 0;
+  // Two budgets, not one. `activeJobs` is the general budget every type shares;
+  // `activeLaneJobs` is the reserved lane's own, spent only when the general
+  // one is full. A job claimed into the general budget while it had room counts
+  // there even if its type is a lane type — the lane is a floor, not a cap.
   let activeJobs = 0;
+  let activeLaneJobs = 0;
 
   // Read ONCE, here, because the registry is written entirely at boot
   // (registerAllProcessors) and frozen for the process's life — and because
@@ -55,6 +68,19 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   // terminally below, so a build that predates a job type must not be able to
   // touch one; see the note on claimNextJob's `jobTypes` parameter.
   const processableTypes = config.jobTypes ?? listRegisteredTypes();
+
+  // THE RESERVED LANE. Long-running jobs — a Meshy generation can hold a slot
+  // for MESHY_TASK_TIMEOUT_MS — fill the general budget for minutes at a time,
+  // and a job type that a person is standing and waiting on (a catalog
+  // publish, with a rep at a restaurant table) used to queue behind them for
+  // exactly that long. The lane lets `lane.slots` more of those types run
+  // beyond `concurrency`, so they are claimed within one poll of being
+  // enqueued whatever else is in flight. Intersected with processableTypes so
+  // the lane can never claim a job this build has no processor for.
+  const laneTypes = (config.reservedLane?.jobTypes ?? []).filter((type) =>
+    processableTypes.includes(type)
+  );
+  const laneSlots = laneTypes.length > 0 ? (config.reservedLane?.slots ?? 0) : 0;
 
   const stop = (signal: string): void => {
     if (!running) return;
@@ -74,6 +100,7 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
     concurrency,
     heartbeatEveryNPolls,
     processableTypes,
+    ...(laneSlots > 0 ? { reservedLane: { jobTypes: laneTypes, slots: laneSlots } } : {}),
   });
   // An empty registry is a boot bug, not a quiet idle worker: the loop below
   // would poll forever and claim nothing while the queue grows.
@@ -91,15 +118,27 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
       });
       // A steadily growing QUEUED count here = backpressure. First scaling
       // lever: raise WORKER_CONCURRENCY or run more worker instances.
-      log('info', 'Worker heartbeat', { workerId, pollCount, activeJobs, depth });
+      log('info', 'Worker heartbeat', {
+        workerId,
+        pollCount,
+        activeJobs,
+        activeLaneJobs,
+        depth,
+      });
     }
 
-    if (activeJobs >= concurrency) {
+    // Which budget this poll can spend. General first; when it is full, only
+    // the reserved lane's types are eligible and they are charged to the lane.
+    const generalOpen = activeJobs < concurrency;
+    const laneOpen = activeLaneJobs < laneSlots;
+    if (!generalOpen && !laneOpen) {
       await sleep(pollIntervalMs);
       continue;
     }
+    const claimableTypes = generalOpen ? processableTypes : laneTypes;
+    const viaLane = !generalOpen;
 
-    const job = await claimNextJob(workerId, claimTimeoutMs, processableTypes).catch((err: unknown) => {
+    const job = await claimNextJob(workerId, claimTimeoutMs, claimableTypes).catch((err: unknown) => {
       log('error', 'Failed to claim job', { workerId, error: toError(err).message });
       return null;
     });
@@ -113,8 +152,9 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
     // rejection here means even markFailed could not be written (e.g. Mongo
     // connection drop) — the job stays CLAIMED/PROCESSING and the stale-claim
     // recovery in claimNextJob re-queues it after the lease expires.
-    activeJobs++;
-    void processJob(job, workerId)
+    if (viaLane) activeLaneJobs++;
+    else activeJobs++;
+    void processJob(job, workerId, claimTimeoutMs)
       .catch((err: unknown) =>
         log('error', 'Unhandled error in processJob', {
           jobId: job._id,
@@ -123,14 +163,15 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
         })
       )
       .finally(() => {
-        activeJobs--;
+        if (viaLane) activeLaneJobs--;
+        else activeJobs--;
       });
 
     await sleep(CLAIM_YIELD_MS);
   }
 
-  log('info', 'Draining active jobs before exit', { workerId, activeJobs });
-  while (activeJobs > 0) {
+  log('info', 'Draining active jobs before exit', { workerId, activeJobs, activeLaneJobs });
+  while (activeJobs + activeLaneJobs > 0) {
     await sleep(DRAIN_POLL_MS);
   }
   process.removeListener('SIGTERM', onSigterm);
@@ -138,7 +179,7 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   log('info', 'Worker shut down cleanly', { workerId });
 }
 
-async function processJob(job: WorkerJob, workerId: string): Promise<void> {
+async function processJob(job: WorkerJob, workerId: string, claimTimeoutMs: number): Promise<void> {
   const jobType = jobTypeOf(job);
   const attempts = job.attempts ?? 0;
   const maxAttempts = job.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -177,11 +218,24 @@ async function processJob(job: WorkerJob, workerId: string): Promise<void> {
     workerId,
   });
 
+  // THE LEASE HEARTBEAT. While the processor runs, `claimedAt` is renewed a
+  // few times per lease so a job that legitimately outlasts
+  // WORKER_CLAIM_TIMEOUT_MS is not re-claimed — by another instance, or by this
+  // one's other slot — and walked twice at once. Fenced (see renewClaim): the
+  // first renewal that finds the fence gone stops the heartbeat, and the
+  // processor's own fenced writes discover the loss the way they always did.
+  //
+  // What this deliberately does NOT change: a worker that DIES stops
+  // heartbeating, and its job is re-claimed one lease later exactly as before.
+  // The lease still recovers crashes; it just no longer punishes slow work.
+  //
   // TODO(hardening): wrap the processor call in Promise.race with a JOB_TIMEOUT_MS
-  // env var so a hung (never-resolving) processor fails fast instead of waiting
-  // for the stale-claim lease to expire.
+  // env var so a hung (never-resolving) processor fails fast — with the
+  // heartbeat, a hang is no longer bounded by the lease.
+  const stopHeartbeat = startLeaseHeartbeat(job, workerId, claimTimeoutMs);
   try {
     const result = await processor(job);
+    stopHeartbeat();
     const flipped = await markCompleted(job._id, result, workerId);
     if (flipped) {
       log('info', 'Job completed', { jobId: job._id, jobType, workerId });
@@ -193,6 +247,7 @@ async function processJob(job: WorkerJob, workerId: string): Promise<void> {
       });
     }
   } catch (err: unknown) {
+    stopHeartbeat();
     const error = toError(err);
 
     // Cancellation and claim loss are NOT failures: the job's outcome is
@@ -241,6 +296,52 @@ async function processJob(job: WorkerJob, workerId: string): Promise<void> {
       workerId,
     });
   }
+}
+
+/**
+ * Renews the job's lease every `claimTimeoutMs / LEASE_RENEWALS_PER_TIMEOUT`
+ * until the returned stop function is called, or until a renewal reports the
+ * fence lost. Never throws: a renewal that fails to write is logged and the
+ * next tick tries again — two misses in a row still leave the lease alive.
+ */
+function startLeaseHeartbeat(job: WorkerJob, workerId: string, claimTimeoutMs: number): () => void {
+  const everyMs = Math.max(1, Math.floor(claimTimeoutMs / LEASE_RENEWALS_PER_TIMEOUT));
+  let stopped = false;
+  let inFlight = false;
+
+  const stop = (): void => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+  };
+
+  const timer = setInterval(() => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    renewClaim(job._id, workerId)
+      .then((stillOurs) => {
+        if (stillOurs || stopped) return;
+        log('warn', 'Lease heartbeat found the claim gone — stopping renewals', {
+          jobId: job._id,
+          workerId,
+        });
+        stop();
+      })
+      .catch((err: unknown) => {
+        log('warn', 'Lease heartbeat failed to renew the claim', {
+          jobId: job._id,
+          workerId,
+          error: toError(err).message,
+        });
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  }, everyMs);
+  // The heartbeat must never be what keeps a draining process alive.
+  timer.unref();
+
+  return stop;
 }
 
 function sleep(ms: number): Promise<void> {

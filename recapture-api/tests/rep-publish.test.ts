@@ -249,6 +249,50 @@ describe('the gap: a photo-only restaurant can be put live by the rep', () => {
     expect(res.body.publicUrl).toBeTruthy();
   });
 
+  it('still queues the run when Mirage is unreachable at the moment of the tap', async () => {
+    // Provisioning runs inside the HTTP request. A Mirage that is asleep or
+    // restarting used to escape it as an unhandled throw — a 500 to a rep whose
+    // catalog was perfectly publishable — and the client's own timeout on a
+    // long provisioning attempt reported a failure for a publish the server
+    // then went on to queue. A transport failure says nothing about the
+    // catalog, so it must not decide the request: the run is queued and its
+    // RESTAURANT CREATE step provisions with the worker's backoff behind it.
+    const { rep, catalogId } = await activated('AAAA4444', '+919876500044', 'Coral Bay');
+    await addPhotoDish(rep, catalogId);
+    mirage.failNext({ method: 'listRestaurants', status: 503, message: 'Service Unavailable' });
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish`)
+      .set(rep.auth);
+
+    expect(res.status).toBe(202);
+    expect(res.body.queued).toBe(true);
+    // Nothing was provisioned — the run owns that now. The frozen activation
+    // URL is untouched, and no mapping has been invented.
+    const catalog = await Catalog.findById(catalogId).lean().exec();
+    expect(catalog?.mirageRestaurantId ?? null).toBeNull();
+    expect(catalog?.publicUrl).toBe('https://scan.test/r/AAAA4444');
+    expect(catalog?.activePublishRunId).toBeTruthy();
+    expect(mirage.callsTo('createRestaurant')).toHaveLength(0);
+  });
+
+  it('still surfaces a Mirage failure that is NOT transient', async () => {
+    // The swallow is scoped to the retryable class. An auth rejection is an
+    // operator problem the rep cannot fix by waiting, and hiding it behind a
+    // queued run would turn a loud misconfiguration into a silent FAILED run.
+    const { rep, catalogId } = await activated('AAAA5555', '+919876500055', 'Slate Grill');
+    await addPhotoDish(rep, catalogId);
+    mirage.failNext({ method: 'listRestaurants', status: 400, message: 'Invalid Api key.' });
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish`)
+      .set(rep.auth);
+
+    expect(res.status).toBe(500);
+    const catalog = await Catalog.findById(catalogId).lean().exec();
+    expect(catalog?.activePublishRunId ?? null).toBeNull();
+  });
+
   it('actually opens a run against the catalog', async () => {
     const { rep, catalogId } = await activated('AAAA3333');
     await addPhotoDish(rep, catalogId);
@@ -278,6 +322,147 @@ describe('the rep and the owner are told the same thing', () => {
     // what fails — before a rep and an owner start describing the same
     // catalog to each other in different words.
     expect(repRes.body).toEqual(ownerRes.body);
+  });
+
+  it('reports the last run identically to GET /catalog/publish/status', async () => {
+    // A failed run is the case that matters: before this route the rep's
+    // screen could not tell a failed publish from a finished one.
+    const { rep, catalogId, owner } = await activated('BBBB3333', '+919876500033', 'Umber Cafe');
+    await addPhotoDish(rep, catalogId);
+    await request(app).post(`/rep/catalogs/${catalogId}/publish`).set(rep.auth).expect(202);
+    const run = await CatalogPublishRun.findOne({ catalogId }).exec();
+    await CatalogPublishRun.updateOne(
+      { _id: run!._id },
+      {
+        $set: {
+          state: 'FAILED',
+          finishedAt: new Date(),
+          error: { code: 'PUBLISH_RESTAURANT_UNAVAILABLE', message: 'Nothing could be published.' },
+        },
+      }
+    ).exec();
+    await Catalog.updateOne({ _id: catalogId }, { $set: { activePublishRunId: null } }).exec();
+
+    const repRes = await request(app)
+      .get(`/rep/catalogs/${catalogId}/publish/status`)
+      .set(rep.auth);
+    const ownerRes = await request(app).get('/catalog/publish/status').set(owner.auth);
+
+    expect(repRes.status).toBe(200);
+    expect(repRes.body.publish.run.state).toBe('FAILED');
+    expect(repRes.body.publish.run.error.code).toBe('PUBLISH_RESTAURANT_UNAVAILABLE');
+    // The same payload through both doors.
+    expect(repRes.body).toEqual(ownerRes.body);
+  });
+
+  it('retries only the failed rows through the rep door, like the owner', async () => {
+    const { rep, catalogId, owner } = await activated('BBBB5555', '+919876500035', 'Sienna Deli');
+    await addPhotoDish(rep, catalogId, 'Dal Fry');
+    await addPhotoDish(rep, catalogId, 'Jeera Rice');
+    await request(app).post(`/rep/catalogs/${catalogId}/publish`).set(rep.auth).expect(202);
+    // The run "finished" with one failed row, as the worker would leave it.
+    const run = await CatalogPublishRun.findOne({ catalogId }).exec();
+    await CatalogPublishRun.updateOne(
+      { _id: run!._id },
+      { $set: { state: 'PARTIAL', finishedAt: new Date() } }
+    ).exec();
+    await Catalog.updateOne({ _id: catalogId }, { $set: { activePublishRunId: null } }).exec();
+    const failed = await CatalogProduct.findOne({ catalogId, name: 'dal_fry' }).exec();
+    await CatalogProduct.updateOne(
+      { _id: failed!._id },
+      {
+        $set: {
+          syncStatus: 'FAILED',
+          syncError: { code: 'PUBLISH_UPSTREAM_TIMEOUT', message: 'x', at: new Date() },
+        },
+      }
+    ).exec();
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish/retry`)
+      .set(rep.auth);
+
+    expect(res.status).toBe(202);
+    expect(res.body.queued).toBe(true);
+    const retryRun = await CatalogPublishRun.findById(res.body.runId).lean().exec();
+    expect(retryRun?.mode).toBe('RETRY_FAILED');
+
+    // With nothing failed, both doors answer the same "nothing to retry" 200.
+    await CatalogPublishRun.updateOne(
+      { _id: retryRun!._id },
+      { $set: { state: 'SUCCEEDED', finishedAt: new Date() } }
+    ).exec();
+    await Catalog.updateOne({ _id: catalogId }, { $set: { activePublishRunId: null } }).exec();
+    await CatalogProduct.updateOne(
+      { _id: failed!._id },
+      { $set: { syncStatus: 'SYNCED' }, $unset: { syncError: '' } }
+    ).exec();
+    const repNothing = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish/retry`)
+      .set(rep.auth);
+    const ownerNothing = await request(app).post('/catalog/publish/retry').set(owner.auth);
+    expect(repNothing.status).toBe(200);
+    expect(repNothing.body).toEqual(ownerNothing.body);
+  });
+
+  it('reports edits made after the run planned as not in this publish', async () => {
+    const { rep, catalogId } = await activated('BBBB6666', '+919876500036', 'Teal Room');
+    await addPhotoDish(rep, catalogId);
+    await request(app).post(`/rep/catalogs/${catalogId}/publish`).set(rep.auth).expect(202);
+
+    const before = await request(app)
+      .get(`/rep/catalogs/${catalogId}/publish/status`)
+      .set(rep.auth);
+    expect(before.body.publish.activeRunId).toBeTruthy();
+    expect(before.body.publish.hasChangesSincePublishStarted).toBe(false);
+
+    // A price fix while the run is going.
+    await addPhotoDish(rep, catalogId, 'Late Addition');
+
+    const after = await request(app)
+      .get(`/rep/catalogs/${catalogId}/publish/status`)
+      .set(rep.auth);
+    expect(after.body.publish.hasChangesSincePublishStarted).toBe(true);
+
+    // Once the run is over there is nothing to be stale against.
+    const run = await CatalogPublishRun.findOne({ catalogId }).exec();
+    await CatalogPublishRun.updateOne(
+      { _id: run!._id },
+      { $set: { state: 'SUCCEEDED', finishedAt: new Date() } }
+    ).exec();
+    await Catalog.updateOne({ _id: catalogId }, { $set: { activePublishRunId: null } }).exec();
+    const finished = await request(app)
+      .get(`/rep/catalogs/${catalogId}/publish/status`)
+      .set(rep.auth);
+    expect(finished.body.publish.hasChangesSincePublishStarted).toBe(false);
+  });
+
+  it('honours an Idempotency-Key so a lost 202 cannot start a second run', async () => {
+    const { rep, catalogId } = await activated('BBBB7777', '+919876500037', 'Plum Kitchen');
+    await addPhotoDish(rep, catalogId);
+
+    const first = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish`)
+      .set(rep.auth)
+      .set('Idempotency-Key', 'rep-key-1');
+    expect(first.status).toBe(202);
+    const run = await CatalogPublishRun.findById(first.body.runId).lean().exec();
+    expect(run?.idempotencyKey).toBe('rep-key-1');
+  });
+
+  it('keeps the status door as enumeration-safe as the publish one', async () => {
+    const { catalogId } = await activated('BBBB4444', '+919876500034', 'Ochre Bar');
+    const stranger = await makeUser('SALES_REP');
+
+    const notMine = await request(app)
+      .get(`/rep/catalogs/${catalogId}/publish/status`)
+      .set(stranger.auth);
+    const notThere = await request(app)
+      .get(`/rep/catalogs/${new Types.ObjectId().toHexString()}/publish/status`)
+      .set(stranger.auth);
+
+    expect(notMine.status).toBe(404);
+    expect(notMine.body).toEqual(notThere.body);
   });
 
   it('reports every failing gate, not just the first', async () => {

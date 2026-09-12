@@ -735,6 +735,83 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   matches `publishedSnapshot.assetIdentities` is not re-uploaded.
   `MIRAGE_ASSET_TRANSFER_MODE` defaults to `bytes`; `url` needs Mirage prompt M1
   and publishes assetless products until then.
+- **The Mirage client retries IN PLACE, narrowly, and never a timeout.**
+  `mirageClient.send` repeats one call up to two more times (1 s, 3 s) — but
+  only when the failure PROVES Mirage never processed it. Mirage's create
+  handlers check uniqueness BEFORE they upload (`findOne`, then `uploadToS3`,
+  then `create`), so a write re-sent while its first copy is still executing
+  over there produces two items. Hence the policy in `isRetryableInPlace`
+  (pinned by `tests/mirage-client-retry.test.ts`): a WRITE repeats on a
+  never-connected socket error (`ECONNREFUSED`/`ENOTFOUND`/…), a proxy-level
+  502/503, or a 429; a READ repeats on any retryable class; a **TIMEOUT is never
+  repeated in place for any method** — that still goes to the worker's backoff,
+  whose one-minute gap is exactly what makes re-sending a timed-out write safe.
+  A multipart body is rebuilt per attempt (the stream parts' `open()` is a
+  factory for this reason). Do not widen the write rules without re-reading
+  Mirage's handler order. The processor also calls `warmUpMirage()` — a GET of
+  Mirage's root, retried — before a run's first write, so a sleeping instance
+  is woken by a read that can be repeated rather than a write that cannot.
+- **A publish is never queued behind a model generation, and is never walked
+  twice.** Two worker properties, both pinned by
+  `tests/worker-lease-and-lane.test.ts`:
+  (1) **Lease heartbeat.** `processJob` renews `claimedAt` three times per
+  `WORKER_CLAIM_TIMEOUT_MS` (`jobQueue.renewClaim`, fenced on `claimedBy` + a
+  live state) for the whole life of the processor. Before this, only the Meshy
+  processor happened to renew (through its stage writes) and a publish longer
+  than the lease — a few 3D dishes — was re-claimed by this same process's
+  other slot and walked concurrently: duplicate items, zeroed counters, PARTIAL
+  runs. A worker that DIES still stops heartbeating and its job is re-claimed
+  one lease later, exactly as before; the heartbeat only stops the lease
+  punishing slow work. (The flip side: a processor that HANGS is no longer
+  bounded by the lease — the JOB_TIMEOUT_MS TODO in `worker.ts` is now real.)
+  (2) **Reserved lane + priority.** `WorkerConfig.reservedLane` gives
+  `MIRAGE_CATALOG_PUBLISH` `WORKER_PUBLISH_LANE_SLOTS` (default 1) extra slots
+  beyond `WORKER_CONCURRENCY`, claimed only when the general budget is full, so
+  a publish — which a rep stands at a table waiting on — is picked up within one
+  poll even while two Meshy generations hold the general slots for ten minutes.
+  The lane is a floor, not a cap: a publish still takes a free general slot.
+  Publish jobs also enqueue at `PUBLISH_JOB_PRIORITY` (10; everything else is
+  0) so a freed general slot takes them first. Types the build cannot process
+  are filtered out of the lane, for the same shared-queue reason as
+  `claimNextJob`'s `jobTypes` filter.
+- **Provisioning in the request path is best-effort against TRANSPORT
+  failures.** `requestPublish` still provisions synchronously on the first
+  publish so a `NAME_TAKEN` reaches the user with a suggestion — but a
+  retryable `MirageError` there (asleep, restarting, unreachable) is logged and
+  the run is queued anyway; its `RESTAURANT CREATE` step provisions with the
+  worker's backoff. Before this, a sleeping Mirage surfaced as a 500 to a rep
+  whose catalog was fine, or as the client's own 75 s timeout on a request the
+  server then went on to complete. Terminal and auth failures still throw —
+  they are operator problems and must stay loud (`tests/rep-publish.test.ts`).
+- **The rep publishes on the OWNER's publish screen, delegated — ONE flow, ONE
+  body, TWO doors.** `/rep/catalogs/:id/publish` (`RepPublishScreen`) renders
+  the same `PublishBody` over the same `PublishScreenState` as
+  `/catalog/publish`, driven by the same `PublishFlow`
+  (`application/catalog/publish_flow.dart`: the poll loop, the backoff, the
+  lifecycle pausing, act-then-re-read, the idempotency key). Each door supplies
+  a `PublishGateway` — the owner's over `CatalogRepository` + `catalogProvider`,
+  the rep's over `RepRepository` for one catalog + `repCatalogDocumentProvider`
+  — and the two notifiers (`PublishNotifier`, `RepPublishNotifier`) are thin
+  hosts forwarding through `PublishFlowHost`. Server side, the rep routes
+  (`/rep/catalogs/:id/publish`, `/publish/retry`, `/publish/status`) delegate to
+  the owner's service keyed by the OWNER and answer the identical shapes and
+  codes (`rep-publish.test.ts` asserts payload equality); the client's mapping
+  is one function for both (`data/repositories/publish_request_mapping.dart`).
+  Before this the rep had a separate, smaller notifier — a button, a toast, no
+  progress, no per-dish failure, no retry, and a run that failed looked exactly
+  like one that finished. **Do not grow a rep-only publish surface again**; the
+  differences are parameters: `PublishVoice` (a handful of "your catalog" vs
+  "the menu" sentences), where a gate's Fix goes (the rep's own routes, resolved
+  from the catalog id in the path), `canFix` (a rep has no section manager, so
+  "Rename category" gets no button), and `canUnpublish: false` — a customer page
+  going dark is the owner's decision, and the rep's router has no unpublish
+  route. The dish list's bottom bar is a DOOR to that screen, mirroring the
+  owner's catalog header; it does not publish. `PublishStatusDto` carries
+  `hasChangesSincePublishStarted` (`draftRevision > run.snapshotRevision`,
+  active run only) so both screens can say "your latest changes are not in this
+  publish" mid-run. RUN-level codes (`PublishErrorCode.*`, `PUBLISH_ABANDONED`)
+  have copy in `sync_error_copy.dart`; the enumerating test does not scan the
+  processor, so add copy by hand when adding a run-level code.
 - **Never `delete-restaurant` from a publish path — `DELETE /catalog` is the ONE
   exception.** Unpublish removes the ITEMS and flips `restaurant.isPublished`.
   `mirageRestaurantId`, `publicUrl` and `publicUrlScheme` are written ONCE and

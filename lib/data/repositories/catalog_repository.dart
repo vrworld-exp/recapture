@@ -4,18 +4,17 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../domain/catalog/publish_gate.dart';
 import '../../domain/catalog/publish_request_result.dart';
 import '../../domain/catalog/publish_status.dart';
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_analytics.dart';
 import '../../domain/entities/catalog_category.dart';
-import '../../domain/entities/catalog_json.dart';
 import '../remote/api_client.dart';
 import 'bytes_response.dart';
 import 'catalog_failure.dart';
 import 'catalog_products_repository.dart';
+import 'publish_request_mapping.dart';
 
 /// Which branding image a slot is for.
 ///
@@ -495,90 +494,19 @@ class RemoteCatalogRepository implements CatalogRepository {
 
   @override
   Future<PublishRequestResult> publish({String? idempotencyKey}) =>
-      _requestPublish(
+      postPublishRequest(
+        _dio,
         '/catalog/publish',
         idempotencyKey: idempotencyKey,
       );
 
   @override
   Future<PublishRequestResult> retryFailedPublish() =>
-      _requestPublish('/catalog/publish/retry');
-
-  /// The shared body of publish and retry: identical response shapes, identical
-  /// refusals, one place that maps them.
-  Future<PublishRequestResult> _requestPublish(
-    String path, {
-    String? idempotencyKey,
-  }) async {
-    try {
-      final res = await _dio.post<Map<String, dynamic>>(
-        path,
-        options: idempotencyKey == null
-            ? null
-            : Options(headers: {'Idempotency-Key': idempotencyKey}),
-      );
-
-      final body = res.data;
-      final runId = body?['runId'];
-      if (runId is! String || runId.isEmpty) {
-        // 200 with `queued: false` — a retry that found nothing failed. The
-        // outcome the user asked for, so it is not a broken contract.
-        return const PublishNothingToRetry();
-      }
-      return PublishQueued(
-        runId: runId,
-        publicUrl: catalogText(body?['publicUrl']),
-      );
-    } on DioException catch (error) {
-      final result = _refusalFrom(error);
-      if (result != null) return result;
-      throw CatalogFailure.fromDio(error);
-    }
-  }
-
-  /// Maps the EXPECTED refusals onto values. Returns null for anything else,
-  /// which the caller turns into a [CatalogFailure].
-  PublishRequestResult? _refusalFrom(DioException error) {
-    final body = error.response?.data;
-    if (body is! Map) return null;
-
-    switch (body['code']) {
-      case 'PUBLISH_IN_PROGRESS':
-        final runId = body['runId'];
-        // Without an id there is nothing to poll, so this degrades to a plain
-        // failure rather than a screen watching a run it cannot name.
-        return runId is String && runId.isNotEmpty
-            ? PublishAlreadyRunning(runId)
-            : null;
-
-      case 'PUBLISH_BLOCKED':
-        return PublishBlocked(PublishGate.listFrom(body['gates']));
-
-      case 'CATALOG_NAME_TAKEN':
-        final fields = body['fields'];
-        final suggested = fields is Map ? fields['name'] : null;
-        return suggested is String && suggested.isNotEmpty
-            ? PublishNameTaken(suggested)
-            : null;
-
-      default:
-        return null;
-    }
-  }
+      postPublishRequest(_dio, '/catalog/publish/retry');
 
   @override
-  Future<PublishStatus> publishStatus() => mapCatalogErrors(() async {
-        final res =
-            await _dio.get<Map<String, dynamic>>('/catalog/publish/status');
-        final publish = res.data?['publish'];
-        if (publish is! Map<String, dynamic>) {
-          throw const CatalogFailure(
-            code: 'MALFORMED_RESPONSE',
-            message: 'Something went wrong. Please try again.',
-          );
-        }
-        return PublishStatus.fromMap(publish);
-      });
+  Future<PublishStatus> publishStatus() =>
+      getPublishStatus(_dio, '/catalog/publish/status');
 
   @override
   Future<UnpublishResult> unpublish() async {

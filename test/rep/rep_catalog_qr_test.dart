@@ -35,6 +35,7 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart'
 import 'package:recapture/data/repositories/admin_standee_repository.dart'
     show StandeeQrFormat;
 import 'package:recapture/data/repositories/rep_repository.dart';
+import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
@@ -148,7 +149,10 @@ class _FakeRepo with RepRepoCatalogDefaults implements RepRepository {
       throw UnimplementedError();
 
   @override
-  Future<RepPublishResult> publish(String catalogId) async =>
+  Future<PublishRequestResult> publish(
+    String catalogId, {
+    String? idempotencyKey,
+  }) async =>
       throw UnimplementedError();
 
   @override

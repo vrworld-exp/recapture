@@ -21,6 +21,8 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show kCatalogUnchanged;
 import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
+import 'package:recapture/domain/catalog/publish_request_result.dart';
+import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
@@ -37,6 +39,18 @@ mixin RepRepoCatalogDefaults implements RepRepository {
   @override
   Future<Catalog> catalog(String catalogId) =>
       throw UnimplementedError('rep catalog read is not exercised by this test');
+
+  @override
+  Future<PublishStatus> publishStatus(String catalogId) =>
+      throw UnimplementedError(
+        'rep publish status is not exercised by this test',
+      );
+
+  @override
+  Future<PublishRequestResult> retryFailedPublish(String catalogId) =>
+      throw UnimplementedError(
+        'rep publish retry is not exercised by this test',
+      );
 
   @override
   Future<CatalogQrImage> catalogQr(

@@ -170,4 +170,11 @@ export interface WorkerConfig {
    * exercise a mismatch between what is claimed and what can be processed.
    */
   jobTypes?: readonly string[];
+  /**
+   * A reserved lane: `slots` extra jobs of these types may run beyond
+   * `concurrency`, so a job someone is waiting on (a catalog publish) is never
+   * queued behind long-running work of other types (a Meshy generation). Types
+   * this instance cannot process are ignored; `slots: 0` disables the lane.
+   */
+  reservedLane?: { jobTypes: readonly string[]; slots: number };
 }

@@ -401,6 +401,84 @@ export function buildMultipart(
   };
 }
 
+// ── In-place retry ──────────────────────────────────────────────────────────
+//
+// WHY THIS EXISTS. Before it, every retryable failure — Mirage still waking
+// up, a 502 from Render's proxy, a refused connection — escaped straight to the
+// publish worker, which re-queues the WHOLE job with a 1-minute backoff (then
+// 2, then 4), and three of them fail the run for good. A hiccup that a second
+// attempt one second later would have absorbed cost a rep a minute at the
+// table per occurrence, and occasionally the whole publish.
+//
+// WHY IT IS NARROW. Mirage's writes are not idempotent, and its create handlers
+// check uniqueness BEFORE they upload (adminController.js: the findOne runs,
+// then uploadToS3, then itemModel.create). A create that timed out on our side
+// is very often still running on theirs; sending it again lands a SECOND create
+// past the uniqueness check and Mirage ends up with two items. So a write is
+// only ever retried here when the failure PROVES Mirage never processed it:
+//
+//   • the connection was never established (ECONNREFUSED, ENOTFOUND, …);
+//   • Render's proxy answered for it (502 Bad Gateway / 503 Unavailable — the
+//     upstream did not take the request);
+//   • Mirage itself said "not now" (429).
+//
+// A TIMEOUT is never retried in place, for any method — a read costs another
+// full MIRAGE_REQUEST_TIMEOUT_MS to retry, and a write may still be executing.
+// Those still go to the worker's backoff, whose one-minute gap is precisely
+// what makes re-sending a timed-out write safe. Reads (GET) retry on every
+// other retryable class because repeating a read cannot duplicate anything.
+
+/**
+ * Delays before the 2nd and 3rd attempt. Short on purpose: the point is to
+ * absorb a blip inside the call, not to wait out an outage — the worker's
+ * backoff does that, and a stalled request path would otherwise hold an HTTP
+ * request open (requestPublish provisions synchronously).
+ */
+const MIRAGE_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000];
+
+/** Node socket error codes that prove no request bytes reached the server. */
+const NEVER_CONNECTED_CODES: ReadonlySet<string> = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+]);
+
+function neverReachedMirage(cause: unknown): boolean {
+  const code = (cause as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && NEVER_CONNECTED_CODES.has(code);
+}
+
+/**
+ * Whether one failed attempt may be repeated inside this call. Exported for
+ * the contract test; `cause` is the raw transport error when there was one.
+ */
+export function isRetryableInPlace(
+  method: RequestSpec['method'],
+  error: MirageError,
+  cause?: unknown
+): boolean {
+  if (!error.isRetryable) return false;
+  const isRead = method === 'get';
+  switch (error.code) {
+    case MirageErrorCode.RATE_LIMITED:
+      return true;
+    case MirageErrorCode.TIMEOUT:
+      return false;
+    case MirageErrorCode.UNREACHABLE:
+      return isRead || neverReachedMirage(cause);
+    case MirageErrorCode.SERVER_ERROR:
+      return isRead || error.status === 502 || error.status === 503;
+    default:
+      return false;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function send<T>(spec: RequestSpec, retriedAuth = false): Promise<T> {
   const fields: Record<string, string> = {};
   for (const [key, value] of Object.entries(spec.fields ?? {})) {
@@ -417,64 +495,127 @@ async function send<T>(spec: RequestSpec, retriedAuth = false): Promise<T> {
   }
 
   const hasFiles = Object.values(spec.files ?? {}).some(Boolean);
-  const headers: Record<string, string> = {};
-  if (spec.requiresAdmin) headers.token = await getAdminToken();
+  const adminToken = spec.requiresAdmin ? await getAdminToken() : undefined;
 
-  let body: unknown;
-  if (hasFiles) {
-    const multipart = buildMultipart(spec, fields);
-    body = multipart.stream;
-    headers['content-type'] = multipart.contentType;
-    // Without this axios falls back to chunked encoding. multer copes, but a
-    // real length is what lets Mirage's proxy reject an oversize body up front
-    // instead of after 90 MiB have already crossed the wire.
-    headers['content-length'] = String(multipart.contentLength);
-  } else if (Object.keys(fields).length > 0) {
-    body = fields;
-  }
+  for (let attempt = 0; ; attempt++) {
+    const retryDelay = MIRAGE_RETRY_DELAYS_MS[attempt];
+    const retry = async (error: MirageError): Promise<void> => {
+      console.warn(
+        `[mirage] ${spec.context}: ${error.code} — retrying in ${retryDelay}ms ` +
+          `(attempt ${attempt + 2} of ${MIRAGE_RETRY_DELAYS_MS.length + 1})`
+      );
+      await sleep(retryDelay);
+    };
 
-  let res: AxiosResponse<unknown>;
-  try {
-    res = await transport().request({
-      method: spec.method,
-      url: spec.path,
-      params: spec.query,
-      data: body,
-      headers,
-    });
-  } catch (cause) {
-    throw classifyMirageTransportFailure(cause, spec.context);
-  }
+    // Built PER ATTEMPT. A multipart body is a stream, and a consumed stream
+    // cannot be replayed — the stream parts' `open()` is a factory for exactly
+    // this reason (assetSync.ts). The headers follow the body because the
+    // boundary is random per build.
+    const headers: Record<string, string> = {};
+    if (adminToken !== undefined) headers.token = adminToken;
 
-  if (spec.tolerateStatuses?.includes(res.status)) {
-    return undefined as T;
-  }
-
-  if (isFailure(res)) {
-    const error = classifyMirageFailure(res.status, messageOf(res), spec.context);
-    // ONE retry on an auth failure, with a freshly minted token — a login-mode
-    // token expires (Mirage's JWT_EXPIRE defaults to 1d) and the first call
-    // after that is the only symptom. A second failure is an operator problem.
-    if (error.failureClass === 'auth' && spec.requiresAdmin && !retriedAuth && !env.MIRAGE_ADMIN_TOKEN) {
-      invalidateAdminToken();
-      return send<T>(spec, true);
+    let body: unknown;
+    if (hasFiles) {
+      const multipart = buildMultipart(spec, fields);
+      body = multipart.stream;
+      headers['content-type'] = multipart.contentType;
+      // Without this axios falls back to chunked encoding. multer copes, but a
+      // real length is what lets Mirage's proxy reject an oversize body up front
+      // instead of after 90 MiB have already crossed the wire.
+      headers['content-length'] = String(multipart.contentLength);
+    } else if (Object.keys(fields).length > 0) {
+      body = fields;
     }
-    throw error;
-  }
 
-  if (spec.dataKey === null) return res.data as T;
+    let res: AxiosResponse<unknown>;
+    try {
+      res = await transport().request({
+        method: spec.method,
+        url: spec.path,
+        params: spec.query,
+        data: body,
+        headers,
+      });
+    } catch (cause) {
+      const error = classifyMirageTransportFailure(cause, spec.context);
+      if (retryDelay !== undefined && isRetryableInPlace(spec.method, error, cause)) {
+        await retry(error);
+        continue;
+      }
+      throw error;
+    }
 
-  const payload = asRecord(res.data)?.[spec.dataKey ?? 'data'];
-  if (payload === undefined || payload === null) {
-    throw new MirageError(
-      MirageErrorCode.MALFORMED_RESPONSE,
-      'terminal',
-      'Mirage returned a success with no payload.',
-      spec.context,
-      res.status
-    );
+    if (spec.tolerateStatuses?.includes(res.status)) {
+      return undefined as T;
+    }
+
+    if (isFailure(res)) {
+      const error = classifyMirageFailure(res.status, messageOf(res), spec.context);
+      // ONE retry on an auth failure, with a freshly minted token — a login-mode
+      // token expires (Mirage's JWT_EXPIRE defaults to 1d) and the first call
+      // after that is the only symptom. A second failure is an operator problem.
+      if (
+        error.failureClass === 'auth' &&
+        spec.requiresAdmin &&
+        !retriedAuth &&
+        !env.MIRAGE_ADMIN_TOKEN
+      ) {
+        invalidateAdminToken();
+        return send<T>(spec, true);
+      }
+      if (retryDelay !== undefined && isRetryableInPlace(spec.method, error)) {
+        await retry(error);
+        continue;
+      }
+      throw error;
+    }
+
+    if (spec.dataKey === null) return res.data as T;
+
+    const payload = asRecord(res.data)?.[spec.dataKey ?? 'data'];
+    if (payload === undefined || payload === null) {
+      throw new MirageError(
+        MirageErrorCode.MALFORMED_RESPONSE,
+        'terminal',
+        'Mirage returned a success with no payload.',
+        spec.context,
+        res.status
+      );
+    }
+    return payload as T;
   }
-  return payload as T;
+}
+
+/**
+ * Wakes Mirage up before a run's first write. Best-effort and never throws.
+ *
+ * Mirage runs on a tier that sleeps, and Render holds the first request open
+ * while the instance boots — long enough, sometimes, to trip
+ * MIRAGE_REQUEST_TIMEOUT_MS. When that first request is a WRITE the timeout
+ * cannot be retried in place (see the note above `MIRAGE_RETRY_DELAYS_MS`) and
+ * the whole publish waits out a worker backoff. So the wake-up is spent on a
+ * GET of Mirage's root instead — the "Server is live now" route, which needs no
+ * api key and is retried on a timeout because repeating a read costs nothing.
+ *
+ * Returns whether Mirage answered. A `false` is informational only: the run
+ * goes ahead regardless, and the executors classify whatever happens next.
+ */
+export async function warmUpMirage(): Promise<boolean> {
+  if (!isMirageConfigured()) return false;
+  const attempts = MIRAGE_RETRY_DELAYS_MS.length + 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      // An absolute URL bypasses the /api/v1 baseURL; the root is outside it.
+      const res = await transport().get(`${env.MIRAGE_BASE_URL}/`, { validateStatus: () => true });
+      if (res.status < 500) return true;
+    } catch {
+      // Fall through to the delay: unreachable or timed out, both worth one more go.
+    }
+    const delay = MIRAGE_RETRY_DELAYS_MS[attempt];
+    if (delay !== undefined) await sleep(delay);
+  }
+  console.warn('[mirage] warm-up ping got no answer — proceeding; the run will classify what follows');
+  return false;
 }
 
 // ── Normalizers (field by field, never a spread) ────────────────────────────

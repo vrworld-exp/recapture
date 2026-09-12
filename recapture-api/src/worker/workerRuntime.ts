@@ -109,5 +109,11 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
     concurrency: env.WORKER_CONCURRENCY,
     workerId,
     heartbeatEveryNPolls: env.WORKER_HEARTBEAT_EVERY_N_POLLS,
+    // A publish must not wait behind two ten-minute Meshy generations for a
+    // general slot to free up — see WORKER_PUBLISH_LANE_SLOTS in config/env.ts.
+    reservedLane: {
+      jobTypes: [MIRAGE_CATALOG_PUBLISH_JOB_TYPE],
+      slots: env.WORKER_PUBLISH_LANE_SLOTS,
+    },
   });
 }

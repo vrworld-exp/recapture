@@ -87,14 +87,23 @@ STEP 4 — BEFORE YOU LEAVE THE TABLE
     put the menu online. Until something publishes, scanning the standee shows
     a "not live yet" page — correct, and useless to a diner.
 
-    The button is at the bottom of the restaurant's dish list. Tap it before
-    you leave. DO NOT SKIP THIS because you added a 3D dish: a finished 3D
-    model does publish by itself, but only when it finishes, and you should not
-    be walking out on a maybe.
+    The button is at the bottom of the restaurant's dish list. It opens the
+    publish screen — the same one the owner has: a checklist of anything
+    that blocks publishing (each row has a Fix button), then a progress bar
+    while the dishes go up, then either "Live on Mirage" with the link and
+    the QR, or a list of exactly which dishes failed and why, with a
+    "Retry failed" button. Tap Publish there before you leave. DO NOT SKIP
+    THIS because you added a 3D dish: a finished 3D model does publish by
+    itself, but only when it finishes, and you should not be walking out on
+    a maybe.
 
-    If it says the menu is not ready, it tells you exactly what is wrong —
-    usually a dish with no photo, or no dishes at all. Fix that and tap again.
-    You are in the room; that is the cheapest this will ever be to fix.
+    If it says the menu is not ready, the checklist tells you exactly what
+    is wrong — usually a dish with no photo, or no dishes at all. Fix that
+    and tap again. You are in the room; that is the cheapest this will ever
+    be to fix. If a dish fails to publish, the screen says which one and
+    why; "Retry failed" re-sends only that dish. You can leave the screen
+    while it publishes — it keeps going, and the dish list's bar shows
+    "Publishing…" until it is done.
 21. Have the owner sign in NOW, on their own phone, with the number you typed.
     Best use of your last five minutes: it proves the number was right while
     you can still fix it, and if they cannot get in you are still there. This

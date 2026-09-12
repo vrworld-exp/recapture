@@ -96,7 +96,12 @@ import {
   PRODUCT_IMAGE_CONTENT_TYPES,
   sniffProductImageContentType,
 } from '@/utils/productImageKeys';
-import { requestPublish } from '@/services/catalogPublishService';
+import {
+  getPublishStatus,
+  requestPublish,
+  requestRetry,
+  type RequestPublishResult,
+} from '@/services/catalogPublishService';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 
@@ -1328,80 +1333,170 @@ router.post(
       return fail(res, 429, 'RATE_LIMITED', 'Too many requests. Please try again shortly.');
     }
 
-    const result = await requestPublish(ownerUserId);
-
-    // ANSWERED BEFORE THE EVENT, mirroring respondToPublishRequest. The
-    // analytics `outcome` union deliberately excludes NOT_FOUND — a publish for
-    // a catalog that vanished mid-request is not a publish attempt to count —
-    // and the compiler enforces that ordering here.
-    if (result.outcome === 'NOT_FOUND') {
-      // It resolved a moment ago, so this is a delete mid-request. Answered with
-      // the delegation 404 so every not-found on this router reads identically.
-      return notDelegated(res);
-    }
-
-    // The OWNER's hash, not the rep's. The event answers "how often is a publish
-    // attempted for this catalog, and what stops it" — a question about the
-    // restaurant, not about who pressed the button. Who acted is already durable
-    // in the CatalogDelegation row, which is where an audit belongs.
-    const gates = result.outcome === 'BLOCKED' ? result.gates : [];
-    track(AnalyticsEvent.CATALOG_PUBLISH_REQUESTED, {
-      user_id_hash: hashIdentifier(ownerUserId),
-      catalog_id: catalogId,
-      mode: 'FULL',
-      outcome: result.outcome,
-      gate_count: gates.length,
-      ...(gates.length > 0 ? { blocked_by: [...new Set(gates.map((gate) => gate.code))] } : {}),
+    // The same header the owner's route honours, for the same lost-202 case:
+    // the run was enqueued, the response never arrived, and the rep presses
+    // Publish again. With the key the server recognises the request; without
+    // it a second press would race the first run's worker.
+    const idempotencyKey = req.header('Idempotency-Key') ?? undefined;
+    const result = await requestPublish(ownerUserId, {
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     });
+    return respondToRepPublishRequest(res, catalogId, ownerUserId, 'FULL', result);
+  })
+);
 
-    switch (result.outcome) {
-      case 'IN_PROGRESS':
-        res.status(409).json({
-          status: 'error',
-          code: 'PUBLISH_IN_PROGRESS',
-          message: 'A publish is already running for this catalog.',
-          runId: result.runId,
-        });
-        return;
+/**
+ * POST /rep/catalogs/:id/publish/retry — only the FAILED rows, on their behalf.
+ *
+ * The rep's half of feature 53. The owner's publish screen has always had a
+ * one-tap "Retry failed" under its failure list; the rep, standing in the
+ * restaurant with the phone the dish was shot on, had to re-run the whole
+ * publish to reach the same outcome. Same service (`requestRetry`, keyed by
+ * the OWNER), same rate window shape as the owner's retry — tighter than
+ * publish, because Retry is one tap next to a list of failures.
+ */
+router.post(
+  '/catalogs/:id/publish/retry',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
 
-      case 'BLOCKED':
-        // EVERY failing gate, byte-identical to what `POST /catalog/publish`
-        // returns — the rep and the owner must be told the same thing about the
-        // same catalog. `rep-publish.test.ts` asserts that equality rather than
-        // trusting this comment.
-        res.status(422).json({
-          status: 'error',
-          code: 'PUBLISH_BLOCKED',
-          message: 'This catalog is not ready to publish yet.',
-          gates: result.gates,
-        });
-        return;
+    const catalogId = String(catalog._id);
+    const ownerUserId = String(catalog.userId);
 
-      case 'NAME_TAKEN':
-        res.status(409).json({
-          status: 'error',
-          code: result.code,
-          message: 'That catalog name is already in use. Try the suggested one.',
-          fields: { name: result.suggestedName },
-        });
-        return;
-
-      case 'NOTHING_TO_RETRY':
-        // Unreachable for mode FULL — requestPublish only returns it from
-        // requestRetry — but the switch stays exhaustive so adding an outcome is
-        // a compile error here rather than a silent fallthrough to no response.
-        res.status(200).json({ status: 'success', runId: null, queued: false });
-        return;
-
-      case 'QUEUED':
-        res.status(202).json({
-          status: 'success',
-          runId: result.run.runId,
-          queued: true,
-          ...(result.mapping ? { publicUrl: result.mapping.publicUrl } : {}),
-        });
-        return;
+    const rate = await consumeRateWindow(
+      `rep-publish-retry:${catalogId}`,
+      env.PUBLISH_RETRY_MAX_PER_WINDOW,
+      env.PUBLISH_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      return fail(res, 429, 'RATE_LIMITED', 'Too many requests. Please try again shortly.');
     }
+
+    const result = await requestRetry(ownerUserId);
+    return respondToRepPublishRequest(res, catalogId, ownerUserId, 'RETRY_FAILED', result);
+  })
+);
+
+/**
+ * Maps a publish/retry result onto the rep's response — the SAME shapes and
+ * codes the owner's `respondToPublishRequest` emits, because a rep and an owner
+ * must be told the same thing about the same catalog (`rep-publish.test.ts`
+ * asserts the gate payloads equal byte for byte).
+ */
+function respondToRepPublishRequest(
+  res: Response,
+  catalogId: string,
+  ownerUserId: string,
+  mode: 'FULL' | 'RETRY_FAILED',
+  result: RequestPublishResult
+): void {
+  // ANSWERED BEFORE THE EVENT, mirroring respondToPublishRequest. The
+  // analytics `outcome` union deliberately excludes NOT_FOUND — a publish for
+  // a catalog that vanished mid-request is not a publish attempt to count —
+  // and the compiler enforces that ordering here.
+  if (result.outcome === 'NOT_FOUND') {
+    // It resolved a moment ago, so this is a delete mid-request. Answered with
+    // the delegation 404 so every not-found on this router reads identically.
+    notDelegated(res);
+    return;
+  }
+
+  // The OWNER's hash, not the rep's. The event answers "how often is a publish
+  // attempted for this catalog, and what stops it" — a question about the
+  // restaurant, not about who pressed the button. Who acted is already durable
+  // in the CatalogDelegation row, which is where an audit belongs.
+  const gates = result.outcome === 'BLOCKED' ? result.gates : [];
+  track(AnalyticsEvent.CATALOG_PUBLISH_REQUESTED, {
+    user_id_hash: hashIdentifier(ownerUserId),
+    catalog_id: catalogId,
+    mode,
+    outcome: result.outcome,
+    gate_count: gates.length,
+    ...(gates.length > 0 ? { blocked_by: [...new Set(gates.map((gate) => gate.code))] } : {}),
+  });
+
+  switch (result.outcome) {
+    case 'IN_PROGRESS':
+      res.status(409).json({
+        status: 'error',
+        code: 'PUBLISH_IN_PROGRESS',
+        message: 'A publish is already running for this catalog.',
+        runId: result.runId,
+      });
+      return;
+
+    case 'BLOCKED':
+      // EVERY failing gate, byte-identical to what `POST /catalog/publish`
+      // returns — the rep and the owner must be told the same thing about the
+      // same catalog. `rep-publish.test.ts` asserts that equality rather than
+      // trusting this comment.
+      res.status(422).json({
+        status: 'error',
+        code: 'PUBLISH_BLOCKED',
+        message: 'This catalog is not ready to publish yet.',
+        gates: result.gates,
+      });
+      return;
+
+    case 'NAME_TAKEN':
+      res.status(409).json({
+        status: 'error',
+        code: result.code,
+        message: 'That catalog name is already in use. Try the suggested one.',
+        fields: { name: result.suggestedName },
+      });
+      return;
+
+    case 'NOTHING_TO_RETRY':
+      // A retry with nothing failed is the state the rep asked for — a 200
+      // with no run, exactly as the owner's route answers it.
+      res.status(200).json({ status: 'success', runId: null, queued: false });
+      return;
+
+    case 'QUEUED':
+      res.status(202).json({
+        status: 'success',
+        runId: result.run.runId,
+        queued: true,
+        ...(result.mapping ? { publicUrl: result.mapping.publicUrl } : {}),
+      });
+      return;
+  }
+}
+
+/**
+ * GET /rep/catalogs/:id/publish/status — how the last publish went.
+ *
+ * THE GAP THIS CLOSES. The rep's screen learned that a run had ENDED from the
+ * catalog document (`isPublishing` flipping off) and nothing else — so a run
+ * that failed looked exactly like one that succeeded, right up to the bar
+ * quietly going back to "Draft changes not yet live" with no word about why.
+ * The rep pressed Publish again, waited another minute, and left with a dead
+ * standee and no idea what to fix. The owner's screen has had this answer
+ * since feature 37; the rep, standing in the restaurant with the phone the
+ * dish was shot on, is the person who can act on it.
+ *
+ * DELEGATES, never reimplements: the payload IS the owner's
+ * `GET /catalog/publish/status` for the same catalog, so a rep and an owner
+ * are told the same thing about the same run — including the lazy repair of
+ * an abandoned lock, which happens inside getPublishStatus and so reaches
+ * this door too.
+ */
+router.get(
+  '/catalogs/:id/publish/status',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const result = await getPublishStatus(String(catalog.userId));
+    // Resolved a moment ago, so a delete mid-request — answered with the
+    // delegation 404 so every not-found on this router reads identically.
+    if (result.outcome === 'NOT_FOUND') return notDelegated(res);
+
+    res.status(200).json({ status: 'success', publish: result.status });
   })
 );
 

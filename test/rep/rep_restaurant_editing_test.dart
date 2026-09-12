@@ -37,6 +37,8 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart'
 import 'package:recapture/data/repositories/catalog_repository.dart'
     show BrandingSlot, CatalogQrFormat, CatalogQrImage;
 import 'package:recapture/data/repositories/rep_repository.dart';
+import 'package:recapture/domain/catalog/publish_request_result.dart';
+import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
@@ -152,6 +154,18 @@ class FakeRepRepository implements RepRepository {
     catalogCalls++;
     return Catalog.fromMap({...golden.catalogGolden(), 'id': catalogId});
   }
+
+  @override
+  Future<PublishStatus> publishStatus(String catalogId) =>
+      throw UnimplementedError(
+        'rep publish status is not exercised by this test',
+      );
+
+  @override
+  Future<PublishRequestResult> retryFailedPublish(String catalogId) =>
+      throw UnimplementedError(
+        'rep publish retry is not exercised by this test',
+      );
 
   @override
   Future<CatalogCategoryList> categories(String catalogId) async =>
@@ -348,8 +362,11 @@ class FakeRepRepository implements RepRepository {
       throw UnimplementedError();
 
   @override
-  Future<RepPublishResult> publish(String catalogId) async =>
-      const RepPublishResult(outcome: RepPublishOutcome.queued);
+  Future<PublishRequestResult> publish(
+    String catalogId, {
+    String? idempotencyKey,
+  }) async =>
+      const PublishQueued(runId: 'run-1');
 
   @override
   Future<void> attachCode(String catalogId, String code) async {}

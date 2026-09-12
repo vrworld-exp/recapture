@@ -1,0 +1,569 @@
+// lib/application/catalog/publish_flow.dart
+//
+// The publish run, watched — for WHOEVER is watching it (features 36-39, 52,
+// 53, 68, 69, and the rep's parity with them).
+//
+// ONE FLOW, TWO DOORS. The owner reaches the run through `/catalog/publish*`
+// and the rep through `/rep/catalogs/:id/publish*`; the backend's rep routes
+// delegate to the owner's service, so both are told the same thing about the
+// same catalog. This file is the client's half of that promise: the poll loop,
+// the backoff, the lifecycle pausing and the act-then-re-read discipline live
+// HERE, once, and each door supplies a [PublishGateway] saying where the
+// requests go. Before this existed the rep had a separate, smaller notifier —
+// a button, a toast and no progress — and "restaurant publishing does not work
+// as well as catalog publishing" was the literal truth of two implementations.
+//
+// THE CLIENT HOLDS NO PUBLISH STATE. Every number on the screen comes from the
+// status read; nothing here advances a counter, guesses a state, or remembers
+// what it asked for. Two devices watching one run must show the same thing,
+// and the only way to guarantee that is to make the server the sole author.
+//
+// WHAT THIS FILE IS REALLY ABOUT IS THE POLL LOOP, and the three ways it can go
+// wrong:
+//   1. never stopping — a timer that outlives the screen keeps a phone awake
+//      and keeps hitting an endpoint nobody is reading. Handled by autoDispose
+//      plus an explicit cancel in `onDispose`.
+//   2. hammering — publishing ten products against a server that may be waking
+//      from a sleeping tier can take minutes, and a fixed one-second poll is
+//      hundreds of pointless requests. Handled by [_pollBackoff].
+//   3. running in a tab nobody is looking at — a browser throttles background
+//      timers unpredictably, so a hidden tab both wastes requests AND cannot be
+//      trusted to keep time. Handled by the lifecycle listener, which pauses on
+//      hide and does an IMMEDIATE catch-up poll on show.
+import 'dart:async';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart' show immutable, visibleForTesting;
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../data/repositories/catalog_failure.dart';
+import '../../domain/catalog/publish_gate.dart';
+import '../../domain/catalog/publish_request_result.dart';
+import '../../domain/catalog/publish_status.dart';
+import '../common/pending_poll_loop.dart'
+    show kPendingPollInitialInterval, kPendingPollMaxInterval;
+
+/// How long to wait before each poll of a run in flight.
+///
+/// Front-loaded and then flat: the interesting moments are the first few
+/// seconds (did the run actually start?) and the transition to terminal, and
+/// between them a publish is a slow sequence of uploads where a five-second
+/// granularity is invisible to a user watching a progress line. The last value
+/// repeats for the rest of the run.
+const List<Duration> _pollBackoff = [
+  Duration(seconds: 1),
+  Duration(seconds: 2),
+  Duration(seconds: 3),
+  Duration(seconds: 5),
+  Duration(seconds: 8),
+];
+
+/// How long to wait between re-checks while the ONLY thing blocking a publish
+/// is an asset still being generated (a preview image, a 3D model).
+///
+/// A DIFFERENT WAIT FROM A RUN'S, and deliberately slower. A run is a thing the
+/// user just started and is watching happen; this is a background job that was
+/// already under way when they got here and typically takes minutes. The same
+/// numbers the rest of the app uses for exactly this wait — see
+/// [kPendingPollInitialInterval] — so the checklist and the grid's
+/// "3D generating…" badge clear at the same sort of moment rather than one
+/// lagging the other by a cadence nobody chose.
+const List<Duration> _gateBackoff = [
+  kPendingPollInitialInterval,
+  Duration(seconds: 5),
+  Duration(seconds: 8),
+  kPendingPollMaxInterval,
+];
+
+/// How many gate re-checks before giving up and leaving it to a pull-to-refresh.
+///
+/// At the cadence above this is roughly fifteen minutes — past the backend's own
+/// generation timeout, after which the asset turns FAILED and waiting longer
+/// cannot help. Polling forever would keep a rate-limited endpoint busy for a
+/// tab someone left open and walked away from, which is the third failure mode
+/// this file's header is about.
+const int _gatePollCap = 100;
+
+/// Where one door's publish requests go.
+///
+/// The owner's gateway is `CatalogRepository` and the app-wide catalog
+/// notifier; the rep's is `RepRepository` for one delegated catalog and that
+/// catalog's document provider. Nothing in [PublishFlow] knows which.
+abstract class PublishGateway {
+  Future<PublishStatus> status();
+
+  Future<PublishRequestResult> publish({String? idempotencyKey});
+
+  Future<PublishRequestResult> retryFailed();
+
+  /// Whether this surface may take the page offline. A rep's may not: a
+  /// customer page going dark is the OWNER's decision, and the rep's route
+  /// has no unpublish for that reason — so the screen hides the control
+  /// rather than offering one that would answer 404.
+  bool get canUnpublish;
+
+  Future<UnpublishResult> unpublish();
+
+  /// Renames the catalog — the one-tap way out of a Mirage name collision.
+  Future<void> rename(String name);
+
+  /// The shell's own copy of the catalog (its header chips, the rep's publish
+  /// bar) has just been superseded by a status read. Best-effort; a failure
+  /// here must never look like a failed publish.
+  void onStatusRead();
+}
+
+/// What the publish screen renders.
+///
+/// [status] is the server's truth. Everything else is about the CURRENT
+/// interaction — a request in flight, the answer to the last one — and none of
+/// it survives a status refresh that contradicts it.
+@immutable
+class PublishScreenState {
+  const PublishScreenState({
+    this.status = const AsyncLoading(),
+    this.isRequesting = false,
+    this.actionFailure,
+    this.notice,
+    this.suggestedName,
+    this.isPollingPaused = false,
+  });
+
+  final AsyncValue<PublishStatus> status;
+
+  /// A publish / retry / unpublish POST is in flight. Separate from
+  /// `status.isLoading` so pressing Publish does not blank the very list the
+  /// user is watching.
+  final bool isRequesting;
+
+  /// The last action failed for a reason worth showing. Cleared by the next
+  /// action and by a successful refresh.
+  final CatalogFailure? actionFailure;
+
+  /// A one-line result of the last action ("Nothing left to retry"). Not an
+  /// error — the outcomes that are neither a failure nor a new run.
+  final String? notice;
+
+  /// From a 409 CATALOG_NAME_TAKEN: the name Mirage will accept. Offered as a
+  /// one-tap rename rather than making the user invent a name that might
+  /// collide again.
+  final String? suggestedName;
+
+  /// The app is backgrounded or the browser tab is hidden. Surfaced so the
+  /// screen can say the numbers are from a moment ago instead of quietly
+  /// showing stale ones.
+  final bool isPollingPaused;
+
+  PublishStatus? get value => status.valueOrNull;
+
+  /// A run is holding the catalog right now.
+  bool get isPublishing => value?.isPublishing ?? false;
+
+  /// Whether the Publish button should do anything. Offline is decided by the
+  /// SCREEN (it watches connectivity); this is everything else.
+  bool get canPublish => !isRequesting && (value?.canPublish ?? false);
+
+  List<PublishGate> get gates => value?.gates ?? const <PublishGate>[];
+
+  PublishScreenState copyWith({
+    AsyncValue<PublishStatus>? status,
+    bool? isRequesting,
+    Object? actionFailure = _unset,
+    Object? notice = _unset,
+    Object? suggestedName = _unset,
+    bool? isPollingPaused,
+  }) =>
+      PublishScreenState(
+        status: status ?? this.status,
+        isRequesting: isRequesting ?? this.isRequesting,
+        actionFailure: identical(actionFailure, _unset)
+            ? this.actionFailure
+            : actionFailure as CatalogFailure?,
+        notice: identical(notice, _unset) ? this.notice : notice as String?,
+        suggestedName: identical(suggestedName, _unset)
+            ? this.suggestedName
+            : suggestedName as String?,
+        isPollingPaused: isPollingPaused ?? this.isPollingPaused,
+      );
+}
+
+const Object _unset = Object();
+
+/// Why the loop is running.
+///
+/// The two waits differ in cadence and in how long they are worth continuing,
+/// so the loop has to know which one it is in — a run is watched closely and
+/// ends; a generating asset is watched patiently and might never finish.
+enum _PollReason { run, gates }
+
+/// The publish flow, owned by whichever notifier is hosting it.
+///
+/// A PLAIN OBJECT rather than a notifier base class, because Riverpod's plain
+/// and family notifiers are different classes with no public ancestor to
+/// share logic through, and this is the one piece of the app that has to
+/// exist as both: the owner's [AutoDisposeNotifier] and the rep's
+/// [AutoDisposeFamilyNotifier] keyed by catalog. The host lends the flow its
+/// `state` through [_read]/[_emit] and calls [dispose] from `ref.onDispose`;
+/// [PublishFlowHost] does the forwarding so neither notifier has to.
+class PublishFlow {
+  PublishFlow({
+    required this.gateway,
+    required PublishScreenState Function() read,
+    required void Function(PublishScreenState next) emit,
+  })  : _read = read,
+        _emit = emit;
+
+  /// Where this door's requests go.
+  final PublishGateway gateway;
+
+  final PublishScreenState Function() _read;
+  final void Function(PublishScreenState next) _emit;
+
+  PublishScreenState get state => _read();
+  set state(PublishScreenState next) => _emit(next);
+
+  Timer? _poll;
+  int _pollAttempt = 0;
+  _PollReason _pollReason = _PollReason.run;
+
+  /// Gate re-checks performed, against [_gatePollCap]. Counted separately from
+  /// [_pollAttempt], which is only a position in a backoff table and is reset
+  /// every time the screen comes back into view — a cap that reset with it
+  /// would not be a cap.
+  int _gatePolls = 0;
+  bool _disposed = false;
+  AppLifecycleListener? _lifecycle;
+
+  /// Held across a FAILED publish attempt so the retry cannot start a second
+  /// run against a catalog the first attempt already claimed.
+  ///
+  /// A lost 202 is the case this exists for: the run was enqueued, the response
+  /// never arrived, and the user presses Publish again. With the same key the
+  /// server recognises the request; with a fresh one it would race its own
+  /// worker. Cleared only once an attempt gets a definitive answer.
+  String? _idempotencyKey;
+
+  /// The host's `build`: wires the lifecycle listener, kicks off the first
+  /// read, and hands back the initial state. The host owns calling [dispose].
+  PublishScreenState start() {
+    // Pausing on hide is not only about saving requests: a browser throttles
+    // background timers on its own schedule, so a hidden tab's poll loop cannot
+    // be trusted to keep time either. On show, catch up IMMEDIATELY rather than
+    // waiting out a backoff step the user did not see start.
+    _lifecycle = AppLifecycleListener(
+      onHide: _pausePolling,
+      onPause: _pausePolling,
+      onShow: _resumePolling,
+      onRestart: _resumePolling,
+    );
+
+    scheduleMicrotask(_loadStatus);
+    return const PublishScreenState();
+  }
+
+  /// Stops the loop for good. Every state write after this is a no-op: the
+  /// notifier behind [_emit] is gone, and a poll that landed late must not
+  /// touch it.
+  void dispose() {
+    _disposed = true;
+    _cancelPoll();
+    _lifecycle?.dispose();
+    _lifecycle = null;
+  }
+
+  // ── Reading ───────────────────────────────────────────────────────────────
+
+  /// First load and explicit retry. Shows the loading state; there is nothing
+  /// behind it yet.
+  Future<void> reload() async {
+    _restartGateWait();
+    state = state.copyWith(status: const AsyncLoading());
+    await _loadStatus();
+  }
+
+  /// Re-reads without blanking the screen — the poll loop, pull-to-refresh, and
+  /// the return from a screen where the user fixed a gate.
+  ///
+  /// An EXPLICIT re-read reopens the gate window. The cap exists to stop a
+  /// forgotten tab polling all afternoon, not to punish a user who came back and
+  /// asked; a pull-to-refresh or a return from the screen where they fixed
+  /// something is that user, and leaving them capped would mean the checklist
+  /// never updates itself again for the life of the screen.
+  Future<void> refresh() {
+    _restartGateWait();
+    return _loadStatus();
+  }
+
+  /// Puts the gate wait back to its opening cadence with a full cap.
+  void _restartGateWait() {
+    _gatePolls = 0;
+    if (_pollReason == _PollReason.gates) _pollAttempt = 0;
+  }
+
+  Future<void> _loadStatus() async {
+    try {
+      final status = await gateway.status();
+      if (_disposed) return;
+      state = state.copyWith(status: AsyncData(status), actionFailure: null);
+      _syncPollingTo(status);
+      // The shell's own chips (Published / Draft changes / Publishing) read a
+      // different provider from this one. Keeping them in step here is what
+      // stops the shell claiming a publish is still running after this screen
+      // has watched it finish.
+      gateway.onStatusRead();
+    } on CatalogFailure catch (failure, stack) {
+      if (_disposed) return;
+      // A failed POLL must not destroy a run the user is watching — only a
+      // failure with nothing behind it takes the screen.
+      if (state.value == null) {
+        state = state.copyWith(status: AsyncError(failure, stack));
+      } else {
+        state = state.copyWith(actionFailure: failure);
+        // Keep polling: a single dropped request during a multi-minute run is
+        // ordinary, and giving up would freeze the progress line for good.
+        _scheduleNextPoll();
+      }
+    }
+  }
+
+  // ── Polling ───────────────────────────────────────────────────────────────
+
+  /// Starts, continues or stops the loop to match [status].
+  ///
+  /// TWO REASONS TO KEEP LOOKING, and the second one is the whole point of this
+  /// method being more than a null check on `activeRunId`:
+  ///
+  ///   1. A RUN IS IN FLIGHT — the progress line has to move.
+  ///   2. NO RUN, BUT THE ONLY BLOCKERS CLEAR THEMSELVES — a preview image is
+  ///      rendering or a model is generating. The catalog becomes publishable
+  ///      with the user doing nothing, and the moment it does is exactly what
+  ///      they opened this screen to see. Stopping here is how a user who
+  ///      uploaded a product photo sat in front of a permanently disabled
+  ///      Publish button: the status that would have unblocked it was never
+  ///      asked for.
+  ///
+  /// Anything else — ready to publish, or blocked on something the USER has to
+  /// fix — is a resting state. Nothing will change without them, so the loop
+  /// stops rather than asking the same question forever.
+  void _syncPollingTo(PublishStatus status) {
+    final inFlight =
+        status.isPublishing || (status.run?.state.isInFlight ?? false);
+    if (inFlight) {
+      // A run supersedes a gate wait, and it resets that wait's cap: whatever
+      // the screen was waiting on before, it is now watching something else.
+      if (_pollReason != _PollReason.run) {
+        _pollReason = _PollReason.run;
+        _pollAttempt = 0;
+      }
+      _gatePolls = 0;
+      _scheduleNextPoll();
+      return;
+    }
+
+    if (status.isWaitingOnGates && _gatePolls < _gatePollCap) {
+      // Coming off a run into a wait restarts the backoff — the two tables are
+      // read with the same counter, and a gate wait inheriting a run's position
+      // would open at its ceiling.
+      if (_pollReason != _PollReason.gates) {
+        _pollReason = _PollReason.gates;
+        _pollAttempt = 0;
+      }
+      _scheduleNextPoll();
+      return;
+    }
+
+    // AT REST. Stop, and reset the backoff so the next run starts responsive
+    // again instead of inheriting the last one's eight-second cadence.
+    _cancelPoll();
+    _pollAttempt = 0;
+    _pollReason = _PollReason.run;
+  }
+
+  void _scheduleNextPoll() {
+    _poll?.cancel();
+    if (_disposed || state.isPollingPaused) return;
+    final backoff =
+        _pollReason == _PollReason.gates ? _gateBackoff : _pollBackoff;
+    final delay = backoff[min(_pollAttempt, backoff.length - 1)];
+    _pollAttempt++;
+    if (_pollReason == _PollReason.gates) _gatePolls++;
+    _poll = Timer(delay, () {
+      if (_disposed) return;
+      _loadStatus();
+    });
+  }
+
+  void _cancelPoll() {
+    _poll?.cancel();
+    _poll = null;
+  }
+
+  void _pausePolling() {
+    if (_disposed || state.isPollingPaused) return;
+    _cancelPoll();
+    state = state.copyWith(isPollingPaused: true);
+  }
+
+  void _resumePolling() {
+    if (_disposed || !state.isPollingPaused) return;
+    state = state.copyWith(isPollingPaused: false);
+    // Catch up now, not after a backoff step: the run may well have finished
+    // while the tab was hidden, and the first thing back on screen should be
+    // the truth rather than the last frame from before.
+    _pollAttempt = 0;
+    unawaited(_loadStatus());
+  }
+
+  /// Test seam for the lifecycle transitions — a widget test cannot make a
+  /// browser tab hide, and the real signal arrives from the engine.
+  @visibleForTesting
+  void debugSetHidden(bool hidden) =>
+      hidden ? _pausePolling() : _resumePolling();
+
+  // ── Acting ────────────────────────────────────────────────────────────────
+
+  /// Publish (feature 36).
+  Future<void> publish() =>
+      _act(() => gateway.publish(idempotencyKey: _keyForAttempt()));
+
+  /// Retry only the failed rows (feature 53).
+  Future<void> retryFailed() => _act(gateway.retryFailed);
+
+  Future<void> _act(Future<PublishRequestResult> Function() request) async {
+    if (state.isRequesting) return;
+    state = state.copyWith(
+      isRequesting: true,
+      actionFailure: null,
+      notice: null,
+      suggestedName: null,
+    );
+
+    try {
+      final result = await request();
+      if (_disposed) return;
+
+      switch (result) {
+        case PublishQueued():
+        case PublishAlreadyRunning():
+          // Both mean the same thing to this screen: a run is going, watch it.
+          // A second press answering 409 is NOT an error — it is the run the
+          // user asked for, already under way.
+          _idempotencyKey = null;
+          state = state.copyWith(isRequesting: false);
+          _pollAttempt = 0;
+          await _loadStatus();
+
+        case PublishBlocked():
+          // Re-read rather than adopting the 422's own gate list: the status
+          // endpoint evaluates the identical set, and taking it from one place
+          // is what stops the checklist and the button disagreeing.
+          _idempotencyKey = null;
+          state = state.copyWith(
+            isRequesting: false,
+            notice: 'Fix the items below, then publish again.',
+          );
+          await _loadStatus();
+
+        case PublishNameTaken(:final suggestedName):
+          _idempotencyKey = null;
+          state = state.copyWith(
+            isRequesting: false,
+            suggestedName: suggestedName,
+          );
+
+        case PublishNothingToRetry():
+          _idempotencyKey = null;
+          state = state.copyWith(
+            isRequesting: false,
+            notice: 'Nothing left to retry — every product is up to date.',
+          );
+          await _loadStatus();
+      }
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      // The key is KEPT: this attempt may well have reached the server and lost
+      // its response, and the next press must be the same request, not a
+      // second one.
+      state = state.copyWith(isRequesting: false, actionFailure: failure);
+    }
+  }
+
+  /// Renames the catalog to the server's suggestion and publishes again — the
+  /// one-tap way out of a Mirage name collision.
+  Future<void> renameAndPublish(String name) async {
+    if (state.isRequesting) return;
+    state = state.copyWith(isRequesting: true, actionFailure: null);
+    try {
+      await gateway.rename(name);
+      if (_disposed) return;
+      state = state.copyWith(isRequesting: false, suggestedName: null);
+      await publish();
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      state = state.copyWith(isRequesting: false, actionFailure: failure);
+    }
+  }
+
+  /// Takes the catalog offline (feature 39). A no-op on a door without one.
+  Future<void> unpublish() async {
+    if (state.isRequesting || !gateway.canUnpublish) return;
+    state = state.copyWith(
+      isRequesting: true,
+      actionFailure: null,
+      notice: null,
+    );
+
+    try {
+      final result = await gateway.unpublish();
+      if (_disposed) return;
+
+      state = state.copyWith(
+        isRequesting: false,
+        notice: switch (result) {
+          UnpublishQueued() => 'Taking your catalog offline…',
+          UnpublishAlreadyRunning() =>
+            'Finishing the run that is already going, then try again.',
+          UnpublishNotPublished() => 'This catalog was not live.',
+        },
+      );
+      _pollAttempt = 0;
+      await _loadStatus();
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      state = state.copyWith(isRequesting: false, actionFailure: failure);
+    }
+  }
+
+  void dismissNotice() =>
+      state = state.copyWith(notice: null, actionFailure: null);
+
+  /// The key for the attempt about to be made — a fresh one, unless a previous
+  /// attempt failed without a definitive answer and left one behind.
+  ///
+  /// The bound is written out rather than shifted: on web an int is a JS
+  /// number, `1 << 32` wraps to 0, and nextInt(0) throws on the first press.
+  String _keyForAttempt() =>
+      _idempotencyKey ??= 'pub-${DateTime.now().microsecondsSinceEpoch}-'
+          '${Random().nextInt(0xFFFFFFFF).toRadixString(16).padLeft(8, '0')}';
+}
+
+/// The forwarding a notifier owes its [PublishFlow].
+///
+/// One mixin, so the owner's notifier and the rep's expose the identical
+/// surface to their screens — and so a method added to the flow is a compile
+/// error here rather than a door that quietly lacks it.
+mixin PublishFlowHost {
+  PublishFlow get flow;
+
+  Future<void> reload() => flow.reload();
+  Future<void> refresh() => flow.refresh();
+  Future<void> publish() => flow.publish();
+  Future<void> retryFailed() => flow.retryFailed();
+  Future<void> renameAndPublish(String name) => flow.renameAndPublish(name);
+  Future<void> unpublish() => flow.unpublish();
+  void dismissNotice() => flow.dismissNotice();
+
+  @visibleForTesting
+  void debugSetHidden(bool hidden) => flow.debugSetHidden(hidden);
+}

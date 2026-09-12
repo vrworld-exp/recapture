@@ -564,16 +564,30 @@ describe('mirageClient — request plumbing', () => {
   });
 
   it('a transport throw becomes a retryable MirageError, not a raw axios error', async () => {
+    // A refused connection is retried in place a couple of times (see
+    // tests/mirage-client-retry.test.ts for that policy); when every attempt
+    // is refused, what escapes is still OUR classified error and not axios's.
     stubTransport({ status: 200 });
-    request.mockRejectedValueOnce(
+    request.mockRejectedValue(
       Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })
     );
-
-    await expect(mirageClient.listRestaurants()).rejects.toMatchObject({
-      name: 'MirageError',
-      code: MirageErrorCode.UNREACHABLE,
-      failureClass: 'retryable',
-    });
+    vi.useFakeTimers();
+    try {
+      const attempt = mirageClient.listRestaurants();
+      const settled = attempt.then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(settled).resolves.toMatchObject({
+        name: 'MirageError',
+        code: MirageErrorCode.UNREACHABLE,
+        failureClass: 'retryable',
+      });
+      expect(request).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

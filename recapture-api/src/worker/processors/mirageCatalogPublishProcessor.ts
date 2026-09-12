@@ -62,7 +62,7 @@ import {
   takeCatalogSnapshot,
   type CatalogSnapshot,
 } from '@/services/catalog/publishSnapshot';
-import { MirageError } from '@/services/mirage';
+import { MirageError, warmUpMirage } from '@/services/mirage';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
 import { sweepPromotedProducts } from '@/services/catalogModelPromotionService';
@@ -303,6 +303,15 @@ export const mirageCatalogPublishProcessor: JobProcessor = async (job) => {
 
     const context = buildContext(publishRunId, run.userId.toHexString(), mode, snapshot);
     const tally = { synced: 0, failed: 0, skipped: 0 };
+
+    // Wake Mirage on a READ before the walk's first WRITE. A write that times
+    // out against a still-booting instance cannot be retried in place (the
+    // request may be executing on Mirage's side) and costs this run a whole
+    // worker backoff; a read can be, and costs it a second. Skipped when the
+    // plan has nothing to send — a no-op republish must stay a no-op.
+    if (plan.steps.some((step) => step.action !== 'SKIP')) {
+      await warmUpMirage();
+    }
 
     for (const step of plan.steps) {
       const result = await runStep(step, context);

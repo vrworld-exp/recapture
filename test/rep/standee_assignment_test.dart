@@ -33,6 +33,7 @@ import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show ProductImageSlot;
 import 'package:recapture/data/repositories/rep_repository.dart';
+import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/domain/entities/qr_code_preflight.dart';
@@ -198,8 +199,11 @@ class _FakeRepRepo with RepRepoCatalogDefaults implements RepRepository {
   Future<List<CatalogProduct>> products(String catalogId) async => const [];
 
   @override
-  Future<RepPublishResult> publish(String catalogId) async =>
-      const RepPublishResult(outcome: RepPublishOutcome.queued);
+  Future<PublishRequestResult> publish(
+    String catalogId, {
+    String? idempotencyKey,
+  }) async =>
+      const PublishQueued(runId: 'run-1');
 
   @override
   Future<void> attachCode(String catalogId, String code) async {}

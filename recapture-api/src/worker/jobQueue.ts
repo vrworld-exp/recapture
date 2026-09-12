@@ -113,6 +113,34 @@ export async function markProcessing(jobId: Types.ObjectId, claimedBy: string): 
 }
 
 /**
+ * Renews the claim lease on a job this worker is still processing.
+ *
+ * WHY THIS EXISTS. claimNextJob treats a CLAIMED/PROCESSING job whose
+ * `claimedAt` is older than the lease as orphaned and hands it to the next
+ * poll — which, with RUN_WORKER_IN_PROCESS and a concurrency of 2, is very
+ * often THIS SAME PROCESS's other slot. The Meshy processor happens to renew
+ * the lease through its stage writes (stageTransitions.ts); a processor that
+ * writes its progress elsewhere — the catalog publish run keeps its state on
+ * CatalogPublishRun, not on Job — renews nothing, and a publish longer than
+ * the lease was walked TWICE at once: two copies of the same run pushing the
+ * same items into Mirage, whose create checks uniqueness BEFORE it uploads.
+ *
+ * Fenced on `claimedBy` + a live state so a canceled or stolen job is never
+ * resurrected; returns whether the lease is still ours.
+ */
+export async function renewClaim(jobId: Types.ObjectId, claimedBy: string): Promise<boolean> {
+  const res = await Job.updateOne(
+    {
+      _id: jobId,
+      claimedBy,
+      state: { $in: ['CLAIMED', 'PROCESSING', 'TEXTURING', 'OPTIMIZING'] },
+    },
+    { $set: { claimedAt: new Date() } }
+  ).exec();
+  return res.matchedCount > 0;
+}
+
+/**
  * The terminal COMPLETED flip — one atomic write closing the pipeline:
  * state, completedAt, result, and the stageProgress pointer's COMPLETED/100
  * stamp. Fenced on claimedBy + non-terminal state, so it can never resurrect
