@@ -1,6 +1,9 @@
 // lib/application/rep/rep_catalogs_notifier.dart
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/rep_repository.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/rep_activation.dart';
@@ -126,6 +129,63 @@ class RepCatalogProductsNotifier
     );
     state = next;
     _schedule(next.valueOrNull ?? const <CatalogProduct>[]);
+  }
+
+  /// Moves the dish at [oldIndex] to [newIndex], optimistically, then writes
+  /// the new order on the restaurant's behalf.
+  ///
+  /// THE OWNER'S GRID HAS DONE THIS SINCE FEATURE 10; THE REP LIST COULD NOT.
+  /// A rep building a menu at the table could file dishes into sections and
+  /// not put one above another — the rows sat in creation order until the
+  /// owner signed in and dragged. Same contract as
+  /// `CatalogProductsNotifier.reorder`: [newIndex] follows the
+  /// `ReorderableListView` convention (counted BEFORE the dragged row is
+  /// lifted out), so the list hands its raw indices straight here. Returns the
+  /// index the row LANDED on, or null when nothing moved — the caller needs
+  /// that number for the undo, which drags the row back from where it is.
+  ///
+  /// The whole list is sent: the rep surface loads every dish (there is no
+  /// paging on `/rep/catalogs/:id/products`), and the server renumbers the
+  /// ids it is given 0..n-1. A failure means NOTHING moved — the server
+  /// rejects a mismatched id set wholesale — so the rollback is unconditional,
+  /// followed by a re-read because the likeliest cause is the owner having
+  /// reordered on their own phone first.
+  ///
+  /// A REORDER IS A DRAFT CHANGE. The server bumps `draftRevision` for it as
+  /// it does for an edit, so the publish bar's flag has moved; the document
+  /// behind that bar is invalidated here because nothing else on the screen
+  /// re-reads it after a drag.
+  Future<int?> reorder(int oldIndex, int newIndex) async {
+    final previous = state.valueOrNull;
+    if (previous == null) return null;
+    if (oldIndex < 0 || oldIndex >= previous.length) return null;
+
+    var target = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    if (target < 0) target = 0;
+    if (target >= previous.length) target = previous.length - 1;
+    if (target == oldIndex) return null;
+
+    final reordered = [...previous];
+    reordered.insert(target, reordered.removeAt(oldIndex));
+    // Positions are renumbered by the server to the array index; mirroring
+    // that locally keeps a later in-place update from re-sorting the list.
+    final optimistic = [
+      for (var i = 0; i < reordered.length; i++)
+        reordered[i].copyWith(position: i),
+    ];
+    state = AsyncData(optimistic);
+
+    try {
+      await ref
+          .read(repRepositoryProvider)
+          .reorderProducts(arg, [for (final item in optimistic) item.id]);
+      ref.invalidate(repCatalogDocumentProvider(arg));
+      return target;
+    } on CatalogFailure {
+      state = AsyncData(previous);
+      unawaited(refresh());
+      rethrow;
+    }
   }
 }
 

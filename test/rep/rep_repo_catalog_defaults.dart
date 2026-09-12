@@ -18,7 +18,7 @@ import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:recapture/data/repositories/catalog_repository.dart'
     show BrandingSlot, CatalogQrFormat, CatalogQrImage;
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
-    show kCatalogUnchanged;
+    show BulkProductAction, kCatalogUnchanged;
 import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
@@ -37,8 +37,8 @@ mixin RepRepoCatalogDefaults implements RepRepository {
       const RepPublishedPage(standees: [], total: 0);
 
   @override
-  Future<Catalog> catalog(String catalogId) =>
-      throw UnimplementedError('rep catalog read is not exercised by this test');
+  Future<Catalog> catalog(String catalogId) => throw UnimplementedError(
+      'rep catalog read is not exercised by this test');
 
   @override
   Future<PublishStatus> publishStatus(String catalogId) =>
@@ -95,8 +95,8 @@ mixin RepRepoCatalogDefaults implements RepRepository {
       );
 
   @override
-  Future<BusinessProfile> profile(String catalogId) =>
-      throw UnimplementedError('rep profile read is not exercised by this test');
+  Future<BusinessProfile> profile(String catalogId) => throw UnimplementedError(
+      'rep profile read is not exercised by this test');
 
   @override
   Future<BusinessProfile> updateProfile(
@@ -146,4 +146,19 @@ mixin RepRepoCatalogDefaults implements RepRepository {
     String? imageKey,
   }) =>
       throw UnimplementedError('rep dish edit is not exercised by this test');
+
+  @override
+  Future<void> reorderProducts(String catalogId, List<String> orderedIds) =>
+      throw UnimplementedError(
+        'rep dish reorder is not exercised by this test',
+      );
+
+  @override
+  Future<int> bulkProducts(
+    String catalogId, {
+    required BulkProductAction action,
+    required List<String> ids,
+    Object? categoryId = kCatalogUnchanged,
+  }) =>
+      throw UnimplementedError('rep bulk move is not exercised by this test');
 }

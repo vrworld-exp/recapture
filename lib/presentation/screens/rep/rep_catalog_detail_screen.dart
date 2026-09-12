@@ -14,13 +14,22 @@
 // second implementation of the hardest screen in the app, and it is the one
 // nobody would keep in step.
 //
-// THREE WAYS OUT OF THIS SCREEN, AND EACH ANSWERS A DIFFERENT QUESTION:
+// FOUR WAYS OUT OF THIS SCREEN, AND EACH ANSWERS A DIFFERENT QUESTION:
 //   • a dish row  → 'is this one right?'          → the dish editor
+//   • Categories  → 'are the SECTIONS right?'     → the category manager
 //   • Preview     → 'is the PAGE right?'          → the customer-eye preview
 //   • Details     → 'is the RESTAURANT right?'    → name, contact, branding
 // Until they existed a rep could add dishes and publish, and could not fix a
 // single thing they had got wrong — the owner had to sign in later and do it,
 // which on a pilot visit means the page goes live wrong or does not go live.
+//
+// AND THE ROWS DRAG. The owner's grid has reordered since feature 10; this list
+// sat in creation order until the owner signed in and dragged, so a rep could
+// build "Mains" and not put Butter Chicken above Dal inside it. Same handle,
+// same keyboard shortcut, same undo as the category manager — one gesture
+// vocabulary across the rep surface — writing through
+// `RepCatalogProductsNotifier.reorder`, which is the single place that knows
+// the ReorderableListView index convention.
 //
 // AND EVERY ONE OF THOSE EDITS LANDS IN A DRAFT, WHICH THE BOTTOM BAR NOW SAYS.
 // Renaming a dish, replacing its photo or model, changing the restaurant's own
@@ -30,6 +39,7 @@
 // walked out had nothing on screen telling them the correction was still in
 // the draft. See [_PublishBar].
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -40,6 +50,7 @@ import '../../../app/theme/app_typography.dart';
 import '../../../application/common/pending_poll_loop.dart';
 import '../../../application/rep/rep_catalogs_notifier.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
+import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
@@ -47,6 +58,8 @@ import '../../../domain/entities/product_model_status.dart';
 import '../../../utils/extensions.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
+import '../catalog/category_manager_screen.dart' show kCategoryTouchWidth;
 
 class RepCatalogDetailScreen extends ConsumerWidget {
   const RepCatalogDetailScreen({super.key, required this.catalogId});
@@ -62,6 +75,24 @@ class RepCatalogDetailScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Dishes'),
         actions: [
+          IconButton(
+            key: const ValueKey('rep_categories'),
+            icon: const Icon(Icons.category_outlined),
+            tooltip: 'Categories',
+            onPressed: () async {
+              await context.push(
+                '${AppRoutes.repCatalogs}/$catalogId/categories',
+              );
+              if (!context.mounted) return;
+              // The manager moves dishes between sections and deletes
+              // sections (which moves their dishes), and every one of those
+              // is a draft change. The list and the bar both re-read.
+              ref.invalidate(repCatalogDocumentProvider(catalogId));
+              await ref
+                  .read(repCatalogProductsProvider(catalogId).notifier)
+                  .refresh();
+            },
+          ),
           IconButton(
             key: const ValueKey('rep_preview_menu'),
             icon: const Icon(Icons.visibility_outlined),
@@ -134,41 +165,162 @@ class RepCatalogDetailScreen extends ConsumerWidget {
                     body: 'Add the first one — capture it and the 3D model '
                         'starts generating on its own.',
                   )
-                : ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.lg,
-                      AppSpacing.lg,
-                      AppSpacing.lg,
-                      AppSpacing.huge * 2,
-                    ),
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) =>
-                        const SizedBox(height: AppSpacing.sm),
-                    itemBuilder: (_, i) => _DishRow(
-                      product: items[i],
-                      // The refresh is what makes an edited name, price or
-                      // photo appear on the row the rep came back to, rather
-                      // than up to one poll interval later — or never, for a
-                      // dish with no 3D model to poll for.
-                      onTap: () async {
-                        await context.push(
-                          '${AppRoutes.repCatalogs}/$catalogId/dishes/'
-                          '${items[i].id}',
-                        );
-                        if (!context.mounted) return;
-                        // An edited name, price, photo or model is a draft
-                        // change — same reason as the add-dish FAB above.
-                        ref.invalidate(repCatalogDocumentProvider(catalogId));
-                        await ref
-                            .read(
-                                repCatalogProductsProvider(catalogId).notifier)
-                            .refresh();
-                      },
-                    ),
+                : LayoutBuilder(
+                    builder: (context, constraints) {
+                      // Finger-sized handles below the same width the category
+                      // manager uses. Measured, never `kIsWeb`: a narrow
+                      // browser window is the phone shape.
+                      final touch = constraints.maxWidth < kCategoryTouchWidth;
+                      return ReorderableListView.builder(
+                        key: const ValueKey('rep_dish_list'),
+                        padding: const EdgeInsets.fromLTRB(
+                          AppSpacing.lg,
+                          AppSpacing.lg,
+                          AppSpacing.lg,
+                          AppSpacing.huge * 2,
+                        ),
+                        // Handles are drawn by the rows themselves, so ONE
+                        // affordance serves touch drag, mouse drag and the
+                        // keyboard hint.
+                        buildDefaultDragHandles: false,
+                        header: Padding(
+                          padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                          child: Text(
+                            'Customers see the dishes in this order. Drag '
+                            'the handle to change it.',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: AppColors.textMuted),
+                          ),
+                        ),
+                        itemCount: items.length,
+                        onReorder: (oldIndex, newIndex) => _reorderDish(
+                          context,
+                          catalogId,
+                          oldIndex,
+                          newIndex,
+                        ),
+                        itemBuilder: (_, i) => Padding(
+                          key: ValueKey('rep_dish_slot_${items[i].id}'),
+                          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                          child: _DishRow(
+                            product: items[i],
+                            touch: touch,
+                            index: i,
+                            count: items.length,
+                            onMove: (from, to) =>
+                                _reorderDish(context, catalogId, from, to),
+                            // The refresh is what makes an edited name, price
+                            // or photo appear on the row the rep came back
+                            // to, rather than up to one poll interval later —
+                            // or never, for a dish with no 3D model to poll
+                            // for.
+                            onTap: () async {
+                              await context.push(
+                                '${AppRoutes.repCatalogs}/$catalogId/dishes/'
+                                '${items[i].id}',
+                              );
+                              if (!context.mounted) return;
+                              // An edited name, price, photo or model is a
+                              // draft change — same reason as the add-dish
+                              // FAB above.
+                              ref.invalidate(
+                                  repCatalogDocumentProvider(catalogId));
+                              await ref
+                                  .read(repCatalogProductsProvider(catalogId)
+                                      .notifier)
+                                  .refresh();
+                            },
+                          ),
+                        ),
+                      );
+                    },
                   ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// One drag on the dish list, written, confirmed, and offered back.
+///
+/// The same shape as the category manager's `_reorder`: the messenger and the
+/// container are captured while the context is certainly mounted, because the
+/// undo fires seconds later from a snackbar the rep may have navigated away
+/// from — a container survives that, a ref does not.
+Future<void> _reorderDish(
+  BuildContext context,
+  String catalogId,
+  int oldIndex,
+  int newIndex,
+) async {
+  final messenger = CatalogFeedback.of(context);
+  final container = ProviderScope.containerOf(context, listen: false);
+  final name = container
+      .read(repCatalogProductsProvider(catalogId))
+      .valueOrNull
+      ?.elementAtOrNull(oldIndex)
+      ?.displayName;
+  await _writeDishOrder(
+    messenger,
+    container,
+    catalogId,
+    oldIndex,
+    newIndex,
+    name: name,
+  );
+}
+
+/// [undoable] is false for the undo's OWN write, so pressing undo twice does
+/// not become a way to walk the list back and forth forever.
+Future<void> _writeDishOrder(
+  ScaffoldMessengerState messenger,
+  ProviderContainer container,
+  String catalogId,
+  int oldIndex,
+  int newIndex, {
+  String? name,
+  bool undoable = true,
+}) async {
+  try {
+    final landed = await container
+        .read(repCatalogProductsProvider(catalogId).notifier)
+        .reorder(oldIndex, newIndex);
+    // Nothing moved — a drag that ended where it started. Confirming it would
+    // be a message about an event that did not happen.
+    if (landed == null) return;
+
+    final subject = name == null ? 'Dish order saved.' : '$name moved.';
+    if (!undoable) {
+      CatalogFeedback.confirm(messenger, subject);
+      return;
+    }
+    CatalogFeedback.undoable(
+      messenger,
+      '$subject Customers see the new order after you publish.',
+      // The REAL inverse: the row is dragged back from where it LANDED to
+      // where it came from, and that write goes to the server like any other.
+      // `oldIndex + 1` when moving down is the ReorderableListView convention
+      // — the target is counted before the row is lifted out.
+      onUndo: () => _writeDishOrder(
+        messenger,
+        container,
+        catalogId,
+        landed,
+        oldIndex > landed ? oldIndex + 1 : oldIndex,
+        name: name,
+        undoable: false,
+      ),
+    );
+  } on CatalogFailure catch (failure) {
+    // The list has already snapped back and re-read itself. Say why, or the
+    // row looks as though it refused the drag for no reason.
+    CatalogFeedback.failure(
+      messenger,
+      failure,
+      subject: 'That order could not be saved',
     );
   }
 }
@@ -268,7 +420,8 @@ class _PublishBarState extends ConsumerState<_PublishBar> {
   @override
   Widget build(BuildContext context) {
     final catalogId = widget.catalogId;
-    final catalog = ref.watch(repCatalogDocumentProvider(catalogId)).valueOrNull;
+    final catalog =
+        ref.watch(repCatalogDocumentProvider(catalogId)).valueOrNull;
 
     // A run can start without this device asking — a 3D model finishing
     // generation publishes on its own, and so does the owner on their phone —
@@ -453,9 +606,30 @@ class _PublishStateLine extends StatelessWidget {
 }
 
 class _DishRow extends StatelessWidget {
-  const _DishRow({required this.product, this.onTap});
+  const _DishRow({
+    required this.product,
+    required this.touch,
+    required this.index,
+    required this.count,
+    this.onMove,
+    this.onTap,
+  });
 
   final CatalogProduct product;
+
+  /// Narrow layout — the handle grows to a finger-sized box. See
+  /// [kCategoryTouchWidth].
+  final bool touch;
+
+  /// This row's slot in the list, and how many there are: what the drag
+  /// handle and the keyboard shortcut hand to the reorder.
+  final int index;
+  final int count;
+
+  /// Keyboard reorder (Alt + arrows), in the `ReorderableListView` index
+  /// convention. Null disables the shortcut; the handle still needs a
+  /// `ReorderableListView` ancestor to do anything.
+  final void Function(int from, int to)? onMove;
 
   /// Opens the dish. Null renders the row as plain text — there is no state
   /// where that is wanted today, and the parameter is optional only so the row
@@ -480,65 +654,110 @@ class _DishRow extends StatelessWidget {
       ProductModelStatus.none => ('Photo only', AppColors.textMuted),
     };
 
-    return Material(
-      color: AppColors.surface1,
-      borderRadius: BorderRadius.circular(AppRadius.sm),
-      child: InkWell(
-        key: ValueKey('rep_dish_row_${product.id}'),
+    final move = onMove;
+    return CallbackShortcuts(
+      // Keyboard reorder (Alt + arrows). Drag-only is inaccessible on a
+      // desktop — and the rep surface runs in a browser — and this is the same
+      // call the drag makes: one code path, one set of rollbacks.
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.arrowUp, alt: true): () {
+          if (move != null && index > 0) move(index, index - 1);
+        },
+        const SingleActivator(LogicalKeyboardKey.arrowDown, alt: true): () {
+          if (move != null && index < count - 1) move(index, index + 2);
+        },
+      },
+      child: Material(
+        color: AppColors.surface1,
         borderRadius: BorderRadius.circular(AppRadius.sm),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      product.displayName,
-                      style: const TextStyle(
-                        fontSize: AppTypography.sizeHeadline,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+        child: InkWell(
+          key: ValueKey('rep_dish_row_${product.id}'),
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+          onTap: onTap,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              touch ? AppSpacing.sm : AppSpacing.md,
+              AppSpacing.lg,
+              AppSpacing.lg,
+              AppSpacing.lg,
+            ),
+            child: Row(
+              children: [
+                // ReorderableDragStartListener works for touch AND mouse, so the
+                // web build's drag needs no second implementation. The box
+                // around the icon is the hit target, so on a phone it is padded
+                // to 40 — the icon alone is 18, which a finger misses.
+                ReorderableDragStartListener(
+                  index: index,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.grab,
+                    child: Tooltip(
+                      message: 'Drag to reorder (or Alt + ↑ / ↓)',
+                      child: SizedBox(
+                        key: ValueKey('rep_dish_handle_${product.id}'),
+                        width: touch ? 40 : 18,
+                        height: touch ? 40 : 18,
+                        child: Center(
+                          child: Icon(
+                            Icons.drag_indicator,
+                            size: touch ? 22 : 18,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        if (product.isModelPending) ...[
-                          SizedBox(
-                            width: 10,
-                            height: 10,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1.5,
+                  ),
+                ),
+                SizedBox(width: touch ? AppSpacing.sm : AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        product.displayName,
+                        style: const TextStyle(
+                          fontSize: AppTypography.sizeHeadline,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          if (product.isModelPending) ...[
+                            SizedBox(
+                              width: 10,
+                              height: 10,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                                color: color,
+                              ),
+                            ),
+                            const SizedBox(width: AppSpacing.xs),
+                          ],
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontSize: AppTypography.sizeLabel,
                               color: color,
                             ),
                           ),
-                          const SizedBox(width: AppSpacing.xs),
                         ],
-                        Text(
-                          label,
-                          style: TextStyle(
-                            fontSize: AppTypography.sizeLabel,
-                            color: color,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              if (product.isArReady) ...[
-                const Icon(Icons.view_in_ar,
-                    color: AppColors.royalGold, size: 18),
-                const SizedBox(width: AppSpacing.sm),
+                if (product.isArReady) ...[
+                  const Icon(Icons.view_in_ar,
+                      color: AppColors.royalGold, size: 18),
+                  const SizedBox(width: AppSpacing.sm),
+                ],
+                // The affordance, not decoration: without it the row reads as a
+                // status line and a rep never discovers the editor behind it.
+                const Icon(Icons.chevron_right,
+                    color: AppColors.textMuted, size: 18),
               ],
-              // The affordance, not decoration: without it the row reads as a
-              // status line and a rep never discovers the editor behind it.
-              const Icon(Icons.chevron_right,
-                  color: AppColors.textMuted, size: 18),
-            ],
+            ),
           ),
         ),
       ),

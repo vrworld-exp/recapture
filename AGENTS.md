@@ -802,16 +802,44 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   like one that finished. **Do not grow a rep-only publish surface again**; the
   differences are parameters: `PublishVoice` (a handful of "your catalog" vs
   "the menu" sentences), where a gate's Fix goes (the rep's own routes, resolved
-  from the catalog id in the path), `canFix` (a rep has no section manager, so
-  "Rename category" gets no button), and `canUnpublish: false` — a customer page
-  going dark is the owner's decision, and the rep's router has no unpublish
-  route. The dish list's bottom bar is a DOOR to that screen, mirroring the
+  from the catalog id in the path), `canFix` (every gate has a rep screen now
+  — "Rename category" opens the rep's category manager — but the hook stays so
+  a gate that grows a label before a screen can be switched off), and
+  `canUnpublish: false` — a customer page going dark is the owner's decision,
+  and the rep's router has no unpublish route. The dish list's bottom bar is a DOOR to that screen, mirroring the
   owner's catalog header; it does not publish. `PublishStatusDto` carries
   `hasChangesSincePublishStarted` (`draftRevision > run.snapshotRevision`,
   active run only) so both screens can say "your latest changes are not in this
   publish" mid-run. RUN-level codes (`PublishErrorCode.*`, `PUBLISH_ABANDONED`)
   have copy in `sync_error_copy.dart`; the enumerating test does not scan the
   processor, so add copy by hand when adding a run-level code.
+- **The rep arranges the menu with the OWNER's tools, delegated — a category
+  manager and a dish reorder, both copies, not parameterisations.**
+  `/rep/catalogs/:id/categories` (`RepCategoryManagerScreen`) is the owner's
+  `CategoryManagerScreen` block for block — create, rename, delete with
+  reassignment, drag-reorder (touch-sized handles under 600dp, Alt+arrows on a
+  keyboard, undo), master/detail from the constraints, the products-in-a-section
+  pane with "Move to…" and the add-dishes picker — over `repCategoriesProvider`
+  and two rep-keyed panes (`application/rep/rep_category_products_notifier.dart`:
+  `repCategoryProductsProvider` / `repCategoryCandidatesProvider`, keyed by
+  `RepCategoryKey(catalogId, categoryId?)`). The owner's screen reads three
+  app-wide providers that resolve "my catalog" from the token; threading a
+  scope through every widget was judged worse than a second file that says
+  "change one, change both" at the top. The panes read ONE unfiltered
+  `GET /rep/catalogs/:id/products` (no filter, no cursor, `REP_PRODUCT_PAGE_SIZE`
+  = 100) and narrow it locally, and flag `truncated` at exactly 100 rather than
+  quietly showing a subset. The dish list (`RepCatalogDetailScreen`) is a
+  `ReorderableListView` with the same handle/shortcut/undo, writing through
+  `RepCatalogProductsNotifier.reorder` (optimistic, unconditional rollback on
+  `ID_SET_MISMATCH`, invalidates `repCatalogDocumentProvider` because a reorder
+  is a draft change). Server side, two routes were added to `routes/rep.ts`,
+  declared BEFORE `/products/:productId` and delegating to the owner service
+  with the restaurant's userId: `POST /rep/catalogs/:id/products/reorder`
+  (`reorderProducts`) and `POST /rep/catalogs/:id/products/bulk`
+  (`bulkProducts`, the owner's schema unnarrowed — the manager's move / drain /
+  add are all one `SET_CATEGORY` call rather than N patches). Guardrails:
+  `tests/rep-restaurant-editing.test.ts` ("the dish order and bulk moves") and
+  `test/rep/rep_category_manager_test.dart`.
 - **Never `delete-restaurant` from a publish path — `DELETE /catalog` is the ONE
   exception.** Unpublish removes the ITEMS and flips `restaurant.isPublished`.
   `mirageRestaurantId`, `publicUrl` and `publicUrlScheme` are written ONCE and

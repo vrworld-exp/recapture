@@ -47,12 +47,13 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
 
   /// Whether the rep has a screen that fixes [gate].
   ///
-  /// Everything but a bad section name: the rep's section picker can create
-  /// a section but not rename one, and the checklist must not offer a button
-  /// that opens nothing. The sentence still shows, so the rep knows to tell
-  /// the owner.
-  bool _canFix(PublishGate gate) =>
-      gate.code != PublishGateCode.categoryNameInvalid;
+  /// Every gate with a fix label has one now. "Rename category" used to be the
+  /// exception — the rep's section picker could create a section but not
+  /// rename one — and the rep's category manager
+  /// (`/rep/catalogs/:id/categories`) closed that. The body still asks, so a
+  /// gate that grows a label before it grows a screen can be turned off here
+  /// rather than offering a button that opens nothing.
+  bool _canFix(PublishGate gate) => true;
 
   /// Sends the rep to whatever fixes [gate], then re-reads.
   ///
@@ -73,8 +74,8 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
       case PublishGateCode.productCategoryUnknown:
         if (productId == null) return;
         await context.push('$_base/dishes/$productId');
-      // See [_canFix]: no rep surface renames a section.
       case PublishGateCode.categoryNameInvalid:
+        await context.push('$_base/categories');
       // Nothing the rep can open would help: the preview image is generating,
       // the model is not finished, or publishing is off on this deployment.
       case PublishGateCode.productThumbnailMissing:

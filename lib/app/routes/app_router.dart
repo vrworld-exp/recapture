@@ -28,6 +28,7 @@ import '../../presentation/screens/rep/rep_publish_screen.dart';
 import '../../presentation/screens/rep/rep_add_dish_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_detail_screen.dart';
 import '../../presentation/screens/rep/rep_catalog_qr_screen.dart';
+import '../../presentation/screens/rep/rep_category_manager_screen.dart';
 import '../../presentation/screens/rep/rep_dish_editor_screen.dart';
 import '../../presentation/screens/rep/rep_menu_preview_screen.dart';
 import '../../presentation/screens/rep/rep_catalogs_screen.dart';
@@ -194,6 +195,11 @@ abstract final class AppRoutes {
   /// The restaurant's whole page as a customer will meet it.
   static const repCatalogPreview = '/rep/catalogs/:id/preview';
 
+  /// The restaurant's menu sections — the OWNER's [catalogCategories], for a
+  /// restaurant a rep holds a delegation on: create, rename, delete with
+  /// reassignment, drag-reorder, and moving dishes between sections.
+  static const repCatalogCategories = '/rep/catalogs/:id/categories';
+
   /// The restaurant's own QR code — the square on the table.
   ///
   /// The SAME code the owner sees at [catalogQr], for a restaurant a rep holds
@@ -286,6 +292,7 @@ abstract final class AppRouteNames {
   static const repDishDetail = 'repDishDetail';
   static const repCatalogDetails = 'repCatalogDetails';
   static const repCatalogPreview = 'repCatalogPreview';
+  static const repCatalogCategories = 'repCatalogCategories';
   static const repCatalogQr = 'repCatalogQr';
   static const repCatalogPublish = 'repCatalogPublish';
   static const adminStandees = 'adminStandees';
@@ -357,7 +364,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       // a rep screen that renders, fires a request and answers 403 — which
       // looks like a broken app rather than a surface they do not have.
       // Inclusive upward, mirroring the backend: MODEL_ARTIST and ADMIN pass.
-      final repRedirect = repRedirectFor(loc, canUseRepSurface: _canUseRep(ref));
+      final repRedirect =
+          repRedirectFor(loc, canUseRepSurface: _canUseRep(ref));
       if (repRedirect != null) return repRedirect;
 
       // Standee inventory is ADMIN-only, matching the backend's stricter gate
@@ -501,7 +509,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogAnalytics,
         name: AppRouteNames.catalogAnalytics,
-        builder: (_, __) => const FlowBackScope(child: CatalogAnalyticsScreen()),
+        builder: (_, __) =>
+            const FlowBackScope(child: CatalogAnalyticsScreen()),
       ),
       // The category manager. STATIC, and declared before the product routes
       // for the same reason `products/new` is: a literal segment must never be
@@ -630,6 +639,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.repCatalogPreview,
         name: AppRouteNames.repCatalogPreview,
         builder: (context, state) => RepMenuPreviewScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogCategories,
+        name: AppRouteNames.repCatalogCategories,
+        builder: (context, state) => RepCategoryManagerScreen(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),

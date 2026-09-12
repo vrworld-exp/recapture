@@ -48,7 +48,12 @@ import 'package:recapture/presentation/screens/rep/rep_publish_screen.dart';
 
 import '../catalog/catalog_entities_test.dart' as golden;
 import '../catalog/publish_fakes.dart'
-    show FakeLinkActions, gatePayload, productPayload, runPayload, statusPayload;
+    show
+        FakeLinkActions,
+        gatePayload,
+        productPayload,
+        runPayload,
+        statusPayload;
 import 'rep_repo_catalog_defaults.dart';
 
 const kCatalogId = '6a83dd464aea89d1d2d28d50';
@@ -290,7 +295,8 @@ void main() {
       expect(find.textContaining('already uses this name'), findsOneWidget);
       // The rep's words for the rep's things.
       expect(find.text('1 of 2 published · 1 failed'), findsOneWidget);
-      expect(find.text('Only the failed dishes are tried again.'), findsOneWidget);
+      expect(
+          find.text('Only the failed dishes are tried again.'), findsOneWidget);
       expect(find.text('Dishes'), findsOneWidget);
     });
 
@@ -372,7 +378,8 @@ void main() {
       // started a run; the rep's question was "is this menu going up", and
       // the answer is yes. Surfacing our lock as a failure would send a rep
       // out of the building believing the standee is dead.
-      final repo = ready()..publishResult = const PublishAlreadyRunning('run-9');
+      final repo = ready()
+        ..publishResult = const PublishAlreadyRunning('run-9');
       await tester.pumpWidget(_harness(repo));
       await tester.pumpAndSettle();
 
@@ -476,8 +483,11 @@ void main() {
       expect(find.text('Add a product'), findsOneWidget);
     });
 
-    testWidgets('offers no fix for a section name the rep cannot edit',
+    testWidgets('offers the category manager for a bad section name',
         (tester) async {
+      // This used to be the ONE gate with no button on the rep's checklist:
+      // the section picker could create but not rename. The rep's category
+      // manager closed that, and a button that opens it is now offered.
       final repo = _FakeRepRepository(
         status: statusPayload(
           gates: [
@@ -491,9 +501,8 @@ void main() {
       await tester.pumpWidget(_harness(repo));
       await tester.pumpAndSettle();
 
-      // The sentence stays; the button that would open nothing does not.
       expect(find.textContaining('cannot be published'), findsOneWidget);
-      expect(find.text('Rename category'), findsNothing);
+      expect(find.text('Rename category'), findsOneWidget);
     });
   });
 

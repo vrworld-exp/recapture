@@ -33,7 +33,7 @@ import 'package:recapture/data/repositories/admin_standee_repository.dart'
     show StandeeQrFormat;
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
-    show ProductImageSlot, kCatalogUnchanged;
+    show BulkProductAction, ProductImageSlot, kCatalogUnchanged;
 import 'package:recapture/data/repositories/catalog_repository.dart'
     show BrandingSlot, CatalogQrFormat, CatalogQrImage;
 import 'package:recapture/data/repositories/rep_repository.dart';
@@ -213,7 +213,8 @@ class FakeRepRepository implements RepRepository {
         .firstWhere((c) => c.id == categoryId)
         .copyWith(name: name);
     storedCategories = [
-      for (final c in storedCategories) if (c.id == categoryId) renamed else c,
+      for (final c in storedCategories)
+        if (c.id == categoryId) renamed else c,
     ];
     return renamed;
   }
@@ -313,6 +314,30 @@ class FakeRepRepository implements RepRepository {
     );
     return dish;
   }
+
+  /// Every dish order this fake was handed, in order.
+  final List<List<String>> reorders = [];
+
+  /// Set to fail the next reorder — the rollback path.
+  CatalogFailure? reorderFailure;
+
+  @override
+  Future<void> reorderProducts(
+    String catalogId,
+    List<String> orderedIds,
+  ) async {
+    reorders.add(orderedIds);
+    if (reorderFailure != null) throw reorderFailure!;
+  }
+
+  @override
+  Future<int> bulkProducts(
+    String catalogId, {
+    required BulkProductAction action,
+    required List<String> ids,
+    Object? categoryId = kCatalogUnchanged,
+  }) async =>
+      throw UnimplementedError('rep bulk move is not exercised by this suite');
 
   // ── The rest of the seam, unexercised here ────────────────────────────────
 
@@ -421,7 +446,8 @@ Widget harness(
       overrides: [
         authProvider.overrideWith(_StubAuth.new),
         repRepositoryProvider.overrideWithValue(repo),
-        if (picker != null) productImagePickerProvider.overrideWithValue(picker),
+        if (picker != null)
+          productImagePickerProvider.overrideWithValue(picker),
       ],
       child: MaterialApp(
         home: Center(

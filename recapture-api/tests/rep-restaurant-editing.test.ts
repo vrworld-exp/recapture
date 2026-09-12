@@ -761,3 +761,160 @@ describe('one dish, edited by the rep', () => {
     expect(await draftRevisionOf(catalogId)).toBeGreaterThan(before);
   });
 });
+
+describe('the dish order and bulk moves, by the rep', () => {
+  // THE GAP THIS CLOSES. The rep could build sections and file dishes into
+  // them, and could not put one dish above another — creation order, forever,
+  // until the owner signed in. And the rep's category manager needs the same
+  // "move these / empty this section into that one" the owner's has, which is
+  // one bulk call and not N patches.
+
+  it('reorders the dishes, and the rep list reads back in the new order', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const ids: string[] = [];
+    for (const name of ['Dal', 'Butter Chicken', 'Naan']) {
+      ids.push(await addDish(catalogId, rep.auth, name));
+    }
+
+    const reordered = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products/reorder`)
+      .set(rep.auth)
+      .send({ ids: [ids[1], ids[2], ids[0]] });
+
+    expect(reordered.status).toBe(200);
+    expect(reordered.body.reordered).toBe(3);
+
+    const list = await request(app)
+      .get(`/rep/catalogs/${catalogId}/products`)
+      .set(rep.auth);
+    expect(list.body.items.map((p: { id: string }) => p.id)).toEqual([
+      ids[1],
+      ids[2],
+      ids[0],
+    ]);
+  });
+
+  it('routes /reorder and /bulk to their handlers and not to :productId', async () => {
+    // STATIC BEFORE PARAMETERISED. If the GET/PATCH `:productId` routes were
+    // declared first, `reorder` and `bulk` would arrive as product ids — this
+    // is the test that fails if somebody moves them.
+    const { catalogId, rep } = await activated('ABCD2345');
+    const dishId = await addDish(catalogId, rep.auth, 'Dal');
+
+    const reorder = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products/reorder`)
+      .set(rep.auth)
+      .send({ ids: [dishId] });
+    expect(reorder.status).toBe(200);
+
+    const bulk = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products/bulk`)
+      .set(rep.auth)
+      .send({ action: 'SET_CATEGORY', ids: [dishId], categoryId: null });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.affected).toBe(1);
+  });
+
+  it("refuses a dish id from another rep's restaurant in the order", async () => {
+    const first = await activated('ABCD2345', '+919876543210');
+    const second = await activated('EFGH6789', '+919812345678');
+    const mine = await addDish(first.catalogId, first.rep.auth, 'Dal');
+    const theirs = await addDish(second.catalogId, second.rep.auth, 'Idli');
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${first.catalogId}/products/reorder`)
+      .set(first.rep.auth)
+      .send({ ids: [theirs, mine] });
+
+    // Rejected wholesale, without naming which id was the problem.
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('ID_SET_MISMATCH');
+  });
+
+  it('moves many dishes into a section in one call, and the owner sees it', async () => {
+    const { catalogId, rep, ownerAuth } = await activated('ABCD2345');
+    const section = await request(app)
+      .post(`/rep/catalogs/${catalogId}/categories`)
+      .set(rep.auth)
+      .send({ name: 'Mains' })
+      .expect(201);
+    const categoryId: string = section.body.category.id;
+    const ids = [
+      await addDish(catalogId, rep.auth, 'Dal'),
+      await addDish(catalogId, rep.auth, 'Naan'),
+    ];
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products/bulk`)
+      .set(rep.auth)
+      .send({ action: 'SET_CATEGORY', ids, categoryId });
+
+    expect(res.status).toBe(200);
+    expect(res.body.affected).toBe(2);
+
+    // Landed on the RESTAURANT's rows, readable through the owner's own door.
+    const owner = await request(app)
+      .get(`/catalog/products?categoryId=${categoryId}`)
+      .set(ownerAuth);
+    expect(owner.status).toBe(200);
+    expect(owner.body.items.map((p: { id: string }) => p.id).sort()).toEqual(
+      [...ids].sort()
+    );
+  });
+
+  it('refuses a section that is not on this menu', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const dishId = await addDish(catalogId, rep.auth, 'Dal');
+
+    const res = await request(app)
+      .post(`/rep/catalogs/${catalogId}/products/bulk`)
+      .set(rep.auth)
+      .send({
+        action: 'SET_CATEGORY',
+        ids: [dishId],
+        categoryId: new Types.ObjectId().toHexString(),
+      });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CATEGORY_NOT_FOUND');
+  });
+
+  it('bumps the draft revision on a reorder, so the order is not claimed live', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const ids = [
+      await addDish(catalogId, rep.auth, 'Dal'),
+      await addDish(catalogId, rep.auth, 'Naan'),
+    ];
+    const before = await draftRevisionOf(catalogId);
+
+    await request(app)
+      .post(`/rep/catalogs/${catalogId}/products/reorder`)
+      .set(rep.auth)
+      .send({ ids: [ids[1], ids[0]] })
+      .expect(200);
+
+    expect(await draftRevisionOf(catalogId)).toBeGreaterThan(before);
+  });
+
+  it('refuses a stranger both, with the same 404 as a missing catalog', async () => {
+    const { catalogId, rep } = await activated('ABCD2345');
+    const dishId = await addDish(catalogId, rep.auth, 'Dal');
+    const stranger = await makeUser('SALES_REP');
+
+    const responses = [
+      await request(app)
+        .post(`/rep/catalogs/${catalogId}/products/reorder`)
+        .set(stranger.auth)
+        .send({ ids: [dishId] }),
+      await request(app)
+        .post(`/rep/catalogs/${catalogId}/products/bulk`)
+        .set(stranger.auth)
+        .send({ action: 'SET_CATEGORY', ids: [dishId], categoryId: null }),
+    ];
+
+    for (const res of responses) {
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('CATALOG_NOT_FOUND');
+    }
+  });
+});

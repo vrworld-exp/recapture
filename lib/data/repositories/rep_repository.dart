@@ -17,9 +17,19 @@ import '../../domain/entities/qr_standee.dart';
 import 'admin_standee_repository.dart' show StandeeQrFormat;
 import 'bytes_response.dart';
 import 'catalog_repository.dart'
-    show BrandingSlot, BrandingSlotX, CatalogQrFormat, CatalogQrFormatX, CatalogQrImage;
+    show
+        BrandingSlot,
+        BrandingSlotX,
+        CatalogQrFormat,
+        CatalogQrFormatX,
+        CatalogQrImage;
 import 'catalog_products_repository.dart'
-    show ProductImageSlot, kCatalogUnchanged;
+    show
+        BulkProductAction,
+        BulkProductActionX,
+        ProductImageSlot,
+        kBulkProductIdLimit,
+        kCatalogUnchanged;
 import '../../domain/entities/rep_activation.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
@@ -306,6 +316,30 @@ abstract interface class RepRepository {
     ProductAvailability? availability,
     String? imageKey,
   });
+
+  /// Writes a new dish order on the restaurant's behalf.
+  ///
+  /// THE OWNER HAS HAD THIS SINCE FEATURE 10; THE REP DID NOT. Send the FULL
+  /// ordered id list of what the screen holds — the server accepts a subset
+  /// and renumbers it 0..n-1 among itself, and rejects any id that is not a
+  /// live dish of this catalog with `ID_SET_MISMATCH`, wholesale, so a failure
+  /// means nothing moved.
+  Future<void> reorderProducts(String catalogId, List<String> orderedIds);
+
+  /// Applies one action to many dishes and returns how many were affected.
+  ///
+  /// The owner's `bulk`, delegated: the rep's category manager moves dishes
+  /// between sections, empties a section before deleting it, and adds picked
+  /// dishes to one — all `SET_CATEGORY` over a list of ids, and one call rather
+  /// than N patches. [categoryId] is required by
+  /// [BulkProductAction.setCategory] (null = Uncategorized) and rejected for
+  /// every other action. Chunk at [kBulkProductIdLimit].
+  Future<int> bulkProducts(
+    String catalogId, {
+    required BulkProductAction action,
+    required List<String> ids,
+    Object? categoryId = kCatalogUnchanged,
+  });
 }
 
 /// Envelope codes the `/rep` endpoints return that a screen branches on.
@@ -560,6 +594,38 @@ class RemoteRepRepository implements RepRepository {
           '/rep/catalogs/$catalogId/categories/reorder',
           data: {'ids': orderedIds},
         );
+      });
+
+  @override
+  Future<void> reorderProducts(String catalogId, List<String> orderedIds) =>
+      mapCatalogErrors(() async {
+        await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/products/reorder',
+          data: {'ids': orderedIds},
+        );
+      });
+
+  @override
+  Future<int> bulkProducts(
+    String catalogId, {
+    required BulkProductAction action,
+    required List<String> ids,
+    Object? categoryId = kCatalogUnchanged,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/products/bulk',
+          data: {
+            'action': action.apiValue,
+            'ids': ids,
+            // SET_CATEGORY needs the key even when the value is null
+            // (Uncategorized); every other action is rejected if it is present.
+            if (!identical(categoryId, kCatalogUnchanged))
+              'categoryId': categoryId,
+          },
+        );
+        final affected = res.data?['affected'];
+        return affected is num && affected >= 0 ? affected.toInt() : 0;
       });
 
   CatalogCategory _categoryFrom(Map<String, dynamic>? body) {

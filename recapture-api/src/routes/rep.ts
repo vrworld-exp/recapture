@@ -38,6 +38,7 @@ import {
   brandingBytesQuerySchema,
   brandingCommitSchema,
   brandingUploadUrlSchema,
+  bulkProductsSchema,
   catalogCategoryParamsSchema,
   catalogProductParamsSchema,
   catalogQrQuerySchema,
@@ -70,10 +71,12 @@ import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { QrResolverNotConfiguredError } from '@/services/qrCodeService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 import {
+  bulkProducts,
   createProduct,
   createProductImageSlot,
   getProduct,
   listProducts,
+  reorderProducts,
   storeProductImageBytes,
   updateProduct,
 } from '@/services/catalogProductsService';
@@ -923,6 +926,117 @@ router.post(
     });
 
     res.status(201).json({ status: 'success', product: result.product });
+  })
+);
+
+// STATIC BEFORE :productId, the same rule the category block follows.
+// `/products/reorder` and `/products/bulk` would otherwise be matched by the
+// GET/PATCH routes below with `productId: 'reorder'` — which objectId()
+// rejects, so it would fail rather than act on the wrong row, but a not-found
+// for a route that exists is still the wrong answer.
+
+/**
+ * POST /rep/catalogs/:id/products/reorder — the order dishes appear in.
+ *
+ * THE OWNER HAS HAD THIS SINCE FEATURE 10; THE REP DID NOT. A rep arranging a
+ * menu at the table could build sections and file dishes into them, and could
+ * not put "Butter Chicken" above "Dal" inside one — the row order was creation
+ * order, forever, until the owner signed in on their own phone and dragged.
+ *
+ * DELEGATES to the owner service with the RESTAURANT's userId, so the position
+ * a rep writes is the position the owner reads, through the same code. The
+ * service accepts a SUBSET and renumbers it 0..n-1 among itself; the rep
+ * screen loads the whole list (REP_PRODUCT_PAGE_SIZE) and sends all of it.
+ */
+router.post(
+  '/catalogs/:id/products/reorder',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = reorderSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const result = await reorderProducts(String(catalog.userId), parsed.data.ids);
+
+    if (result.outcome === 'NO_CATALOG') return notDelegated(res);
+    if (result.outcome === 'ID_SET_MISMATCH') {
+      return fail(
+        res,
+        400,
+        'ID_SET_MISMATCH',
+        'One or more dishes could not be reordered. Reload and try again.'
+      );
+    }
+
+    res.status(200).json({ status: 'success', reordered: result.count });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/products/bulk — one action over many dishes.
+ *
+ * WHAT THE REP'S CATEGORY MANAGER NEEDS AND NOTHING MORE. "Move these dishes
+ * to Mains", "empty this section into Desserts before deleting it" and "add
+ * these three to Starters" are all SET_CATEGORY over a list of ids, and the
+ * owner's manager already does them through this exact service. Without it the
+ * rep manager would have to PATCH one dish at a time — N requests where the
+ * owner makes one, and a run that fails halfway with no way to say which half.
+ *
+ * The OWNER's schema, unnarrowed, for the reason the PATCH route gives: a
+ * second set of bounds to keep in step is the drift this router exists to
+ * avoid. Ownership comes from the resolved delegation, never from the body.
+ */
+router.post(
+  '/catalogs/:id/products/bulk',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = bulkProductsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        parsed.error.issues[0]?.message ?? 'Invalid request'
+      );
+    }
+
+    const result = await bulkProducts(String(catalog.userId), parsed.data);
+
+    if (result.outcome === 'NO_CATALOG') return notDelegated(res);
+    if (result.outcome === 'CATEGORY_NOT_FOUND') {
+      return fail(res, 404, 'CATEGORY_NOT_FOUND', 'That category does not exist.');
+    }
+    if (result.outcome === 'ID_SET_MISMATCH') {
+      return fail(
+        res,
+        400,
+        'ID_SET_MISMATCH',
+        'One or more dishes could not be found. Reload and try again.'
+      );
+    }
+
+    track(AnalyticsEvent.CATALOG_PRODUCTS_BULK_ACTION, {
+      // The hashed REP — they made the request. The restaurant is identified
+      // by catalog_id elsewhere; a product action does not carry it.
+      user_id_hash: hashIdentifier(req.user!.userId),
+      action: parsed.data.action,
+      requested_count: parsed.data.ids.length,
+      affected_count: result.affected,
+    });
+
+    res.status(200).json({ status: 'success', affected: result.affected });
   })
 );
 
