@@ -1,12 +1,8 @@
 
 
 
-
-
  ✅ 1.
 upadte name of product, category and restaurant name is not reflecting inside catalog and on mirage menu, that i got feedback so check it and if it is then fix it.
-
-
 
 
 
@@ -19,10 +15,8 @@ On mirage menu share btn is working good, but currently it is getting the url fr
 
 
 
-
 ✅3.
 User have role : Admin and Artist, they should get an option to submit the 3d model for that perticular project, if they want. So for that give btn on every peoject inside live section liek submit mode, onclick that redirect to a page there these data shoud , Submitting model for this project Name, and ui to submit the 3d model that should be .glb and submit btn. After submitting a success msg appaere and it should get reflect inside my project section of that project to that perticular user.
-
 
 
 
@@ -36,12 +30,9 @@ For both apk and web.
 
 
 
-
 ✅5.
 Publishing of restaurent by sale rep/ staff mem should be simmilar like catalo publish process or ui and everything, i have seen catalog publish is working so good process and ui everything, but restaurent publishing is not working as good as like catalog publish. 
 Do this on both web and apk carefully.
-
-
 
 
 
@@ -55,6 +46,7 @@ Do this on both web and apk carefully.
 
 
 
+
 ✅7.
 Don't show the label on drag btn when user long press on the btn on dishes/products of restaurant and also on category of restaurant. It should happen only drag thing on click and also on long click.
 Do it carefully on web and apk both places.
@@ -63,11 +55,8 @@ Do it carefully on web and apk both places.
 
 
 
-
 ✅7a.
 My restaurant of sale rep or staff mem account, there is a qr when user press on this btn then he/she redirected on a qr page there all thing about that restaurant is present like qr and copy btn and open btn and else, i have they all have url of my recap backend serviecs but they should use mirage public link, i don't whan to expose the backend url here . MIRAGE_PUBLIC_BASE_URL is containing the url. understand my concerne and update that. do carefullly on web and apk both.
-
-
 
 
 
@@ -84,7 +73,7 @@ And below the page if user is admin then show activated by userImg with name and
 
 
 
-8. 
+✅8. 
 Publish btn glitch, i have seen on catalog and also on restaurant publish btn both places user need to click twice to start publishing process and on second time he/she sended on the publishing screen, so i want for the first time he should send on the screen of publishing and publishing process should start on the first time
 Do it carefully on web and apk both places.
 
@@ -96,7 +85,7 @@ Do it carefully on web and apk both places.
 At the time of adding dishes of a restaurant on both places catalog and by sale rep, user able to set the dish veg and non veg and also the non (means don't show the label on dish ) do this feature, if you need then update on Mirage fe and Mirage be also. By default it should be veg and when  someone explicitly choose none or non-veg then only addd that data and use that data on ui. 
 And on catalog and resaurent product/dishes the default value should be veg only and ui have all 3 values in a row so user/staff mem able to change it by usuing that ui.
 DO it carefullly foe both apk and web and also for mirage.
-do changes on all 4 sides if you wnat.
+do changes on all 4 sides if you want.
 
 
 

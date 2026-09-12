@@ -203,18 +203,19 @@ describe('before there is a URL', () => {
     expect(res.body.code).toBe('CATALOG_NOT_PUBLISHED');
   });
 
-  it('DOES serve the standee URL a rep activation froze, before the first publish', async () => {
-    // The counterpart, pinned because it is the surprising half: the square a
-    // rep can show at the table exists from activation. What it resolves TO is
-    // the resolver's business (a "not live yet" page until the menu ships), and
-    // the button that reaches this screen is gated on a live menu for exactly
-    // that reason — but the endpoint itself must not refuse a URL that exists.
+  it('does NOT serve the standee URL a rep activation froze, before the first publish', async () => {
+    // Activation freezes `{resolver}/r/{code}` into `publicUrl`, and this route
+    // used to draw it. It no longer does: the resolver is this API's own host,
+    // and a rep reprinting from the QR screen must get the Mirage page or
+    // nothing (services/customerUrl.ts). Before the first publish there is no
+    // Mirage page, so the answer is the owner route's 409 — and the button
+    // that reaches this screen is gated on a live menu anyway.
     const { rep, catalogId } = await activated('QRGG2345');
 
     const res = await request(app).get(`/rep/catalogs/${catalogId}/qr`).set(rep.auth);
 
-    expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toBe('image/png');
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CATALOG_NOT_PUBLISHED');
   });
 });
 
@@ -225,9 +226,7 @@ describe('the gate', () => {
     const stranger = await makeUser('SALES_REP');
     const ghostId = new Types.ObjectId().toHexString();
 
-    const notDelegated = await request(app)
-      .get(`/rep/catalogs/${catalogId}/qr`)
-      .set(stranger.auth);
+    const notDelegated = await request(app).get(`/rep/catalogs/${catalogId}/qr`).set(stranger.auth);
     const nonexistent = await request(app).get(`/rep/catalogs/${ghostId}/qr`).set(stranger.auth);
 
     // Identical, so this route cannot be used to discover which restaurants a

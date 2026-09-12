@@ -51,6 +51,8 @@ import '../../presentation/screens/catalog/catalog_qr_screen.dart';
 import '../../presentation/screens/catalog/change_product_model_screen.dart';
 import '../../presentation/screens/catalog/product_editor_screen.dart';
 import '../../presentation/screens/catalog/publish_screen.dart';
+import '../../presentation/widgets/catalog/publish_body.dart'
+    show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
@@ -495,7 +497,12 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogPublish,
         name: AppRouteNames.catalogPublish,
-        builder: (_, __) => const FlowBackScope(child: PublishScreen()),
+        // `?start=1` is what a Publish BUTTON appends — see kPublishStartQuery.
+        builder: (_, state) => FlowBackScope(
+          child: PublishScreen(
+            startPublish: state.uri.queryParameters[kPublishStartQuery] == '1',
+          ),
+        ),
       ),
       // Reachable in its own right, not only from the success state: a business
       // that published last month wants the QR again without republishing.
@@ -671,6 +678,7 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.repCatalogPublish,
         builder: (context, state) => RepPublishScreen(
           catalogId: state.pathParameters['id'] ?? '',
+          startPublish: state.uri.queryParameters[kPublishStartQuery] == '1',
         ),
       ),
       // STATIC BEFORE PARAMETERISED, like the catalog publish/QR pair above:

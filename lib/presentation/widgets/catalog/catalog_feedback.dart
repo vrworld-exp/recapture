@@ -75,8 +75,29 @@ abstract final class CatalogFeedback {
   ///
   /// Call this BEFORE the await, always. This is the whole reason the rest of
   /// the API does not take a context.
-  static ScaffoldMessengerState of(BuildContext context) =>
-      ScaffoldMessenger.of(context);
+  ///
+  /// It also notes how wide the scaffold under [context] is — see
+  /// [_hostWidth] — because that is the last moment a scaffold is in hand.
+  static ScaffoldMessengerState of(BuildContext context) {
+    final messenger = ScaffoldMessenger.of(context);
+    final scaffold = Scaffold.maybeOf(context)?.context.findRenderObject();
+    if (scaffold is RenderBox && scaffold.hasSize) {
+      _hostWidth[messenger] = scaffold.size.width;
+    }
+    return messenger;
+  }
+
+  /// The width of the scaffold a toast will be laid out in, by messenger.
+  ///
+  /// A banner is pinned by MARGIN (it has no `width`), and a margin computed
+  /// from the WINDOW squeezes a scaffold that is narrower than the window —
+  /// a screen rendered inside a side panel, or a test harness that boxes a
+  /// screen at 400 px — down to a strip a few pixels wide. The scaffold's own
+  /// width is the right input, and [of] is the one moment this API holds a
+  /// context inside one, so it is recorded there. Keyed weakly on the
+  /// messenger so a torn-down app leaks nothing; missing (a call site that
+  /// captured the messenger some other way) falls back to the window.
+  static final Expando<double> _hostWidth = Expando<double>('catalogToastHost');
 
   /// "That worked." One sentence, no action.
   static void confirm(ScaffoldMessengerState messenger, String message) =>
@@ -162,9 +183,10 @@ abstract final class CatalogFeedback {
     messenger.clearMaterialBanners();
 
     // The pin is a MARGIN here — a banner has no `width` — computed from the
-    // window the messenger lives in, which on every screen in this app is the
-    // scaffold's width too.
-    final width = MediaQuery.maybeSizeOf(messenger.context)?.width ?? 0;
+    // scaffold's width where [of] saw one, else the window's. See [_hostWidth].
+    final width = _hostWidth[messenger] ??
+        MediaQuery.maybeSizeOf(messenger.context)?.width ??
+        0;
     final pinned = width >= kCatalogToastConstrainWidth;
     final side =
         pinned ? (width - kCatalogToastWidth) / 2 : kCatalogToastMargin;

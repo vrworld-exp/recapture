@@ -27,7 +27,12 @@ import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun } from '@/models/CatalogPublishRun';
 import { Job } from '@/models/Job';
 import { User } from '@/models/User';
-import { clampQrSize, QR_DEFAULT_SIZE, QR_MAX_SIZE, QR_MIN_SIZE } from '@/services/catalogQrService';
+import {
+  clampQrSize,
+  QR_DEFAULT_SIZE,
+  QR_MAX_SIZE,
+  QR_MIN_SIZE,
+} from '@/services/catalogQrService';
 import { resetMirageClient, setMirageClient } from '@/services/mirage';
 import { FakeMirage } from './fixtures/mirageFake';
 
@@ -109,11 +114,17 @@ async function seed(
   return catalogId;
 }
 
-/** Publishes once, so the catalog has a real minted URL. */
+/**
+ * Publishes once, so the catalog has a real minted URL, and returns the link
+ * the QR ENCODES: the one the catalog DTO shows — `customerUrl`, the Mirage
+ * page by name — which is not the stored ObjectId form. The square and the
+ * text under it must agree with what the screen shows, so the test reads the
+ * same DTO the screen does.
+ */
 async function publish(auth: Auth): Promise<string> {
   await request(app).post('/catalog/publish').set(auth).send({});
-  const catalog = await Catalog.findOne({}).lean().exec();
-  return catalog?.publicUrl as string;
+  const res = await request(app).get('/catalog').set(auth);
+  return res.body.catalog.publicUrl as string;
 }
 
 /** Decodes a PNG back to the string it encodes. */
@@ -153,19 +164,22 @@ describe('GET /catalog/qr?format=png', () => {
   });
 
   it('encodes a long URL without losing error correction', async () => {
+    // The link is the NAME, so the longest link is the longest name the
+    // schema allows (CATALOG_NAME_SLUG_MAX).
     const { id, auth } = await makeUser();
-    const long = `https://menu.test/${'a'.repeat(180)}`;
+    const name = 'a'.repeat(120);
     await seed(id, {
+      name,
       status: 'PUBLISHED',
-      mirageRestaurantId: 'a'.repeat(24),
-      publicUrl: long,
+      mirageRestaurantId: 'b'.repeat(24),
+      publicUrl: `https://menu.test/${'b'.repeat(24)}`,
       publicUrlScheme: 'MIRAGE_OBJECT_ID',
     });
 
     const res = await request(app).get('/catalog/qr?format=png').set(auth).buffer(true);
 
     expect(res.status).toBe(200);
-    expect(await decodeQr(res.body)).toBe(long);
+    expect(await decodeQr(res.body)).toBe(`https://menu.test/${name}`);
   });
 
   it('sets a download filename and a strong ETag, both readable cross-origin', async () => {
@@ -216,13 +230,12 @@ describe('the code never changes', () => {
     expect(Buffer.compare(a.body, b.body)).toBe(0);
   });
 
-  it('survives a rename, a republish and product add/delete', async () => {
+  it('survives a republish and product add/delete', async () => {
     const { id, auth } = await makeUser();
     const catalogId = await seed(id);
     const publicUrl = await publish(auth);
     const before = (await request(app).get('/catalog/qr?format=png').set(auth).buffer(true)).body;
 
-    await request(app).patch('/catalog').set(auth).send({ name: 'Green Cafe' });
     await CatalogProduct.create({
       catalogId,
       userId: new Types.ObjectId(id),
@@ -237,26 +250,54 @@ describe('the code never changes', () => {
 
     const after = await request(app).get('/catalog/qr?format=png').set(auth).buffer(true);
 
-    // The IMAGE is identical, and so is what it decodes to. (The download
-    // filename follows the new name — that is a header, not the code.)
+    // The IMAGE is identical, and so is what it decodes to.
     expect(Buffer.compare(before, after.body)).toBe(0);
     expect(await decodeQr(after.body)).toBe(publicUrl);
   });
 
-  it('is immune to a later change of MIRAGE_PUBLIC_BASE_URL', async () => {
+  it('FOLLOWS a rename — the link is the name, and the stored URL does not move', async () => {
+    // The one edit that changes the square, accepted knowingly when the link
+    // became `{host}/{name}` (services/customerUrl.ts): the QR screens tell the
+    // user to reprint after a rename. What must NOT move is the stored
+    // `publicUrl` — the ObjectId form the resolver redirects printed standees
+    // through — and the assertion below is what keeps a rename from ever
+    // being taken as licence to rewrite it.
     const { id, auth } = await makeUser();
-    await seed(id);
+    const catalogId = await seed(id);
     const publicUrl = await publish(auth);
+    const storedBefore = (await Catalog.findById(catalogId).lean().exec())?.publicUrl;
     const before = (await request(app).get('/catalog/qr?format=png').set(auth).buffer(true)).body;
 
-    // The host moves. A catalog already carrying a printed sticker is
-    // grandfathered onto the URL it was issued.
+    await request(app).patch('/catalog').set(auth).send({ name: 'Green Cafe' });
+
+    const after = await request(app).get('/catalog/qr?format=png').set(auth).buffer(true);
+    const stored = await Catalog.findById(catalogId).lean().exec();
+
+    expect(Buffer.compare(before, after.body)).not.toBe(0);
+    expect(await decodeQr(after.body)).toBe(`https://menu.test/${stored!.name}`);
+    expect(await decodeQr(after.body)).not.toBe(publicUrl);
+    expect(stored?.publicUrl).toBe(storedBefore);
+  });
+
+  it('FOLLOWS a later change of MIRAGE_PUBLIC_BASE_URL — the stored URL does not', async () => {
+    // The second consequence of the name form: the displayed link is read
+    // from the environment, so moving the public host moves every square
+    // rendered after the move. The stored ObjectId URL stays as issued.
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id);
+    const publicUrl = await publish(auth);
+    const storedBefore = (await Catalog.findById(catalogId).lean().exec())?.publicUrl;
+    const before = (await request(app).get('/catalog/qr?format=png').set(auth).buffer(true)).body;
+
     Object.assign(env, { MIRAGE_PUBLIC_BASE_URL: 'https://elsewhere.test' });
 
     const after = await request(app).get('/catalog/qr?format=png').set(auth).buffer(true);
 
-    expect(Buffer.compare(before, after.body)).toBe(0);
-    expect(await decodeQr(after.body)).toBe(publicUrl);
+    expect(Buffer.compare(before, after.body)).not.toBe(0);
+    expect(await decodeQr(after.body)).toBe(
+      publicUrl.replace('https://menu.test/', 'https://elsewhere.test/')
+    );
+    expect((await Catalog.findById(catalogId).lean().exec())?.publicUrl).toBe(storedBefore);
     expect(publicUrl).toContain('https://menu.test/');
   });
 });
@@ -364,7 +405,12 @@ describe('GET /catalog/qr?format=pdf', () => {
     // The fiddly part of writing a PDF by hand: every offset in the xref table
     // must be the true byte position of `<n> 0 obj`. A reader that follows a
     // wrong one shows a blank page rather than an error.
-    const startxref = Number(pdf.slice(pdf.lastIndexOf('startxref') + 9).trim().split('\n')[0]);
+    const startxref = Number(
+      pdf
+        .slice(pdf.lastIndexOf('startxref') + 9)
+        .trim()
+        .split('\n')[0]
+    );
     expect(pdf.slice(startxref, startxref + 4)).toBe('xref');
 
     const offsets = [...pdf.matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));

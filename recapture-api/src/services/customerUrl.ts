@@ -48,12 +48,16 @@ export type CustomerUrlSource = Pick<ICatalog, 'name' | 'mirageRestaurantId'>;
  * rather than `menu.example/66f1a2…`. That is the form asked for on every
  * display surface.
  *
- * WHAT THIS COSTS, stated so nobody rediscovers it: a catalog RENAME changes
- * this link, where the ObjectId form never did. The stored `publicUrl` and the
- * standee resolver are untouched by that — a printed standee redirects through
- * `mintPublicUrl`, the ObjectId form — so a square printed from a standee keeps
- * working across a rename; a square reprinted from the QR screen carries the
- * name it was printed under.
+ * WHAT THIS COSTS, stated so nobody rediscovers it. Two things the stored
+ * ObjectId form guaranteed, this form does not:
+ *   • a catalog RENAME changes this link;
+ *   • a later change of `MIRAGE_PUBLIC_BASE_URL` repoints it — the link is
+ *     read from the environment at display time, not from the document.
+ * Both were accepted knowingly (`tests/catalog-qr.test.ts` pins the new
+ * behaviour). The stored `publicUrl` and the standee resolver are untouched by
+ * either — a printed standee redirects through `mintPublicUrl`, the ObjectId
+ * form — so a square printed from a standee keeps working across a rename; a
+ * square reprinted from the QR screen carries the name it was printed under.
  *
  * Null before the first publish: the Mirage restaurant does not exist yet, so
  * there is no menu page — "publish first" is the honest answer, never the
@@ -63,5 +67,8 @@ export type CustomerUrlSource = Pick<ICatalog, 'name' | 'mirageRestaurantId'>;
  */
 export function customerUrl(catalog: CustomerUrlSource): string | null {
   if (!catalog.mirageRestaurantId || !env.MIRAGE_PUBLIC_BASE_URL) return null;
-  return `${env.MIRAGE_PUBLIC_BASE_URL}/${catalog.name}`;
+  // A stored slug is `[a-z0-9_]` and encodes to itself; the encoding is for a
+  // document that predates slugging, so a name with a space cannot produce
+  // a link that breaks at the space.
+  return `${env.MIRAGE_PUBLIC_BASE_URL}/${encodeURIComponent(catalog.name)}`;
 }

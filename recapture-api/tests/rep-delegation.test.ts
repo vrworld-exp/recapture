@@ -18,11 +18,7 @@ import mongoose, { Types } from 'mongoose';
 import jwt from 'jsonwebtoken';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
-import {
-  HeadObjectCommand,
-  ListObjectsV2Command,
-  DeleteObjectCommand,
-} from '@aws-sdk/client-s3';
+import { HeadObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 import { createApp } from '@/app';
 import { env } from '@/config/env';
@@ -225,7 +221,9 @@ describe('revocation', () => {
     expect(listed.body.catalogs).toHaveLength(1);
     expect(listed.body.catalogs[0]).toMatchObject({
       id: catalogId,
-      publicUrl: 'https://scan.test/r/CCCC3333',
+      // The resolver URL activation froze is NEVER shown — see
+      // services/customerUrl.ts. Before the first publish there is no link.
+      publicUrl: null,
       isProvisioned: false,
     });
 
@@ -253,7 +251,11 @@ describe('revocation', () => {
 
     expect(await CatalogDelegation.countDocuments({ repUserId: repId, catalogId: catId })).toBe(2);
     expect(
-      await CatalogDelegation.countDocuments({ repUserId: repId, catalogId: catId, revokedAt: null })
+      await CatalogDelegation.countDocuments({
+        repUserId: repId,
+        catalogId: catId,
+        revokedAt: null,
+      })
     ).toBe(1);
   });
 

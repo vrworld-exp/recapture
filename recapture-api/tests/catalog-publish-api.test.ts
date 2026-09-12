@@ -204,7 +204,9 @@ describe('POST /catalog/publish', () => {
     const catalog = await Catalog.findById(catalogId).lean().exec();
     expect(catalog?.mirageRestaurantId).toBeDefined();
     expect(catalog?.publicUrl).toBe(`https://menu.test/${catalog?.mirageRestaurantId}`);
-    expect(res.body.publicUrl).toBe(catalog?.publicUrl);
+    // The RESPONSE carries the link a person is shown — the Mirage page by
+    // NAME (services/customerUrl.ts) — not the stored ObjectId form.
+    expect(res.body.publicUrl).toBe(`https://menu.test/${encodeURIComponent(catalog!.name)}`);
   });
 
   it('captures the revision at RUN CREATION, so an edit just made is included', async () => {
@@ -342,10 +344,7 @@ describe('publish gates', () => {
   it('does not gate on an ARCHIVED product that is missing its assets', async () => {
     const { id, auth } = await makeUser();
     const catalogId = await seed(id, {
-      products: [
-        { name: 'Chair' },
-        { name: 'Ghost', type: 'IMAGE_ONLY', assets: {} },
-      ],
+      products: [{ name: 'Chair' }, { name: 'Ghost', type: 'IMAGE_ONLY', assets: {} }],
     });
     await CatalogProduct.updateOne(
       { catalogId, name: 'Ghost' },
@@ -419,9 +418,7 @@ describe('publish gates', () => {
     const res = await request(app).post('/catalog/publish').set(auth).send({});
 
     expect(res.status).toBe(422);
-    expect(res.body.gates.map((g: { code: string }) => g.code)).toContain(
-      'CATEGORY_NAME_INVALID'
-    );
+    expect(res.body.gates.map((g: { code: string }) => g.code)).toContain('CATEGORY_NAME_INVALID');
     expect(mirage.calls).toHaveLength(0);
   });
 

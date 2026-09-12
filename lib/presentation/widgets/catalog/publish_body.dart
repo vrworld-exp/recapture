@@ -102,6 +102,31 @@ class PublishVoice {
   String items(int count) => count == 1 ? itemNoun : itemNounPlural;
 }
 
+/// The query flag a Publish BUTTON adds to the publish route: `?start=1`.
+///
+/// ONE PRESS, NOT TWO. The publish screen used to be a door and a button: the
+/// header's "Publish" opened it, and a second "Publish" on it started the run.
+/// Every user who pressed the first one had already decided, and read the
+/// second as the first not having worked. So a button that SAYS Publish now
+/// opens the screen with this flag, and the screen starts the run itself the
+/// moment it knows it can — see [publishAutoStartReady]. Doors that only WATCH
+/// ("Publishing… see progress", the analytics screen's nudge) do not set it.
+const String kPublishStartQuery = 'start';
+
+/// Whether a screen opened with [kPublishStartQuery] should fire its publish
+/// now — the same conditions that enable the button, so the auto-start can
+/// never send a request the button would have refused.
+///
+/// A null status (still loading) is "not yet", not "no": the caller asks again
+/// on the next build. Gates, a run already in flight, or being offline answer
+/// "no", and the screen then shows exactly what a press would have shown — the
+/// checklist, the progress line, or the offline notice.
+bool publishAutoStartReady({
+  required PublishScreenState state,
+  required bool isOnline,
+}) =>
+    isOnline && state.status.hasValue && state.canPublish;
+
 class PublishBody extends StatelessWidget {
   const PublishBody({
     super.key,
@@ -162,7 +187,6 @@ class PublishBody extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _StatusCard(status: status, voice: voice),
-
                 if (!isOnline) ...[
                   const SizedBox(height: AppSpacing.md),
                   const _Banner(
@@ -177,7 +201,6 @@ class PublishBody extends StatelessWidget {
                         'page will pick up where it left off.',
                   ),
                 ],
-
                 if (state.suggestedName case final suggested?) ...[
                   const SizedBox(height: AppSpacing.md),
                   _NameTakenCard(
@@ -187,7 +210,6 @@ class PublishBody extends StatelessWidget {
                     onRename: onRename,
                   ),
                 ],
-
                 if (inFlight) ...[
                   const SizedBox(height: AppSpacing.md),
                   _RunProgress(
@@ -196,7 +218,6 @@ class PublishBody extends StatelessWidget {
                     voice: voice,
                   ),
                 ],
-
                 if (!inFlight && status.failures.isNotEmpty) ...[
                   const SizedBox(height: AppSpacing.md),
                   _FailureCard(
@@ -206,12 +227,10 @@ class PublishBody extends StatelessWidget {
                     onRetryFailed: isOnline ? onRetryFailed : null,
                   ),
                 ],
-
                 if (!inFlight && status.isLive && status.failures.isEmpty) ...[
                   const SizedBox(height: AppSpacing.md),
                   _SuccessCard(status: status, onOpenQr: onOpenQr),
                 ],
-
                 if (status.gates.isNotEmpty) ...[
                   const SizedBox(height: AppSpacing.md),
                   _GateChecklist(
@@ -222,7 +241,6 @@ class PublishBody extends StatelessWidget {
                     onOpenPreview: onOpenPreview,
                   ),
                 ],
-
                 const SizedBox(height: AppSpacing.xl),
                 _Actions(
                   state: state,
@@ -233,7 +251,6 @@ class PublishBody extends StatelessWidget {
                   onPublish: onPublish,
                   onUnpublish: onUnpublish,
                 ),
-
                 if (status.products.isNotEmpty) ...[
                   const SizedBox(height: AppSpacing.xxl),
                   _ProductList(products: status.products, voice: voice),
@@ -275,8 +292,7 @@ class _StatusCard extends StatelessWidget {
             children: [
               _Chip(
                 label: status.status.label,
-                color:
-                    status.isLive ? AppColors.success : AppColors.textMuted,
+                color: status.isLive ? AppColors.success : AppColors.textMuted,
               ),
               // Feature 38. Server-DERIVED — never recomputed here, and true
               // after a partial run because some products genuinely are not
@@ -293,7 +309,8 @@ class _StatusCard extends StatelessWidget {
             status.lastPublishedAt == null
                 ? voice.neverPublished
                 : 'Last published ${_ago(status.lastPublishedAt!)}.',
-            style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+            style:
+                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
           ),
         ],
       ),
@@ -325,8 +342,7 @@ class _RunProgress extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface1,
         borderRadius: BorderRadius.circular(AppRadius.sm),
-        border:
-            Border.all(color: AppColors.royalGold.withValues(alpha: 0.35)),
+        border: Border.all(color: AppColors.royalGold.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -384,8 +400,7 @@ class _RunProgress extends StatelessWidget {
               'Paused while this tab is in the background. It will catch up '
               'the moment you come back.',
               key: const ValueKey('publish_paused_note'),
-              style:
-                  textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+              style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
             ),
           ],
         ],
@@ -540,8 +555,8 @@ class _SuccessCard extends StatelessWidget {
               // what every printed QR resolves through.
               url,
               key: const ValueKey('publish_public_url'),
-              style: textTheme.bodySmall
-                  ?.copyWith(color: AppColors.textSecondary),
+              style:
+                  textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
             ),
             const SizedBox(height: AppSpacing.md),
             PublishLinkActions(url: url),
@@ -638,7 +653,8 @@ class _GateChecklist extends StatelessWidget {
                     // one — so there is no upstream prose to strip.
                     child: Text(gate.message, style: textTheme.bodySmall),
                   ),
-                  if (gate.code.fixLabel case final label? when canFix(gate)) ...[
+                  if (gate.code.fixLabel case final label?
+                      when canFix(gate)) ...[
                     const SizedBox(width: AppSpacing.sm),
                     TextButton(
                       onPressed: () => onFix(gate),
@@ -698,7 +714,8 @@ class _NameTakenCard extends StatelessWidget {
           const SizedBox(height: AppSpacing.sm),
           Text(
             '${voice.nameTakenBody}"$suggested" and publish.',
-            style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+            style:
+                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
           ),
           const SizedBox(height: AppSpacing.md),
           AppButton(
@@ -851,7 +868,8 @@ class _Banner extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: textTheme.bodyMedium?.copyWith(color: color)),
+                Text(title,
+                    style: textTheme.bodyMedium?.copyWith(color: color)),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   body,

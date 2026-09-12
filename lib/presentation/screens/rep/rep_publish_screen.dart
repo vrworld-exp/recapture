@@ -33,9 +33,17 @@ import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/publish_body.dart';
 
 class RepPublishScreen extends ConsumerStatefulWidget {
-  const RepPublishScreen({super.key, required this.catalogId});
+  const RepPublishScreen({
+    super.key,
+    required this.catalogId,
+    this.startPublish = false,
+  });
 
   final String catalogId;
+
+  /// Opened by a button that SAID Publish: start the run as soon as the
+  /// status says it can. See [kPublishStartQuery].
+  final bool startPublish;
 
   @override
   ConsumerState<RepPublishScreen> createState() => _RepPublishScreenState();
@@ -44,6 +52,21 @@ class RepPublishScreen extends ConsumerStatefulWidget {
 class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
   String get _catalogId => widget.catalogId;
   String get _base => '${AppRoutes.repCatalogs}/$_catalogId';
+
+  /// One attempt per open, decided on the first status — the owner's rule,
+  /// for the owner's reason (see `PublishScreen._maybeAutoStart`).
+  bool _autoStartDecided = false;
+
+  void _maybeAutoStart(PublishScreenState state, bool isOnline) {
+    if (!widget.startPublish || _autoStartDecided) return;
+    if (!state.status.hasValue) return;
+    _autoStartDecided = true;
+    if (!publishAutoStartReady(state: state, isOnline: isOnline)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(repPublishProvider(_catalogId).notifier).publish();
+    });
+  }
 
   /// Whether the rep has a screen that fixes [gate].
   ///
@@ -101,6 +124,7 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
     final provider = repPublishProvider(_catalogId);
     final state = ref.watch(provider);
     final isOnline = ref.watch(isOnlineProvider);
+    _maybeAutoStart(state, isOnline);
 
     // A notice or a failure is a RESULT, and a result the rep does not see is
     // the same as no result at all.

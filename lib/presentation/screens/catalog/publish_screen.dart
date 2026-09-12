@@ -27,13 +27,36 @@ import '../../widgets/catalog/publish_body.dart';
 export '../../widgets/catalog/publish_body.dart' show kPublishContentMaxWidth;
 
 class PublishScreen extends ConsumerStatefulWidget {
-  const PublishScreen({super.key});
+  const PublishScreen({super.key, this.startPublish = false});
+
+  /// Opened by a button that SAID Publish: start the run as soon as the
+  /// status says it can. See [kPublishStartQuery].
+  final bool startPublish;
 
   @override
   ConsumerState<PublishScreen> createState() => _PublishScreenState();
 }
 
 class _PublishScreenState extends ConsumerState<PublishScreen> {
+  /// The auto-start is one attempt per open, decided on the first status
+  /// that arrives — a second look would republish after the user cancelled
+  /// or after a run they watched finish.
+  bool _autoStartDecided = false;
+
+  /// Fires the publish the opening button asked for, once, when the screen
+  /// can. Called from build, so the request itself is deferred a frame: a
+  /// notifier must not be written while the tree that watches it is building.
+  void _maybeAutoStart(PublishScreenState state, bool isOnline) {
+    if (!widget.startPublish || _autoStartDecided) return;
+    if (!state.status.hasValue) return; // still loading — ask next build
+    _autoStartDecided = true;
+    if (!publishAutoStartReady(state: state, isOnline: isOnline)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(publishProvider.notifier).publish();
+    });
+  }
+
   /// Sends the user to whatever fixes [gate], then re-reads.
   ///
   /// The gates come back from the server on every status read, so returning
@@ -117,6 +140,7 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(publishProvider);
     final isOnline = ref.watch(isOnlineProvider);
+    _maybeAutoStart(state, isOnline);
 
     // A notice or a failure is a RESULT, and a result the user does not see is
     // the same as no result at all.
@@ -162,7 +186,9 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
         liveLine: 'Your catalog is live.',
         offlineLine: 'Your catalog is offline.',
       );
-      if (toast != null) CatalogFeedback.confirm(CatalogFeedback.of(context), toast);
+      if (toast != null) {
+        CatalogFeedback.confirm(CatalogFeedback.of(context), toast);
+      }
     });
 
     return Scaffold(

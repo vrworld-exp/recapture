@@ -62,6 +62,7 @@ import '../../../utils/extensions.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/publish_body.dart' show kPublishStartQuery;
 import '../catalog/category_manager_screen.dart' show kCategoryTouchWidth;
 
 class RepCatalogDetailScreen extends ConsumerWidget {
@@ -421,7 +422,17 @@ class _PublishBarState extends ConsumerState<_PublishBar> {
   }
 
   Future<void> _openPublish() async {
-    await context.push('${AppRoutes.repCatalogs}/${widget.catalogId}/publish');
+    // A button that SAYS Publish starts the run; the "see progress" door only
+    // watches. The label above is what decides which one this press was.
+    final running = ref
+            .read(repCatalogDocumentProvider(widget.catalogId))
+            .valueOrNull
+            ?.isPublishing ??
+        false;
+    await context.push(
+      '${AppRoutes.repCatalogs}/${widget.catalogId}/publish'
+      '${running ? '' : '?$kPublishStartQuery=1'}',
+    );
     if (!mounted) return;
     // Both halves of this screen move on a publish: the status the dish rows
     // render, and the draft flag this bar reads. The publish screen refreshes

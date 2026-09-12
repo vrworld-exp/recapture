@@ -18,6 +18,7 @@ import '../../../domain/entities/catalog_status.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/publish_body.dart' show kPublishStartQuery;
 import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_actions.dart';
@@ -177,8 +178,14 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   /// finished while the user was on that screen has moved all three. The
   /// publish notifier refreshes it as it polls, so this is only the belt to
   /// that braces — and it costs one request on a screen the user just left.
+  ///
+  /// WITH THE START FLAG: the header button says Publish, so the screen it
+  /// opens starts the run rather than asking again — see kPublishStartQuery.
   Future<void> _openPublish() async {
-    await context.pushNamed(AppRouteNames.catalogPublish);
+    await context.pushNamed(
+      AppRouteNames.catalogPublish,
+      queryParameters: {kPublishStartQuery: '1'},
+    );
     if (!mounted) return;
     await ref.read(catalogProvider.notifier).refresh();
   }
@@ -577,9 +584,7 @@ class _CatalogHeaderCard extends StatelessWidget {
                 // "Publish changes" once something is live: the first press
                 // creates a public page, every one after that updates one, and
                 // those are different promises.
-                label: catalog.isNeverPublished
-                    ? 'Publish'
-                    : 'Publish changes',
+                label: catalog.isNeverPublished ? 'Publish' : 'Publish changes',
                 icon: Icons.cloud_upload_outlined,
                 isFullWidth: false,
                 onPressed: onOpenPublish,
