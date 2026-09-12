@@ -94,10 +94,12 @@ class RepCatalogQrScreen extends ConsumerWidget {
                   // handing it over.
                   scanCaption:
                       'Customers scan this to open this restaurant\u2019s menu.',
+                  // Renaming is deliberately NOT promised \u2014 see the owner's
+                  // QR screen: the link is the restaurant's name.
                   permanenceNote:
-                      'This code never changes. Print it once \u2014 renaming the '
-                      'restaurant, adding dishes or taking the menu offline '
-                      'will not break it.',
+                      'Print it once \u2014 adding dishes or taking the menu '
+                      'offline will not break it. Renaming the restaurant '
+                      'changes the link, so reprint after a rename.',
                   shareSubject: restaurant?.displayName,
                 ),
               ),

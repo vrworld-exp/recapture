@@ -170,7 +170,7 @@ class _DetailBody extends StatelessWidget {
           )
         else ...[
           if (owner.phone != null) ...[
-            _ContactRow(
+            OwnerContactRow(
               icon: Icons.phone_outlined,
               label: 'Phone',
               value: owner.phone!,
@@ -179,7 +179,7 @@ class _DetailBody extends StatelessWidget {
             const SizedBox(height: AppSpacing.md),
           ],
           if (owner.email != null) ...[
-            _ContactRow(
+            OwnerContactRow(
               icon: Icons.mail_outline,
               label: 'Email',
               value: owner.email!,
@@ -205,8 +205,13 @@ class _DetailBody extends StatelessWidget {
 /// whatever app the OS picks, which does nothing at all on the web build. Copy
 /// works identically on both, and an admin pastes it wherever they actually
 /// work.
-class _ContactRow extends StatelessWidget {
-  const _ContactRow({
+///
+/// Public for the same reason [OwnerAvatar] is: the admin's standee QR screen
+/// shows the activating rep's contact under the code, and a second copy of
+/// this row would be a second place for the copy-but-never-echo rule to slip.
+class OwnerContactRow extends StatelessWidget {
+  const OwnerContactRow({
+    super.key,
     required this.icon,
     required this.label,
     required this.value,

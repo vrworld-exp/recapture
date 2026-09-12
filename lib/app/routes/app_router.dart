@@ -21,6 +21,7 @@ import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/admin/admin_batch_detail_screen.dart';
+import '../../presentation/screens/admin/admin_standee_qr_screen.dart';
 import '../../presentation/screens/admin/admin_standees_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_published_screen.dart';
@@ -226,6 +227,11 @@ abstract final class AppRoutes {
   /// One batch's codes. `:batchId` = the QrBatch id.
   static const adminBatchDetail = '/admin/standees/:batchId';
 
+  /// What an ACTIVE standee turned into — the restaurant's QR and who
+  /// activated it. `:code` = the printed code. Nested under the batch so the
+  /// path can never be mistaken for a `:batchId`.
+  static const adminStandeeQr = '/admin/standees/:batchId/codes/:code/qr';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -297,6 +303,7 @@ abstract final class AppRouteNames {
   static const repCatalogPublish = 'repCatalogPublish';
   static const adminStandees = 'adminStandees';
   static const adminBatchDetail = 'adminBatchDetail';
+  static const adminStandeeQr = 'adminStandeeQr';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const submitModel = 'submitModel';
@@ -678,6 +685,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.adminBatchDetail,
         builder: (context, state) => AdminBatchDetailScreen(
           batchId: state.pathParameters['batchId'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.adminStandeeQr,
+        name: AppRouteNames.adminStandeeQr,
+        builder: (context, state) => AdminStandeeQrScreen(
+          code: state.pathParameters['code'] ?? '',
         ),
       ),
       GoRoute(

@@ -101,6 +101,9 @@ import {
   unassignCode,
 } from '@/services/standeeAssignmentService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
+import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
+import { loadStandeeActivation } from '@/services/standeeActivationService';
+import { catalogQrQuerySchema } from '@/validation/catalogSchemas';
 
 const router = Router();
 
@@ -1872,6 +1875,131 @@ router.get(
       res.status(304).end();
       return;
     }
+
+    res.setHeader('Content-Type', rendered.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
+    res.status(200).send(rendered.body);
+  })
+);
+
+/**
+ * GET /admin/qr-codes/:code/activation — what a standee in use turned into.
+ *
+ * THE READ BEHIND THE QR BUTTON ON AN ACTIVE ROW. The batch list says "in
+ * use"; this says WHICH restaurant and WHO activated it. The catalog half is
+ * the same fields the rep's own restaurant document carries, with `publicUrl`
+ * already through `customerUrl` (the Mirage page, never the resolver — see
+ * services/customerUrl.ts). The person half is the LIST-SAFE owner summary
+ * (`{id, displayName, hasAvatar}`), the same shape the live-projects list
+ * carries for "Created by": the raw phone or email comes from
+ * `GET /admin/users/:id`, one person per call, metered and audited, so this
+ * route adds no second unmasked-contact path.
+ *
+ * One 404 for every kind of "not in use" — see loadStandeeActivation.
+ */
+router.get(
+  '/qr-codes/:code/activation',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid QR code',
+      });
+      return;
+    }
+
+    const activation = await loadStandeeActivation(code.data);
+    if (!activation) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'This standee is not in use.',
+      });
+      return;
+    }
+
+    res.status(200).json({ status: 'success', activation });
+  })
+);
+
+/**
+ * GET /admin/qr-codes/:code/activation/qr?format=png|pdf&size=<px> — the
+ * activated RESTAURANT's own QR, as the rep and the owner see it.
+ *
+ * NOT the standee sheet (`/qr-codes/:code/qr`), which draws the resolver URL
+ * and the eight printed characters. This is the menu's code — the Mirage link
+ * through `customerUrl`, drawn by the same `renderCatalogQr` with the same
+ * arguments the owner's `GET /catalog/qr` and the rep's `GET /rep/catalogs/
+ * :id/qr` pass — so all three surfaces print the identical square. The ETag
+ * is the same key those routes use, for the same reason: it is the same image.
+ *
+ * 409 CATALOG_NOT_PUBLISHED while the restaurant is activated but has never
+ * gone live: there is no Mirage page yet, so there is nothing honest to draw.
+ */
+router.get(
+  '/qr-codes/:code/activation/qr',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid QR code',
+      });
+      return;
+    }
+
+    const parsed = catalogQrQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: parsed.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const activation = await loadStandeeActivation(code.data);
+    if (!activation) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'This standee is not in use.',
+      });
+      return;
+    }
+
+    const url = activation.catalog.publicUrl;
+    if (!url) {
+      res.status(409).json({
+        status: 'error',
+        code: 'CATALOG_NOT_PUBLISHED',
+        message: 'This restaurant has not been published yet — the QR code is created when it goes live.',
+      });
+      return;
+    }
+
+    const { format, size } = parsed.data;
+    const clamped = clampQrSize(size);
+
+    const etag = strongETag({ url, name: activation.catalog.name, format, size: clamped });
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
+      res.status(304).end();
+      return;
+    }
+
+    const rendered = await renderCatalogQr({
+      publicUrl: url,
+      catalogName: activation.catalog.name,
+      format,
+      size: clamped,
+    });
 
     res.setHeader('Content-Type', rendered.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);

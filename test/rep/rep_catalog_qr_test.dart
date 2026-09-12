@@ -319,7 +319,7 @@ void main() {
       expect(find.byKey(const ValueKey('qr_image')), findsOneWidget);
       // Character for character. Nothing here composes, shortens or re-cases it.
       expect(find.text(kLiveUrl), findsOneWidget);
-      expect(find.textContaining('This code never changes'), findsOneWidget);
+      expect(find.textContaining('Print it once'), findsOneWidget);
     });
 
     testWidgets('saves the PNG through the delivery seam, without refetching',

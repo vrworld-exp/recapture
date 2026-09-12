@@ -98,11 +98,15 @@ class CatalogQrScreen extends ConsumerWidget {
                       ref.read(catalogQrProvider.notifier).save(format),
                   scanCaption: 'Customers scan this to open your catalog.',
                   // Feature 32, said out loud: this is the promise that makes
-                  // printing worth the money.
+                  // printing worth the money. RENAMING IS NOT ON THE LIST any
+                  // more: the link is the catalog's NAME on the public host
+                  // (services/customerUrl.ts), so a rename is the one edit
+                  // that does move it. Promising otherwise here would be the
+                  // lie a printed sticker finds out.
                   permanenceNote:
-                      'This code never changes. Print it once — renaming your '
-                      'catalog, adding products or taking it offline will not '
-                      'break it.',
+                      'Print it once — adding products or taking the catalog '
+                      'offline will not break it. Renaming the catalog changes '
+                      'the link, so reprint after a rename.',
                 ),
               ),
             ),

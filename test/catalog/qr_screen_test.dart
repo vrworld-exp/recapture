@@ -63,7 +63,7 @@ void main() {
       findsOneWidget,
     );
     // The promise that makes printing worth the money (feature 32).
-    expect(find.textContaining('This code never changes'), findsOneWidget);
+    expect(find.textContaining('Print it once'), findsOneWidget);
     // Asked for at print resolution, not display resolution.
     expect(repo.qrCalls, [CatalogQrFormat.png]);
   });

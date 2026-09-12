@@ -27,7 +27,9 @@
 // changes what people can SEE, never what they may do.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
@@ -165,6 +167,18 @@ class AdminBatchDetailScreen extends ConsumerWidget {
                         onAssign: code.state.isPrintable
                             ? () => _assign(context, notifier, code)
                             : null,
+                        // ONLY a standee in use has a restaurant behind it.
+                        // Offering this on stock would open a screen whose
+                        // whole content is "not in use".
+                        onShowQr: code.state == QrCodeState.active
+                            ? () => context.pushNamed(
+                                  AppRouteNames.adminStandeeQr,
+                                  pathParameters: {
+                                    'batchId': batchId,
+                                    'code': code.code,
+                                  },
+                                )
+                            : null,
                       );
                     },
                   ),
@@ -250,6 +264,7 @@ class _CodeTile extends StatelessWidget {
     required this.busy,
     required this.onSend,
     required this.onAssign,
+    required this.onShowQr,
   });
 
   final QrStandeeCode code;
@@ -263,6 +278,10 @@ class _CodeTile extends StatelessWidget {
   /// Null for a code that cannot be handed to anyone. Same absent-not-greyed
   /// rule as [onSend].
   final VoidCallback? onAssign;
+
+  /// Opens the restaurant this standee activated — its QR, link and the rep
+  /// who activated it. Null for anything not in use; same rule as [onSend].
+  final VoidCallback? onShowQr;
 
   @override
   Widget build(BuildContext context) {
@@ -346,6 +365,16 @@ class _CodeTile extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           else ...[
+            if (onShowQr != null)
+              IconButton(
+                key: ValueKey('activation_qr_${code.code}'),
+                tooltip: 'Show the restaurant this standee activated',
+                onPressed: onShowQr,
+                icon: const Icon(Icons.qr_code_2),
+                // Gold, like the rep list's QR button: on an in-use row this is
+                // the one thing an admin came to the list for.
+                color: AppColors.royalGold,
+              ),
             if (onAssign != null)
               IconButton(
                 key: ValueKey('assign_${code.code}'),

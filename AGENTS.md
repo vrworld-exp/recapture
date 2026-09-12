@@ -611,10 +611,15 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   must be the same physical object; a second renderer is how that stops being
   true. The LAYOUT differs between the one-up sheet and the batch grid; what is
   printed on a card does not.
-- **Two doors to the CATALOG QR, and it is not the standee sheet.**
-  `GET /catalog/qr` (the owner, resolved from their own token) and
+- **Three doors to the CATALOG QR, and it is not the standee sheet.**
+  `GET /catalog/qr` (the owner, resolved from their own token),
   `GET /rep/catalogs/:id/qr` (a rep, resolved through `resolveDelegatedCatalog`)
-  both hand the stored `publicUrl` to `renderCatalogQr` with the same arguments
+  and `GET /admin/qr-codes/:code/activation/qr` (ADMIN, resolved from an ACTIVE
+  standee to the catalog it activated — `services/standeeActivationService.ts`,
+  whose JSON twin `GET /admin/qr-codes/:code/activation` also names the
+  activating rep as the list-safe `{id, displayName, hasAvatar}` summary; the
+  raw contact stays behind `GET /admin/users/:id`) all hand `customerUrl(catalog)`
+  to `renderCatalogQr` with the same arguments
   and the same `strongETag` key, so the bytes and the cache tag are identical by
   construction — `tests/rep-catalog-qr.test.ts` compares them rather than trusting
   it. Do not give the rep route its own render, its own filename or its own size

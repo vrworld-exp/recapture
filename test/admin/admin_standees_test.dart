@@ -18,6 +18,9 @@ import 'package:recapture/application/admin/admin_batch_codes_notifier.dart';
 import 'package:recapture/application/admin/admin_standees_notifier.dart';
 import 'package:recapture/application/catalog/catalog_qr_service.dart';
 import 'package:recapture/data/repositories/admin_standee_repository.dart';
+import 'package:recapture/data/repositories/catalog_repository.dart'
+    show CatalogQrFormat, CatalogQrImage;
+import 'package:recapture/domain/entities/standee_activation.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/domain/entities/qr_standee.dart';
 
@@ -123,6 +126,18 @@ class _FakeRepo implements AdminStandeeRepository {
       mimeType: 'application/pdf',
     );
   }
+
+  @override
+  Future<StandeeActivation> activation(String code) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<CatalogQrImage> activationQr(
+    String code, {
+    CatalogQrFormat format = CatalogQrFormat.png,
+    int? size,
+  }) async =>
+      throw UnimplementedError();
 
   @override
   Future<QrDownloadFile> batchCsv(String batchId) async {

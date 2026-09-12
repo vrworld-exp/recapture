@@ -13,9 +13,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/catalog/qr_download_file.dart';
 import '../../domain/entities/qr_standee.dart';
+import '../../domain/entities/standee_activation.dart';
 import '../remote/api_client.dart';
 import 'bytes_response.dart';
 import 'catalog_failure.dart';
+import 'catalog_repository.dart'
+    show CatalogQrFormat, CatalogQrFormatX, CatalogQrImage;
 
 /// Error codes the standee endpoints return that a screen actually branches on.
 abstract final class AdminStandeeErrorCodes {
@@ -113,6 +116,24 @@ abstract interface class AdminStandeeRepository {
   Future<QrDownloadFile> standeeFile(
     String code, {
     StandeeQrFormat format,
+    int? size,
+  });
+
+  /// What an ACTIVE standee turned into: the restaurant and who activated it.
+  ///
+  /// Throws [CatalogFailure] with [AdminStandeeErrorCodes.notFound] for a code
+  /// that is not in use — unknown, unassigned stock, retired, or an activation
+  /// whose restaurant was deleted; the backend makes no distinction.
+  Future<StandeeActivation> activation(String code);
+
+  /// The activated RESTAURANT's own QR — the Mirage link, the same square the
+  /// rep's and the owner's QR screens draw — not the standee sheet.
+  ///
+  /// Throws [CatalogFailure] with `CATALOG_NOT_PUBLISHED` while the restaurant
+  /// has been activated but never published.
+  Future<CatalogQrImage> activationQr(
+    String code, {
+    CatalogQrFormat format,
     int? size,
   });
 
@@ -264,6 +285,49 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
         fallbackMime:
             format == StandeeQrFormat.png ? 'image/png' : 'application/pdf',
       ).then((res) => res.file);
+
+  @override
+  Future<StandeeActivation> activation(String code) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/admin/qr-codes/$code/activation',
+        );
+        final raw = res.data?['activation'];
+        if (raw is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return StandeeActivation.fromMap(raw);
+      });
+
+  @override
+  Future<CatalogQrImage> activationQr(
+    String code, {
+    CatalogQrFormat format = CatalogQrFormat.png,
+    int? size,
+  }) async {
+    // Through [_bytes] so a 409 CATALOG_NOT_PUBLISHED keeps its code — see the
+    // note on that helper — then reshaped into the image the shared QR
+    // notifier state carries.
+    final res = await _bytes(
+      '/admin/qr-codes/$code/activation/qr',
+      query: {
+        'format': format.apiValue,
+        if (size != null) 'size': size,
+      },
+      fallbackName: 'catalog-qr.${format.apiValue}',
+      fallbackMime:
+          format == CatalogQrFormat.png ? 'image/png' : 'application/pdf',
+    );
+    return CatalogQrImage(
+      bytes: res.file.bytes,
+      contentType: res.file.mimeType,
+      fileName: res.file.fileName,
+      format: format,
+    );
+  }
 
   @override
   Future<List<SalesRepSummary>> salesReps() => mapCatalogErrors(() async {

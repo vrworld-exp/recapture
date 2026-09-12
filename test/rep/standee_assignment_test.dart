@@ -29,6 +29,9 @@ import 'package:recapture/application/catalog/catalog_qr_service.dart';
 import 'package:recapture/application/rep/rep_capabilities.dart';
 import 'package:recapture/application/rep/rep_standees_notifier.dart';
 import 'package:recapture/data/repositories/admin_standee_repository.dart';
+import 'package:recapture/data/repositories/catalog_repository.dart'
+    show CatalogQrFormat, CatalogQrImage;
+import 'package:recapture/domain/entities/standee_activation.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show ProductImageSlot;
@@ -136,6 +139,18 @@ class _FakeAdminRepo implements AdminStandeeRepository {
   Future<QrDownloadFile> standeeFile(
     String code, {
     StandeeQrFormat format = StandeeQrFormat.pdf,
+    int? size,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<StandeeActivation> activation(String code) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<CatalogQrImage> activationQr(
+    String code, {
+    CatalogQrFormat format = CatalogQrFormat.png,
     int? size,
   }) async =>
       throw UnimplementedError();
