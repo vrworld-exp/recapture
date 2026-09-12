@@ -13,6 +13,7 @@ import { Types } from 'mongoose';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogDelegation } from '@/models/CatalogDelegation';
 import { isDuplicateKeyError } from '@/services/catalogService';
+import { customerUrl } from '@/services/customerUrl';
 import type { CatalogStatus } from '@/models/types/catalog.types';
 
 /**
@@ -118,7 +119,8 @@ export async function listDelegatedCatalogs(
         name: catalog.name,
         businessName: catalog.businessName ?? null,
         status: catalog.status,
-        publicUrl: catalog.publicUrl ?? null,
+        // The Mirage page, never the resolver — see services/customerUrl.ts.
+        publicUrl: customerUrl(catalog),
         isProvisioned: Boolean(catalog.mirageRestaurantId),
         grantedAt: grant.grantedAt.toISOString(),
       },

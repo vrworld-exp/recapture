@@ -24,6 +24,7 @@
 import { Types } from 'mongoose';
 
 import { Catalog, type ICatalog } from '@/models/Catalog';
+import { customerUrl } from '@/services/customerUrl';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogDelegation } from '@/models/CatalogDelegation';
 import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
@@ -33,11 +34,7 @@ import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
 import { MIRAGE_CATALOG_PUBLISH_JOB_TYPE } from '@/models/types/job.types';
 import { effectiveModelStatus, isModelPending } from '@/models/types/catalog.types';
-import type {
-  PublishMode,
-  PublishRunState,
-  SyncStatus,
-} from '@/models/types/catalog.types';
+import type { PublishMode, PublishRunState, SyncStatus } from '@/models/types/catalog.types';
 import {
   CATALOG_NAME_TAKEN,
   provisionCatalog,
@@ -215,8 +212,7 @@ async function gateSourceModels(
 
   return withModels.flatMap((product) => {
     const model = byId.get(String(product.sourceModelId));
-    const usable =
-      model && model.status === 'SUCCEEDED' && owned.has(String(model.projectId));
+    const usable = model && model.status === 'SUCCEEDED' && owned.has(String(model.projectId));
     if (usable) return [];
     return [
       {
@@ -416,9 +412,7 @@ export async function evaluatePublishGates(
  */
 export class CatalogMappingImmutableError extends Error {
   constructor(field: string) {
-    super(
-      `${field} is frozen once written — a printed QR resolves through it (feature 32).`
-    );
+    super(`${field} is frozen once written — a printed QR resolves through it (feature 32).`);
     this.name = 'CatalogMappingImmutableError';
   }
 }
@@ -522,7 +516,13 @@ export interface PublishRunDto {
 }
 
 export type RequestPublishResult =
-  | { outcome: 'QUEUED'; run: PublishRunDto; mapping?: CatalogMappingDto }
+  | {
+      outcome: 'QUEUED';
+      run: PublishRunDto;
+      mapping?: CatalogMappingDto;
+      /** The link to show, once the restaurant exists on Mirage. See services/customerUrl.ts. */
+      publicUrl: string | null;
+    }
   | { outcome: 'NOT_FOUND' }
   | { outcome: 'BLOCKED'; gates: PublishGate[] }
   | { outcome: 'IN_PROGRESS'; runId: string }
@@ -611,6 +611,9 @@ async function openRun(
 
   return {
     outcome: 'QUEUED',
+    // Null on a first publish whose provisioning was deferred to the run;
+    // the client then learns the link from publish status, as it always did.
+    publicUrl: customerUrl(catalog),
     run: {
       runId: runId.toHexString(),
       state: 'QUEUED',
@@ -830,6 +833,7 @@ export interface PublishStatusDto {
    * publish" without a second read. False whenever nothing is running.
    */
   hasChangesSincePublishStarted: boolean;
+  /** The link to SHOW — the Mirage page, never the resolver. See services/customerUrl.ts. */
   publicUrl: string | null;
   lastPublishedAt: string | null;
   activeRunId: string | null;
@@ -875,9 +879,7 @@ export async function getPublishStatus(
 
   const [run, products] = await Promise.all([
     CatalogPublishRun.findOne({ catalogId }).sort({ createdAt: -1 }).lean().exec(),
-    CatalogProduct.find({ catalogId, deletedAt: null })
-      .sort({ position: 1, _id: 1 })
-      .exec(),
+    CatalogProduct.find({ catalogId, deletedAt: null }).sort({ position: 1, _id: 1 }).exec(),
   ]);
 
   const gates = await evaluatePublishGates(catalog, products);
@@ -895,7 +897,7 @@ export async function getPublishStatus(
         run !== null &&
         String(run._id) === catalog.activePublishRunId?.toHexString() &&
         catalog.draftRevision > run.snapshotRevision,
-      publicUrl: catalog.publicUrl ?? null,
+      publicUrl: customerUrl(catalog),
       lastPublishedAt: catalog.lastPublishedAt?.toISOString() ?? null,
       activeRunId: catalog.activePublishRunId?.toHexString() ?? null,
       run: run

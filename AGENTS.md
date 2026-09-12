@@ -844,9 +844,19 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   exception.** Unpublish removes the ITEMS and flips `restaurant.isPublished`.
   `mirageRestaurantId`, `publicUrl` and `publicUrlScheme` are written ONCE and
   frozen — a printed QR resolves through them, and `assertMappingImmutable`
-  THROWS on an attempt to rewrite. The QR is rendered server-side from the STORED
-  `publicUrl` verbatim; `catalogQrService` does not import
-  `MIRAGE_PUBLIC_BASE_URL`, and it should stay that way.
+  THROWS on an attempt to rewrite. `catalogQrService` draws whatever string it
+  is handed and does not import `MIRAGE_PUBLIC_BASE_URL`; that should stay.
+  **What it is handed, and what every DTO shows, is `customerUrl(catalog)`
+  (`services/customerUrl.ts`), never the stored string directly.** That helper
+  answers `{MIRAGE_PUBLIC_BASE_URL}/{catalog.name}` — the NAME slug, which
+  Mirage's public `/:restaurant` route resolves by name before falling back to
+  an ObjectId — once the Mirage restaurant exists, and null before that. Under
+  `RECAPTURE_SHORT_CODE` the stored string is this API's `/r/{code}` resolver,
+  which is the standee's business and must not appear on a screen, a sticker
+  reprinted from the QR page or a shared link. Known cost: a rename changes the
+  displayed link; printed standees are unaffected because the resolver
+  redirects through `mintPublicUrl` (the ObjectId form, which lives in
+  `customerUrl.ts` and is re-exported by `catalogProvisioningService`).
 
   The exception exists because "delete my catalog and start over" cannot be
   honoured any other way, and it is the one action where giving up the URL is the

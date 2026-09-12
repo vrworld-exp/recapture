@@ -252,7 +252,7 @@ async function respondToPublishRequest(
         status: 'success',
         runId: result.run.runId,
         queued: true,
-        ...(result.mapping ? { publicUrl: result.mapping.publicUrl } : {}),
+        ...(result.publicUrl ? { publicUrl: result.publicUrl } : {}),
       });
       return;
   }
@@ -1318,9 +1318,14 @@ router.post(
 /**
  * GET /catalog/qr?format=png|pdf&size=<px> — features 31–35.
  *
- * Rendered from `catalog.publicUrl` VERBATIM. This route never composes a URL,
- * which is what makes feature 32 ("a printed sticker keeps working") a property
- * of the code rather than a rule somebody has to remember.
+ * Rendered from the link a customer is shown — `customerUrl(catalog)` — which
+ * under the MIRAGE_OBJECT_ID scheme is `catalog.publicUrl` VERBATIM, and under
+ * RECAPTURE_SHORT_CODE is the Mirage page rather than this API's resolver: the
+ * square an owner prints from here must not carry the backend's host. This
+ * route still composes nothing itself; see `services/customerUrl.ts` for the
+ * one place that decides. Feature 32 ("a printed sticker keeps working") holds
+ * under both schemes — a Mirage ObjectId is immutable, and the resolver keeps
+ * redirecting the standees that were printed with it.
  *
  * Highly cacheable by construction: the URL never changes, so neither does the
  * image. The strong ETag lets a client — or a CDN in front of us — skip the
@@ -1344,10 +1349,14 @@ router.get(
     const catalog = await getCatalog(userId);
     if (!catalog) return noCatalog(res);
 
-    if (!catalog.publicUrl) {
-      // A URL is minted at provisioning and never before. Inventing one here
-      // would produce a QR that resolves to nothing — worse than no QR, because
-      // it might get printed.
+    // `getCatalog` hands back the DTO, whose `publicUrl` has already been
+    // through `customerUrl` — the Mirage page, or null before the first
+    // publish. Nothing is composed here.
+    const url = catalog.publicUrl;
+    if (!url) {
+      // A menu page exists from the first publish and never before. Inventing
+      // one here would produce a QR that resolves to nothing — worse than no
+      // QR, because it might get printed.
       return fail(
         res,
         409,
@@ -1362,7 +1371,7 @@ router.get(
     // Keyed on everything that can change the bytes and nothing that cannot.
     // The catalog's revision is deliberately ABSENT: editing a product does not
     // change the code, and including it would invalidate a cache on every save.
-    const etag = strongETag({ url: catalog.publicUrl, name: catalog.name, format, size: clamped });
+    const etag = strongETag({ url, name: catalog.name, format, size: clamped });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
@@ -1371,7 +1380,7 @@ router.get(
     }
 
     const rendered = await renderCatalogQr({
-      publicUrl: catalog.publicUrl,
+      publicUrl: url,
       catalogName: catalog.name,
       format,
       size: clamped,

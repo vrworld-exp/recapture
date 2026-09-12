@@ -31,13 +31,16 @@
 // `RepCatalogProductsNotifier.reorder`, which is the single place that knows
 // the ReorderableListView index convention.
 //
-// AND EVERY ONE OF THOSE EDITS LANDS IN A DRAFT, WHICH THE BOTTOM BAR NOW SAYS.
-// Renaming a dish, replacing its photo or model, changing the restaurant's own
-// name or branding — none of it reaches a customer until a publish. The bar
-// used to be a single button reading "Publish the menu" whether there were
-// twenty unsent edits behind it or none, so a rep who corrected a price and
-// walked out had nothing on screen telling them the correction was still in
-// the draft. See [_PublishBar].
+// AND EVERY ONE OF THOSE EDITS LANDS IN A DRAFT, WHICH THE TOP OF THE SCREEN
+// SAYS. Renaming a dish, replacing its photo or model, changing the
+// restaurant's own name or branding — none of it reaches a customer until a
+// publish. The bar used to be a single button reading "Publish the menu"
+// whether there were twenty unsent edits behind it or none, so a rep who
+// corrected a price and walked out had nothing on screen telling them the
+// correction was still in the draft. The state line first lived in the bottom
+// bar, directly above the button; it now sits under the app bar, where the
+// owner's catalog header keeps the same badge. See [_PublishStateHeader] and
+// [_PublishBar].
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -68,8 +71,6 @@ class RepCatalogDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final products = ref.watch(repCatalogProductsProvider(catalogId));
-
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       appBar: AppBar(
@@ -139,106 +140,127 @@ class RepCatalogDetailScreen extends ConsumerWidget {
         icon: const Icon(Icons.add),
         label: const Text('Add a dish'),
       ),
-      // The publish bar, and the line above it saying what is still a draft.
-      // See [_PublishBar].
+      // The door to publishing. What is still a draft is said at the TOP of
+      // the screen, not here — see [_PublishStateHeader].
       bottomNavigationBar: _PublishBar(catalogId: catalogId),
       body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: () {
-            ref.invalidate(repCatalogDocumentProvider(catalogId));
-            return ref
-                .read(repCatalogProductsProvider(catalogId).notifier)
-                .refresh();
-          },
-          child: products.when(
-            loading: () => const Center(child: AppLoadingIndicator()),
-            error: (_, __) => _Message(
-              title: "Couldn't load the dishes.",
-              body: 'Check your connection and pull down to try again.',
-              onRetry: () => ref
-                  .read(repCatalogProductsProvider(catalogId).notifier)
-                  .refresh(),
-            ),
-            data: (items) => items.isEmpty
-                ? const _Message(
-                    title: 'No dishes yet.',
-                    body: 'Add the first one — capture it and the 3D model '
-                        'starts generating on its own.',
-                  )
-                : LayoutBuilder(
-                    builder: (context, constraints) {
-                      // Finger-sized handles below the same width the category
-                      // manager uses. Measured, never `kIsWeb`: a narrow
-                      // browser window is the phone shape.
-                      final touch = constraints.maxWidth < kCategoryTouchWidth;
-                      return ReorderableListView.builder(
-                        key: const ValueKey('rep_dish_list'),
-                        padding: const EdgeInsets.fromLTRB(
-                          AppSpacing.lg,
-                          AppSpacing.lg,
-                          AppSpacing.lg,
-                          AppSpacing.huge * 2,
-                        ),
-                        // Handles are drawn by the rows themselves, so ONE
-                        // affordance serves touch drag, mouse drag and the
-                        // keyboard hint.
-                        buildDefaultDragHandles: false,
-                        header: Padding(
-                          padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                          child: Text(
-                            'Customers see the dishes in this order. Drag '
-                            'the handle to change it.',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(color: AppColors.textMuted),
-                          ),
-                        ),
-                        itemCount: items.length,
-                        onReorder: (oldIndex, newIndex) => _reorderDish(
-                          context,
-                          catalogId,
-                          oldIndex,
-                          newIndex,
-                        ),
-                        itemBuilder: (_, i) => Padding(
-                          key: ValueKey('rep_dish_slot_${items[i].id}'),
-                          padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                          child: _DishRow(
-                            product: items[i],
-                            touch: touch,
-                            index: i,
-                            count: items.length,
-                            onMove: (from, to) =>
-                                _reorderDish(context, catalogId, from, to),
-                            // The refresh is what makes an edited name, price
-                            // or photo appear on the row the rep came back
-                            // to, rather than up to one poll interval later —
-                            // or never, for a dish with no 3D model to poll
-                            // for.
-                            onTap: () async {
-                              await context.push(
-                                '${AppRoutes.repCatalogs}/$catalogId/dishes/'
-                                '${items[i].id}',
-                              );
-                              if (!context.mounted) return;
-                              // An edited name, price, photo or model is a
-                              // draft change — same reason as the add-dish
-                              // FAB above.
-                              ref.invalidate(
-                                  repCatalogDocumentProvider(catalogId));
-                              await ref
-                                  .read(repCatalogProductsProvider(catalogId)
-                                      .notifier)
-                                  .refresh();
-                            },
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
+        child: Column(
+          children: [
+            // Outside the RefreshIndicator on purpose: it is a status strip,
+            // not a row of the list, and it must not scroll away under the
+            // pull-to-refresh spinner or with the dishes.
+            _PublishStateHeader(catalogId: catalogId),
+            Expanded(child: _DishList(catalogId: catalogId)),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+/// The dishes, under pull-to-refresh: the list itself, or why there is none.
+class _DishList extends ConsumerWidget {
+  const _DishList({required this.catalogId});
+
+  final String catalogId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final products = ref.watch(repCatalogProductsProvider(catalogId));
+
+    return RefreshIndicator(
+      onRefresh: () {
+        ref.invalidate(repCatalogDocumentProvider(catalogId));
+        return ref
+            .read(repCatalogProductsProvider(catalogId).notifier)
+            .refresh();
+      },
+      child: products.when(
+        loading: () => const Center(child: AppLoadingIndicator()),
+        error: (_, __) => _Message(
+          title: "Couldn't load the dishes.",
+          body: 'Check your connection and pull down to try again.',
+          onRetry: () => ref
+              .read(repCatalogProductsProvider(catalogId).notifier)
+              .refresh(),
+        ),
+        data: (items) => items.isEmpty
+            ? const _Message(
+                title: 'No dishes yet.',
+                body: 'Add the first one — capture it and the 3D model '
+                    'starts generating on its own.',
+              )
+            : LayoutBuilder(
+                builder: (context, constraints) {
+                  // Finger-sized handles below the same width the category
+                  // manager uses. Measured, never `kIsWeb`: a narrow
+                  // browser window is the phone shape.
+                  final touch = constraints.maxWidth < kCategoryTouchWidth;
+                  return ReorderableListView.builder(
+                    key: const ValueKey('rep_dish_list'),
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.lg,
+                      AppSpacing.lg,
+                      AppSpacing.lg,
+                      AppSpacing.huge * 2,
+                    ),
+                    // Handles are drawn by the rows themselves, so ONE
+                    // affordance serves touch drag, mouse drag and the
+                    // keyboard hint.
+                    buildDefaultDragHandles: false,
+                    header: Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                      child: Text(
+                        'Customers see the dishes in this order. Drag '
+                        'the handle to change it.',
+                        style: Theme.of(context)
+                            .textTheme
+                            .bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                    ),
+                    itemCount: items.length,
+                    onReorder: (oldIndex, newIndex) => _reorderDish(
+                      context,
+                      catalogId,
+                      oldIndex,
+                      newIndex,
+                    ),
+                    itemBuilder: (_, i) => Padding(
+                      key: ValueKey('rep_dish_slot_${items[i].id}'),
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                      child: _DishRow(
+                        product: items[i],
+                        touch: touch,
+                        index: i,
+                        count: items.length,
+                        onMove: (from, to) =>
+                            _reorderDish(context, catalogId, from, to),
+                        // The refresh is what makes an edited name, price
+                        // or photo appear on the row the rep came back
+                        // to, rather than up to one poll interval later —
+                        // or never, for a dish with no 3D model to poll
+                        // for.
+                        onTap: () async {
+                          await context.push(
+                            '${AppRoutes.repCatalogs}/$catalogId/dishes/'
+                            '${items[i].id}',
+                          );
+                          if (!context.mounted) return;
+                          // An edited name, price, photo or model is a
+                          // draft change — same reason as the add-dish
+                          // FAB above.
+                          ref.invalidate(repCatalogDocumentProvider(catalogId));
+                          await ref
+                              .read(repCatalogProductsProvider(catalogId)
+                                  .notifier)
+                              .refresh();
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
       ),
     );
   }
@@ -340,25 +362,18 @@ Future<void> _writeDishOrder(
 /// exactly the line they had read before pressing. The publish screen is
 /// where the run is watched, and there is one of it for both doors.
 ///
-/// THE LINE ABOVE THE BUTTON IS THE POINT. A rep edits a draft all visit — dish
-/// names, photos, models, the restaurant's own name and branding — and none of
-/// it reaches a customer until a publish. With a fixed "Publish the menu" label
-/// and nothing else, the screen looked identical with twenty unsent edits and
-/// with none, so the one question a rep has on the way out the door ("did that
-/// price fix actually go up?") had no answer on the screen that owed it one.
+/// THE STATE LINE IS NOT HERE ANY MORE. It used to sit directly above this
+/// button, which put the one sentence a rep needs ("is that price fix live?")
+/// at the bottom of the screen, under the FAB, where nobody looks until they
+/// are about to press Publish. It now sits under the app bar — see
+/// [_PublishStateHeader]. This bar keeps two things: the button's label, which
+/// still tracks the same document, and the poll that keeps that document
+/// fresh while a run holds the catalog, so a finished run does not leave
+/// "Publishing…" on a screen nobody refreshed.
 ///
-/// SERVER-DERIVED, NEVER DIFFED. [Catalog.hasUnpublishedChanges] comes off the
-/// draft/published revision counters; the client must not try to recompute it
-/// by comparing anything locally, because a badge that disagrees with the
-/// publish it describes is worse than no badge at all. The detail screen
-/// re-reads the document after every edit that can move the flag, and — while
-/// a run holds the catalog — keeps re-reading it on the shared cadence so a
-/// finished run does not leave "Publishing…" on a screen nobody refreshed.
-///
-/// WHILE THE DOCUMENT IS UNREAD, THE BAR CLAIMS NOTHING AND THE BUTTON STILL
-/// WORKS. Loading, or a failed read, shows no state line and leaves a live
-/// button — the same "we cannot tell → assume there are drafts" rule
-/// [Catalog.fromMap] applies to the flag itself.
+/// WHILE THE DOCUMENT IS UNREAD, THE BUTTON STILL WORKS. Loading, or a failed
+/// read, leaves a live button — the same "we cannot tell → assume there are
+/// drafts" rule [Catalog.fromMap] applies to the flag itself.
 class _PublishBar extends ConsumerStatefulWidget {
   const _PublishBar({required this.catalogId});
 
@@ -435,7 +450,6 @@ class _PublishBarState extends ConsumerState<_PublishBar> {
 
     final running = catalog?.isPublishing ?? false;
     final pending = catalog?.hasUnpublishedChanges ?? true;
-    final staleRun = catalog?.hasChangesSincePublishStarted ?? false;
 
     // Always a door, never a request: the screen behind it is where the
     // checklist, the progress and the failures live, and it is worth opening
@@ -452,26 +466,57 @@ class _PublishBarState extends ConsumerState<_PublishBar> {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (catalog != null) ...[
-              _PublishStateLine(
-                catalog: catalog,
-                running: running,
-                staleRun: staleRun,
-              ),
-              const SizedBox(height: AppSpacing.md),
-            ],
-            AppButton(
-              key: const ValueKey('rep_publish_button'),
-              label: label,
-              icon: running ? Icons.sync : Icons.cloud_upload_outlined,
-              onPressed: _openPublish,
-            ),
-          ],
+        child: AppButton(
+          key: const ValueKey('rep_publish_button'),
+          label: label,
+          icon: running ? Icons.sync : Icons.cloud_upload_outlined,
+          onPressed: _openPublish,
         ),
+      ),
+    );
+  }
+}
+
+/// The publish state, pinned under the app bar.
+///
+/// AT THE TOP, WHERE THE OWNER'S BADGE IS. The owner's catalog screen says
+/// "Draft changes not yet live" in its header (feature 38); a rep looking at
+/// the same restaurant reads the same sentence in the same place. It is the
+/// first thing on the screen because it is the first question a rep has on
+/// opening it — and the last one on the way out — not a footnote to the
+/// button.
+///
+/// SERVER-DERIVED, NEVER DIFFED. [Catalog.hasUnpublishedChanges] comes off the
+/// draft/published revision counters; the client must not try to recompute it
+/// by comparing anything locally, because a badge that disagrees with the
+/// publish it describes is worse than no badge at all. The detail screen
+/// re-reads the document after every edit that can move the flag, and
+/// [_PublishBar] keeps re-reading it while a run holds the catalog.
+///
+/// WHILE THE DOCUMENT IS UNREAD, THIS CLAIMS NOTHING. Loading, or a failed
+/// read, renders no strip at all rather than a guess.
+class _PublishStateHeader extends ConsumerWidget {
+  const _PublishStateHeader({required this.catalogId});
+
+  final String catalogId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final catalog =
+        ref.watch(repCatalogDocumentProvider(catalogId)).valueOrNull;
+    if (catalog == null) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.md,
+        AppSpacing.lg,
+        0,
+      ),
+      child: _PublishStateLine(
+        catalog: catalog,
+        running: catalog.isPublishing,
+        staleRun: catalog.hasChangesSincePublishStarted,
       ),
     );
   }
@@ -538,7 +583,7 @@ class _PublishStateLine extends StatelessWidget {
     );
   }
 
-  /// Every state this bar can be in, most urgent first.
+  /// Every state this line can be in, most urgent first.
   (IconData, Color, String, String) _describe() {
     final published = catalog.lastPublishedAt;
 
@@ -691,8 +736,13 @@ class _DishRow extends StatelessWidget {
                   index: index,
                   child: MouseRegion(
                     cursor: SystemMouseCursors.grab,
-                    child: Tooltip(
-                      message: 'Drag to reorder (or Alt + ↑ / ↓)',
+                    // No Tooltip: on touch the tooltip's trigger IS a long-press,
+                    // so pressing the handle to start a drag popped "Drag to
+                    // reorder" over the list mid-gesture, and on the web it hung
+                    // off every hover. The label survives for screen readers only;
+                    // how to drag is taught by the line above the list.
+                    child: Semantics(
+                      label: 'Drag to reorder',
                       child: SizedBox(
                         key: ValueKey('rep_dish_handle_${product.id}'),
                         width: touch ? 40 : 18,

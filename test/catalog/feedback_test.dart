@@ -102,13 +102,14 @@ Set<String> _backendEnvelopeCodes() {
   return {
     for (final source in _envelopeSources)
       for (final pattern in patterns)
-        for (final match in pattern.allMatches(_readApi(source))) match.group(1)!,
+        for (final match in pattern.allMatches(_readApi(source)))
+          match.group(1)!,
   };
 }
 
 Set<String> _backendSyncCodes() => {
-      for (final match
-          in RegExp(r"""['"](PUBLISH_[A-Z0-9_]+)['"]""").allMatches(_readApi(_syncSource)))
+      for (final match in RegExp(r"""['"](PUBLISH_[A-Z0-9_]+)['"]""")
+          .allMatches(_readApi(_syncSource)))
         match.group(1)!,
     };
 
@@ -243,7 +244,8 @@ void main() {
       expect(catalogErrorCopy(invented), same(kCatalogUnknownError));
       expect(catalogErrorSentence(invented), isNot(contains(invented)));
       expect(catalogErrorSentence(null), isNotEmpty);
-      expect(syncErrorCopy('PUBLISH_NOT_A_REAL_CODE'), same(kUnknownSyncErrorCopy));
+      expect(syncErrorCopy('PUBLISH_NOT_A_REAL_CODE'),
+          same(kUnknownSyncErrorCopy));
     });
 
     test('offline is its own sentence, not a shade of "server error"', () {
@@ -313,7 +315,7 @@ void main() {
       CatalogFeedback.confirm(messenger, 'Mains archived.');
       await tester.pump(const Duration(milliseconds: 400));
 
-      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.byType(MaterialBanner), findsOneWidget);
       // The NEWEST one: a confirmation four seconds late reads as a report
       // about something else.
       expect(find.text('Mains archived.'), findsOneWidget);
@@ -324,9 +326,9 @@ void main() {
     });
 
     testWidgets('the message is announced to a screen reader', (tester) async {
-      // A snackbar takes no focus and is painted into the overlay, so without
-      // a live region it never reaches TalkBack, VoiceOver or, on the web
-      // build, `aria-live`. A confirmation nobody hears is not a confirmation.
+      // A banner takes no focus, so without a live region it never reaches
+      // TalkBack, VoiceOver or, on the web build, `aria-live`. A confirmation
+      // nobody hears is not a confirmation.
       final semantics = tester.ensureSemantics();
       await tester.pumpWidget(
         _toastHarness((m) => CatalogFeedback.confirm(m, 'Starters archived.')),
@@ -351,33 +353,46 @@ void main() {
 
     testWidgets('there is a keyboard-reachable way to dismiss it',
         (tester) async {
-      // Swipe is the only built-in dismissal, and there is no swipe on a
-      // desktop browser. The close button is a real button in the traversal
-      // order.
+      // A banner has no swipe to dismiss, and there would be no swipe on a
+      // desktop browser anyway. The close button is a real button in the
+      // traversal order.
       await tester.pumpWidget(
         _toastHarness((m) => CatalogFeedback.confirm(m, 'Starters archived.')),
       );
       await tester.tap(find.text('go'));
-      // Through the entrance animation: a snackbar sliding in is inside an
-      // IgnorePointer, so a tap on it would be a tap on nothing.
+      // Through the entrance animation, so the tap lands on a settled button.
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 750));
 
-      expect(tester.widget<SnackBar>(find.byType(SnackBar)).showCloseIcon, isTrue);
+      expect(
+        find.descendant(
+          of: find.byType(MaterialBanner),
+          matching: find.byIcon(Icons.close),
+        ),
+        findsOneWidget,
+      );
 
       await tester.tap(find.byIcon(Icons.close));
       await tester.pumpAndSettle();
-      expect(find.byType(SnackBar), findsNothing);
+      expect(find.byType(MaterialBanner), findsNothing);
     });
 
     testWidgets('a long message wraps rather than truncating', (tester) async {
-      // The half that gets cut is the half that says what to do.
+      // The half that gets cut is the half that says what to do. A phone-sized
+      // WINDOW, not just a phone-sized scaffold: the pin is decided from the
+      // window, and a 360 px scaffold in an 800 px window would be pinned.
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
       await tester.pumpWidget(
         _toastHarness(
           (m) => CatalogFeedback.failure(
             m,
-            const CatalogFailure(code: 'OFFLINE', message: 'x', isOffline: true),
-            subject: 'A product with a genuinely long name could not be archived',
+            const CatalogFailure(
+                code: 'OFFLINE', message: 'x', isOffline: true),
+            subject:
+                'A product with a genuinely long name could not be archived',
           ),
           width: 360,
         ),
@@ -387,7 +402,7 @@ void main() {
 
       final text = tester.widget<Text>(
         find.descendant(
-          of: find.byType(SnackBar),
+          of: find.byType(MaterialBanner),
           matching: find.textContaining('could not be archived'),
         ),
       );
@@ -398,9 +413,32 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('the toast sits at the top of the screen, not the bottom',
+        (tester) async {
+      // A rep saving a dish on a laptop had the confirmation appear at the
+      // bottom edge, a screen's height from the form. It floats OVER the body
+      // (non-zero elevation) so nothing on the page jumps when it arrives.
+      await tester.pumpWidget(
+        _toastHarness((m) => CatalogFeedback.confirm(m, 'Saved.')),
+      );
+      final bodyBefore = tester.getTopLeft(find.text('go'));
+      await tester.tap(find.text('go'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 750));
+
+      final banner = tester.getRect(find.byType(MaterialBanner));
+      final scaffold = tester.getRect(find.byType(Scaffold));
+      expect(banner.top, scaffold.top);
+      expect(banner.bottom, lessThan(scaffold.center.dy));
+      expect(tester.getTopLeft(find.text('go')), bodyBefore);
+
+      await tester.pump(kCatalogToastDuration);
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('a wide window pins the toast instead of spanning it',
         (tester) async {
-      // Decided from the WINDOW, never from `kIsWeb`: a 1600 px snackbar puts
+      // Decided from the WINDOW, never from `kIsWeb`: a 1600 px banner puts
       // its undo a screen's width from the card the user just acted on.
       tester.view.physicalSize = const Size(1600, 1000);
       tester.view.devicePixelRatio = 1;
@@ -411,9 +449,21 @@ void main() {
       );
       await tester.tap(find.text('go'));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 750));
 
+      // The banner's own surface — the first Material under it — not the
+      // widget, whose box includes the margin that does the pinning.
       expect(
-        tester.widget<SnackBar>(find.byType(SnackBar)).width,
+        tester
+            .getSize(
+              find
+                  .descendant(
+                    of: find.byType(MaterialBanner),
+                    matching: find.byType(Material),
+                  )
+                  .first,
+            )
+            .width,
         kCatalogToastWidth,
       );
 
@@ -446,8 +496,7 @@ void main() {
       // LEAVE the screen with the undo still on offer. This is the case the
       // whole ScaffoldMessenger-not-BuildContext design exists for: the toast
       // outlives the route that raised it.
-      Navigator.of(tester.element(find.byType(CategoryManagerScreen)))
-          .pop();
+      Navigator.of(tester.element(find.byType(CategoryManagerScreen))).pop();
       await tester.pumpAndSettle(const Duration(milliseconds: 300));
       expect(find.byType(CategoryManagerScreen), findsNothing);
       expect(find.text('Undo'), findsOneWidget);
@@ -485,7 +534,7 @@ void main() {
       await tester.pump();
 
       expect(repo.reorders, isEmpty);
-      expect(find.byType(SnackBar), findsNothing);
+      expect(find.byType(MaterialBanner), findsNothing);
     });
   });
 }

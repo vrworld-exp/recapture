@@ -526,8 +526,13 @@ class _CategoryRow extends ConsumerWidget {
                     index: index,
                     child: MouseRegion(
                       cursor: SystemMouseCursors.grab,
-                      child: Tooltip(
-                        message: 'Drag to reorder (or Alt + ↑ / ↓)',
+                      // No Tooltip: on touch the tooltip's trigger IS a long-press,
+                      // so pressing the handle to start a drag popped "Drag to
+                      // reorder" over the list mid-gesture, and on the web it hung
+                      // off every hover. The label survives for screen readers only;
+                      // how to drag is taught by the line above the list.
+                      child: Semantics(
+                        label: 'Drag to reorder',
                         child: SizedBox(
                           width: touch ? 40 : 18,
                           height: touch ? 40 : 18,

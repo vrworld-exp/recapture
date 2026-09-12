@@ -18,7 +18,7 @@ import { env } from '@/config/env';
 import { Catalog } from '@/models/Catalog';
 import { QrCode } from '@/models/QrCode';
 import { QrScanDaily } from '@/models/QrScanDaily';
-import { mintPublicUrl } from '@/services/catalogProvisioningService';
+import { mintPublicUrl } from '@/services/customerUrl';
 import type { FallbackKind } from '@/services/qrFallbackPage';
 import { normalizeQrCode } from '@/utils/qrCodes';
 

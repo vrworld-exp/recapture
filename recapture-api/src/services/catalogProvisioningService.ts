@@ -25,6 +25,7 @@ import { env } from '@/config/env';
 import { BUCKET_ARTIFACTS } from '@/config/s3';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import type { PublicUrlScheme } from '@/models/types/catalog.types';
+import { mintPublicUrl } from '@/services/customerUrl';
 import { getObjectBytes } from '@/services/s3ObjectStore';
 import {
   getMirageClient,
@@ -93,23 +94,26 @@ function assertPublicUrlConfigured(): void {
 /**
  * The Mirage menu URL for a Mirage restaurant id.
  *
- * THERE ARE EXACTLY TWO CALLERS AND THE LIST IS CLOSED:
+ * THE FORMAT STRING LIVES IN `services/customerUrl.ts` and is re-exported here
+ * for the callers that historically imported it from this module. There are
+ * three readers of it and the list is closed:
  *
- *  1. {@link persistMapping}, at the moment the mapping is first written. Every
- *     read of a catalog's own URL — the QR renderer, the share sheet, the
- *     catalog DTO — returns the STORED string, never a recomputed one. §8 says
- *     a third caller of that kind should fail code review on that basis alone.
+ *  1. {@link persistMapping}, at the moment the mapping is first written — the
+ *     STORED string, which is what the QR under the MIRAGE_OBJECT_ID scheme
+ *     encodes and what feature 32 freezes.
  *  2. The public resolver (services/qrResolverService.ts), which needs WHERE
  *     THE MENU LIVES rather than what the catalog's stored URL says. Under the
  *     same-day-activation scheme those stopped being the same string:
  *     activation writes `{PUBLIC_RESOLVER_BASE_URL}/r/{code}` into
  *     `publicUrl`, so a resolver redirecting there would redirect to itself
- *     forever. It is exported for that one caller so the format string exists
- *     in exactly one place — a second copy is how the two drift apart.
+ *     forever.
+ *  3. `customerUrl` in the same file, which answers every DISPLAY of a link —
+ *     DTOs and the QR screens — so that a short-code catalog shows and prints
+ *     the Mirage page rather than this API's host. See that file's header.
+ *
+ * A fourth reader that WRITES should fail code review on that basis alone.
  */
-export function mintPublicUrl(mirageRestaurantId: string): string {
-  return `${env.MIRAGE_PUBLIC_BASE_URL}/${mirageRestaurantId}`;
-}
+export { mintPublicUrl } from '@/services/customerUrl';
 
 /** The mapping as stored, or null on a document that has none yet. */
 function mappingOf(catalog: ICatalog): CatalogMappingDto | null {

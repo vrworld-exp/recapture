@@ -19,6 +19,7 @@ import { getMirageClient, MirageError, MirageErrorCode } from '@/services/mirage
 import { hasActiveRun } from '@/services/catalog/publishRunState';
 import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
+import { customerUrl } from '@/services/customerUrl';
 import { presignObjectPutUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import { checkCatalogImageKey, sweepSupersededImages } from '@/services/catalogImages';
 import {
@@ -55,8 +56,11 @@ export interface CatalogDto {
   contact: CatalogContact | null;
   status: CatalogStatus;
   /**
-   * The frozen public URL, or null before first publish. Read back verbatim —
-   * NEVER recomputed, because every printed QR encodes it (feature 32).
+   * The link to SHOW — the Mirage menu page — or null before first publish.
+   * Under the MIRAGE_OBJECT_ID scheme this is the frozen `publicUrl` verbatim;
+   * under RECAPTURE_SHORT_CODE the stored string is this API's resolver and is
+   * never shown — see `services/customerUrl.ts`. Displayed by the client
+   * verbatim and composed by nobody on that side.
    */
   publicUrl: string | null;
   /** True once a publish run has provisioned the Mirage restaurant. */
@@ -149,7 +153,7 @@ export function toCatalogDto(
     businessName: c.businessName ?? null,
     contact: c.contact ?? null,
     status: c.status,
-    publicUrl: c.publicUrl ?? null,
+    publicUrl: customerUrl(c),
     isProvisioned: Boolean(c.mirageRestaurantId),
     hasUnpublishedChanges: c.draftRevision > c.publishedRevision,
     lastPublishedAt: c.lastPublishedAt ? c.lastPublishedAt.toISOString() : null,

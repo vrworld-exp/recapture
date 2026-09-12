@@ -1574,7 +1574,7 @@ function respondToRepPublishRequest(
         status: 'success',
         runId: result.run.runId,
         queued: true,
-        ...(result.mapping ? { publicUrl: result.mapping.publicUrl } : {}),
+        ...(result.publicUrl ? { publicUrl: result.publicUrl } : {}),
       });
       return;
   }
@@ -1620,8 +1620,9 @@ router.get(
  *
  * THE OWNER'S ROUTE, DELEGATED — not a second render. `GET /catalog/qr` resolves
  * the catalog from the caller's own token; this one resolves it from the
- * delegation grant and then hands the SAME `catalog.publicUrl` to the SAME
- * `renderCatalogQr` with the same arguments. A rep and the restaurant that owns
+ * delegation grant and then hands the SAME `customerUrl(catalog)` — the Mirage
+ * page, never this API's resolver — to the SAME `renderCatalogQr` with the
+ * same arguments. A rep and the restaurant that owns
  * the menu therefore print the identical square, which is the only version of
  * this feature worth having: the two must not be distinguishable once they are
  * on a table.
@@ -1671,7 +1672,11 @@ router.get(
     const catalog = await getCatalog(String(delegated.userId));
     if (!catalog) return notDelegated(res);
 
-    if (!catalog.publicUrl) {
+    // `getCatalog` hands back the DTO, whose `publicUrl` has already been
+    // through `customerUrl` — the Mirage page, or null before the first
+    // publish. Nothing is composed here.
+    const url = catalog.publicUrl;
+    if (!url) {
       // The owner route's sentence, rewritten for who is reading it: a rep is
       // being told to finish the visit, not to go and publish their own menu.
       return fail(
@@ -1689,7 +1694,7 @@ router.get(
     // bytes, same tag — a CDN or a client that has one of these cached must hit
     // on the other, because they are the same image.
     const etag = strongETag({
-      url: catalog.publicUrl,
+      url,
       name: catalog.name,
       format,
       size: clamped,
@@ -1702,7 +1707,7 @@ router.get(
     }
 
     const rendered = await renderCatalogQr({
-      publicUrl: catalog.publicUrl,
+      publicUrl: url,
       catalogName: catalog.name,
       format,
       size: clamped,

@@ -29,7 +29,7 @@ Commands for Flutter :------------->
 9264981073 : Admin 
 9264981074 : Modle Artist     [ Marvel catalog,  ]
 9264981075 : user
-9264981076 : Sale Rep
+9264981076 : Sale Rep    [ Published 2 standees.]
 
 new for test ------------->>>
 
@@ -55,3 +55,5 @@ flutter run
 
 flutter build apk --release
 
+
+                               
