@@ -25,6 +25,7 @@ import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
+import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/presentation/screens/catalog/category_manager_screen.dart';
 import 'catalog_repo_analytics_defaults.dart';
@@ -276,6 +277,7 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     String? sourceModelId,
     String? imageKey,
   }) =>
@@ -291,6 +293,7 @@ class FakeCategoryProductsRepository implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     ProductType? type,
     String? sourceModelId,
     String? imageKey,

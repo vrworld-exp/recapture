@@ -17,9 +17,10 @@ import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
-import { effectiveModelStatus } from '@/models/types/catalog.types';
+import { effectiveFoodType, effectiveModelStatus } from '@/models/types/catalog.types';
 import type {
   ProductAssets,
+  ProductFoodType,
   ProductModelStatus,
   ProductAvailability,
   ProductType,
@@ -62,6 +63,8 @@ export interface ProductDto {
   tags: string[];
   availability: ProductAvailability;
   featured: boolean;
+  /** Veg / non-veg / no label — the marker the public menu shows. */
+  foodType: ProductFoodType;
   position: number;
   /** OUR CloudFront URLs, frozen at create time. Null for an image-only row. */
   glbUrl: string | null;
@@ -118,6 +121,9 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     tags: p.tags ?? [],
     availability: p.availability,
     featured: p.featured,
+    // Derived, never raw: a row predating the field is VEG, which is what
+    // Mirage has been rendering for it.
+    foodType: effectiveFoodType(p),
     position: p.position,
     glbUrl: p.assets?.glbUrl ?? null,
     usdzUrl: p.assets?.usdzUrl ?? null,
@@ -387,6 +393,9 @@ export async function createProduct(
     ...(input.tags !== undefined ? { tags: input.tags } : {}),
     ...(input.availability !== undefined ? { availability: input.availability } : {}),
     ...(input.featured !== undefined ? { featured: input.featured } : {}),
+    // Omitted = VEG through the schema default. Only an explicit NON_VEG or
+    // NONE is ever a choice the caller made.
+    ...(input.foodType !== undefined ? { foodType: input.foodType } : {}),
     position,
     ...(sourceProjectId ? { sourceProjectId } : {}),
     ...(sourceModelId ? { sourceModelId } : {}),
@@ -593,6 +602,7 @@ export async function updateProduct(
   if (input.tags !== undefined) set.tags = input.tags;
   if (input.availability !== undefined) set.availability = input.availability;
   if (input.featured !== undefined) set.featured = input.featured;
+  if (input.foodType !== undefined) set.foodType = input.foodType;
   if (input.position !== undefined) set.position = input.position;
 
   // ── Assets: replace a model (15), replace an image (16), convert a type (17)
@@ -747,6 +757,7 @@ export async function duplicateProduct(
     tags: source.tags ?? [],
     availability: source.availability,
     featured: source.featured,
+    foodType: effectiveFoodType(source),
     position: await nextProductPosition(catalogId),
     ...(source.sourceProjectId ? { sourceProjectId: source.sourceProjectId } : {}),
     ...(source.sourceModelId ? { sourceModelId: source.sourceModelId } : {}),

@@ -81,7 +81,7 @@ Do it carefully on web and apk both places.
 
 
 
-9.
+⌛9.
 At the time of adding dishes of a restaurant on both places catalog and by sale rep, user able to set the dish veg and non veg and also the non (means don't show the label on dish ) do this feature, if you need then update on Mirage fe and Mirage be also. By default it should be veg and when  someone explicitly choose none or non-veg then only addd that data and use that data on ui. 
 And on catalog and resaurent product/dishes the default value should be veg only and ui have all 3 values in a row so user/staff mem able to change it by usuing that ui.
 DO it carefullly foe both apk and web and also for mirage.

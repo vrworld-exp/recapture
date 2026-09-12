@@ -212,7 +212,17 @@ export interface MirageItem {
   availability?: MirageAvailability;
   featured?: boolean;
   sortPosition?: number;
+  /** Veg / non-veg / no label. Absent on an item written before the field existed. */
+  foodType?: MirageFoodType;
+  isNonVeg?: boolean;
 }
+
+/**
+ * Mirage's three-state veg marker — the same vocabulary as ReCapture's
+ * ProductFoodType, spelled here so the client module stays free of model imports.
+ * NONE hides the marker on the public page entirely.
+ */
+export type MirageFoodType = 'VEG' | 'NON_VEG' | 'NONE';
 
 // ── Write inputs ────────────────────────────────────────────────────────────
 // `CLOUD_FRONT_URL` and `BUCKET_NAME` are deliberately NOT part of any input
@@ -293,6 +303,8 @@ export interface CreateItemInput {
   /** Dropped by Mirage when falsy or ≤ 0 — a free product has no price field. */
   price?: number;
   description?: string;
+  /** Send BOTH: Mirage derives one from the other only when a caller omits it. */
+  foodType?: MirageFoodType;
   isNonVeg?: boolean;
   tags?: string[];
   availability?: MirageAvailability;
@@ -329,6 +341,7 @@ export interface UpdateItemInput {
   description?: string;
   /** A real category move — Mirage repoints both back-references. */
   categoryId?: string;
+  foodType?: MirageFoodType;
   isNonVeg?: boolean;
   tags?: string[];
   availability?: MirageAvailability;

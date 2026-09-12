@@ -42,6 +42,7 @@ import type {
   MirageAnalyticsQuery,
   MirageAnalyticsSummary,
   MirageAvailability,
+  MirageFoodType,
   MirageCategory,
   MirageFileField,
   MirageFileUpload,
@@ -721,6 +722,7 @@ function toCategory(raw: Record<string, unknown>): MirageCategory {
 function toItem(raw: Record<string, unknown>): MirageItem {
   const model = asRecord(raw.model);
   const availability = str(raw.availability);
+  const foodType = str(raw.foodType);
   return {
     id: requireId(raw, 'read item'),
     name: str(raw.name) ?? '',
@@ -738,6 +740,10 @@ function toItem(raw: Record<string, unknown>): MirageItem {
       : {}),
     ...(typeof raw.featured === 'boolean' ? { featured: raw.featured } : {}),
     ...(num(raw.sortPosition) !== undefined ? { sortPosition: num(raw.sortPosition) } : {}),
+    ...(foodType === 'VEG' || foodType === 'NON_VEG' || foodType === 'NONE'
+      ? { foodType: foodType as MirageFoodType }
+      : {}),
+    ...(typeof raw.isNonVeg === 'boolean' ? { isNonVeg: raw.isNonVeg } : {}),
   };
 }
 
@@ -902,6 +908,7 @@ export const mirageClient: MirageClient = {
         restaurant: input.restaurantId,
         price: input.price,
         description: input.description,
+        foodType: input.foodType,
         isNonVeg: input.isNonVeg,
         tags: input.tags,
         availability: input.availability,
@@ -943,6 +950,7 @@ export const mirageClient: MirageClient = {
         price: input.price,
         description: input.description,
         category: input.categoryId,
+        foodType: input.foodType,
         isNonVeg: input.isNonVeg,
         tags: input.tags,
         availability: input.availability,

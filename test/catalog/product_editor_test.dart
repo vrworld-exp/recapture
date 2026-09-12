@@ -25,6 +25,7 @@ import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
+import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/product_sync_status.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:go_router/go_router.dart';
@@ -77,6 +78,7 @@ class EditorRepository implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     ProductType? type,
     String? sourceModelId,
     String? imageKey,
@@ -165,6 +167,7 @@ class EditorRepository implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     String? sourceModelId,
     String? imageKey,
   }) =>

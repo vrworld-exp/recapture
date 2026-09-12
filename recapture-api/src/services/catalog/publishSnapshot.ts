@@ -20,10 +20,11 @@ import { Types } from 'mongoose';
 import { Catalog } from '@/models/Catalog';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct } from '@/models/CatalogProduct';
-import { effectiveModelStatus } from '@/models/types/catalog.types';
+import { effectiveFoodType, effectiveModelStatus } from '@/models/types/catalog.types';
 import type {
   CatalogContact,
   CatalogStatus,
+  ProductFoodType,
   ProductModelStatus,
   ProductPublishedSnapshot,
   ProductType,
@@ -88,6 +89,8 @@ export interface CatalogSnapshotProduct {
   /** null = uncategorized (materialised as a real Mirage category in B2). */
   categoryId: string | null;
   position: number;
+  /** Veg / non-veg / no label — always resolved, never absent (see effectiveFoodType). */
+  foodType: ProductFoodType;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;
@@ -234,6 +237,7 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
         price: product.price,
         categoryId: product.categoryId ? idOf(product.categoryId) : null,
         position: product.position,
+        foodType: effectiveFoodType(product),
         glbUrl: product.assets?.glbUrl,
         usdzUrl: product.assets?.usdzUrl,
         thumbnailUrl: product.assets?.thumbnailUrl,

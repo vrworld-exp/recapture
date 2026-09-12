@@ -30,6 +30,7 @@ import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../../utils/price_format.dart';
 import '../../screens/projects/model_render_view.dart';
+import 'food_type_field.dart';
 
 class PreviewProductCard extends StatelessWidget {
   const PreviewProductCard({
@@ -111,6 +112,14 @@ class PreviewProductCard extends StatelessWidget {
                   top: AppSpacing.md,
                   right: AppSpacing.md,
                   child: _TypeBadge(product: product),
+                ),
+                // Top-left, exactly where mirage-fe's MenuItemCard puts it.
+                // Draws nothing for "no label" — the value decides, not the
+                // caller.
+                Positioned(
+                  top: AppSpacing.md,
+                  left: AppSpacing.md,
+                  child: FoodTypeMarker(type: product.foodType, size: 16),
                 ),
                 Positioned(
                   left: AppSpacing.lg,

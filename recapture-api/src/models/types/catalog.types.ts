@@ -166,6 +166,32 @@ export const PRODUCT_AVAILABILITIES = ['IN_STOCK', 'OUT_OF_STOCK'] as const;
 export type ProductAvailability = (typeof PRODUCT_AVAILABILITIES)[number];
 
 /**
+ * The veg / non-veg marker a dish carries on the public menu.
+ *   VEG     — the green square. THE DEFAULT: a dish nobody classified is
+ *             vegetarian, which is what Mirage has always rendered for an
+ *             item with no `isNonVeg`.
+ *   NON_VEG — the red square.
+ *   NONE    — no marker at all. For a catalog where the distinction is
+ *             meaningless (a furniture showroom, a bakery), or a dish the
+ *             owner would rather not label.
+ *
+ * PUBLISHED to Mirage as `foodType`, with `isNonVeg` sent alongside so the
+ * older boolean the public page grew up on stays in step (NON_VEG ⇒ true,
+ * everything else ⇒ false). Three values rather than a boolean because "no
+ * label" is a real answer a boolean cannot give.
+ *
+ * Read it through `effectiveFoodType`, never raw — documents predating the
+ * field have no value stored and are VEG by the same rule Mirage applies.
+ */
+export const PRODUCT_FOOD_TYPES = ['VEG', 'NON_VEG', 'NONE'] as const;
+export type ProductFoodType = (typeof PRODUCT_FOOD_TYPES)[number];
+
+/** The stored value, or the VEG default a document predating the field means. */
+export function effectiveFoodType(product: { foodType?: ProductFoodType }): ProductFoodType {
+  return product.foodType ?? 'VEG';
+}
+
+/**
  * Per-entity projection state — "does Mirage currently match what we last
  * pushed for this row?".
  *
@@ -236,6 +262,12 @@ export interface ProductPublishedSnapshot {
   mirageCategoryId?: string;
   /** Display order as last pushed (Mirage's `sortPosition`) — feature 48. */
   position?: number;
+  /**
+   * The veg / non-veg marker as last pushed. Absent on a snapshot written
+   * before the field existed, which the planner reads as VEG — the value
+   * Mirage was showing for that item all along — rather than as "changed".
+   */
+  foodType?: ProductFoodType;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;

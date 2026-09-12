@@ -26,6 +26,7 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
+import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/domain/entities/project.dart';
 import 'package:recapture/domain/entities/project_model.dart';
@@ -90,6 +91,7 @@ class _FakeProductsRepo implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     String? sourceModelId,
     String? imageKey,
   }) async {

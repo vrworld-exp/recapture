@@ -179,6 +179,7 @@ function snapshotOf(
     categoryId: product.categoryId,
     mirageCategoryId,
     position: product.position,
+    foodType: product.foodType,
     glbUrl: product.glbUrl,
     usdzUrl: product.usdzUrl,
     thumbnailUrl: product.thumbnailUrl,
@@ -247,6 +248,10 @@ async function createProduct(
     ...(product.price !== undefined ? { price: product.price } : {}),
     ...(product.description !== undefined ? { description: product.description } : {}),
     sortPosition: product.position,
+    // Both spellings: `foodType` is the three-state truth, `isNonVeg` keeps
+    // the boolean the public page grew up on in step with it.
+    foodType: product.foodType,
+    isNonVeg: product.foodType === 'NON_VEG',
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };
@@ -404,6 +409,9 @@ async function applyUpdate(
       ? { categoryId: mirageCategoryId }
       : {}),
     ...(changed('position') ? { sortPosition: product.position } : {}),
+    ...(changed('foodType')
+      ? { foodType: product.foodType, isNonVeg: product.foodType === 'NON_VEG' }
+      : {}),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };

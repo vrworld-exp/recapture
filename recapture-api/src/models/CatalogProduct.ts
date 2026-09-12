@@ -18,11 +18,13 @@
 import { Schema, model, Document, Types } from 'mongoose';
 import {
   PRODUCT_AVAILABILITIES,
+  PRODUCT_FOOD_TYPES,
   PRODUCT_MODEL_STATUSES,
   PRODUCT_TYPES,
   SYNC_STATUSES,
   type ProductAssets,
   type ProductAvailability,
+  type ProductFoodType,
   type ProductModelStatus,
   type ProductPublishedSnapshot,
   type ProductType,
@@ -71,6 +73,12 @@ export interface ICatalogProduct extends Document {
   availability: ProductAvailability;
   /** ReCapture-only — Mirage's item schema has no featured flag. */
   featured: boolean;
+  /**
+   * The veg / non-veg / no-label marker on the public menu. PUBLISHED — see
+   * ProductFoodType. Defaults to VEG; read through `effectiveFoodType` so a
+   * document predating the field reads the same way.
+   */
+  foodType: ProductFoodType;
   /**
    * Display order within the catalog. ReCapture honours it everywhere; Mirage
    * has no sort field at all, so on the public page order is by creation date.
@@ -156,6 +164,10 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
       default: 'IN_STOCK',
     },
     featured: { type: Boolean, required: true, default: false },
+    // VEG on every document that never chose, which is exactly what Mirage
+    // has been rendering for those items — so no migration and no visible
+    // change for anything already published.
+    foodType: { type: String, enum: PRODUCT_FOOD_TYPES, required: true, default: 'VEG' },
     position: { type: Number, required: true, default: 0 },
     sourceProjectId: { type: Schema.Types.ObjectId, ref: 'Project' },
     sourceModelId: { type: Schema.Types.ObjectId, ref: 'ProjectModel' },

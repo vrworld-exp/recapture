@@ -32,6 +32,7 @@ import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog_category.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
+import '../../../domain/entities/product_food_type.dart';
 import '../../../domain/entities/product_sync_status.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../../platform/unsaved_changes.dart';
@@ -41,6 +42,7 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/app_status_pill.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/food_type_field.dart';
 import '../../widgets/catalog/product_actions.dart';
 import '../../widgets/model_picker_field.dart' show kModelPickerMaxWidth;
 
@@ -215,6 +217,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
   late String? _categoryId = widget.product.categoryId;
   late ProductAvailability _availability = widget.product.availability;
   late bool _featured = widget.product.featured;
+  late ProductFoodType _foodType = widget.product.foodType;
   late List<String> _tags = [...widget.product.tags];
 
   String? _failureMessage;
@@ -261,6 +264,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       _tags.join('\u0000') != widget.product.tags.join('\u0000');
   bool get _availabilityChanged => _availability != widget.product.availability;
   bool get _featuredChanged => _featured != widget.product.featured;
+  bool get _foodTypeChanged => _foodType != widget.product.foodType;
 
   bool get _isDirty =>
       _nameChanged ||
@@ -269,7 +273,8 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       _categoryChanged ||
       _tagsChanged ||
       _availabilityChanged ||
-      _featuredChanged;
+      _featuredChanged ||
+      _foodTypeChanged;
 
   /// Publishes the dirty flag outward — to the router's browser-back guard and
   /// to the browser's own tab-close prompt.
@@ -312,6 +317,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
         tags: _tagsChanged ? _tags : null,
         availability: _availabilityChanged ? _availability : null,
         featured: _featuredChanged ? _featured : null,
+        foodType: _foodTypeChanged ? _foodType : null,
       );
       if (!mounted) return;
 
@@ -677,6 +683,16 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
             changed: _tagsChanged,
             onAdd: _addTag,
             onRemove: _removeTag,
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          FoodTypeField(
+            fieldKey: const ValueKey('product_food_type'),
+            value: _foodType,
+            enabled: !busy,
+            onChanged: (value) {
+              setState(() => _foodType = value);
+              _recomputeDirty();
+            },
           ),
           const SizedBox(height: AppSpacing.lg),
           _AvailabilityField(

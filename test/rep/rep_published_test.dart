@@ -24,6 +24,7 @@ import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
+import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/domain/entities/qr_code_preflight.dart';
 import 'package:recapture/domain/entities/qr_standee.dart';
@@ -109,6 +110,7 @@ class _FakeRepo with RepRepoCatalogDefaults implements RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
+  ProductFoodType? foodType,
   }) async =>
       throw UnimplementedError();
 

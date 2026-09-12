@@ -37,12 +37,14 @@ import '../../../data/repositories/catalog_products_repository.dart'
 import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
+import '../../../domain/entities/product_food_type.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/food_type_field.dart';
 import '../../widgets/catalog/preview_product_card.dart';
 import '../../widgets/rep/rep_section_picker.dart';
 
@@ -135,6 +137,7 @@ class _DishFormState extends ConsumerState<_DishForm> {
 
   late String? _categoryId = widget.dish.categoryId;
   late ProductAvailability _availability = widget.dish.availability;
+  late ProductFoodType _foodType = widget.dish.foodType;
 
   /// The photo the rep picked but has not saved yet.
   ///
@@ -201,6 +204,7 @@ class _DishFormState extends ConsumerState<_DishForm> {
   bool get _priceChanged => _parsedPrice() != widget.dish.price;
   bool get _categoryChanged => _categoryId != widget.dish.categoryId;
   bool get _availabilityChanged => _availability != widget.dish.availability;
+  bool get _foodTypeChanged => _foodType != widget.dish.foodType;
 
   bool get _isDirty =>
       _nameChanged ||
@@ -208,6 +212,7 @@ class _DishFormState extends ConsumerState<_DishForm> {
       _priceChanged ||
       _categoryChanged ||
       _availabilityChanged ||
+      _foodTypeChanged ||
       _pendingImageKey != null;
 
   /// The dish as the FORM currently reads it — what the preview card renders.
@@ -222,6 +227,7 @@ class _DishFormState extends ConsumerState<_DishForm> {
         price: _price.text.trim().isEmpty ? null : _parsedPrice(),
         categoryId: _categoryId,
         availability: _availability,
+        foodType: _foodType,
       );
 
   // ── Actions ───────────────────────────────────────────────────────────────
@@ -289,6 +295,7 @@ class _DishFormState extends ConsumerState<_DishForm> {
         price: _priceChanged ? _parsedPrice() : kCatalogUnchanged,
         categoryId: _categoryChanged ? _categoryId : kCatalogUnchanged,
         availability: _availabilityChanged ? _availability : null,
+        foodType: _foodTypeChanged ? _foodType : null,
         imageKey: _pendingImageKey,
       );
       if (!mounted) return;
@@ -477,6 +484,20 @@ class _DishFormState extends ConsumerState<_DishForm> {
                 .textTheme
                 .bodySmall
                 ?.copyWith(color: AppColors.textMuted),
+          ),
+          const SizedBox(height: AppSpacing.xxl),
+
+          // ── Veg / non-veg ─────────────────────────────────────────────────
+          // The one row here that customers DO see — the preview card above
+          // redraws its marker as the rep taps.
+          Text('Veg / non-veg', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: AppSpacing.sm),
+          FoodTypeField(
+            fieldKey: const ValueKey('rep_dish_food_type'),
+            showLabel: false,
+            value: _foodType,
+            enabled: !_saving,
+            onChanged: (value) => setState(() => _foodType = value),
           ),
           const SizedBox(height: AppSpacing.xxl),
 

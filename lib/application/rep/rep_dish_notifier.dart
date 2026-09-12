@@ -23,6 +23,7 @@ import '../../data/repositories/catalog_products_repository.dart'
 import '../../data/repositories/rep_repository.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
+import '../../domain/entities/product_food_type.dart';
 import 'rep_restaurant_notifier.dart';
 
 /// Which dish, on which restaurant.
@@ -88,6 +89,7 @@ class RepDishNotifier
     Object? price = kCatalogUnchanged,
     Object? categoryId = kCatalogUnchanged,
     ProductAvailability? availability,
+    ProductFoodType? foodType,
     String? imageKey,
   }) async {
     step.value = RepDishSaveStep.saving;
@@ -100,6 +102,7 @@ class RepDishNotifier
         price: price,
         categoryId: categoryId,
         availability: availability,
+        foodType: foodType,
         imageKey: imageKey,
       );
       // Only now: a save that threw leaves the key pending so the retry can

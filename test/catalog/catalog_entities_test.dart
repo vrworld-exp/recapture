@@ -20,6 +20,7 @@ import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/catalog_status.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
+import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/product_sync_status.dart';
 import 'package:recapture/domain/entities/product_model_status.dart';
 import 'package:recapture/domain/entities/product_type.dart';
@@ -59,6 +60,7 @@ Map<String, dynamic> productGolden() => {
       'tags': ['chair', 'wood'],
       'availability': 'IN_STOCK',
       'featured': true,
+      'foodType': 'NON_VEG',
       'position': 3,
       'glbUrl': 'https://cdn.example.com/model.glb',
       'usdzUrl': 'https://cdn.example.com/model.usdz',
@@ -223,6 +225,7 @@ void main() {
       expect(product.tags, ['chair', 'wood']);
       expect(product.availability, ProductAvailability.inStock);
       expect(product.featured, isTrue);
+      expect(product.foodType, ProductFoodType.nonVeg);
       expect(product.position, 3);
       expect(product.glbUrl, 'https://cdn.example.com/model.glb');
       expect(product.usdzUrl, 'https://cdn.example.com/model.usdz');
@@ -246,6 +249,7 @@ void main() {
       expect(restored.tags, original.tags);
       expect(restored.availability, original.availability);
       expect(restored.featured, original.featured);
+      expect(restored.foodType, original.foodType);
       expect(restored.position, original.position);
       expect(restored.glbUrl, original.glbUrl);
       expect(restored.sourceProjectId, original.sourceProjectId);
@@ -387,6 +391,33 @@ void main() {
       // Omitted → unchanged, like every other field on this copyWith.
       expect(pending.copyWith(featured: true).modelStatus,
           ProductModelStatus.processing);
+    });
+
+    test('foodType is veg unless the server says otherwise', () {
+      // An older server sends nothing; a dish nobody classified is veg —
+      // which is what the public page has always drawn for it.
+      expect(
+        CatalogProduct.fromMap(productGolden()..remove('foodType')).foodType,
+        ProductFoodType.veg,
+      );
+      expect(
+        CatalogProduct.fromMap(productGolden()..['foodType'] = 'NONE').foodType,
+        ProductFoodType.none,
+      );
+      // A value this build does not know fails to veg rather than throwing.
+      expect(
+        CatalogProduct.fromMap(productGolden()..['foodType'] = 'VEGAN').foodType,
+        ProductFoodType.veg,
+      );
+    });
+
+    test('only "no label" hides the marker', () {
+      expect(ProductFoodType.veg.showsMarker, isTrue);
+      expect(ProductFoodType.nonVeg.showsMarker, isTrue);
+      expect(ProductFoodType.none.showsMarker, isFalse);
+      // The wire values the backend enum expects, exactly.
+      expect(ProductFoodType.values.map((t) => t.apiValue),
+          ['VEG', 'NON_VEG', 'NONE']);
     });
 
     test('copyWith distinguishes "move to Uncategorized" from "leave it alone"',

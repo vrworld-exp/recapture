@@ -47,9 +47,11 @@ import '../../../application/projects/projects_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/rep_repository.dart';
+import '../../../domain/entities/product_food_type.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
+import '../../widgets/catalog/food_type_field.dart';
 import '../../widgets/model_picker_field.dart';
 import '../../widgets/rep/rep_section_picker.dart';
 import 'rep_web_capture_screen.dart';
@@ -80,6 +82,9 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
   /// honest default: a rep who has not chosen has not chosen, and guessing the
   /// first section for them would file dishes into "Starters" all evening.
   String? _categoryId;
+
+  /// Veg by default. Only a non-veg / no-label choice is sent — see _submit.
+  ProductFoodType _foodType = ProductFoodType.veg;
   PickedProductImage? _image;
   String? _failureMessage;
   bool _submitting = false;
@@ -218,6 +223,8 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
         // and the rep had to reopen it in the editor to place it — which, on a
         // menu with no sections to begin with, essentially nobody did.
         categoryId: _categoryId,
+        // Veg is the server default; only an explicit other choice goes out.
+        foodType: _foodType == ProductFoodType.veg ? null : _foodType,
       );
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -319,6 +326,18 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
                 validator: (value) => (value ?? '').trim().isEmpty
                     ? 'Give this dish a name.'
                     : null,
+              ),
+
+              // ── Veg / non-veg ─────────────────────────────────────────────
+              const SizedBox(height: AppSpacing.xxl),
+              FoodTypeField(
+                fieldKey: const ValueKey('rep_add_dish_food_type'),
+                value: _foodType,
+                enabled: !_submitting,
+                onChanged: (value) => setState(() {
+                  _foodType = value;
+                  _failureMessage = null;
+                }),
               ),
 
               // ── Section ───────────────────────────────────────────────────

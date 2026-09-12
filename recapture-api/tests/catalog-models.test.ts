@@ -222,6 +222,9 @@ describe('CatalogProduct', () => {
     expect(product.tags).toEqual([]);
     expect(product.availability).toBe('IN_STOCK');
     expect(product.featured).toBe(false);
+    // VEG unless someone explicitly chose otherwise — the marker Mirage has
+    // always rendered for an item with no classification.
+    expect(product.foodType).toBe('VEG');
     expect(product.position).toBe(0);
     expect(product.syncStatus).toBe('NEVER');
     expect(product.mirageItemId).toBeUndefined();

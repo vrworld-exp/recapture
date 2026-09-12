@@ -10,11 +10,13 @@ import '../../../application/catalog/product_create_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/product_availability.dart';
+import '../../../domain/entities/product_food_type.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/food_type_field.dart';
 import '../../widgets/model_picker_field.dart';
 import '../projects/model_viewer_screen.dart';
 
@@ -59,6 +61,9 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
   ProductType _type = ProductType.threeD;
   ProductAvailability _availability = ProductAvailability.inStock;
   bool _featured = false;
+
+  /// Veg by default. Only a non-veg / no-label choice is sent — see submit.
+  ProductFoodType _foodType = ProductFoodType.veg;
 
   /// The capture whose model backs a 3D product. A capture is what the user
   /// recognises; it is the way IN to the models, not the answer.
@@ -174,6 +179,8 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
         price: _parsedPrice(),
         availability: _availability,
         featured: _featured ? true : null,
+        // Veg is the server default; only an explicit other choice goes out.
+        foodType: _foodType == ProductFoodType.veg ? null : _foodType,
         sourceModelId: sourceModelId,
         imageBytes: _image?.bytes,
         imageContentType: _image?.contentType,
@@ -331,6 +338,13 @@ class _AddProductScreenState extends ConsumerState<AddProductScreen> {
                     maxLines: 4,
                     minLines: 2,
                     textInputAction: TextInputAction.newline,
+                  ),
+                  const SizedBox(height: AppSpacing.xxl),
+                  FoodTypeField(
+                    fieldKey: const ValueKey('product_food_type'),
+                    value: _foodType,
+                    enabled: !submitting,
+                    onChanged: (value) => setState(() => _foodType = value),
                   ),
                   const SizedBox(height: AppSpacing.xxl),
                   _AvailabilityField(

@@ -8,6 +8,7 @@ import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_category.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
+import '../../domain/entities/product_food_type.dart';
 import '../../domain/entities/product_type.dart';
 import '../../domain/catalog/publish_request_result.dart';
 import '../../domain/catalog/publish_status.dart';
@@ -126,6 +127,8 @@ abstract interface class RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
+    /// Omit for veg — the server default. Only an explicit choice is sent.
+    ProductFoodType? foodType,
   });
 
   /// Uploads an image through the API and returns its committed key.
@@ -314,6 +317,7 @@ abstract interface class RepRepository {
     Object? price = kCatalogUnchanged,
     Object? categoryId = kCatalogUnchanged,
     ProductAvailability? availability,
+    ProductFoodType? foodType,
     String? imageKey,
   });
 
@@ -445,6 +449,7 @@ class RemoteRepRepository implements RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
+    ProductFoodType? foodType,
   }) =>
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
@@ -460,6 +465,7 @@ class RemoteRepRepository implements RepRepository {
             // treats an absent categoryId as Uncategorized already, and sending
             // an explicit null would be a second way to say the same thing.
             if (categoryId != null) 'categoryId': categoryId,
+            if (foodType != null) 'foodType': foodType.apiValue,
           },
         );
         final product = res.data?['product'];
@@ -722,6 +728,7 @@ class RemoteRepRepository implements RepRepository {
     Object? price = kCatalogUnchanged,
     Object? categoryId = kCatalogUnchanged,
     ProductAvailability? availability,
+    ProductFoodType? foodType,
     String? imageKey,
   }) =>
       mapCatalogErrors(() async {
@@ -737,6 +744,7 @@ class RemoteRepRepository implements RepRepository {
             if (!identical(categoryId, kCatalogUnchanged))
               'categoryId': categoryId,
             if (availability != null) 'availability': availability.apiValue,
+            if (foodType != null) 'foodType': foodType.apiValue,
             if (imageKey != null) 'imageKey': imageKey,
           },
         );

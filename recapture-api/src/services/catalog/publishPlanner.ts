@@ -92,6 +92,11 @@ export const PRODUCT_DIFF_FIELDS = [
   // regression: those items are on Mirage with no `sortPosition` at all, so the
   // update is the one that finally pushes it. It happens once per product.
   'position',
+  // The veg / non-veg / no-label marker. Unlike `position` this does NOT cause
+  // a one-time republish of everything: a snapshot with no `foodType` is read
+  // as VEG (see the accessor), which is what Mirage was already rendering for
+  // that item, so only a product someone actually reclassified plans an UPDATE.
+  'foodType',
   'glbUrl',
   'usdzUrl',
   'thumbnailUrl',
@@ -170,6 +175,8 @@ const PRODUCT_DIFF_ACCESSORS: Record<ProductDiffField, DiffAccessor> = {
   type: { current: (p) => p.type, published: (s) => s.type },
   categoryId: { current: (p) => p.categoryId, published: (s) => s.categoryId },
   position: { current: (p) => p.position, published: (s) => s.position },
+  // Absent-on-snapshot means VEG, deliberately — see PRODUCT_DIFF_FIELDS.
+  foodType: { current: (p) => p.foodType, published: (s) => s.foodType ?? 'VEG' },
   glbUrl: { current: (p) => p.glbUrl, published: (s) => s.glbUrl },
   usdzUrl: { current: (p) => p.usdzUrl, published: (s) => s.usdzUrl },
   thumbnailUrl: { current: (p) => p.thumbnailUrl, published: (s) => s.thumbnailUrl },

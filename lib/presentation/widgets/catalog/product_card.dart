@@ -10,10 +10,12 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_availability.dart';
+import '../../../domain/entities/product_food_type.dart';
 import '../../../domain/entities/product_model_status.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../../utils/price_format.dart';
 import '../app_status_pill.dart';
+import 'food_type_field.dart';
 
 /// A single product card.
 ///
@@ -99,6 +101,15 @@ class ProductCard extends StatelessWidget {
                     top: AppSpacing.sm,
                     right: AppSpacing.sm,
                     child: _FeaturedMarker(),
+                  ),
+                // The veg / non-veg square, where the public card draws it.
+                // Under the featured star so the two never overlap; the
+                // marker draws nothing for "no label", so no condition here.
+                if (product.foodType.showsMarker)
+                  Positioned(
+                    top: product.featured ? AppSpacing.sm + 24 : AppSpacing.sm,
+                    right: AppSpacing.sm,
+                    child: _FoodTypeBadge(type: product.foodType),
                   ),
                 // Under the type badge, so "3D" and "what state that 3D is in"
                 // read as one column rather than competing corners.
@@ -431,6 +442,26 @@ class _ModelStatusBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The veg / non-veg marker on a dark chip, so it reads over any thumbnail.
+class _FoodTypeBadge extends StatelessWidget {
+  const _FoodTypeBadge({required this.type});
+
+  final ProductFoodType type;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(AppSpacing.xs),
+        decoration: BoxDecoration(
+          color: AppColors.bgPrimary.withValues(alpha: 0.75),
+          borderRadius: BorderRadius.circular(AppRadius.xs),
+        ),
+        child: Tooltip(
+          message: type.label,
+          child: FoodTypeMarker(type: type, size: 13),
+        ),
+      );
 }
 
 class _FeaturedMarker extends StatelessWidget {

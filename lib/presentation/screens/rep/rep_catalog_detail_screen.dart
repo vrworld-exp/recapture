@@ -57,11 +57,13 @@ import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
+import '../../../domain/entities/product_food_type.dart';
 import '../../../domain/entities/product_model_status.dart';
 import '../../../utils/extensions.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/food_type_field.dart';
 import '../../widgets/catalog/publish_body.dart' show kPublishStartQuery;
 import '../catalog/category_manager_screen.dart' show kCategoryTouchWidth;
 
@@ -774,13 +776,26 @@ class _DishRow extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        product.displayName,
-                        style: const TextStyle(
-                          fontSize: AppTypography.sizeHeadline,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
+                      Row(
+                        children: [
+                          // The veg / non-veg square, before the name the way
+                          // a printed menu does it. Draws nothing for "no
+                          // label", so the row needs no condition here.
+                          if (product.foodType.showsMarker) ...[
+                            FoodTypeMarker(type: product.foodType, size: 12),
+                            const SizedBox(width: AppSpacing.sm),
+                          ],
+                          Expanded(
+                            child: Text(
+                              product.displayName,
+                              style: const TextStyle(
+                                fontSize: AppTypography.sizeHeadline,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 2),
                       Row(

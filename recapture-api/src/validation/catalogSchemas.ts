@@ -13,6 +13,7 @@
 import { z } from 'zod';
 import {
   PRODUCT_AVAILABILITIES,
+  PRODUCT_FOOD_TYPES,
   PRODUCT_TYPES,
 } from '@/models/types/catalog.types';
 import { BRANDING_SLOTS, PRODUCT_IMAGE_CONTENT_TYPES } from '@/utils/productImageKeys';
@@ -274,6 +275,8 @@ export const createProductSchema = z
     tags: tagsSchema.optional(),
     availability: z.enum(PRODUCT_AVAILABILITIES).optional(),
     featured: z.boolean().optional(),
+    /** Veg / non-veg / no label. Omitted = VEG, the schema default. */
+    foodType: z.enum(PRODUCT_FOOD_TYPES).optional(),
     position: z.number().int().min(0).optional(),
     sourceModelId: objectId('model id').optional(),
     /**
@@ -350,6 +353,7 @@ export const updateProductSchema = z
     tags: tagsSchema.optional(),
     availability: z.enum(PRODUCT_AVAILABILITIES).optional(),
     featured: z.boolean().optional(),
+    foodType: z.enum(PRODUCT_FOOD_TYPES).optional(),
     position: z.number().int().min(0).optional(),
     /** Convert the product to this type. Requires the matching asset below. */
     type: z.enum(PRODUCT_TYPES).optional(),

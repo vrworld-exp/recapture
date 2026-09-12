@@ -28,6 +28,7 @@ import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
+import 'package:recapture/domain/entities/product_food_type.dart';
 
 mixin RepRepoCatalogDefaults implements RepRepository {
   /// The published history is empty unless a test says otherwise — most of
@@ -143,6 +144,7 @@ mixin RepRepoCatalogDefaults implements RepRepository {
     Object? price = kCatalogUnchanged,
     Object? categoryId = kCatalogUnchanged,
     ProductAvailability? availability,
+    ProductFoodType? foodType,
     String? imageKey,
   }) =>
       throw UnimplementedError('rep dish edit is not exercised by this test');

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../domain/entities/catalog_json.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
+import '../../domain/entities/product_food_type.dart';
 import '../../domain/entities/product_type.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
@@ -120,6 +121,8 @@ abstract interface class CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    /// Omit for veg — the server default. Only an explicit choice is sent.
+    ProductFoodType? foodType,
     String? sourceModelId,
     String? imageKey,
   });
@@ -152,6 +155,7 @@ abstract interface class CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     ProductType? type,
     String? sourceModelId,
     String? imageKey,
@@ -283,6 +287,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     String? sourceModelId,
     String? imageKey,
   }) =>
@@ -298,6 +303,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
             if (tags != null) 'tags': tags,
             if (availability != null) 'availability': availability.apiValue,
             if (featured != null) 'featured': featured,
+            if (foodType != null) 'foodType': foodType.apiValue,
             if (sourceModelId != null) 'sourceModelId': sourceModelId,
             if (imageKey != null) 'imageKey': imageKey,
           },
@@ -315,6 +321,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     ProductType? type,
     String? sourceModelId,
     String? imageKey,
@@ -333,6 +340,7 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
             if (tags != null) 'tags': tags,
             if (availability != null) 'availability': availability.apiValue,
             if (featured != null) 'featured': featured,
+            if (foodType != null) 'foodType': foodType.apiValue,
             // `unknown` is this build's fallback for a value it does not
             // recognise; sending it would be a 400 on a strict enum.
             if (type != null && type != ProductType.unknown) 'type': type.apiValue,

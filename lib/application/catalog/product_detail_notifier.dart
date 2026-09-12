@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/repositories/catalog_products_repository.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
+import '../../domain/entities/product_food_type.dart';
 import '../../domain/entities/product_type.dart';
 import 'catalog_notifier.dart';
 import 'catalog_products_notifier.dart';
@@ -89,6 +90,7 @@ class ProductDetailNotifier
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
   }) async {
     step.value = ProductSaveStep.saving;
     try {
@@ -101,6 +103,7 @@ class ProductDetailNotifier
         tags: tags,
         availability: availability,
         featured: featured,
+        foodType: foodType,
       );
       _adopt(updated);
       return updated;

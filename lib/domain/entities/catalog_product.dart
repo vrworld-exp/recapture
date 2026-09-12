@@ -2,6 +2,7 @@
 import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 import 'product_availability.dart';
+import 'product_food_type.dart';
 import 'product_model_status.dart';
 import 'product_sync_status.dart';
 import 'product_type.dart';
@@ -35,6 +36,7 @@ class CatalogProduct {
     this.tags = const <String>[],
     this.availability = ProductAvailability.inStock,
     this.featured = false,
+    this.foodType = ProductFoodType.veg,
     this.glbUrl,
     this.usdzUrl,
     this.thumbnailUrl,
@@ -82,6 +84,11 @@ class CatalogProduct {
 
   /// ⚠ ReCapture-only — affects ordering inside the app, nothing public.
   final bool featured;
+
+  /// The veg / non-veg / no-label marker. PUBLISHED — customers see this one.
+  /// Defaults to veg, which is also what an older server means by not sending
+  /// it. See [ProductFoodType].
+  final ProductFoodType foodType;
 
   /// Sort key within the catalog. ⚠ ReCapture-only: Mirage sorts the public page
   /// by creation date and stores no position (feature 48).
@@ -167,6 +174,7 @@ class CatalogProduct {
           (map['availability'] ?? '').toString(),
         ),
         featured: map['featured'] == true,
+        foodType: ProductFoodTypeX.fromApiValue(map['foodType']?.toString()),
         position: catalogCount(map['position']),
         glbUrl: catalogText(map['glbUrl']),
         usdzUrl: catalogText(map['usdzUrl']),
@@ -200,6 +208,7 @@ class CatalogProduct {
         'tags': tags,
         'availability': availability.apiValue,
         'featured': featured,
+        'foodType': foodType.apiValue,
         'position': position,
         'glbUrl': glbUrl,
         'usdzUrl': usdzUrl,
@@ -234,6 +243,7 @@ class CatalogProduct {
     List<String>? tags,
     ProductAvailability? availability,
     bool? featured,
+    ProductFoodType? foodType,
     int? position,
     ProductModelStatus? modelStatus,
     ProductSyncStatus? syncStatus,
@@ -254,6 +264,7 @@ class CatalogProduct {
         tags: tags ?? this.tags,
         availability: availability ?? this.availability,
         featured: featured ?? this.featured,
+        foodType: foodType ?? this.foodType,
         position: position ?? this.position,
         glbUrl: glbUrl,
         usdzUrl: usdzUrl,
