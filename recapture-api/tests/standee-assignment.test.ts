@@ -736,3 +736,153 @@ describe('the rep sheet download follows ownership, not just assignment', () => 
     expect(res.status).toBe(404);
   });
 });
+
+
+describe('GET /admin/standees/published — every menu anyone has put live', () => {
+  /** Activates `code` for `rep` and takes the menu live. */
+  async function signUp(
+    rep: { auth: { Authorization: string } },
+    code: string,
+    phone: string,
+    name: string,
+    { publish = true }: { publish?: boolean } = {}
+  ): Promise<string> {
+    const res = await request(app)
+      .post('/rep/activations')
+      .set(rep.auth)
+      .send({ code, restaurantName: name, restaurantPhone: phone, businessName: name });
+    expect(res.status).toBe(201);
+    const catalogId = res.body.catalogId as string;
+    if (publish) {
+      await Catalog.updateOne(
+        { _id: new Types.ObjectId(catalogId) },
+        { $set: { status: 'PUBLISHED' } }
+      ).exec();
+    }
+    return catalogId;
+  }
+
+  it('spans EVERY rep, where /rep/published sees only the caller', async () => {
+    const admin = await makeUser('ADMIN');
+    const one = await makeUser('SALES_REP');
+    const two = await makeUser('SALES_REP');
+    const [codeA, codeB] = await mintCodes(2);
+    await signUp(one, codeA, '+919876512001', 'Blue Cafe');
+    await signUp(two, codeB, '+919876512002', 'Red Diner');
+
+    const mine = await request(app).get('/rep/published').set(one.auth);
+    expect(mine.body.standees).toHaveLength(1);
+
+    const all = await request(app).get('/admin/standees/published').set(admin.auth);
+
+    expect(all.status).toBe(200);
+    expect(all.body.standees).toHaveLength(2);
+    expect((all.body.standees as { code: string }[]).map((s) => s.code).sort()).toEqual(
+      [codeA, codeB].sort()
+    );
+    expect(all.body.total).toBe(2);
+  });
+
+  it('counts every MINTED standee as the denominator, live or not', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    // Five printed, one working — the gap the header exists to show.
+    const codes = await mintCodes(5);
+    await signUp(rep, codes[0]!, '+919876512010', 'Only One Live');
+
+    const res = await request(app).get('/admin/standees/published').set(admin.auth);
+
+    expect(res.body.total).toBe(1);
+    expect(res.body.generated).toBe(5);
+  });
+
+  it('leaves both totals alone when the window narrows the list', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const codes = await mintCodes(3);
+    await signUp(rep, codes[0]!, '+919876512020', 'Old Place');
+    await signUp(rep, codes[1]!, '+919876512021', 'New Place');
+    // Backdate one activation well outside the window.
+    await QrCode.updateOne(
+      { code: codes[0] },
+      { $set: { activatedAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) } }
+    ).exec();
+
+    const res = await request(app).get('/admin/standees/published?days=7').set(admin.auth);
+
+    expect(res.body.standees).toHaveLength(1);
+    // A fraction that moved with the filter would answer a different question.
+    expect(res.body.total).toBe(2);
+    expect(res.body.generated).toBe(3);
+  });
+
+  it('names who put each menu live, and never their phone or email', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP', {
+      displayName: 'Field Rep One',
+      phone: REP_PHONE,
+      email: REP_EMAIL,
+    });
+    const [code] = await mintCodes(1);
+    await signUp(rep, code!, '+919876512030', 'Blue Cafe');
+
+    const res = await request(app).get('/admin/standees/published').set(admin.auth);
+
+    expect(res.body.standees[0].activatedBy).toMatchObject({
+      id: rep.id,
+      displayName: 'Field Rep One',
+    });
+    // The list-safe summary and nothing more: the raw number stays behind
+    // GET /admin/users/:id, which is metered and audited.
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain(REP_PHONE);
+    expect(body).not.toContain(REP_EMAIL);
+  });
+
+  it("does not leak the activator's id through the rep's own history", async () => {
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    await signUp(rep, code!, '+919876512040', 'Blue Cafe');
+
+    const res = await request(app).get('/rep/published').set(rep.auth);
+
+    // The shared query selects activatedByUserId; the rep DTO must strip it.
+    expect(res.body.standees[0]).not.toHaveProperty('activatedByUserId');
+    expect(res.body.standees[0]).not.toHaveProperty('activatedBy');
+    expect(res.body).not.toHaveProperty('generated');
+  });
+
+  it('EXCLUDES an activated standee whose menu is not live yet', async () => {
+    const admin = await makeUser('ADMIN');
+    const rep = await makeUser('SALES_REP');
+    const [code] = await mintCodes(1);
+    // Bound, but never published — "in use" is not "live".
+    await signUp(rep, code!, '+919876512050', 'Not Live Yet', { publish: false });
+
+    const res = await request(app).get('/admin/standees/published').set(admin.auth);
+
+    expect(res.body.standees).toHaveLength(0);
+    expect(res.body.total).toBe(0);
+    expect(res.body.generated).toBe(1);
+  });
+
+  it('is ADMIN-only — a MODEL_ARTIST and a SALES_REP are both refused', async () => {
+    const artist = await makeUser('MODEL_ARTIST');
+    const rep = await makeUser('SALES_REP');
+
+    for (const who of [artist, rep]) {
+      const res = await request(app).get('/admin/standees/published').set(who.auth);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('FORBIDDEN');
+    }
+  });
+
+  it('rejects a nonsense window rather than guessing', async () => {
+    const admin = await makeUser('ADMIN');
+
+    const res = await request(app).get('/admin/standees/published?days=nope').set(admin.auth);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_REQUEST');
+  });
+});

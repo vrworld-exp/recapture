@@ -82,6 +82,7 @@ import {
   assignStandeeSchema,
   mintQrBatchSchema,
   qrCodeParam,
+  repPublishedQuerySchema,
   standeeQrQuerySchema,
   type AssignStandeeInput,
   type MintQrBatchInput,
@@ -97,6 +98,7 @@ import {
   unassignBatchCodes,
   assignCode,
   findAssignableRep,
+  listAllPublishedStandees,
   listAssignableReps,
   unassignCode,
 } from '@/services/standeeAssignmentService';
@@ -2236,6 +2238,66 @@ router.delete(
 
     const unassigned = await unassignBatchCodes(new Types.ObjectId(batchId));
     res.status(200).json({ status: 'success', unassigned, assignedTo: null });
+  })
+);
+
+/**
+ * GET /admin/standees/published?days= — every menu ANYONE has put live.
+ *
+ * `GET /rep/published` SEEN FROM ABOVE. That route is keyed on the caller, by
+ * design: a rep's history is theirs and no shape of that request reads another
+ * rep's. This one answers the question only an admin has — how much of the
+ * printed stock is actually working — and it is the same question
+ * `GET /admin/qr-batches` answers per batch, so it sits behind the same
+ * ADMIN-only gate rather than widening the rep route for a role.
+ *
+ * TWO NUMBERS, NOT ONE. `total` is every live menu all-time and `generated` is
+ * every standee ever minted, which together are the header's "2 of 115". Both
+ * IGNORE the window: narrowing to "last 7 days" is a question about the list,
+ * and a denominator that moved with it would be answering something else.
+ *
+ * Rows carry the LIST-SAFE activator (`{id, displayName, hasAvatar}`) — see
+ * AdminPublishedStandee. The raw phone or email stays behind
+ * `GET /admin/users/:id`, the one metered, audited unmasked-contact path.
+ *
+ * 409 RESOLVER_NOT_CONFIGURED like every path that emits a printable URL.
+ */
+router.get(
+  '/standees/published',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const parsed = repPublishedQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: parsed.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const { days } = parsed.data;
+    // Resolved to an absolute instant HERE, exactly as the rep route does, so
+    // the service takes a date and is testable against a fixed clock.
+    const since =
+      days === undefined ? undefined : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    let result;
+    try {
+      result = await listAllPublishedStandees(since ? { since } : {});
+    } catch (err) {
+      if (err instanceof QrResolverNotConfiguredError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'RESOLVER_NOT_CONFIGURED',
+          message: 'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment',
+        });
+        return;
+      }
+      throw err;
+    }
+
+    res.status(200).json({ status: 'success', ...result });
   })
 );
 

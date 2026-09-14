@@ -32,6 +32,7 @@ import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
+import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 import 'package:recapture/presentation/screens/catalog/catalog_preview_screen.dart';
 import 'package:recapture/presentation/widgets/catalog/preview_product_card.dart';
@@ -640,6 +641,204 @@ void main() {
       expect(previewCardHeight(800), (800 - 180) / 2);
       expect(previewCardHeight(300), 200);
       expect(previewCardHeight(2000), 420);
+    });
+  });
+
+  // ── Sorting and filtering ────────────────────────────────────────────────
+  //
+  // THE ASSERTION THAT CARRIES THIS GROUP is that the frame stops calling
+  // itself the customer's page the moment a lens is on. Everything else here is
+  // ordinary list behaviour; that one line is the whole reason sorting a
+  // PREVIEW is allowed at all, and a regression would quietly teach authors
+  // that customers see their dishes newest-first.
+  group('the author lens', () {
+    /// A product with the fields the sorts actually read.
+    CatalogProduct dish(
+      String id, {
+      required String name,
+      required double? price,
+      required DateTime created,
+      ProductType type = ProductType.threeD,
+      String? glbUrl = 'https://cdn/m.glb',
+      ProductFoodType foodType = ProductFoodType.veg,
+    }) =>
+        CatalogProduct.fromMap(
+          golden.productGolden()
+            ..['id'] = id
+            ..['name'] = name
+            ..['type'] = type.apiValue
+            ..['price'] = price
+            ..['thumbnailUrl'] = 'https://cdn/$id.jpg'
+            ..['glbUrl'] = glbUrl
+            ..['foodType'] = foodType.apiValue
+            ..['createdAt'] = created.toIso8601String(),
+        );
+
+    final oldest = dish(
+      'p1',
+      name: 'Alpha',
+      price: 300,
+      created: DateTime.utc(2026, 1, 1),
+    );
+    final middle = dish(
+      'p2',
+      name: 'Charlie',
+      price: 100,
+      created: DateTime.utc(2026, 6, 1),
+      type: ProductType.imageOnly,
+      glbUrl: null,
+      foodType: ProductFoodType.nonVeg,
+    );
+    final newest = dish(
+      'p3',
+      name: 'Bravo',
+      price: 200,
+      created: DateTime.utc(2026, 9, 1),
+    );
+
+    Widget lensHarness() => harness(
+          catalogRepo: FakePreviewCatalogRepo(),
+          productsRepo: FakeProductsRepository(
+            (_) async => pageOf([oldest, middle, newest]),
+          ),
+          // Tall enough that every card is laid out, so ordering can be read
+          // off the render tree rather than off a scroll position.
+          size: const Size(400, 2400),
+        );
+
+    /// The card names in the order they are painted.
+    List<String> ordered(WidgetTester tester) => tester
+        .widgetList<PreviewProductCard>(find.byType(PreviewProductCard))
+        .map((card) => card.product.displayName)
+        .toList();
+
+    testWidgets('defaults to menu order and claims the customer view',
+        (tester) async {
+      await tester.pumpWidget(lensHarness());
+      await tester.pumpAndSettle();
+
+      expect(ordered(tester), ['Alpha', 'Charlie', 'Bravo']);
+      expect(find.text('WHAT A CUSTOMER SEES'), findsOneWidget);
+      // No lens, nothing to say and nothing to reset.
+      expect(find.byKey(const ValueKey('preview_view_notice')), findsNothing);
+    });
+
+    testWidgets('newest and oldest reorder the page', (tester) async {
+      await tester.pumpWidget(lensHarness());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('preview_sort_newest')));
+      await tester.pumpAndSettle();
+      expect(ordered(tester), ['Bravo', 'Charlie', 'Alpha']);
+
+      await tester.tap(find.byKey(const ValueKey('preview_sort_oldest')));
+      await tester.pumpAndSettle();
+      expect(ordered(tester), ['Alpha', 'Charlie', 'Bravo']);
+    });
+
+    testWidgets('price and name sorts', (tester) async {
+      await tester.pumpWidget(lensHarness());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('preview_sort_priceHigh')));
+      await tester.pumpAndSettle();
+      expect(ordered(tester), ['Alpha', 'Bravo', 'Charlie']);
+
+      await tester.tap(find.byKey(const ValueKey('preview_sort_nameAz')));
+      await tester.pumpAndSettle();
+      expect(ordered(tester), ['Alpha', 'Bravo', 'Charlie']);
+    });
+
+    testWidgets('the frame STOPS claiming the customer view under a lens',
+        (tester) async {
+      await tester.pumpWidget(lensHarness());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('preview_sort_newest')));
+      await tester.pumpAndSettle();
+
+      // The one assertion this whole feature hangs on.
+      expect(find.text('WHAT A CUSTOMER SEES'), findsNothing);
+      expect(find.text('YOUR VIEW OF THE DRAFT'), findsOneWidget);
+      expect(find.byKey(const ValueKey('preview_view_notice')), findsOneWidget);
+      // And it says what customers actually get instead.
+      expect(find.textContaining('Customers get the menu order'), findsOneWidget);
+    });
+
+    testWidgets('Reset puts the page back and the claim with it',
+        (tester) async {
+      await tester.pumpWidget(lensHarness());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('preview_sort_newest')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('preview_view_reset')));
+      await tester.pumpAndSettle();
+
+      expect(ordered(tester), ['Alpha', 'Charlie', 'Bravo']);
+      expect(find.text('WHAT A CUSTOMER SEES'), findsOneWidget);
+    });
+
+    testWidgets('filters narrow the set and count what is hidden',
+        (tester) async {
+      await tester.pumpWidget(lensHarness());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('preview_filter_photo')));
+      await tester.pumpAndSettle();
+
+      // Only the image-only dish survives "Photo only".
+      expect(ordered(tester), ['Charlie']);
+      expect(find.textContaining('2 products hidden'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('preview_filter_threeD')));
+      await tester.pumpAndSettle();
+      expect(ordered(tester), ['Alpha', 'Bravo']);
+
+      await tester.tap(find.byKey(const ValueKey('preview_filter_nonVeg')));
+      await tester.pumpAndSettle();
+      expect(ordered(tester), ['Charlie']);
+    });
+
+    testWidgets('a filter that matches nothing is not a branded empty page',
+        (tester) async {
+      await tester.pumpWidget(harness(
+        catalogRepo: FakePreviewCatalogRepo(),
+        productsRepo: FakeProductsRepository(
+          // Every dish is veg, so "Non-veg" matches none of them.
+          (_) async => pageOf([oldest, newest]),
+        ),
+        size: const Size(400, 2400),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('preview_filter_nonVeg')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('preview_no_matches')), findsOneWidget);
+      // "This is exactly what a customer would see" would be a lie about a
+      // draft the author has merely narrowed.
+      expect(find.text('Nothing on the menu yet'), findsNothing);
+
+      await tester.tap(
+          find.byKey(const ValueKey('preview_no_matches_reset')));
+      await tester.pumpAndSettle();
+      expect(ordered(tester), ['Alpha', 'Bravo']);
+    });
+
+    testWidgets('the counts above the frame describe the DRAFT, not the view',
+        (tester) async {
+      await tester.pumpWidget(lensHarness());
+      await tester.pumpAndSettle();
+      expect(find.text('3 products'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('preview_filter_photo')));
+      await tester.pumpAndSettle();
+
+      // Still three products in the catalog; one of them is on screen. A
+      // summary that moved with the filter would be answering the wrong
+      // question right above a banner explaining the filter.
+      expect(find.text('3 products'), findsOneWidget);
     });
   });
 }

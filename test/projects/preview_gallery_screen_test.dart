@@ -276,11 +276,24 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('preview_tile_images/EYE/a.jpg')));
     await tester.pumpAndSettle();
 
+    expect(find.text('a.jpg'), findsOneWidget, reason: 'viewer opened on a.jpg');
+
     // Viewer Delete → platform confirmation dialog → confirm.
     await tester.tap(find.widgetWithText(OutlinedButton, 'Delete'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(TextButton, 'Delete'));
-    await tester.pumpAndSettle(); // delete completes, viewer pops
+    await tester.pumpAndSettle();
+
+    // The viewer STAYS, on the photo that was next to the deleted one. Curating
+    // a set of thirty must not mean being thrown back to the grid thirty times;
+    // only an emptied set closes it.
+    expect(find.text('b.jpg'), findsOneWidget);
+    expect(find.text('a.jpg'), findsNothing);
+
+    // A CloseButton, not a BackButton: the viewer is a fullscreenDialog route,
+    // so tester.pageBack() (which hunts for a "Back" tooltip) finds nothing.
+    await tester.tap(find.byType(CloseButton));
+    await tester.pumpAndSettle();
 
     // The deleted tile is gone; the other remains; count updated.
     expect(find.byKey(const ValueKey('preview_tile_images/EYE/a.jpg')), findsNothing);
@@ -289,6 +302,56 @@ void main() {
     // Nothing was re-requested after the delete.
     expect(repo.photosCalls, 1);
     expect(repo.exportCalls, 0);
+  });
+
+  testWidgets('the viewer pages across the whole set from the edge arrows',
+      (tester) async {
+    final repo = _FakeRepo()
+      ..photosResult = _photos(
+          ['images/EYE/a.jpg', 'images/EYE/b.jpg', 'images/TOP/c.jpg']);
+
+    await tester.pumpWidget(_app(repo, _RecordingDownloader(), admin: false));
+    await tester.pump();
+
+    // Open the MIDDLE photo: the tapped tile decides where the pager starts.
+    await tester.tap(find.byKey(const ValueKey('preview_tile_images/EYE/b.jpg')));
+    await tester.pumpAndSettle();
+    expect(find.text('b.jpg'), findsOneWidget);
+    expect(find.text('2 of 3'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('preview_viewer_next')));
+    await tester.pumpAndSettle();
+    expect(find.text('c.jpg'), findsOneWidget);
+    expect(find.text('3 of 3'), findsOneWidget);
+    // The end of the set: forward is hidden rather than left dead.
+    expect(find.byKey(const ValueKey('preview_viewer_next')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('preview_viewer_prev')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('preview_viewer_prev')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('a.jpg'), findsOneWidget);
+    expect(find.text('1 of 3'), findsOneWidget);
+    expect(find.byKey(const ValueKey('preview_viewer_prev')), findsNothing);
+
+    // Browsing the set is still free — paging mints no presigned urls.
+    expect(repo.exportCalls, 0);
+    expect(repo.photosCalls, 1);
+  });
+
+  testWidgets('a single photo gets no arrows and no counter', (tester) async {
+    final repo = _FakeRepo()..photosResult = _photos(['images/EYE/a.jpg']);
+
+    await tester.pumpWidget(_app(repo, _RecordingDownloader(), admin: false));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('preview_tile_images/EYE/a.jpg')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('preview_viewer_prev')), findsNothing);
+    expect(find.byKey(const ValueKey('preview_viewer_next')), findsNothing);
+    expect(find.byKey(const ValueKey('preview_viewer_counter')), findsNothing);
+    expect(find.text('a.jpg'), findsOneWidget);
   });
 
   testWidgets(

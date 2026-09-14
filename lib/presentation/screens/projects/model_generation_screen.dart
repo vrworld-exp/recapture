@@ -1,7 +1,16 @@
 // lib/presentation/screens/projects/model_generation_screen.dart
 //
-// Watches ONE Meshy generation from QUEUED → SUCCEEDED/FAILED and offers the
-// next step: View 3D Model, or Retry (which returns to the photo selection).
+// Watches ONE Meshy generation from QUEUED → SUCCEEDED/FAILED and takes the
+// next step itself: the 3D viewer OPENS on success, or Retry returns to the
+// photo selection on failure.
+//
+// THERE IS NO "View 3D Model" BUTTON, deliberately. Reaching 100% is the
+// answer to the only question this screen asks, so a button in between is a
+// second confirmation of something the user already asked for by pressing
+// Create Model. The open is latched ([_opened]) and backing out of the viewer
+// pops this screen too — otherwise a back gesture would be answered by
+// immediately reopening the viewer, or by stranding the user on a finished
+// progress screen with nothing left to do.
 //
 // Pure observer: the polling, backoff and stop condition all live in
 // [ModelGenerationNotifier] — this screen only renders whichever record it was
@@ -20,11 +29,12 @@ import '../../../domain/entities/project_model.dart';
 import '../../widgets/app_button.dart';
 import 'model_viewer_screen.dart';
 
-class ModelGenerationScreen extends ConsumerWidget {
+class ModelGenerationScreen extends ConsumerStatefulWidget {
   const ModelGenerationScreen({
     super.key,
     required this.projectId,
     required this.modelId,
+    this.renderBuilder = ModelViewerScreen.defaultRenderBuilder,
   });
 
   final String projectId;
@@ -33,37 +43,64 @@ class ModelGenerationScreen extends ConsumerWidget {
   /// a regenerate, and this screen must keep showing the run it was opened for.
   final String modelId;
 
+  /// Forwarded to the viewer this screen opens on success. Same seam, same
+  /// reason as [ModelViewerScreen.renderBuilder]: the real renderer drives a
+  /// WebView, which has no platform implementation in a widget test — and now
+  /// that the viewer opens BY ITSELF, a test of this screen reaches it.
+  final ModelRenderBuilder renderBuilder;
+
+  @override
+  ConsumerState<ModelGenerationScreen> createState() =>
+      _ModelGenerationScreenState();
+}
+
+class _ModelGenerationScreenState extends ConsumerState<ModelGenerationScreen> {
+  /// One-shot latch for the automatic open. Polling keeps rebuilding this
+  /// screen while the viewer sits on top of it, and a user who backs out has
+  /// said they want OUT — without this, either would reopen the viewer.
+  bool _opened = false;
+
   ProjectModelView? _find(List<ProjectModelView>? models) {
     for (final m in models ?? const <ProjectModelView>[]) {
-      if (m.id == modelId) return m;
+      if (m.id == widget.modelId) return m;
     }
     return null;
   }
 
-  Future<void> _openViewer(
-    BuildContext context,
-    WidgetRef ref,
-    ProjectModelView model,
-  ) async {
+  Future<void> _openViewer(ProjectModelView model) async {
     final canApprove = ref.read(isStaffProvider);
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ModelViewerScreen(
           model: model,
+          renderBuilder: widget.renderBuilder,
           onApprove: canApprove
               ? () => ref
-                  .read(modelGenerationProvider(projectId).notifier)
+                  .read(modelGenerationProvider(widget.projectId).notifier)
                   .approve(model.id)
               : null,
         ),
       ),
     );
+    // Back from the viewer lands where the run started (the photo set), not on
+    // a finished progress screen. This screen has nothing left to say.
+    if (mounted) await Navigator.of(context).maybePop();
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(modelGenerationProvider(projectId));
+  Widget build(BuildContext context) {
+    final async = ref.watch(modelGenerationProvider(widget.projectId));
     final model = _find(async.valueOrNull);
+
+    // 100% means done, so done is what happens. Deferred to after this frame
+    // because a build must not navigate; latched because this build runs again
+    // on every poll and again when the viewer is dismissed.
+    if (model?.status == ModelStatus.succeeded && !_opened) {
+      _opened = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openViewer(model!);
+      });
+    }
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
@@ -91,9 +128,12 @@ class ModelGenerationScreen extends ConsumerWidget {
                 key: const ValueKey('model_gen_pending'),
                 model: model!,
               ),
-            ModelStatus.succeeded => _Succeeded(
-                key: const ValueKey('model_gen_succeeded'),
-                onView: () => _openViewer(context, ref, model!),
+            // Not a dead end and not a decision: the viewer is already on
+            // its way in, and this is the frame underneath it.
+            ModelStatus.succeeded => const _Pending(
+                key: ValueKey('model_gen_succeeded'),
+                headline: 'Your model is ready',
+                detail: 'Opening the 3D preview…',
               ),
             // A status this build doesn't know is treated as terminal, so the
             // user gets a way forward instead of an endless spinner.
@@ -317,33 +357,6 @@ class _StepRow extends StatelessWidget {
               ],
             ],
           ),
-        ),
-      ],
-    );
-  }
-}
-
-class _Succeeded extends StatelessWidget {
-  const _Succeeded({super.key, required this.onView});
-
-  final VoidCallback onView;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Icon(Icons.view_in_ar, color: AppColors.mirageRed, size: 44),
-        const SizedBox(height: AppSpacing.xl),
-        Text('Your model is ready',
-            style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: AppSpacing.xl),
-        AppButton(
-          key: const ValueKey('view_model_cta'),
-          label: 'View 3D Model',
-          icon: Icons.view_in_ar_outlined,
-          isFullWidth: false,
-          onPressed: onView,
         ),
       ],
     );

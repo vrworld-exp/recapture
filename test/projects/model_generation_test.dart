@@ -284,6 +284,10 @@ void main() {
   });
 
   group('ModelGenerationScreen — status transitions', () {
+    // The renderer is injected for the same reason the viewer's own group
+    // injects one — a WebView has no platform implementation in a widget test
+    // — but here it is REQUIRED rather than convenient: a succeeded record
+    // opens the viewer on its own, so every test below can reach it.
     Widget app(_FakeRepo repo) => ProviderScope(
           overrides: [
             liveProjectsRepositoryProvider.overrideWithValue(repo),
@@ -291,9 +295,22 @@ void main() {
           ],
           child: MaterialApp(
             theme: AppTheme.dark,
-            home: const ModelGenerationScreen(projectId: 'p1', modelId: 'm1'),
+            home: ModelGenerationScreen(
+              projectId: 'p1',
+              modelId: 'm1',
+              renderBuilder: (_, m) => Text('rendering ${m.glbUrl}'),
+            ),
           ),
         );
+
+    /// Settles the automatic open: one frame for the listing, one for the
+    /// post-frame push, then the route transition. Not pumpAndSettle — a
+    /// pending record keeps the poll timer alive and would never settle.
+    Future<void> pumpUntilViewer(WidgetTester tester) async {
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+    }
 
     testWidgets('a PROCESSING record shows progress, not a CTA',
         (tester) async {
@@ -333,7 +350,8 @@ void main() {
       expect(find.text('Generating 3D model'), findsOneWidget);
     });
 
-    testWidgets('a SUCCEEDED record offers View 3D Model', (tester) async {
+    testWidgets('a SUCCEEDED record opens the viewer — no CTA in between',
+        (tester) async {
       final repo = _FakeRepo(models: [
         const ProjectModelView(
           id: 'm1',
@@ -343,9 +361,12 @@ void main() {
         ),
       ]);
       await tester.pumpWidget(app(repo));
-      await tester.pump();
+      await pumpUntilViewer(tester);
 
-      expect(find.byKey(const ValueKey('view_model_cta')), findsOneWidget);
+      // The viewer is on screen, reached without a press.
+      expect(find.text('rendering https://cdn/model.glb'), findsOneWidget);
+      // And the old "ask first" button is gone for good.
+      expect(find.byKey(const ValueKey('view_model_cta')), findsNothing);
       expect(find.byKey(const ValueKey('model_gen_pending')), findsNothing);
     });
 
@@ -383,9 +404,39 @@ void main() {
         ),
       ]);
       await tester.pumpWidget(app(repo));
-      await tester.pump();
+      await pumpUntilViewer(tester);
 
-      expect(find.byKey(const ValueKey('view_model_cta')), findsOneWidget);
+      // m1's model opened, not the newer m2 that is still processing.
+      expect(find.text('rendering https://cdn/model.glb'), findsOneWidget);
+    });
+
+    testWidgets('the viewer opens ONCE — a poll does not reopen it',
+        (tester) async {
+      // The record is succeeded but m2 is still pending, so the notifier keeps
+      // polling and this screen keeps rebuilding underneath the viewer. The
+      // latch is what stops every tick from pushing another copy.
+      final repo = _FakeRepo(models: [
+        const ProjectModelView(
+          id: 'm2',
+          source: ModelSource.meshy,
+          status: ModelStatus.processing,
+        ),
+        const ProjectModelView(
+          id: 'm1',
+          source: ModelSource.meshy,
+          status: ModelStatus.succeeded,
+          glbUrl: 'https://cdn/model.glb',
+        ),
+      ]);
+      await tester.pumpWidget(app(repo));
+      await pumpUntilViewer(tester);
+
+      // Let several poll ticks land on the screen below the viewer.
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(seconds: 4));
+      }
+
+      expect(find.text('rendering https://cdn/model.glb'), findsOneWidget);
     });
   });
 

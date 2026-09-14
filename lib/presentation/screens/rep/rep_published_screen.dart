@@ -1,10 +1,24 @@
 // lib/presentation/screens/rep/rep_published_screen.dart
 //
-// "Published standees" — the restaurants this rep has actually put online.
+// "Published standees" — the restaurants that have actually been put online:
+// this rep's, or EVERY rep's when an admin is reading.
 //
 // THE COUNT AT THE TOP IS THE POINT. A rep wants to know how many menus they
 // have taken live, and that number comes from the server ignoring the filter, so
 // narrowing to "Last 7 days" changes the list underneath it and not the total.
+//
+// AN ADMIN GETS THE SAME COUNT AS A FRACTION — "2 of 115 menus live" — because
+// their question is not how many but how MUCH: standees are printed in runs and
+// handed out, and the gap between what was minted and what is working is the
+// only number that says whether the stock in the field is doing anything. The
+// denominator is every standee ever minted, and like the numerator it ignores
+// the window: a fraction that shrank when somebody tapped "Last 7 days" would
+// be answering a question nobody asked.
+//
+// WHOSE LIST IT IS, IS SAID OUT LOUD. An admin reading rows they did not create
+// must not have to guess, so the subtitle names the scope and each row carries
+// who put that menu live. Without that, a cross-rep list reads as a personal one
+// with impossible entries in it.
 //
 // TAPPING A ROW OPENS THE MENU — the real one, in a browser, on both targets.
 // That is what made url_launcher worth adding (see
@@ -60,7 +74,7 @@ class RepPublishedScreen extends ConsumerWidget {
       body: SafeArea(
         child: Column(
           children: [
-            _Header(total: state.total),
+            _Header(state: state),
             _WindowChips(
               selected: state.window,
               onSelect: notifier.setWindow,
@@ -72,7 +86,9 @@ class RepPublishedScreen extends ConsumerWidget {
                 child: state.page.when(
                   loading: () => const Center(child: AppLoadingIndicator()),
                   error: (_, __) => _Message(
-                    title: "Couldn't load your published standees.",
+                    title: state.everyone
+                        ? "Couldn't load published standees."
+                        : "Couldn't load your published standees.",
                     body: 'Check your connection and pull down to try again.',
                     onRetry: notifier.load,
                   ),
@@ -82,8 +98,13 @@ class RepPublishedScreen extends ConsumerWidget {
                               ? 'Nothing published yet.'
                               : 'Nothing in this period.',
                           body: state.window == PublishedWindow.all
-                              ? 'Activate a standee and publish the menu — it '
-                                  'will appear here.'
+                              ? state.everyone
+                                  // An admin has not failed to do anything —
+                                  // the reps have not been out yet.
+                                  ? 'When a standee is activated and its menu '
+                                      'published, it appears here.'
+                                  : 'Activate a standee and publish the menu — '
+                                      'it will appear here.'
                               : 'Try a longer period.',
                         )
                       : ListView.separated(
@@ -142,43 +163,123 @@ class RepPublishedScreen extends ConsumerWidget {
   }
 }
 
+/// The number the screen exists to show: a count for a rep, a fraction of the
+/// printed stock for an admin.
 class _Header extends StatelessWidget {
-  const _Header({required this.total});
+  const _Header({required this.state});
 
-  final int total;
+  final RepPublishedState state;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(
-          AppSpacing.lg,
-          AppSpacing.lg,
-          AppSpacing.lg,
-          AppSpacing.md,
-        ),
-        child: Row(
-          children: [
-            Text(
-              '$total',
-              style: const TextStyle(
-                fontSize: AppTypography.sizeDisplay,
-                fontWeight: FontWeight.w700,
-                color: AppColors.royalGold,
-              ),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Text(
-                // Singular matters on a screen whose whole job is a count.
-                total == 1 ? 'menu you put live' : 'menus you put live',
+  Widget build(BuildContext context) {
+    final total = state.total;
+    final generated = state.generated;
+    final fraction = state.hasFraction;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.lg,
+        AppSpacing.lg,
+        AppSpacing.md,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                '$total',
+                key: const ValueKey('published_total'),
                 style: const TextStyle(
-                  fontSize: AppTypography.sizeBody,
-                  color: AppColors.textSecondary,
+                  fontSize: AppTypography.sizeDisplay,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.royalGold,
                 ),
+              ),
+              if (fraction) ...[
+                const SizedBox(width: AppSpacing.xs),
+                Text(
+                  // The denominator is deliberately quieter than the
+                  // numerator: how many are LIVE is the finding, how many were
+                  // printed is the context it is read against.
+                  'of $generated',
+                  key: const ValueKey('published_generated'),
+                  style: const TextStyle(
+                    fontSize: AppTypography.sizeTitle,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ],
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Text(
+                  _caption(total, fraction: fraction),
+                  style: const TextStyle(
+                    fontSize: AppTypography.sizeBody,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (fraction) ...[
+            const SizedBox(height: AppSpacing.md),
+            _StockBar(live: total, generated: generated!),
+            const SizedBox(height: AppSpacing.sm),
+            const Text(
+              // Says whose work is on screen. An admin reading rows they did
+              // not create should never have to infer the scope.
+              'Across every staff member, out of all standees minted.',
+              style: TextStyle(
+                fontSize: AppTypography.sizeLabel,
+                color: AppColors.textMuted,
               ),
             ),
           ],
-        ),
-      );
+        ],
+      ),
+    );
+  }
+
+  /// Singular matters on a screen whose whole job is a count — and the
+  /// possessive has to go when the list is not the reader's own work.
+  static String _caption(int total, {required bool fraction}) {
+    if (fraction) return total == 1 ? 'menu live' : 'menus live';
+    return total == 1 ? 'menu you put live' : 'menus you put live';
+  }
+}
+
+/// How much of the printed stock is working, as a bar.
+///
+/// A bar and not a percentage: the useful reading is "most of it" or "hardly
+/// any", and a figure like 1.7% invites precision the number does not have —
+/// standees are minted in runs long before anyone goes out with them.
+class _StockBar extends StatelessWidget {
+  const _StockBar({required this.live, required this.generated});
+
+  final int live;
+  final int generated;
+
+  @override
+  Widget build(BuildContext context) {
+    // Nothing minted is not zero progress, it is NO fraction; an empty track
+    // says that without dividing by zero.
+    final value = generated <= 0 ? 0.0 : (live / generated).clamp(0.0, 1.0);
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppRadius.xs),
+      child: LinearProgressIndicator(
+        key: const ValueKey('published_stock_bar'),
+        value: value,
+        minHeight: 6,
+        color: AppColors.royalGold,
+        backgroundColor: AppColors.surface2,
+      ),
+    );
+  }
 }
 
 class _WindowChips extends StatelessWidget {
@@ -263,6 +364,31 @@ class _PublishedTile extends StatelessWidget {
                         letterSpacing: 1.2,
                       ),
                     ),
+                    // Only ever present on the admin read. A rep does not need
+                    // telling that they are the one who did this.
+                    if (standee.activatedBy case final person?) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          const Icon(Icons.person_outline,
+                              size: 12, color: AppColors.textMuted),
+                          const SizedBox(width: AppSpacing.xs),
+                          Flexible(
+                            child: Text(
+                              'Put live by ${person.displayLabel}',
+                              key: ValueKey(
+                                  'published_activator_${standee.code}'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: AppTypography.sizeLabel,
+                                color: AppColors.textMuted,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

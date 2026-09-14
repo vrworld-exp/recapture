@@ -5,6 +5,11 @@
 // (share-sheet) action and — for ADMIN only — a Delete (soft-delete) action, so
 // staff can curate the set before/instead of a bulk export.
 //
+// The full-screen view is a PAGER over the whole set (swipe / edge arrows /
+// arrow keys — see [_PhotoViewer]), not a single photo: judging a capture means
+// comparing it with the ones either side of it, and bouncing back to the grid
+// between every pair is how a set of thirty stops getting looked at.
+//
 // BROWSING COSTS NOTHING. The grid is listed from the credential-free
 // `/photos` endpoint and every pixel is drawn through the authenticated
 // photo-bytes proxy ([AdminPhotoImage]). Only Download reaches for the export
@@ -23,7 +28,9 @@
 //
 // Errors show MAPPED copy only — never a raw code or URL (same rule as 9F /
 // the Live tab).
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/routes/flow_back.dart';
@@ -269,22 +276,25 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
         maxWidth: width,
       );
 
-  Future<void> _openViewer(PreviewManifest manifest, PreviewPhoto photo) async {
+  /// Opens the full-screen viewer at [index] of the capture set.
+  ///
+  /// An INDEX, not a photo: the viewer pages across the whole set, so where in
+  /// it the tap landed is the thing worth passing. The list itself is watched
+  /// inside the viewer rather than snapshotted here, so a delete made in there
+  /// lands on the next photo instead of stranding the pager on a tile the grid
+  /// no longer has.
+  Future<void> _openViewer(int index) async {
     final canDelete = ref.read(isAdminProvider);
-    final image = _imageFor(photo, kPreviewViewerWidth);
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         fullscreenDialog: true,
         builder: (_) => _PhotoViewer(
-          photo: photo,
-          image: image,
+          projectId: widget.projectId,
+          initialIndex: index,
           canDelete: canDelete,
-          isDownloading: () => _downloadInFlight.contains(photo.key),
-          onDownload: () => _download(photo),
-          onDelete: () async {
-            final deleted = await _delete(photo);
-            if (deleted && mounted) Navigator.of(context).maybePop();
-          },
+          imageFor: (photo) => _imageFor(photo, kPreviewViewerWidth),
+          onDownload: _download,
+          onDelete: _delete,
         ),
       ),
     );
@@ -433,7 +443,7 @@ class _PreviewGalleryScreenState extends ConsumerState<PreviewGalleryScreen> {
                       // in the way.
                       onTap: () => _selecting
                           ? _toggle(photo)
-                          : _openViewer(manifest, photo),
+                          : _openViewer(index),
                     );
                   },
                   childCount: manifest.files.length,
@@ -596,96 +606,367 @@ class _TilePlaceholder extends StatelessWidget {
   }
 }
 
-/// Full-screen viewer for one photo with Download + (admin) Delete actions.
-class _PhotoViewer extends StatefulWidget {
+/// Full-screen viewer for the capture set: opened at one photo, pageable
+/// across every other photo of the same project, with Download + (admin)
+/// Delete acting on whichever one is on screen.
+///
+/// THREE ways to move, because the two builds do not share an input. A SWIPE
+/// (a finger on the apk; a mouse drag on web, which needs
+/// [_DragAnywhereScrollBehavior] — Flutter does not let a mouse drag a
+/// scrollable by default, so the gesture would silently do nothing there), the
+/// on-screen ARROWS at either edge, and the LEFT/RIGHT keyboard keys a browser
+/// user reaches for first. All three drive the one [PageController], so there
+/// is no second notion of "which photo" to drift out of step.
+///
+/// The photo list is WATCHED, not passed in: deleting the photo on screen
+/// shrinks the set underneath the pager, which is exactly what makes it land on
+/// the next photo. Only an emptied set closes the viewer.
+class _PhotoViewer extends ConsumerStatefulWidget {
   const _PhotoViewer({
-    required this.photo,
-    required this.image,
+    required this.projectId,
+    required this.initialIndex,
     required this.canDelete,
-    required this.isDownloading,
+    required this.imageFor,
     required this.onDownload,
     required this.onDelete,
   });
 
-  final PreviewPhoto photo;
+  final String projectId;
 
-  /// Proxy-backed full-view source (see [AdminPhotoImage]). Download resolves
-  /// its own presigned url separately and delivers the untouched original.
-  final ImageProvider image;
+  /// Where the tapped tile sat in the set at open time.
+  final int initialIndex;
 
   final bool canDelete;
-  final bool Function() isDownloading;
-  final VoidCallback onDownload;
-  final Future<void> Function() onDelete;
+
+  /// Proxy-backed full-view source for one photo (see [AdminPhotoImage]).
+  /// Download resolves its own presigned url separately and delivers the
+  /// untouched original.
+  final ImageProvider Function(PreviewPhoto) imageFor;
+
+  final Future<void> Function(PreviewPhoto) onDownload;
+
+  /// Confirms, then soft-deletes; true when the photo is gone.
+  final Future<bool> Function(PreviewPhoto) onDelete;
 
   @override
-  State<_PhotoViewer> createState() => _PhotoViewerState();
+  ConsumerState<_PhotoViewer> createState() => _PhotoViewerState();
 }
 
-class _PhotoViewerState extends State<_PhotoViewer> {
+class _PhotoViewerState extends ConsumerState<_PhotoViewer> {
+  late final PageController _controller =
+      PageController(initialPage: widget.initialIndex);
+
+  late int _index = widget.initialIndex;
+
+  /// Per-photo download guard held HERE as well as in the gallery: the viewer
+  /// is its own route, so a setState in the gallery does not rebuild it and the
+  /// button would spin only on the screen nobody is looking at.
+  final Set<String> _downloading = <String>{};
+
+  /// True while the photo on screen is zoomed in. Paging is suspended then, so
+  /// a drag pans the photo instead of flicking to the next one.
+  bool _zoomed = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int index, int count) {
+    if (index < 0 || index >= count || index == _index) return;
+    _controller.animateToPage(
+      index,
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+    );
+  }
+
+  KeyEventResult _onKey(KeyEvent event, int count) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _goTo(_index - 1, count);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _goTo(_index + 1, count);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Future<void> _download(PreviewPhoto photo) async {
+    if (_downloading.contains(photo.key)) return;
+    setState(() => _downloading.add(photo.key));
+    try {
+      await widget.onDownload(photo);
+    } finally {
+      if (mounted) setState(() => _downloading.remove(photo.key));
+    }
+  }
+
+  Future<void> _delete(PreviewPhoto photo) async {
+    final deleted = await widget.onDelete(photo);
+    if (!deleted || !mounted) return;
+    // The watched set has already lost it, so the pager is showing a neighbour.
+    // Closing is right only when there is no neighbour left to show.
+    final remaining = ref
+            .read(previewGalleryProvider(widget.projectId))
+            .valueOrNull
+            ?.files
+            .length ??
+        0;
+    if (remaining == 0) await Navigator.of(context).maybePop();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final files =
+        ref.watch(previewGalleryProvider(widget.projectId)).valueOrNull?.files ??
+            const <PreviewPhoto>[];
+    // Nothing left to page over. _delete is already closing the route; this is
+    // just the frame in between.
+    if (files.isEmpty) {
+      return const Scaffold(backgroundColor: AppColors.bgPrimary);
+    }
+    // Deleting the LAST photo of the set leaves the index past its end.
+    if (_index > files.length - 1) {
+      _index = files.length - 1;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controller.hasClients) _controller.jumpToPage(_index);
+      });
+    }
+    final photo = files[_index];
+    final theme = Theme.of(context);
+
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: AppColors.textSecondary),
-        title: Text(
-          widget.photo.fileName,
-          style: Theme.of(context).textTheme.bodyMedium,
-          overflow: TextOverflow.ellipsis,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              photo.fileName,
+              style: theme.textTheme.bodyMedium,
+              overflow: TextOverflow.ellipsis,
+            ),
+            // Position is the thing a pager owes the viewer: without it there
+            // is no way to tell a long set from a stuck one.
+            if (files.length > 1)
+              Text(
+                '${_index + 1} of ${files.length}',
+                key: const ValueKey('preview_viewer_counter'),
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: AppColors.textMuted),
+              ),
+          ],
         ),
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: Center(
-              child: InteractiveViewer(
-                child: Image(
-                  image: widget.image,
-                  fit: BoxFit.contain,
-                  loadingBuilder: (context, child, progress) => progress == null
-                      ? child
-                      : const _TilePlaceholder(loading: true),
-                  errorBuilder: (_, __, ___) =>
-                      const _TilePlaceholder(loading: false),
-                ),
-              ),
-            ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.lg),
-              child: Row(
+      body: Focus(
+        autofocus: true,
+        onKeyEvent: (_, event) => _onKey(event, files.length),
+        child: Column(
+          children: [
+            Expanded(
+              child: Stack(
                 children: [
-                  Expanded(
-                    child: AppButton(
-                      label: 'Download',
-                      icon: Icons.download_outlined,
-                      isLoading: widget.isDownloading(),
-                      onPressed: widget.onDownload,
-                    ),
-                  ),
-                  if (widget.canDelete) ...[
-                    const SizedBox(width: AppSpacing.md),
-                    Expanded(
-                      child: AppButton.secondary(
-                        label: 'Delete',
-                        icon: Icons.delete_outline,
-                        onPressed: () => widget.onDelete(),
+                  ScrollConfiguration(
+                    behavior: const _DragAnywhereScrollBehavior(),
+                    child: PageView.builder(
+                      key: const ValueKey('preview_viewer_pager'),
+                      controller: _controller,
+                      physics: _zoomed
+                          ? const NeverScrollableScrollPhysics()
+                          : const PageScrollPhysics(),
+                      itemCount: files.length,
+                      onPageChanged: (i) => setState(() {
+                        _index = i;
+                        // The page arriving is at rest; whatever the one
+                        // leaving was zoomed to is not this page's state.
+                        _zoomed = false;
+                      }),
+                      itemBuilder: (_, i) => _ZoomablePhoto(
+                        key: ValueKey('preview_page_${files[i].key}'),
+                        image: widget.imageFor(files[i]),
+                        onZoomChanged: (zoomed) {
+                          if (zoomed != _zoomed && i == _index) {
+                            setState(() => _zoomed = zoomed);
+                          }
+                        },
                       ),
                     ),
-                  ],
+                  ),
+                  // Hidden rather than disabled at the ends: a dead arrow on a
+                  // photo reads as a broken one.
+                  if (_index > 0)
+                    _NavArrow(
+                      buttonKey: const ValueKey('preview_viewer_prev'),
+                      alignment: Alignment.centerLeft,
+                      icon: Icons.chevron_left,
+                      tooltip: 'Previous photo',
+                      onPressed: () => _goTo(_index - 1, files.length),
+                    ),
+                  if (_index < files.length - 1)
+                    _NavArrow(
+                      buttonKey: const ValueKey('preview_viewer_next'),
+                      alignment: Alignment.centerRight,
+                      icon: Icons.chevron_right,
+                      tooltip: 'Next photo',
+                      onPressed: () => _goTo(_index + 1, files.length),
+                    ),
                 ],
               ),
             ),
-          ),
-        ],
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: AppButton(
+                        label: 'Download',
+                        icon: Icons.download_outlined,
+                        isLoading: _downloading.contains(photo.key),
+                        onPressed: () => _download(photo),
+                      ),
+                    ),
+                    if (widget.canDelete) ...[
+                      const SizedBox(width: AppSpacing.md),
+                      Expanded(
+                        child: AppButton.secondary(
+                          label: 'Delete',
+                          icon: Icons.delete_outline,
+                          onPressed: () => _delete(photo),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
+
+/// One edge arrow over the photo: a thumb target on the apk, the obvious mouse
+/// affordance on web. Sits on a scrim so it stays visible over a pale capture.
+class _NavArrow extends StatelessWidget {
+  const _NavArrow({
+    required this.buttonKey,
+    required this.alignment,
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final Key buttonKey;
+  final Alignment alignment;
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: alignment,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+        child: Material(
+          color: AppColors.scrim,
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: IconButton(
+            key: buttonKey,
+            tooltip: tooltip,
+            iconSize: 28,
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+            icon: Icon(icon, color: AppColors.textPrimary),
+            onPressed: onPressed,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One page of the viewer: the photo, zoomable for inspection. It reports its
+/// zoom state up so the pager can stop competing with a pan.
+class _ZoomablePhoto extends StatefulWidget {
+  const _ZoomablePhoto({
+    super.key,
+    required this.image,
+    required this.onZoomChanged,
+  });
+
+  final ImageProvider image;
+  final ValueChanged<bool> onZoomChanged;
+
+  @override
+  State<_ZoomablePhoto> createState() => _ZoomablePhotoState();
+}
+
+class _ZoomablePhotoState extends State<_ZoomablePhoto> {
+  final TransformationController _transform = TransformationController();
+
+  @override
+  void initState() {
+    super.initState();
+    _transform.addListener(_report);
+  }
+
+  /// A hair above 1, so float noise from a settled pinch does not read as zoom
+  /// and leave the pager permanently stuck.
+  void _report() =>
+      widget.onZoomChanged(_transform.value.getMaxScaleOnAxis() > 1.01);
+
+  @override
+  void dispose() {
+    _transform.removeListener(_report);
+    _transform.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: InteractiveViewer(
+        transformationController: _transform,
+        child: Image(
+          image: widget.image,
+          fit: BoxFit.contain,
+          loadingBuilder: (context, child, progress) =>
+              progress == null ? child : const _TilePlaceholder(loading: true),
+          errorBuilder: (_, __, ___) => const _TilePlaceholder(loading: false),
+        ),
+      ),
+    );
+  }
+}
+
+/// Lets a MOUSE drag the pager. Flutter allows dragging a scrollable with touch
+/// and stylus only, so without this the swipe works on the apk and does nothing
+/// at all on web — where most staff open this gallery.
+class _DragAnywhereScrollBehavior extends MaterialScrollBehavior {
+  const _DragAnywhereScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => const {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.stylus,
+        PointerDeviceKind.invertedStylus,
+        PointerDeviceKind.trackpad,
+      };
 }
 
 class _EmptyView extends StatelessWidget {

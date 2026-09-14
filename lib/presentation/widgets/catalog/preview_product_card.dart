@@ -19,6 +19,18 @@
 // the model when asked — which doubles as the answer to "very large GLB on a
 // low-end device": nothing downloads until the user says so, and the hint on
 // the button says why.
+//
+// ── WHAT THE VISUAL TREATMENT IS DOING ──────────────────────────────────────
+// A menu is chosen from, not read, so the card is built to be SCANNED: the
+// photo carries the appetite, and everything drawn over it is ranked — name
+// first, price second as a gold pill, the 3D affordance as the one saturated
+// object on the card. The lift (shadow + hairline) is what makes a column of
+// these read as a stack of menu cards rather than as a list of rows.
+//
+// NOTHING AUTHORING-ONLY MAY ENTER THE FRAME. Every decoration here is
+// something the published card also has (photo, name, price, media kind, the
+// veg marker); the warning strip stays OUTSIDE, under the card, in the
+// author's colours. A prettier card that leaks a sync pill is a broken preview.
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 
@@ -84,57 +96,59 @@ class PreviewProductCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(AppRadius.md),
-          child: SizedBox(
-            height: height,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                _media(),
-                // The public page's cinematic scrim. Also what makes white text
-                // legible over an arbitrary customer photo.
-                const DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                      colors: [
-                        Color(0xE60B0B0E),
-                        Color(0x330B0B0E),
-                        Color(0x000B0B0E),
-                      ],
-                      stops: [0.0, 0.45, 1.0],
-                    ),
-                  ),
+        Container(
+          height: height,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            // An opaque base so the drop shadow has something to sit under
+            // while a photo is still streaming in.
+            color: AppColors.surface2,
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x73000000),
+                blurRadius: 24,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          // Painted OVER the media and under no hit test — a hairline that
+          // keeps a dark photo from bleeding into the dark page behind it.
+          foregroundDecoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(AppRadius.lg),
+            border: Border.all(color: const Color(0x14FFFFFF)),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _media(),
+              const _CardScrim(),
+              Positioned(
+                top: AppSpacing.md,
+                right: AppSpacing.md,
+                child: _TypeBadge(product: product),
+              ),
+              // Top-left, exactly where mirage-fe's MenuItemCard puts it.
+              // Draws nothing for "no label" — the value decides, not the
+              // caller.
+              Positioned(
+                top: AppSpacing.md,
+                left: AppSpacing.md,
+                child: FoodTypeMarker(type: product.foodType, size: 16),
+              ),
+              Positioned(
+                left: AppSpacing.lg,
+                right: AppSpacing.lg,
+                bottom: AppSpacing.lg,
+                child: _Caption(
+                  product: product,
+                  canShowThreeD: _canShowThreeD,
+                  isThreeDActive: isThreeDActive,
+                  onLoadThreeD: onLoadThreeD,
+                  onUnloadThreeD: onUnloadThreeD,
                 ),
-                Positioned(
-                  top: AppSpacing.md,
-                  right: AppSpacing.md,
-                  child: _TypeBadge(product: product),
-                ),
-                // Top-left, exactly where mirage-fe's MenuItemCard puts it.
-                // Draws nothing for "no label" — the value decides, not the
-                // caller.
-                Positioned(
-                  top: AppSpacing.md,
-                  left: AppSpacing.md,
-                  child: FoodTypeMarker(type: product.foodType, size: 16),
-                ),
-                Positioned(
-                  left: AppSpacing.lg,
-                  right: AppSpacing.lg,
-                  bottom: AppSpacing.lg,
-                  child: _Caption(
-                    product: product,
-                    canShowThreeD: _canShowThreeD,
-                    isThreeDActive: isThreeDActive,
-                    onLoadThreeD: onLoadThreeD,
-                    onUnloadThreeD: onUnloadThreeD,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
         if (gates.isNotEmpty) ...[
@@ -178,6 +192,34 @@ class PreviewProductCard extends StatelessWidget {
   }
 }
 
+/// The public page's cinematic scrim, and what makes white text legible over an
+/// arbitrary customer photo.
+///
+/// Four stops rather than three: the extra one near the bottom keeps the name
+/// and price on solid ground over a BRIGHT photo — a plated dish shot on a
+/// white tablecloth is the common case, and it is exactly where a two-stop
+/// gradient gives up.
+class _CardScrim extends StatelessWidget {
+  const _CardScrim();
+
+  @override
+  Widget build(BuildContext context) => const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [
+              Color(0xF20B0B0E),
+              Color(0x9E0B0B0E),
+              Color(0x330B0B0E),
+              Color(0x000B0B0E),
+            ],
+            stops: [0.0, 0.34, 0.62, 1.0],
+          ),
+        ),
+      );
+}
+
 /// The card image. A 3D product's is its generated preview, an image-only
 /// product's is the uploaded photo — both arrive as `thumbnailUrl`, and its
 /// absence is itself a publish gate, so the placeholder here says so plainly
@@ -207,6 +249,16 @@ class _PreviewThumbnail extends StatelessWidget {
     return Image.network(
       url,
       fit: BoxFit.cover,
+      // A photo that fades in reads as the page loading; one that snaps in
+      // reads as the page jumping.
+      frameBuilder: (_, child, frame, wasSynchronous) => wasSynchronous
+          ? child
+          : AnimatedOpacity(
+              opacity: frame == null ? 0 : 1,
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOut,
+              child: child,
+            ),
       errorBuilder: (_, __, ___) => const _MissingImage(),
     );
   }
@@ -216,14 +268,28 @@ class _MissingImage extends StatelessWidget {
   const _MissingImage();
 
   @override
-  Widget build(BuildContext context) => ColoredBox(
-        color: AppColors.surface2,
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [AppColors.surface1, AppColors.surface2],
+          ),
+        ),
         child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.image_not_supported_outlined,
-                  color: AppColors.textMuted, size: 32),
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.bgPrimary.withValues(alpha: 0.5),
+                  border: Border.all(color: const Color(0x14FFFFFF)),
+                ),
+                child: const Icon(Icons.image_not_supported_outlined,
+                    color: AppColors.textMuted, size: 26),
+              ),
               const SizedBox(height: AppSpacing.sm),
               Text(
                 'No image yet',
@@ -239,6 +305,11 @@ class _MissingImage extends StatelessWidget {
 }
 
 /// The public page's top-right pill: 3D or photo.
+///
+/// The two are coloured apart on purpose. "3D" is the thing this product has
+/// that most menu items do not, so it carries the gold; a photo is the baseline
+/// and stays quiet. A customer scanning a column of cards can find the ones
+/// worth turning around without reading a word.
 class _TypeBadge extends StatelessWidget {
   const _TypeBadge({required this.product});
 
@@ -247,14 +318,16 @@ class _TypeBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final threeD = product.type.supportsThreeD;
+    final accent = threeD ? AppColors.royalGold : AppColors.textSecondary;
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.sm,
         vertical: AppSpacing.xs,
       ),
       decoration: BoxDecoration(
-        color: AppColors.bgPrimary.withValues(alpha: 0.6),
+        color: AppColors.bgPrimary.withValues(alpha: 0.62),
         borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: accent.withValues(alpha: 0.45)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -262,16 +335,16 @@ class _TypeBadge extends StatelessWidget {
           Icon(
             threeD ? Icons.view_in_ar_outlined : Icons.photo_outlined,
             size: 12,
-            color: AppColors.mirageRed,
+            color: accent,
           ),
           const SizedBox(width: AppSpacing.xs),
           Text(
             threeD ? '3D' : 'PHOTO',
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: AppTypography.sizeLabel,
               fontWeight: FontWeight.w700,
               letterSpacing: 1.2,
-              color: AppColors.textPrimary,
+              color: accent,
             ),
           ),
         ],
@@ -297,6 +370,12 @@ class _Caption extends StatelessWidget {
   final VoidCallback? onLoadThreeD;
   final VoidCallback? onUnloadThreeD;
 
+  /// Cast under the name and price so they hold up over a blown-out highlight
+  /// the scrim alone cannot tame.
+  static const List<Shadow> _legibility = [
+    Shadow(color: Color(0xCC000000), blurRadius: 12, offset: Offset(0, 2)),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
@@ -317,6 +396,9 @@ class _Caption extends StatelessWidget {
                 style: textTheme.titleMedium?.copyWith(
                   color: AppColors.textPrimary,
                   fontWeight: FontWeight.w700,
+                  height: 1.18,
+                  letterSpacing: -0.2,
+                  shadows: _legibility,
                 ),
               ),
               // No price is NOT rendered as a zero: the public card simply has
@@ -324,12 +406,29 @@ class _Caption extends StatelessWidget {
               // 1). Showing "₹0" here would preview a claim the customer will
               // never see.
               if (price != null) ...[
-                const SizedBox(height: AppSpacing.xs),
-                Text(
-                  price,
-                  style: textTheme.bodyMedium?.copyWith(
-                    color: AppColors.textPrimary,
-                    fontWeight: FontWeight.w600,
+                const SizedBox(height: AppSpacing.sm),
+                // A pill rather than a line of text: price is the second thing
+                // anyone looks for and the first thing they compare between
+                // cards, so it gets an edge to be found by.
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.sm,
+                    vertical: AppSpacing.xs,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.bgPrimary.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(AppRadius.xs),
+                    border: Border.all(
+                      color: AppColors.royalGold.withValues(alpha: 0.5),
+                    ),
+                  ),
+                  child: Text(
+                    price,
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: AppColors.goldGlow,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
                   ),
                 ),
               ],
@@ -355,20 +454,40 @@ class _ThreeDButton extends StatelessWidget {
   final VoidCallback? onPressed;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
-        message: active
-            ? 'Show the card image again'
-            : 'Loads the 3D model — these can be several megabytes, so it may '
-                'take a moment on a slow connection or an older phone.',
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(AppRadius.lg);
+    return Tooltip(
+      message: active
+          ? 'Show the card image again'
+          : 'Loads the 3D model — these can be several megabytes, so it may '
+              'take a moment on a slow connection or an older phone.',
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: radius,
+          // Inactive is the invitation and carries the brand gradient and its
+          // glow; active is a dismiss and recedes to glass.
+          gradient: active ? null : AppColors.primaryGradient,
+          color: active ? AppColors.bgPrimary.withValues(alpha: 0.72) : null,
+          border: active
+              ? Border.all(color: const Color(0x2EFFFFFF))
+              : null,
+          boxShadow: active
+              ? null
+              : const [
+                  BoxShadow(
+                    color: Color(0x59E10600),
+                    blurRadius: 18,
+                    offset: Offset(0, 6),
+                  ),
+                ],
+        ),
         child: Material(
           key: ValueKey(active ? 'preview_3d_hide' : 'preview_3d_show'),
-          color: active
-              ? AppColors.surface2.withValues(alpha: 0.92)
-              : AppColors.mirageRed,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
+          color: Colors.transparent,
+          borderRadius: radius,
           child: InkWell(
             onTap: onPressed,
-            borderRadius: BorderRadius.circular(AppRadius.lg),
+            borderRadius: radius,
             child: Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppSpacing.lg,
@@ -397,7 +516,9 @@ class _ThreeDButton extends StatelessWidget {
             ),
           ),
         ),
-      );
+      ),
+    );
+  }
 }
 
 /// The pre-flight half of the preview: what would stop this product publishing.
@@ -428,18 +549,27 @@ class _WarningStrip extends StatelessWidget {
       padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(AppRadius.xs),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
         border: Border.all(color: color.withValues(alpha: 0.35), width: 0.5),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            actionable.isEmpty
-                ? Icons.hourglass_empty
-                : Icons.warning_amber_rounded,
-            size: 16,
-            color: color,
+          // The icon sits in a tinted disc so the strip has one clear entry
+          // point at a glance, the same shape the notices above the page use.
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.xs),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color.withValues(alpha: 0.16),
+            ),
+            child: Icon(
+              actionable.isEmpty
+                  ? Icons.hourglass_empty
+                  : Icons.warning_amber_rounded,
+              size: 14,
+              color: color,
+            ),
           ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
@@ -456,7 +586,7 @@ class _WarningStrip extends StatelessWidget {
                       style: Theme.of(context)
                           .textTheme
                           .bodySmall
-                          ?.copyWith(color: color),
+                          ?.copyWith(color: color, height: 1.35),
                     ),
                   ),
               ],

@@ -11,16 +11,28 @@
 // The download reuses the rep's own standee sheet endpoint, so this screen
 // needed no new platform code: the same [QrDeliverer] seam behind the catalog QR
 // hands over a share sheet on mobile and a blob download in the browser.
+//
+// AN ADMIN READS THE SAME SCREEN WIDER. For a rep this is "what have I put
+// live"; for an admin it is "how much of what we printed is working", which is
+// the same list with the scope taken off plus a denominator. It is ONE screen
+// because it is one question asked from two heights — and because the rep view
+// is what an admin would otherwise have to imagine while reading it.
+//
+// The WIDENING IS A DIFFERENT ROUTE, not a widened one: `/rep/published` is
+// keyed server-side on the caller's own id and stays that way, and the
+// cross-rep read is ADMIN-gated at `/admin/standees/published`. A role is
+// checked once, here, to decide which repository to ask.
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/admin_standee_repository.dart'
-    show StandeeQrFormat;
+    show AdminStandeeRepository, StandeeQrFormat, adminStandeeRepositoryProvider;
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/rep_repository.dart';
 import '../../domain/entities/qr_standee.dart';
+import '../auth/user_role_notifier.dart';
 import '../catalog/catalog_qr_service.dart';
 
 @immutable
@@ -28,12 +40,20 @@ class RepPublishedState {
   const RepPublishedState({
     this.page = const AsyncLoading(),
     this.window = PublishedWindow.all,
+    this.everyone = false,
     this.busyCode,
     this.failure,
     this.notice,
   });
 
   final AsyncValue<RepPublishedPage> page;
+
+  /// Whether this list spans EVERY rep (an admin reading) or just the caller.
+  ///
+  /// Held in state rather than re-read from the role at each use so the copy,
+  /// the header and the rows cannot disagree about whose work is on screen
+  /// while a role read is in flight.
+  final bool everyone;
 
   /// How far back the list is looking. Client-held because it is a question
   /// about this screen, not about the data.
@@ -58,11 +78,21 @@ class RepPublishedState {
   /// appear to delete most of somebody's career.
   int get total => page.valueOrNull?.total ?? 0;
 
+  /// Every standee ever minted, or null when this read carries no denominator
+  /// (a rep's own history). The "115" in "2 of 115 menus live".
+  int? get generated => page.valueOrNull?.generated;
+
+  /// Whether the header can show a fraction at all. A denominator of zero is
+  /// deliberately still a fraction — "0 of 0 menus live" is the truth about a
+  /// business that has not minted anything, and hiding it would read as a bug.
+  bool get hasFraction => everyone && generated != null;
+
   bool isBusy(String code) => busyCode == code;
 
   RepPublishedState copyWith({
     AsyncValue<RepPublishedPage>? page,
     PublishedWindow? window,
+    bool? everyone,
     Object? busyCode = _unset,
     Object? failure = _unset,
     Object? notice = _unset,
@@ -70,6 +100,7 @@ class RepPublishedState {
       RepPublishedState(
         page: page ?? this.page,
         window: window ?? this.window,
+        everyone: everyone ?? this.everyone,
         busyCode:
             identical(busyCode, _unset) ? this.busyCode : busyCode as String?,
         failure: identical(failure, _unset)
@@ -86,17 +117,28 @@ class RepPublishedNotifier extends AutoDisposeNotifier<RepPublishedState> {
 
   RepRepository get _repo => ref.read(repRepositoryProvider);
 
+  AdminStandeeRepository get _adminRepo =>
+      ref.read(adminStandeeRepositoryProvider);
+
   @override
   RepPublishedState build() {
     _disposed = false;
     ref.onDispose(() => _disposed = true);
+    // WATCHED, not read: a role that resolves after this screen opens (the
+    // first paint of a cold start) must widen the list rather than leave an
+    // admin looking at their own three restaurants.
+    final everyone = ref.watch(isAdminProvider);
     scheduleMicrotask(load);
-    return const RepPublishedState();
+    return RepPublishedState(everyone: everyone);
   }
 
   Future<void> load() async {
     try {
-      final page = await _repo.publishedStandees(days: state.window.days);
+      // The role picks the ROUTE. Both answer the same page shape; only the
+      // admin one carries `generated` and per-row activators.
+      final page = state.everyone
+          ? await _adminRepo.publishedStandees(days: state.window.days)
+          : await _repo.publishedStandees(days: state.window.days);
       if (_disposed) return;
       state = state.copyWith(page: AsyncData(page), failure: null);
     } on CatalogFailure catch (failure, stack) {

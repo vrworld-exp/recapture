@@ -28,6 +28,7 @@ import { Catalog } from '@/models/Catalog';
 import { User, type UserRole } from '@/models/User';
 import { maskIdentifier } from '@/utils/maskIdentifier';
 import { resolverUrlFor } from '@/services/qrCodeService';
+import { summarizeOwners, type AdminOwnerSummary } from '@/services/adminUsersService';
 import type { QrCodeState } from '@/models/types/qr.types';
 
 /**
@@ -444,16 +445,131 @@ export async function listRepPublishedStandees(
   repUserId: Types.ObjectId,
   opts: { since?: Date } = {}
 ): Promise<RepPublishedResult> {
+  const rows = await publishedRows({ activatedByUserId: repUserId }, opts.since);
+
+  // Mapped field by field rather than spread: the internal row carries
+  // `activatedByUserId`, and a raw account id is not something a rep's own
+  // history has any business shipping to a client.
+  const standees = rows.map(stripActivator);
+
+  // Counted separately from the filtered page, and only when a window was
+  // asked for — an unfiltered call already knows the answer it would compute.
+  const total = opts.since
+    ? await countPublished({ activatedByUserId: repUserId })
+    : standees.length;
+
+  return { standees, total };
+}
+
+/** One published standee as the ADMIN's cross-rep list shows it. */
+export interface AdminPublishedStandee extends RepPublishedStandee {
+  /**
+   * The rep who put this menu live — the LIST-SAFE summary
+   * (`{id, displayName, hasAvatar}`), the same shape "Created by" carries on a
+   * live project and `GET /admin/qr-codes/:code/activation` carries here.
+   *
+   * It is the field that makes a cross-rep list mean anything: a page of
+   * restaurants nobody is attributed to answers "how many are live" and not
+   * "who signed them up". The RAW phone or email stays where it has always
+   * been — `GET /admin/users/:id`, one person per call, metered and audited —
+   * so this list adds no second unmasked-contact path.
+   *
+   * Null when the activating account no longer resolves.
+   */
+  activatedBy: AdminOwnerSummary | null;
+}
+
+export interface AdminPublishedResult {
+  standees: AdminPublishedStandee[];
+  /**
+   * Every menu ANYONE has put live, ignoring the window — the numerator of the
+   * admin header's "2 of 115".
+   */
+  total: number;
+  /**
+   * Every standee ever minted — the denominator. Counted from the code
+   * documents rather than summed from `QrBatch.count`, so it is what exists
+   * rather than what was ordered.
+   */
+  generated: number;
+}
+
+/**
+ * Every standee ANYONE has put live — the admin's read of the same history.
+ *
+ * THE REP LIST WITH THE SCOPE TAKEN OFF, deliberately sharing [publishedRows]
+ * rather than paraphrasing its rules. "Published" is a subtle predicate here —
+ * ACTIVE code AND a catalog whose status is PUBLISHED, because a standee is
+ * bound at activation and the menu goes live later — and two copies of that
+ * would drift into an admin total that disagreed with the sum of the rep ones.
+ *
+ * ADMIN-ONLY at the route. A rep's own history is theirs; a list of every
+ * restaurant every rep signed up is a business-wide figure, which is the same
+ * line `GET /admin/qr-batches` already draws.
+ */
+export async function listAllPublishedStandees(
+  opts: { since?: Date } = {}
+): Promise<AdminPublishedResult> {
+  const rows = await publishedRows({}, opts.since);
+
+  // ONE query for the whole page's activators, not one per row — the same
+  // instinct as `loadAssignees`: a page of 200 restaurants was signed up by a
+  // handful of people.
+  const activators = await summarizeOwners(
+    [...new Set(rows.map((r) => r.activatedByUserId).filter((id): id is string => !!id))]
+  );
+
+  const standees: AdminPublishedStandee[] = rows.map((row) => ({
+    ...stripActivator(row),
+    activatedBy: row.activatedByUserId
+      ? (activators.get(row.activatedByUserId) ?? null)
+      : null,
+  }));
+
+  const [total, generated] = await Promise.all([
+    opts.since ? countPublished({}) : Promise.resolve(standees.length),
+    QrCode.countDocuments({ deletedAt: null }).exec(),
+  ]);
+
+  return { standees, total, generated };
+}
+
+/** [RepPublishedStandee] plus the activator id the DTOs must not carry. */
+type PublishedRow = RepPublishedStandee & { activatedByUserId: string | null };
+
+/** Drops the internal activator id, leaving exactly the published DTO. */
+function stripActivator(row: PublishedRow): RepPublishedStandee {
+  return {
+    code: row.code,
+    url: row.url,
+    name: row.name,
+    businessName: row.businessName,
+    catalogId: row.catalogId,
+    activatedAt: row.activatedAt,
+  };
+}
+
+/**
+ * The ACTIVE codes matching [scope] whose catalogs are PUBLISHED, newest
+ * activation first.
+ *
+ * The ONE place the "published standee" predicate lives, so the rep's history
+ * and the admin's roll-up cannot disagree about what counts.
+ */
+async function publishedRows(
+  scope: Record<string, unknown>,
+  since?: Date
+): Promise<PublishedRow[]> {
   const base = {
-    activatedByUserId: repUserId,
+    ...scope,
     state: 'ACTIVE' as const,
     deletedAt: null,
     catalogId: { $exists: true },
   };
 
   const codes = await QrCode.find(
-    opts.since ? { ...base, activatedAt: { $gte: opts.since } } : base,
-    { code: 1, catalogId: 1, activatedAt: 1 }
+    since ? { ...base, activatedAt: { $gte: since } } : base,
+    { code: 1, catalogId: 1, activatedAt: 1, activatedByUserId: 1 }
   )
     .sort({ activatedAt: -1, code: 1 })
     .lean()
@@ -470,7 +586,7 @@ export async function listRepPublishedStandees(
     .exec();
   const byId = new Map(live.map((c) => [String(c._id), c]));
 
-  const standees = codes
+  return codes
     .filter((c) => byId.has(String(c.catalogId)))
     .map((c) => {
       const catalog = byId.get(String(c.catalogId))!;
@@ -481,23 +597,19 @@ export async function listRepPublishedStandees(
         businessName: catalog.businessName ?? null,
         catalogId: String(c.catalogId),
         activatedAt: c.activatedAt ?? null,
+        activatedByUserId: c.activatedByUserId ? String(c.activatedByUserId) : null,
       };
     });
-
-  // Counted separately from the filtered page, and only when a window was
-  // asked for — an unfiltered call already knows the answer it would compute.
-  const total = opts.since
-    ? await countRepPublished(repUserId)
-    : standees.length;
-
-  return { standees, total };
 }
 
-/** All-time published count for one rep. Two queries, no documents returned. */
-async function countRepPublished(repUserId: Types.ObjectId): Promise<number> {
+/**
+ * All-time published count for [scope]. Two queries, no documents returned;
+ * an empty scope counts every rep's.
+ */
+async function countPublished(scope: Record<string, unknown>): Promise<number> {
   const codes = await QrCode.find(
     {
-      activatedByUserId: repUserId,
+      ...scope,
       state: 'ACTIVE',
       deletedAt: null,
       catalogId: { $exists: true },

@@ -11,15 +11,26 @@
 // Second: the window is sent as `days` and nothing else is inferred client-side.
 // A list that filtered locally would quietly disagree with the count beside it.
 //
+// Third: WHICH ROUTE THE ROLE PICKS. An admin reads the same screen across every
+// rep, and that widening is a different endpoint rather than a widened one —
+// `/rep/published` stays keyed on the caller server-side. A regression that sent
+// an admin to the rep route would look like a working screen showing one
+// person's work, which is the failure nobody would report as a bug.
+//
 // Hermetic: the repository and the delivery seam are fakes, so no Dio, no share
 // sheet, no platform channel.
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/catalog/catalog_qr_service.dart';
 import 'package:recapture/application/rep/rep_published_notifier.dart';
 import 'package:recapture/data/repositories/admin_standee_repository.dart'
-    show StandeeQrFormat;
+    show
+        AdminStandeeRepository,
+        StandeeQrFormat,
+        adminStandeeRepositoryProvider;
+import 'package:recapture/domain/entities/project_owner.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
@@ -148,10 +159,46 @@ class _FakeDeliverer implements QrDeliverer {
   }
 }
 
-ProviderContainer _containerWith(_FakeRepo repo, _FakeDeliverer deliverer) {
+/// The ADMIN read of the same history.
+///
+/// `noSuchMethod` rather than twenty stub members: this suite exercises exactly
+/// one method of a wide repository, and spelling out the rest would be
+/// boilerplate that has to be maintained every time the admin surface grows.
+/// Anything else called on it throws, which is the assertion we want — this
+/// screen must touch nothing else.
+class _FakeAdminRepo implements AdminStandeeRepository {
+  _FakeAdminRepo(this.page);
+
+  RepPublishedPage page;
+
+  /// Every `days` value asked for, in order. Null is "all time".
+  final List<int?> windows = [];
+
+  @override
+  Future<RepPublishedPage> publishedStandees({int? days}) async {
+    windows.add(days);
+    return page;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      super.noSuchMethod(invocation);
+}
+
+ProviderContainer _containerWith(
+  _FakeRepo repo,
+  _FakeDeliverer deliverer, {
+  bool admin = false,
+  _FakeAdminRepo? adminRepo,
+}) {
   final container = ProviderContainer(overrides: [
     repRepositoryProvider.overrideWithValue(repo),
     qrDelivererProvider.overrideWithValue(deliverer),
+    // Required, not optional: the notifier watches the role to pick a route,
+    // and the real chain reads it from Hive, which no widget test has open.
+    isAdminProvider.overrideWithValue(admin),
+    if (adminRepo != null)
+      adminStandeeRepositoryProvider.overrideWithValue(adminRepo),
   ]);
   addTearDown(container.dispose);
   return container;
@@ -296,6 +343,111 @@ void main() {
       final failure = container.read(repPublishedProvider).failure;
       expect(failure?.code, 'QR_SAVE_FAILED');
       expect(failure?.message, isNot(contains('StateError')));
+    });
+  });
+
+  group('an admin reads the same screen wider', () {
+    RepPublishedStandee adminRow(String code, String by) => RepPublishedStandee(
+          code: code,
+          url: 'https://scan.test/r/$code',
+          name: 'blue_cafe',
+          businessName: 'Blue Cafe',
+          catalogId: 'cat-$code',
+          activatedBy: ProjectOwnerSummary(
+            id: 'u-$by',
+            displayName: by,
+            hasAvatar: false,
+          ),
+        );
+
+    test('asks the ADMIN route, never the rep one', () async {
+      final repo = _FakeRepo();
+      final adminRepo = _FakeAdminRepo(RepPublishedPage(
+        standees: [adminRow('AAAA1111', 'Rep One')],
+        total: 2,
+        generated: 115,
+      ));
+      final container = _containerWith(
+        repo,
+        _FakeDeliverer(),
+        admin: true,
+        adminRepo: adminRepo,
+      );
+      container.listen(repPublishedProvider, (_, __) {});
+      await pumpEventQueue();
+
+      // The rep route is keyed on the caller server-side, so asking it would
+      // silently show an admin their own handful of restaurants.
+      expect(repo.windows, isEmpty);
+      expect(adminRepo.windows, [null]);
+    });
+
+    test('carries the fraction: live out of every standee minted', () async {
+      final adminRepo = _FakeAdminRepo(RepPublishedPage(
+        standees: [adminRow('AAAA1111', 'Rep One')],
+        total: 2,
+        generated: 115,
+      ));
+      final container = _containerWith(
+        _FakeRepo(),
+        _FakeDeliverer(),
+        admin: true,
+        adminRepo: adminRepo,
+      );
+      container.listen(repPublishedProvider, (_, __) {});
+      await pumpEventQueue();
+
+      final state = container.read(repPublishedProvider);
+      expect(state.everyone, isTrue);
+      expect(state.total, 2);
+      expect(state.generated, 115);
+      expect(state.hasFraction, isTrue);
+      // The row says whose work it is — the point of a cross-rep list.
+      expect(state.standees.single.activatedBy?.displayLabel, 'Rep One');
+    });
+
+    test('a window narrows the list and leaves both totals alone', () async {
+      final adminRepo = _FakeAdminRepo(const RepPublishedPage(
+        standees: [],
+        total: 2,
+        generated: 115,
+      ));
+      final container = _containerWith(
+        _FakeRepo(),
+        _FakeDeliverer(),
+        admin: true,
+        adminRepo: adminRepo,
+      );
+      container.listen(repPublishedProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container
+          .read(repPublishedProvider.notifier)
+          .setWindow(PublishedWindow.last7);
+      await pumpEventQueue();
+
+      // Still the admin route, now with the window — and the header numbers
+      // are whatever the server said, never standees.length.
+      expect(adminRepo.windows, [null, 7]);
+      final state = container.read(repPublishedProvider);
+      expect(state.total, 2);
+      expect(state.generated, 115);
+    });
+
+    test('a rep gets no fraction and no activator', () async {
+      final repo = _FakeRepo()
+        ..page = RepPublishedPage(standees: [_row('AAAA1111')], total: 1);
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(repPublishedProvider, (_, __) {});
+      await pumpEventQueue();
+
+      final state = container.read(repPublishedProvider);
+      expect(state.everyone, isFalse);
+      // No denominator, so the header stays a count — "1 of null" is not a
+      // thing a rep should ever be shown.
+      expect(state.generated, isNull);
+      expect(state.hasFraction, isFalse);
+      expect(state.standees.single.activatedBy, isNull);
     });
   });
 }

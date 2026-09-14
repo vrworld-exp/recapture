@@ -718,7 +718,11 @@ class _IdentityBlock extends ConsumerWidget {
                       ),
                       const SizedBox(height: AppSpacing.xs),
                       Text(
-                        'Menus you have put live',
+                        // An admin opens the same door onto every rep's work,
+                        // so the possessive has to go for them.
+                        canMintStandees
+                            ? 'Every menu live, across all staff'
+                            : 'Menus you have put live',
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: AppColors.textMuted),
                       ),

@@ -8,6 +8,7 @@
 // RepStandeeRow) and `src/models/types/qr.types.ts` (QR_CODE_STATES) — there is
 // no shared package, per AGENTS.md §0.1.
 import '../catalog/catalog_names.dart';
+import 'project_owner.dart';
 import 'user_role.dart';
 
 /// Lifecycle of one physical standee, mirroring the backend's `QR_CODE_STATES`.
@@ -309,7 +310,13 @@ enum PublishedWindow {
   final String label;
 }
 
-/// One standee this rep put live.
+/// One standee put live — by this rep, or by anyone when an admin is reading.
+///
+/// ONE type for both reads rather than two, because it is one ROW: same
+/// restaurant, same code, same link, same download. The admin's list adds
+/// [activatedBy] and nothing else, and a second class would mean two copies of
+/// [displayName] — the rule that decides what a restaurant is CALLED — free to
+/// drift apart on two screens showing the same restaurant.
 class RepPublishedStandee {
   const RepPublishedStandee({
     required this.code,
@@ -318,6 +325,7 @@ class RepPublishedStandee {
     required this.catalogId,
     this.businessName,
     this.activatedAt,
+    this.activatedBy,
   });
 
   /// The 8 characters printed under the QR square.
@@ -333,6 +341,18 @@ class RepPublishedStandee {
   final String? businessName;
   final String catalogId;
   final DateTime? activatedAt;
+
+  /// Who put this menu live — present only on the ADMIN read, where the list
+  /// spans every rep and a row with no name attached answers "how many are
+  /// live" instead of "who signed this one up".
+  ///
+  /// The list-safe summary, same as "Created by" on a live project: a name and
+  /// whether there is a picture. This type deliberately cannot carry a phone or
+  /// an email; the admin taps through to the one bounded route for those.
+  ///
+  /// Null on a rep's own history (the rep already knows), and null for an
+  /// account that no longer resolves.
+  final ProjectOwnerSummary? activatedBy;
 
   /// What the row prints.
   ///
@@ -357,19 +377,32 @@ class RepPublishedStandee {
         catalogId: (map['catalogId'] ?? '').toString(),
         activatedAt:
             DateTime.tryParse((map['activatedAt'] ?? '').toString())?.toLocal(),
+        activatedBy: ProjectOwnerSummary.tryFrom(map['activatedBy']),
       );
 }
 
-/// A page of published standees, plus the number that does not move.
+/// A page of published standees, plus the numbers that do not move.
 class RepPublishedPage {
-  const RepPublishedPage({required this.standees, required this.total});
+  const RepPublishedPage({
+    required this.standees,
+    required this.total,
+    this.generated,
+  });
 
   final List<RepPublishedStandee> standees;
 
-  /// Every standee this rep has ever put live, IGNORING the window — the
-  /// number the screen exists to show, which must not change when a filter
-  /// is tapped.
+  /// Every standee put live, IGNORING the window — this rep's on their own
+  /// history, everyone's on the admin read. The number the screen exists to
+  /// show, which must not change when a filter is tapped.
   final int total;
+
+  /// Every standee ever MINTED, ignoring the window — the denominator of the
+  /// admin header's "2 of 115".
+  ///
+  /// Null on a rep's own history, and that is the honest shape: how much stock
+  /// the business has printed is not a fact about a rep's work, and the rep
+  /// header has never claimed to be a fraction of anything.
+  final int? generated;
 }
 
 /// What a whole-batch assignment moved.

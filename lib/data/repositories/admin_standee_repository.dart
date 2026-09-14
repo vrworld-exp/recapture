@@ -90,6 +90,19 @@ abstract interface class AdminStandeeRepository {
   /// Every mint run, newest first, with what is left in each.
   Future<List<QrBatchSummary>> batches();
 
+  /// Every menu ANYONE has put live — the admin's read of the same history
+  /// `RepRepository.publishedStandees` returns scoped to one rep.
+  ///
+  /// Separate method, separate route, deliberately: `/rep/published` is keyed
+  /// on the caller's own id server-side, so there is no shape of that request
+  /// that returns somebody else's work. Seeing across reps is an ADMIN
+  /// capability and goes through an ADMIN-gated route.
+  ///
+  /// [days] narrows the LIST only. The page's `total` and `generated` ignore
+  /// it, because the header they feed is "how much of what we printed is
+  /// working" and that is not a question about the last week.
+  Future<RepPublishedPage> publishedStandees({int? days});
+
   /// Mints a run. `count` is bounded server-side by QR_BATCH_MAX_SIZE.
   /// Mints a run. count is bounded server-side by QR_BATCH_MAX_SIZE.
   ///
@@ -208,6 +221,29 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
             .whereType<Map<String, dynamic>>()
             .map(QrBatchSummary.fromMap)
             .toList(growable: false);
+      });
+
+  @override
+  Future<RepPublishedPage> publishedStandees({int? days}) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/admin/standees/published',
+          queryParameters: {if (days != null) 'days': days},
+        );
+        final raw = res.data?['standees'];
+        return RepPublishedPage(
+          standees: raw is List
+              ? raw
+                  .whereType<Map<String, dynamic>>()
+                  .map(RepPublishedStandee.fromMap)
+                  .toList(growable: false)
+              : const <RepPublishedStandee>[],
+          total: (res.data?['total'] as num?)?.toInt() ?? 0,
+          // Absent rather than zero when the server did not send it: a missing
+          // denominator must read as "no fraction to show", never as
+          // "0 standees exist" under a list that plainly has rows in it.
+          generated: (res.data?['generated'] as num?)?.toInt(),
+        );
       });
 
   @override
