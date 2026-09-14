@@ -72,14 +72,19 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
       case PublishGateCode.productAssetMissing:
       case PublishGateCode.productNameDuplicate:
       // The product's own screen is where its category is picked, so a product
-      // pointing at a category the catalog no longer has is fixed there too.
+      // pointing at a category the catalog no longer has — or at none — is
+      // fixed there too.
       case PublishGateCode.productCategoryUnknown:
+      case PublishGateCode.productUncategorized:
         if (productId == null) return;
         await context.pushNamed(
           AppRouteNames.productDetail,
           pathParameters: {'productId': productId},
         );
       case PublishGateCode.categoryNameInvalid:
+      // Creating the first category files every product into it, so the
+      // manager is the whole fix.
+      case PublishGateCode.catalogNoCategories:
         await context.pushNamed(AppRouteNames.catalogCategories);
       // Nothing the user can open would help: the preview image is generating,
       // the model is not finished, or publishing is off on this deployment.

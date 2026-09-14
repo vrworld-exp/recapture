@@ -29,6 +29,7 @@ import type {
 import { encodePositionCursor, type PositionCursor } from '@/utils/cursor';
 import { appendSlugSuffix, flexibleSlugRegex } from '@/utils/catalogNames';
 import { bumpDraftRevision, findOwnedCatalog } from '@/services/catalogService';
+import { firstCategoryId } from '@/services/catalogCategoriesService';
 import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { env } from '@/config/env';
 import { presignObjectPutUrl, putObjectBytes } from '@/services/s3ObjectStore';
@@ -308,6 +309,12 @@ export async function createProduct(
   // Category, when given, must be a live category of THIS catalog. Scoping the
   // lookup to the catalog is what stops a product being filed under someone
   // else's category.
+  //
+  // WHEN NOT GIVEN, THE FIRST CATEGORY. A product with no category reaches the
+  // live page as a tab called "uncategorized", and "I didn't pick one" was the
+  // ordinary way that happened. Null is now reserved for a catalog that has no
+  // categories at all — the one case publish refuses rather than repairs.
+  let categoryId: Types.ObjectId | null;
   if (input.categoryId) {
     const category = await CatalogCategory.findOne({
       _id: new Types.ObjectId(input.categoryId),
@@ -315,6 +322,9 @@ export async function createProduct(
       deletedAt: null,
     }).exec();
     if (!category) return { outcome: 'CATEGORY_NOT_FOUND' };
+    categoryId = category._id as Types.ObjectId;
+  } else {
+    categoryId = await firstCategoryId(catalogId);
   }
 
   let assets: ProductAssets | undefined;
@@ -389,7 +399,7 @@ export async function createProduct(
     name: input.name,
     ...(input.description !== undefined ? { description: input.description } : {}),
     ...(input.price !== undefined ? { price: input.price } : {}),
-    categoryId: input.categoryId ? new Types.ObjectId(input.categoryId) : null,
+    categoryId,
     ...(input.tags !== undefined ? { tags: input.tags } : {}),
     ...(input.availability !== undefined ? { availability: input.availability } : {}),
     ...(input.featured !== undefined ? { featured: input.featured } : {}),

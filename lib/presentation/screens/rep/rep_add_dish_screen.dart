@@ -47,6 +47,7 @@ import '../../../application/projects/projects_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/rep_repository.dart';
+import '../../../domain/entities/catalog_category.dart';
 import '../../../domain/entities/product_food_type.dart';
 import '../../../domain/entities/product_type.dart';
 import '../../widgets/app_button.dart';
@@ -78,10 +79,32 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
   String? _selectedProjectId;
   String? _selectedModelId;
 
-  /// The section the dish will be filed into. Null is Uncategorized, and is the
-  /// honest default: a rep who has not chosen has not chosen, and guessing the
-  /// first section for them would file dishes into "Starters" all evening.
+  /// The section the dish will be filed into.
+  ///
+  /// DEFAULTS TO THE FIRST SECTION once the list arrives, and this is a
+  /// re-decision. It used to stay null — "a rep who has not chosen has not
+  /// chosen" — and the cost of that turned out to be dishes reaching the live
+  /// page under a tab called "uncategorized". The server now files an unchosen
+  /// dish into the first section anyway; showing that here means the rep sees
+  /// where it is going before they press Add, rather than after. A rep who
+  /// wants a different section still picks one. Null only for a menu with no
+  /// sections at all.
   String? _categoryId;
+
+  /// Whether [_categoryId] is the rep's own choice rather than the default,
+  /// so a list that reloads does not overwrite a pick.
+  bool _categoryChosen = false;
+
+  /// The section the dish goes in: the rep's pick, else the FIRST section.
+  ///
+  /// Derived at use rather than written into [_categoryId] when the list
+  /// arrives, so there is no setState-during-build and no race with a list
+  /// that reloads after a "New section…" create. Null only when there are no
+  /// sections at all.
+  String? _effectiveCategoryId(List<CatalogCategory> categories) {
+    if (_categoryChosen) return _categoryId;
+    return categories.isNotEmpty ? categories.first.id : null;
+  }
 
   /// Veg by default. Only a non-veg / no-label choice is sent — see _submit.
   ProductFoodType _foodType = ProductFoodType.veg;
@@ -221,8 +244,13 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
         imageKey: imageKey,
         // FILED ON THE WAY IN. Before this the dish was created uncategorized
         // and the rep had to reopen it in the editor to place it — which, on a
-        // menu with no sections to begin with, essentially nobody did.
-        categoryId: _categoryId,
+        // menu with no sections to begin with, essentially nobody did. Null
+        // here is now only "no sections exist"; the server would default to
+        // the first one regardless.
+        categoryId: _effectiveCategoryId(
+          ref.read(repCategoriesProvider(widget.catalogId)).valueOrNull?.categories ??
+              const <CatalogCategory>[],
+        ),
         // Veg is the server default; only an explicit other choice goes out.
         foodType: _foodType == ProductFoodType.veg ? null : _foodType,
       );
@@ -360,10 +388,11 @@ class _RepAddDishScreenState extends ConsumerState<RepAddDishScreen> {
                       fieldKey: const ValueKey('rep_add_dish_section'),
                       catalogId: widget.catalogId,
                       categories: list.categories,
-                      value: _categoryId,
+                      value: _effectiveCategoryId(list.categories),
                       enabled: !_submitting,
                       onChanged: (value) => setState(() {
                         _categoryId = value;
+                        _categoryChosen = true;
                         _failureMessage = null;
                       }),
                     ),

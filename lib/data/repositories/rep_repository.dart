@@ -241,7 +241,8 @@ abstract interface class RepRepository {
     String name,
   );
 
-  /// Deletes a section and returns how many dishes moved to Uncategorized.
+  /// Deletes a section and returns how many dishes the server moved out of it
+  /// (into the first remaining section, or Uncategorized for the last).
   ///
   /// The count is the whole point of the return type: the rep is deleting a
   /// grouping on someone else's menu, and the confirmation must never let that

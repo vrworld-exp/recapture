@@ -93,11 +93,15 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
       case PublishGateCode.productAssetMissing:
       case PublishGateCode.productNameDuplicate:
       // The dish editor is where its section is picked, so a dish pointing at
-      // a section the menu no longer has is fixed there too.
+      // a section the menu no longer has — or at none — is fixed there too.
       case PublishGateCode.productCategoryUnknown:
+      case PublishGateCode.productUncategorized:
         if (productId == null) return;
         await context.push('$_base/dishes/$productId');
       case PublishGateCode.categoryNameInvalid:
+      // Creating the first section files every dish into it, so the manager
+      // is the whole fix.
+      case PublishGateCode.catalogNoCategories:
         await context.push('$_base/categories');
       // Nothing the rep can open would help: the preview image is generating,
       // the model is not finished, or publishing is off on this deployment.

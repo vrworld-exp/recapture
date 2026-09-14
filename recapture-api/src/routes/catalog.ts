@@ -611,7 +611,14 @@ router.post(
       category_id: result.category.id,
     });
 
-    res.status(201).json({ status: 'success', category: result.category });
+    res.status(201).json({
+      status: 'success',
+      category: result.category,
+      // Non-zero only for the catalog's FIRST category, which adopts every
+      // product made before it. The client says so, because products
+      // silently changing section is otherwise a thing to report.
+      adoptedProductCount: result.adoptedProductCount,
+    });
   })
 );
 
@@ -688,9 +695,11 @@ router.delete(
 
     res.status(200).json({
       status: 'success',
-      // The client shows "3 products moved to Uncategorized" — deleting a
-      // grouping must never look like it deleted the things inside it.
+      // The client shows "3 products moved to Starters" — deleting a grouping
+      // must never look like it deleted the things inside it. `movedTo` is
+      // null only when this was the last category, and the copy says so.
       movedProductCount: result.movedProductCount,
+      movedTo: result.movedTo,
     });
   })
 );

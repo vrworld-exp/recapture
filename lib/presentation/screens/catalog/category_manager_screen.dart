@@ -960,9 +960,13 @@ class _DeleteCategoryDialog extends StatefulWidget {
 }
 
 class _DeleteCategoryDialogState extends State<_DeleteCategoryDialog> {
-  /// Null = Uncategorized, and it is the default because it is the outcome that
-  /// needs no extra work and loses nothing.
-  String? _destinationId;
+  /// Where the products go. THE FIRST OTHER CATEGORY by default — the same
+  /// "first" the server picks and a new product is filed into — and null only
+  /// when this is the last one, because then there is nowhere else. It used to
+  /// default to Uncategorized, which is how deleting a section put a tab called
+  /// "uncategorized" on the live menu.
+  late String? _destinationId =
+      widget.others.isEmpty ? null : widget.others.first.id;
 
   @override
   Widget build(BuildContext context) {
@@ -992,11 +996,15 @@ class _DeleteCategoryDialogState extends State<_DeleteCategoryDialog> {
             ),
             if (!empty) ...[
               const SizedBox(height: AppSpacing.lg),
-              _DestinationTile(
-                label: 'Uncategorized',
-                selected: _destinationId == null,
-                onTap: () => setState(() => _destinationId = null),
-              ),
+              // Offered ONLY when there is nothing else to offer. With another
+              // category to move to, "Uncategorized" is a way to break the
+              // menu, not a destination.
+              if (widget.others.isEmpty)
+                _DestinationTile(
+                  label: 'Uncategorized',
+                  selected: _destinationId == null,
+                  onTap: () => setState(() => _destinationId = null),
+                ),
               for (final other in widget.others)
                 _DestinationTile(
                   label: other.displayName,
@@ -1009,6 +1017,16 @@ class _DeleteCategoryDialogState extends State<_DeleteCategoryDialog> {
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: AppColors.textMuted),
               ),
+              if (widget.others.isEmpty) ...[
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  // Said now rather than discovered at Publish.
+                  'This is your last category. Publishing will ask you to '
+                  'create one before these products can go live.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: AppColors.warning, height: 1.4),
+                ),
+              ],
             ],
           ],
         ),

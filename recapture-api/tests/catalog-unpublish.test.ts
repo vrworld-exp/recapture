@@ -104,12 +104,20 @@ async function seedPublished(userId: string): Promise<{
   });
   const catalogId = catalog._id as Types.ObjectId;
 
+  // A category, because a catalog with products and none no longer publishes.
+  const category = await CatalogCategory.create({
+    catalogId,
+    userId: new Types.ObjectId(userId),
+    name: 'menu',
+    position: 0,
+  });
   await CatalogProduct.create({
     catalogId,
     userId: new Types.ObjectId(userId),
     type: 'IMAGE_ONLY',
     name: 'Chair',
     position: 0,
+    categoryId: category._id,
     assets: { imageKey: 'dev/catalog/x/products/p/0.jpg' },
     mirageItemId: 'mi-1',
     syncStatus: 'SYNCED',

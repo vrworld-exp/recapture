@@ -156,6 +156,15 @@ async function activated(
     .send({ code, restaurantName, restaurantPhone: phone });
   expect(res.status).toBe(201);
 
+  // A section, because a menu with dishes and none no longer publishes
+  // (CATALOG_NO_CATEGORIES). Every dish added below is filed into it by the
+  // server — this is the shape a real visit now takes.
+  const section = await request(app)
+    .post(`/rep/catalogs/${res.body.catalogId}/categories`)
+    .set(rep.auth)
+    .send({ name: 'Mains' });
+  expect(section.status).toBe(201);
+
   const owner = await User.findOne({ phone }).exec();
   return {
     rep,

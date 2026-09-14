@@ -104,7 +104,8 @@ class RepCategoriesNotifier
     return updated;
   }
 
-  /// Deletes one and returns how many dishes the SERVER moved to Uncategorized.
+  /// Deletes one and returns how many dishes the SERVER moved out of it — into
+  /// the first remaining section, or Uncategorized only for the last one.
   ///
   /// That number is the one to report, and it is not always the one the
   /// confirmation showed: `productCount` counts only live dishes, while the

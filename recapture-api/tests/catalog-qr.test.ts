@@ -24,6 +24,7 @@ import { createApp } from '@/app';
 import { env } from '@/config/env';
 import { Catalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
+import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogPublishRun } from '@/models/CatalogPublishRun';
 import { Job } from '@/models/Job';
 import { User } from '@/models/User';
@@ -103,12 +104,21 @@ async function seed(
     ...overrides,
   });
   const catalogId = catalog._id as Types.ObjectId;
+  // A category, because a catalog with products and none no longer publishes
+  // (CATALOG_NO_CATEGORIES) — this suite is about what happens after the gates.
+  const category = await CatalogCategory.create({
+    catalogId,
+    userId: new Types.ObjectId(userId),
+    name: 'menu',
+    position: 0,
+  });
   await CatalogProduct.create({
     catalogId,
     userId: new Types.ObjectId(userId),
     type: 'IMAGE_ONLY',
     name: 'Chair',
     position: 0,
+    categoryId: category._id,
     assets: { imageKey: 'dev/catalog/x/products/p/0.jpg' },
   });
   return catalogId;
@@ -242,6 +252,8 @@ describe('the code never changes', () => {
       type: 'IMAGE_ONLY',
       name: 'Stool',
       position: 1,
+      // Filed, or the republish below is refused as PRODUCT_UNCATEGORIZED.
+      categoryId: (await CatalogCategory.findOne({ catalogId }).lean().exec())!._id,
       assets: { imageKey: 'dev/x.jpg' },
     });
     await CatalogProduct.deleteOne({ catalogId, name: 'Chair' }).exec();

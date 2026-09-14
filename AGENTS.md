@@ -729,6 +729,28 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   (already-normalized) names, so posting "Garden Chairs" against a stored
   `garden_chairs` passes the check and creates a twin. ReCapture's display name
   stays authoritative — never write Mirage's echo back over it.
+- **A product is NEVER uncategorized while the catalog has a category.** A
+  null `categoryId` used to be a first-class state — the "Uncategorized"
+  bucket, materialised at publish as a real Mirage category named
+  `uncategorized` — and it surfaced on live menus as a tab customers read as a
+  category nobody recognised. Three writes now keep products filed
+  (`services/catalogCategoriesService.ts`, `catalogProductsService.createProduct`):
+  a product created with no category goes into the **first** category (by
+  position); the **first** category created adopts every stray (a second one
+  adopts nothing — "Drinks" must not swallow the starters); deleting a category
+  moves its products to the first **remaining** one, and to null only when it
+  was the last. Publish refuses the two strays that can still exist:
+  `CATALOG_NO_CATEGORIES` (products, no categories — ONE catalog-level row) and
+  `PRODUCT_UNCATEGORIZED` (a pre-rule row under a catalog that has categories —
+  one row per product). Never both. The client mirrors both in
+  `evaluateDraftGates` (with `categoryIds: null` meaning "did not look", never
+  "there are none"), the editors stop offering "Uncategorized" once a category
+  exists, and the rep's add-dish defaults to the first section — a **reversal**
+  of the earlier "a rep who has not chosen has not chosen" stance, made
+  deliberately. The bucket code in `categorySync.ts` stays as the backstop for
+  data written before this; nothing new aims at it. An explicit `categoryId:
+  null` on update / bulk `SET_CATEGORY` is still honoured as a deliberate
+  "move out" — the gate is what catches it.
 - **Assets stream, they are never buffered.** `MirageFileUpload` is a union:
   `kind: 'bytes'` for things small by construction (a logo), `kind: 'stream'`
   for anything model-sized. `mirageClient` encodes the multipart body BY HAND so

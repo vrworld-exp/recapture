@@ -162,6 +162,7 @@ class CatalogPreview {
       gates: evaluateDraftGates(
         catalogName: catalog.name,
         products: live,
+        categoryIds: [for (final category in ordered) category.id],
       ),
       emptySectionTitles: emptyTitles,
     );

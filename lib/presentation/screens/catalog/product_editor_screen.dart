@@ -1057,7 +1057,16 @@ class _AssetPanel extends StatelessWidget {
   }
 }
 
-/// The category picker, including the Uncategorized bucket.
+/// The category picker.
+///
+/// "UNCATEGORIZED" IS NOT A CHOICE ANY MORE, once the catalog has a category.
+/// A product in no category reached the live page as a tab called
+/// "uncategorized", and this dropdown was one of the ways it got there. The
+/// null row is kept only where it is the truth: a catalog with no categories at
+/// all (there is nothing else to offer), and a product that is CURRENTLY
+/// uncategorized (the dropdown must be able to show its own value) — and there
+/// it is labelled as the problem it is, and vanishes the moment a category is
+/// picked.
 class _CategoryField extends ConsumerWidget {
   const _CategoryField({
     required this.categoryId,
@@ -1083,6 +1092,7 @@ class _CategoryField extends ConsumerWidget {
     // exactly where the server put the product.
     final known = categories.any((c) => c.id == categoryId);
     final value = known ? categoryId : null;
+    final offerNone = categories.isEmpty || value == null;
 
     return _DirtyLabel(
       label: 'Category',
@@ -1096,10 +1106,16 @@ class _CategoryField extends ConsumerWidget {
             dropdownColor: AppColors.surface1,
             onChanged: enabled ? onChanged : null,
             items: [
-              const DropdownMenuItem<String?>(
-                value: null,
-                child: Text('Uncategorized'),
-              ),
+              if (offerNone)
+                DropdownMenuItem<String?>(
+                  value: null,
+                  child: Text(
+                    categories.isEmpty
+                        ? 'No categories yet'
+                        : 'No category — pick one',
+                    style: const TextStyle(color: AppColors.warning),
+                  ),
+                ),
               for (final category in categories)
                 DropdownMenuItem<String?>(
                   value: category.id,

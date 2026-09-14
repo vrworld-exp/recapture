@@ -121,7 +121,8 @@ abstract interface class CatalogRepository {
 
   Future<CatalogCategory> renameCategory(String id, String name);
 
-  /// Deletes a category and returns how many products moved to Uncategorized —
+  /// Deletes a category and returns how many products the server moved out of
+  /// it (into the first remaining category, or Uncategorized for the last) —
   /// the confirmation copy needs that number, because deleting a grouping must
   /// never look like it deleted the products inside it.
   Future<int> deleteCategory(String id);

@@ -319,7 +319,7 @@ describe('catalog categories', () => {
     expect(res.body.code).toBe('ID_SET_MISMATCH');
   });
 
-  it('deleting a category moves its products to Uncategorized, never deletes them', async () => {
+  it('deleting the LAST category moves its products to Uncategorized, never deletes them', async () => {
     const { auth } = await makeUser();
     await createCatalogFor(auth);
 
@@ -333,6 +333,8 @@ describe('catalog categories', () => {
       .set(auth)
       .expect(200);
     expect(del.body.movedProductCount).toBe(1);
+    // Nowhere else to go — and the client says so, because publish will refuse.
+    expect(del.body.movedTo).toBeNull();
 
     const list = await request(app).get('/catalog/products').set(auth).expect(200);
     expect(list.body.items).toHaveLength(1);
@@ -341,6 +343,90 @@ describe('catalog categories', () => {
     const cats = await request(app).get('/catalog/categories').set(auth).expect(200);
     expect(cats.body.categories).toHaveLength(0);
     expect(cats.body.uncategorizedCount).toBe(1);
+  });
+
+  // ── The no-uncategorized rules ──────────────────────────────────────────
+  //
+  // A product in no category reached the live page as a tab called
+  // "uncategorized". These pin the three writes that now keep products filed.
+
+  it('files a product created without a category into the FIRST category', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+    const first = await request(app).post('/catalog/categories').set(auth).send({ name: 'Starters' });
+    await request(app).post('/catalog/categories').set(auth).send({ name: 'Mains' });
+
+    const res = await createImageOnly(auth, { name: 'Soup' });
+
+    // The first by POSITION — the one at the top of every picker — not the
+    // most recently created.
+    expect(res.body.product.categoryId).toBe(first.body.category.id);
+  });
+
+  it('a product created with no categories at all stays uncategorized', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+
+    const res = await createImageOnly(auth, { name: 'Soup' });
+
+    // Nothing to file it into; publish is what refuses this, not create.
+    expect(res.body.product.categoryId).toBeNull();
+  });
+
+  it('the FIRST category adopts every product created before it', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+    await createImageOnly(auth, { name: 'Soup' });
+    await createImageOnly(auth, { name: 'Bread' });
+
+    const first = await request(app)
+      .post('/catalog/categories')
+      .set(auth)
+      .send({ name: 'Starters' })
+      .expect(201);
+
+    expect(first.body.adoptedProductCount).toBe(2);
+    expect(first.body.category.productCount).toBe(2);
+    const cats = await request(app).get('/catalog/categories').set(auth).expect(200);
+    expect(cats.body.uncategorizedCount).toBe(0);
+  });
+
+  it('a SECOND category adopts nothing', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+    const first = await request(app).post('/catalog/categories').set(auth).send({ name: 'Starters' });
+    await createImageOnly(auth, { name: 'Soup' });
+
+    const second = await request(app)
+      .post('/catalog/categories')
+      .set(auth)
+      .send({ name: 'Drinks' })
+      .expect(201);
+
+    // "Drinks" must not swallow every unfiled starter on the menu.
+    expect(second.body.adoptedProductCount).toBe(0);
+    const list = await request(app).get('/catalog/products').set(auth).expect(200);
+    expect(list.body.items[0].categoryId).toBe(first.body.category.id);
+  });
+
+  it('deleting a category moves its products to the first REMAINING one', async () => {
+    const { auth } = await makeUser();
+    await createCatalogFor(auth);
+    const drinks = await request(app).post('/catalog/categories').set(auth).send({ name: 'Drinks' });
+    const food = await request(app).post('/catalog/categories').set(auth).send({ name: 'Food' });
+    await createImageOnly(auth, { name: 'Latte', categoryId: drinks.body.category.id });
+
+    const del = await request(app)
+      .delete(`/catalog/categories/${drinks.body.category.id}`)
+      .set(auth)
+      .expect(200);
+
+    expect(del.body.movedProductCount).toBe(1);
+    expect(del.body.movedTo).toEqual({ id: food.body.category.id, name: 'food' });
+    const list = await request(app).get('/catalog/products').set(auth).expect(200);
+    expect(list.body.items[0].categoryId).toBe(food.body.category.id);
+    const cats = await request(app).get('/catalog/categories').set(auth).expect(200);
+    expect(cats.body.uncategorizedCount).toBe(0);
   });
 
   it('a foreign category id is a 404, not a 403', async () => {
@@ -524,7 +610,15 @@ describe('catalog products', () => {
     const categoryId = cat.body.category.id as string;
 
     await createImageOnly(auth, { name: 'Latte', categoryId });
-    await createImageOnly(auth, { name: 'Muffin' });
+    const muffin = await createImageOnly(auth, { name: 'Muffin' });
+    // Created without a category, Muffin was filed into the first one; move it
+    // OUT explicitly (an explicit null on update still clears) so the `none`
+    // filter has something to find.
+    await request(app)
+      .patch(`/catalog/products/${muffin.body.product.id}`)
+      .set(auth)
+      .send({ categoryId: null })
+      .expect(200);
 
     const inCat = await request(app)
       .get('/catalog/products')

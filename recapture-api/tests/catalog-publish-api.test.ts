@@ -106,6 +106,8 @@ interface SeedOptions {
     syncStatus?: 'NEVER' | 'SYNCED' | 'FAILED';
   }[];
   catalog?: Record<string, unknown>;
+  /** Seed NO category, so the products are strays — the refused shape. */
+  uncategorized?: boolean;
 }
 
 async function seed(userId: string, options: SeedOptions = {}): Promise<Types.ObjectId> {
@@ -119,6 +121,20 @@ async function seed(userId: string, options: SeedOptions = {}): Promise<Types.Ob
   });
   const catalogId = catalog._id as Types.ObjectId;
 
+  // Every seeded product is filed under one category unless the test says
+  // otherwise: a catalog with products and no category is REFUSED now
+  // (CATALOG_NO_CATEGORIES), and that refusal has tests of its own below.
+  const categoryId = options.uncategorized
+    ? null
+    : (
+        await CatalogCategory.create({
+          catalogId,
+          userId: new Types.ObjectId(userId),
+          name: 'menu',
+          position: 0,
+        })
+      )._id;
+
   const specs = options.products ?? [{ name: 'Chair' }];
   await Promise.all(
     specs.map((spec, index) =>
@@ -128,6 +144,7 @@ async function seed(userId: string, options: SeedOptions = {}): Promise<Types.Ob
         type: spec.type ?? 'IMAGE_ONLY',
         name: spec.name,
         position: index,
+        categoryId,
         assets: spec.assets ?? { imageKey: `dev/catalog/x/products/p/${index}.jpg` },
         ...(spec.sourceModelId ? { sourceModelId: spec.sourceModelId } : {}),
         ...(spec.sourceProjectId ? { sourceProjectId: spec.sourceProjectId } : {}),
@@ -419,6 +436,53 @@ describe('publish gates', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.gates.map((g: { code: string }) => g.code)).toContain('CATEGORY_NAME_INVALID');
+    expect(mirage.calls).toHaveLength(0);
+  });
+
+  it('refuses products with NO category to be filed under, in one row', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id, {
+      products: [{ name: 'Chair' }, { name: 'Stool' }],
+      uncategorized: true,
+    });
+
+    const res = await request(app).post('/catalog/publish').set(auth).send({});
+
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('PUBLISH_BLOCKED');
+    const codes = res.body.gates.map((g: { code: string }) => g.code);
+    // ONE catalog-level row, not one per product — with nothing to file them
+    // under, forty rows saying so would bury the one instruction that helps.
+    expect(codes.filter((c: string) => c === 'CATALOG_NO_CATEGORIES')).toHaveLength(1);
+    expect(codes).not.toContain('PRODUCT_UNCATEGORIZED');
+
+    // Blocked BEFORE Mirage: this is the exact path that used to put a tab
+    // called "uncategorized" on a live menu.
+    const catalog = await Catalog.findById(catalogId).lean().exec();
+    expect(catalog?.mirageRestaurantId).toBeUndefined();
+    expect(mirage.calls).toHaveLength(0);
+  });
+
+  it('refuses a stray product under a catalog that HAS categories, per product', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id, { products: [{ name: 'Chair' }, { name: 'Stool' }] });
+    // A row from before the no-uncategorized rules: categories exist, and this
+    // one is in none of them.
+    await CatalogProduct.updateOne(
+      { catalogId, name: 'Stool' },
+      { $set: { categoryId: null } }
+    ).exec();
+
+    const res = await request(app).post('/catalog/publish').set(auth).send({});
+
+    expect(res.status).toBe(422);
+    const gate = res.body.gates.find(
+      (g: { code: string }) => g.code === 'PRODUCT_UNCATEGORIZED'
+    );
+    expect(gate.productName).toBe('Stool');
+    expect(res.body.gates.map((g: { code: string }) => g.code)).not.toContain(
+      'CATALOG_NO_CATEGORIES'
+    );
     expect(mirage.calls).toHaveLength(0);
   });
 

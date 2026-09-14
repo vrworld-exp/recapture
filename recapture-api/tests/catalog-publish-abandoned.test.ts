@@ -105,12 +105,21 @@ async function seed(userId: string): Promise<Types.ObjectId> {
     publishedRevision: -1,
   });
   const catalogId = catalog._id as Types.ObjectId;
+  // A category, because a catalog with products and none no longer publishes
+  // (CATALOG_NO_CATEGORIES) — this suite is about what happens after the gates.
+  const category = await CatalogCategory.create({
+    catalogId,
+    userId: new Types.ObjectId(userId),
+    name: 'menu',
+    position: 0,
+  });
   await CatalogProduct.create({
     catalogId,
     userId: new Types.ObjectId(userId),
     type: 'IMAGE_ONLY',
     name: 'Chair',
     position: 0,
+    categoryId: category._id,
     assets: { imageKey: 'dev/catalog/x/products/p/0.jpg' },
   });
   return catalogId;

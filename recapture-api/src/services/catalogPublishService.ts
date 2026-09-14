@@ -70,6 +70,10 @@ export const PublishGateCode = {
   PRODUCT_NAME_DUPLICATE: 'PRODUCT_NAME_DUPLICATE',
   /** The product is filed under a category this catalog no longer has. */
   PRODUCT_CATEGORY_UNKNOWN: 'PRODUCT_CATEGORY_UNKNOWN',
+  /** There are products but not one category to file them under. */
+  CATALOG_NO_CATEGORIES: 'CATALOG_NO_CATEGORIES',
+  /** Categories exist, and this product is in none of them. */
+  PRODUCT_UNCATEGORIZED: 'PRODUCT_UNCATEGORIZED',
   /** A category whose stored name would reach Mirage as nothing at all. */
   CATEGORY_NAME_INVALID: 'CATEGORY_NAME_INVALID',
   /** MIRAGE_* config is absent on this deployment. */
@@ -274,6 +278,20 @@ function gateDuplicateNames(products: readonly ICatalogProduct[]): PublishGate[]
  *     collection) can still hold `"!!!"`, which reaches create-category as an
  *     empty name and comes back as a tab nobody can explain.
  *
+ *   • A PRODUCT IN NO CATEGORY AT ALL. This used to be a legitimate state —
+ *     the "Uncategorized" bucket, materialised on the Mirage side as a real
+ *     category — and it surfaced on live menus as a tab called
+ *     "uncategorized" that customers read as a category nobody recognised.
+ *     The authoring writes now keep products filed (see
+ *     catalogCategoriesService), so this gate is the backstop for the two ways
+ *     a stray can still exist: a catalog with products and NO categories, where
+ *     there was nothing to file them into (CATALOG_NO_CATEGORIES, one row for
+ *     the whole catalog), and a product written before the rules under a
+ *     catalog that does have categories (PRODUCT_UNCATEGORIZED, one row per
+ *     product, with a Fix that opens it). The two never both fire: with no
+ *     categories, every product is uncategorized and forty rows saying so
+ *     would bury the one instruction that helps.
+ *
  * A FULL publish pushes EVERY live category, not only the ones with products
  * under them (publishPlanner.neededCategories), so the name check covers all of
  * them rather than just the referenced set.
@@ -299,12 +317,31 @@ async function gateCatalogCategories(
       message: `The category "${category.name}" cannot be published under that name. Rename it.`,
     }));
 
+  if (categories.length === 0 && products.length > 0) {
+    gates.push({
+      code: PublishGateCode.CATALOG_NO_CATEGORIES,
+      message:
+        'Your menu has no categories yet. Create one — your products will be filed into it — then publish.',
+    });
+    // Every product is uncategorized here; saying so per product would only
+    // bury the sentence above.
+    return gates;
+  }
+
   for (const product of products) {
-    if (!product.categoryId) continue; // Uncategorized — a real bucket, not a gap.
+    if (!product.categoryId) {
+      gates.push({
+        code: PublishGateCode.PRODUCT_UNCATEGORIZED,
+        message: `"${product.name}" is not in any category. Pick one for it.`,
+        productId: (product._id as Types.ObjectId).toHexString(),
+        productName: product.name,
+      });
+      continue;
+    }
     if (known.has(String(product.categoryId))) continue;
     gates.push({
       code: PublishGateCode.PRODUCT_CATEGORY_UNKNOWN,
-      message: `"${product.name}" is filed under a category that is no longer in your catalog. Pick one for it, or move it to Uncategorized.`,
+      message: `"${product.name}" is filed under a category that is no longer in your catalog. Pick one for it.`,
       productId: (product._id as Types.ObjectId).toHexString(),
       productName: product.name,
     });

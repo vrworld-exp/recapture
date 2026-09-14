@@ -6,6 +6,26 @@
 // or invalid category id, so nothing publishes until these exist on the Mirage
 // side. The "Uncategorized" bucket is a NULL `categoryId` on the product here,
 // materialised as a real Mirage category by the publish worker.
+//
+// ── NOTHING SHOULD REACH THAT BUCKET ANY MORE ────────────────────────────────
+// The materialised bucket surfaces on the live page as a tab called
+// "uncategorized" — a slug the customer reads as a category nobody recognises.
+// It was reported as exactly that. So the rule is now that a product is NEVER
+// uncategorized while the catalog has a category to put it in, enforced at
+// every write that could produce one:
+//
+//   • a product created with no category is filed into the FIRST category
+//     (catalogProductsService.createProduct → firstCategoryId);
+//   • the FIRST category created adopts every product that predates it
+//     (createCategory → adoptedProductCount);
+//   • deleting a category moves its products to the first REMAINING one, and
+//     only to null when there is nothing left to move them to (deleteCategory).
+//
+// The one state this cannot prevent — products and no categories at all — is
+// refused at publish by CATALOG_NO_CATEGORIES (catalogPublishService), and a
+// stray that survives from before these rules by PRODUCT_UNCATEGORIZED. The
+// bucket code in categorySync stays as the backstop for data written before
+// this, not as a destination anything here still aims at.
 import { Types } from 'mongoose';
 import { CatalogCategory, type ICatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct } from '@/models/CatalogProduct';
@@ -101,10 +121,38 @@ export async function listCategories(userId: string): Promise<ListCategoriesResu
   };
 }
 
+/**
+ * The category a product lands in when nobody picked one.
+ *
+ * The FIRST by display position, or null for a catalog with no categories yet.
+ * "First" rather than "most recent" because it is the one the customer meets
+ * first on the page and the one an author sees at the top of every picker — a
+ * dish filed there is findable; one filed into whatever was created last is a
+ * surprise.
+ */
+export async function firstCategoryId(
+  catalogId: Types.ObjectId
+): Promise<Types.ObjectId | null> {
+  const first = await CatalogCategory.findOne({ catalogId, deletedAt: null })
+    .sort({ position: 1, _id: 1 })
+    .select('_id')
+    .lean()
+    .exec();
+  return first ? (first._id as Types.ObjectId) : null;
+}
+
 export type CreateCategoryResult =
   | { outcome: 'NO_CATALOG' }
   | { outcome: 'DUPLICATE_NAME' }
-  | { outcome: 'CREATED'; category: CategoryDto };
+  | {
+      outcome: 'CREATED';
+      category: CategoryDto;
+      /**
+       * Products that had no category and were filed into this one because it
+       * is the catalog's FIRST. Zero for every category after the first.
+       */
+      adoptedProductCount: number;
+    };
 
 /**
  * Creates a category.
@@ -125,21 +173,47 @@ export async function createCategory(
   const catalogId = catalog._id as Types.ObjectId;
   const position = input.position ?? (await nextCategoryPosition(catalogId));
 
+  // Read BEFORE the insert: whether this is the catalog's first category is
+  // what decides the adoption below, and after the insert it never is.
+  const hadCategories =
+    (await CatalogCategory.exists({ catalogId, deletedAt: null }).exec()) !== null;
+
+  let created: ICatalogCategory;
   try {
-    const created = await CatalogCategory.create({
+    created = await CatalogCategory.create({
       catalogId,
       userId: new Types.ObjectId(userId),
       name: input.name,
       position,
     });
-
-    await bumpDraftRevision(catalogId);
-
-    return { outcome: 'CREATED', category: toCategoryDto(created, 0) };
   } catch (err) {
     if (isDuplicateKeyError(err)) return { outcome: 'DUPLICATE_NAME' };
     throw err;
   }
+
+  // THE FIRST CATEGORY ADOPTS THE STRAYS. Products are routinely created
+  // before anyone thinks to make a section (a rep photographing dishes at a
+  // table, an owner importing captures), and until this they stayed
+  // uncategorized until somebody reopened each one. Only the first category
+  // does this: a second one called "Drinks" must not swallow every unfiled
+  // starter on the menu. Two concurrent first creates both sweep, and the
+  // second sweep finds nothing left — no lock needed.
+  let adopted = 0;
+  if (!hadCategories) {
+    const swept = await CatalogProduct.updateMany(
+      { catalogId, categoryId: null, deletedAt: null },
+      { $set: { categoryId: created._id } }
+    ).exec();
+    adopted = swept.modifiedCount;
+  }
+
+  await bumpDraftRevision(catalogId);
+
+  return {
+    outcome: 'CREATED',
+    category: toCategoryDto(created, adopted),
+    adoptedProductCount: adopted,
+  };
 }
 
 /** Appends after the current last category. Ties are broken by `_id` in the
@@ -196,18 +270,36 @@ export async function updateCategory(
   }
 }
 
+/** Where a deleted category's products went, as the client says it. */
+export interface MovedToCategory {
+  id: string;
+  name: string;
+}
+
 export type DeleteCategoryResult =
   | { outcome: 'NO_CATALOG' }
   | { outcome: 'NOT_FOUND' }
-  | { outcome: 'DELETED'; movedProductCount: number };
+  | {
+      outcome: 'DELETED';
+      movedProductCount: number;
+      /**
+       * The category the products were moved INTO — the first remaining one —
+       * or null when this was the last category and they had nowhere to go but
+       * Uncategorized (which publish will then refuse, by design).
+       */
+      movedTo: MovedToCategory | null;
+    };
 
 /**
- * Soft-deletes a category and moves its products to Uncategorized (feature 23b).
+ * Soft-deletes a category and moves its products to the first REMAINING
+ * category (feature 23b, re-decided under the no-uncategorized rule).
  *
  * Moving rather than cascading is the deliberate choice: deleting a grouping
- * must not delete the products inside it, and Uncategorized already exists as a
- * first-class destination (a null `categoryId`). The publish worker turns that
- * into the Mirage-side move on the next run.
+ * must not delete the products inside it. They used to go to Uncategorized —
+ * a null `categoryId` — which put a tab called "uncategorized" on the live
+ * page the next time anyone published. Now they go to the first category still
+ * standing, and to null ONLY when there is none, in which case the publish
+ * gate says so before a customer can.
  *
  * Products are moved BEFORE the category flips to deleted. The other order
  * would leave a window where a product points at a deleted category, which the
@@ -226,9 +318,22 @@ export async function deleteCategory(
   const category = await CatalogCategory.findOne({ _id: id, catalogId, deletedAt: null }).exec();
   if (!category) return { outcome: 'NOT_FOUND' };
 
+  // The destination is decided BEFORE the delete so the doomed category can
+  // never be its own destination, and read by position so it is the same
+  // "first" a new product would be filed into.
+  const destination = await CatalogCategory.findOne({
+    catalogId,
+    deletedAt: null,
+    _id: { $ne: id },
+  })
+    .sort({ position: 1, _id: 1 })
+    .select('_id name')
+    .lean()
+    .exec();
+
   const moved = await CatalogProduct.updateMany(
     { catalogId, categoryId: id, deletedAt: null },
-    { $set: { categoryId: null } }
+    { $set: { categoryId: destination ? (destination._id as Types.ObjectId) : null } }
   ).exec();
 
   // Conditional on still-live so a concurrent double-delete has exactly one
@@ -240,7 +345,13 @@ export async function deleteCategory(
 
   await bumpDraftRevision(catalogId);
 
-  return { outcome: 'DELETED', movedProductCount: moved.modifiedCount };
+  return {
+    outcome: 'DELETED',
+    movedProductCount: moved.modifiedCount,
+    movedTo: destination
+      ? { id: String(destination._id), name: destination.name as string }
+      : null,
+  };
 }
 
 export type ReorderCategoriesResult =

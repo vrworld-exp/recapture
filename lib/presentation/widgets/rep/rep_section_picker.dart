@@ -30,9 +30,10 @@ import '../../../domain/entities/catalog_category.dart';
 /// The sentinel the "New section…" row carries.
 ///
 /// A String rather than a null or an empty id, and deliberately one no
-/// ObjectId can equal: `null` is already taken — it is Uncategorized, a real
-/// and selectable answer — so the action needs a value of its own that cannot
-/// collide with a category id arriving from the server.
+/// ObjectId can equal: `null` is already taken — it is "no section", which the
+/// dropdown still has to be able to SHOW for a dish that has none — so the
+/// action needs a value of its own that cannot collide with a category id
+/// arriving from the server.
 const String _kNewSectionValue = '__rep_new_section__';
 
 /// The section a dish sits in, plus a way to make one.
@@ -109,6 +110,13 @@ class _RepSectionPickerState extends ConsumerState<RepSectionPicker> {
     // crashing the screen over a stale id.
     final known = widget.categories.any((c) => c.id == widget.value);
     final enabled = widget.enabled && !_creating;
+    // "NO SECTION" IS NOT A CHOICE ANY MORE once the menu has a section. A dish
+    // in none reached the live page as a tab called "uncategorized", and this
+    // picker was one of the ways it got there. The null row survives only where
+    // it is the truth — a menu with no sections at all, or a dish that is
+    // currently in none — labelled as the problem it is, and it goes the moment
+    // a section is picked. Both lists below must agree on whether it is there.
+    final offerNone = widget.categories.isEmpty || !known || widget.value == null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -125,7 +133,13 @@ class _RepSectionPickerState extends ConsumerState<RepSectionPicker> {
           // makes any test that taps an option by name ambiguous. One entry per
           // item, in the same order, is the contract.
           selectedItemBuilder: (context) => [
-            const Text('Uncategorized'),
+            if (offerNone)
+              Text(
+                widget.categories.isEmpty
+                    ? 'No sections yet'
+                    : 'No section — pick one',
+                style: const TextStyle(color: AppColors.warning),
+              ),
             for (final category in widget.categories)
               Text(category.displayName, overflow: TextOverflow.ellipsis),
             // The action is never a selection, so it needs no closed-state
@@ -133,11 +147,17 @@ class _RepSectionPickerState extends ConsumerState<RepSectionPicker> {
             const SizedBox.shrink(),
           ],
           items: [
-            const DropdownMenuItem<String?>(
-              key: ValueKey('rep_section_option_none'),
-              value: null,
-              child: Text('Uncategorized'),
-            ),
+            if (offerNone)
+              DropdownMenuItem<String?>(
+                key: const ValueKey('rep_section_option_none'),
+                value: null,
+                child: Text(
+                  widget.categories.isEmpty
+                      ? 'No sections yet'
+                      : 'No section — pick one',
+                  style: const TextStyle(color: AppColors.warning),
+                ),
+              ),
             for (final category in widget.categories)
               DropdownMenuItem<String?>(
                 key: ValueKey('rep_section_option_${category.id}'),

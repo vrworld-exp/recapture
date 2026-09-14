@@ -578,8 +578,10 @@ void main() {
         category('a', name: 'Chairs', position: 0, productCount: 3),
         category('b', name: 'Tables', position: 1),
       ]);
-      repo.movedOnDelete = 3;
-      await tester.pumpWidget(harness(repo));
+      final products = FakeCategoryProductsRepository({
+        'a': [grid.product('p1'), grid.product('p2'), grid.product('p3')],
+      });
+      await tester.pumpWidget(harness(repo, products: products));
       await tester.pumpAndSettle();
 
       await tester.tap(find.byTooltip('Category options').first);
@@ -593,6 +595,40 @@ void main() {
             'deleted with it. Choose where they go.'),
         findsOneWidget,
       );
+      // With another category to move to, Uncategorized is not offered: it is
+      // a way to break the menu, not a destination.
+      expect(find.text('Uncategorized'), findsOneWidget); // the fixed row only
+
+      // Nothing tapped: the DEFAULT is the first other category, not
+      // Uncategorized — which is how deleting a category used to put a tab
+      // called "uncategorized" on the live menu.
+      await tester.tap(find.text('Move and delete'));
+      await tester.pumpAndSettle();
+
+      expect(products.bulkCalls.single.categoryId, 'b');
+      expect(repo.deletes, ['a']);
+      expect(find.textContaining('3 products moved to Tables'), findsOneWidget);
+    });
+
+    testWidgets('the LAST category is the only one that offers Uncategorized',
+        (tester) async {
+      final repo = FakeCategoriesRepository([
+        category('a', name: 'Chairs', position: 0, productCount: 3),
+      ]);
+      repo.movedOnDelete = 3;
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Category options').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      // The fixed bucket row AND the dialog's destination tile — there is
+      // nowhere else for these products to go, and the dialog says what that
+      // means before it happens rather than at Publish.
+      expect(find.text('Uncategorized'), findsNWidgets(2));
+      expect(find.textContaining('This is your last category'), findsOneWidget);
 
       await tester.tap(find.text('Move and delete'));
       await tester.pumpAndSettle();

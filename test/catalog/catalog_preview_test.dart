@@ -380,8 +380,14 @@ void main() {
 
       expect(preview.products.map((p) => p.id), ['p1']);
       // ...and therefore an archived product with no image is not reported as
-      // blocking a publish it is not part of.
-      expect(preview.gates, isEmpty);
+      // blocking a publish it is not part of. (The catalog-level "no
+      // categories" row is about the draft, not about p2, and is not a product
+      // gate.)
+      expect(preview.gatesByProduct, isEmpty);
+      expect(
+        preview.gates.map((g) => g.code),
+        [PublishGateCode.catalogNoCategories],
+      );
     });
 
     test('a product whose category is missing still appears on the page', () {
@@ -411,9 +417,84 @@ void main() {
         ],
       );
 
-      expect(preview.gates.length, 2);
+      expect(preview.gates.where((g) => g.isAboutProduct).length, 2);
       expect(preview.productsWithWarnings, 1);
       expect(preview.gatesByProduct['p1'], hasLength(2));
+    });
+
+    // ── The no-uncategorized rule, mirrored ─────────────────────────────────
+    //
+    // A product in no category reached the live page as a tab called
+    // "uncategorized". The preview's pre-flight now says so BEFORE Publish
+    // does, in the same two shapes the server uses.
+
+    test('products with no categories at all trip ONE catalog-level gate', () {
+      final preview = compose(
+        products: [
+          product('p1', thumbnailUrl: 'https://cdn/a.jpg'),
+          product('p2', thumbnailUrl: 'https://cdn/b.jpg'),
+        ],
+      );
+
+      final codes = preview.gates.map((g) => g.code).toList();
+      // One row, not one per product — forty rows saying the same thing would
+      // bury the one instruction that helps.
+      expect(codes.where((c) => c == PublishGateCode.catalogNoCategories),
+          hasLength(1));
+      expect(codes, isNot(contains(PublishGateCode.productUncategorized)));
+      expect(preview.catalogGates.single.code,
+          PublishGateCode.catalogNoCategories);
+      expect(PublishGateCode.catalogNoCategories.fixLabel, 'Create a category');
+    });
+
+    test('a stray under a catalog WITH categories is flagged on its card', () {
+      final preview = compose(
+        categories: [category('c1', name: 'Starters', position: 0)],
+        products: [
+          inCategory(product('p1', thumbnailUrl: 'https://cdn/a.jpg'), 'c1'),
+          inCategory(product('p2', thumbnailUrl: 'https://cdn/b.jpg'), null),
+        ],
+      );
+
+      expect(preview.gatesByProduct['p1'], isNull);
+      expect(preview.gatesByProduct['p2']?.single.code,
+          PublishGateCode.productUncategorized);
+      expect(
+        preview.gates.map((g) => g.code),
+        isNot(contains(PublishGateCode.catalogNoCategories)),
+      );
+    });
+
+    test('a category the catalog no longer has is flagged too', () {
+      final preview = compose(
+        categories: [category('c1', name: 'Starters', position: 0)],
+        products: [
+          inCategory(product('p1', thumbnailUrl: 'https://cdn/a.jpg'), 'gone'),
+        ],
+      );
+
+      expect(preview.gatesByProduct['p1']?.single.code,
+          PublishGateCode.productCategoryUnknown);
+    });
+
+    test('an empty catalog has nothing to file, so no category gate', () {
+      final preview = compose();
+
+      expect(
+        preview.gates.map((g) => g.code),
+        isNot(contains(PublishGateCode.catalogNoCategories)),
+      );
+    });
+
+    test('a caller that did not read categories is not told there are none',
+        () {
+      // Null is "did not look"; only an empty LIST is "there are none".
+      final gates = evaluateDraftGates(
+        catalogName: 'Cafe',
+        products: [product('p1', thumbnailUrl: 'https://cdn/a.jpg')],
+      );
+
+      expect(gates, isEmpty);
     });
   });
 

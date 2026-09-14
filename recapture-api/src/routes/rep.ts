@@ -353,7 +353,14 @@ router.post(
       category_id: result.category.id,
     });
 
-    res.status(201).json({ status: 'success', category: result.category });
+    res.status(201).json({
+      status: 'success',
+      category: result.category,
+      // Non-zero only for the catalog's FIRST category, which adopts every
+      // product made before it. The client says so, because products
+      // silently changing section is otherwise a thing to report.
+      adoptedProductCount: result.adoptedProductCount,
+    });
   })
 );
 
@@ -444,11 +451,13 @@ router.patch(
 /**
  * DELETE /rep/catalogs/:id/categories/:categoryId — remove a section.
  *
- * THE DISHES SURVIVE. `deleteCategory` moves them to Uncategorized rather than
- * deleting them, and `movedProductCount` comes back so the rep screen can say
- * "3 dishes moved to Uncategorized" — deleting a grouping must never look like
- * it deleted the things inside it, least of all to someone doing it on another
- * business's menu.
+ * THE DISHES SURVIVE. `deleteCategory` moves them to the first remaining
+ * section rather than deleting them, and `movedProductCount` + `movedTo` come
+ * back so the rep screen can say "3 dishes moved to Starters" — deleting a
+ * grouping must never look like it deleted the things inside it, least of all
+ * to someone doing it on another business's menu. `movedTo` is null only for
+ * the last section, whose dishes have nowhere to go but Uncategorized — which
+ * publish then refuses, by design.
  */
 router.delete(
   '/catalogs/:id/categories/:categoryId',
@@ -477,6 +486,7 @@ router.delete(
     res.status(200).json({
       status: 'success',
       movedProductCount: result.movedProductCount,
+      movedTo: result.movedTo,
     });
   })
 );

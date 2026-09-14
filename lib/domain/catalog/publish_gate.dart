@@ -41,6 +41,10 @@ enum PublishGateCode {
   productNameDuplicate,
   productCategoryUnknown,
   categoryNameInvalid,
+  /// Products exist and not one category does — nothing to file them under.
+  catalogNoCategories,
+  /// Categories exist and this product is in none of them.
+  productUncategorized,
   publishingUnavailable,
   unknown,
 }
@@ -56,6 +60,8 @@ extension PublishGateCodeX on PublishGateCode {
         PublishGateCode.productNameDuplicate => 'PRODUCT_NAME_DUPLICATE',
         PublishGateCode.productCategoryUnknown => 'PRODUCT_CATEGORY_UNKNOWN',
         PublishGateCode.categoryNameInvalid => 'CATEGORY_NAME_INVALID',
+        PublishGateCode.catalogNoCategories => 'CATALOG_NO_CATEGORIES',
+        PublishGateCode.productUncategorized => 'PRODUCT_UNCATEGORIZED',
         PublishGateCode.publishingUnavailable => 'PUBLISHING_UNAVAILABLE',
         PublishGateCode.unknown => 'UNKNOWN',
       };
@@ -70,6 +76,8 @@ extension PublishGateCodeX on PublishGateCode {
         'PRODUCT_NAME_DUPLICATE' => PublishGateCode.productNameDuplicate,
         'PRODUCT_CATEGORY_UNKNOWN' => PublishGateCode.productCategoryUnknown,
         'CATEGORY_NAME_INVALID' => PublishGateCode.categoryNameInvalid,
+        'CATALOG_NO_CATEGORIES' => PublishGateCode.catalogNoCategories,
+        'PRODUCT_UNCATEGORIZED' => PublishGateCode.productUncategorized,
         'PUBLISHING_UNAVAILABLE' => PublishGateCode.publishingUnavailable,
         _ => PublishGateCode.unknown,
       };
@@ -91,6 +99,10 @@ extension PublishGateCodeX on PublishGateCode {
         // name. Same screen, so the label says what to do there.
         PublishGateCode.productCategoryUnknown => 'Pick a category',
         PublishGateCode.categoryNameInvalid => 'Rename category',
+        // Creating the first category files every product into it, so the fix
+        // is one screen and one action away — the label says the action.
+        PublishGateCode.catalogNoCategories => 'Create a category',
+        PublishGateCode.productUncategorized => 'Pick a category',
         PublishGateCode.productThumbnailMissing => null,
         PublishGateCode.productModelNotReady => null,
         PublishGateCode.publishingUnavailable => null,
@@ -181,6 +193,7 @@ List<PublishGate> catalogLevelGates(List<PublishGate> gates) => [
 List<PublishGate> evaluateDraftGates({
   required String catalogName,
   required List<CatalogProduct> products,
+  List<String>? categoryIds,
 }) {
   final gates = <PublishGate>[];
 
@@ -202,8 +215,62 @@ List<PublishGate> evaluateDraftGates({
     gates.addAll(_gateProduct(product));
   }
   gates.addAll(_gateDuplicateNames(products));
+  gates.addAll(_gateCategories(products, categoryIds));
 
   return gates;
+}
+
+/// The no-uncategorized rule, mirroring the backend's `gateCatalogCategories`.
+///
+/// A product in no category reached the live page as a tab called
+/// "uncategorized". The authoring writes now keep products filed, so this is
+/// the backstop for the two ways a stray can still exist — products with NO
+/// categories to go in (one catalog-level row), or a product from before the
+/// rules under a catalog that has some (one row per product). Never both: with
+/// no categories every product is uncategorized, and forty rows saying so
+/// would bury the one instruction that helps.
+///
+/// [categoryIds] are the catalog's LIVE categories, or NULL for a caller that
+/// did not read them — and null means these gates are skipped, not that the
+/// catalog has none. "I did not look" and "there are none" are different
+/// answers, and only the second is a blocker; guessing the first into the
+/// second would be the one thing this file's header forbids.
+List<PublishGate> _gateCategories(
+  List<CatalogProduct> products,
+  List<String>? categoryIds,
+) {
+  if (categoryIds == null || products.isEmpty) return const [];
+
+  if (categoryIds.isEmpty) {
+    return const [
+      PublishGate(
+        code: PublishGateCode.catalogNoCategories,
+        message: 'Your menu has no categories yet. Create one — your products '
+            'will be filed into it — then publish.',
+      ),
+    ];
+  }
+
+  final known = categoryIds.toSet();
+  return [
+    for (final product in products)
+      if (product.categoryId == null)
+        PublishGate(
+          code: PublishGateCode.productUncategorized,
+          message: '"${product.displayName}" is not in any category. '
+              'Pick one for it.',
+          productId: product.id,
+          productName: product.displayName,
+        )
+      else if (!known.contains(product.categoryId))
+        PublishGate(
+          code: PublishGateCode.productCategoryUnknown,
+          message: '"${product.displayName}" is filed under a category that '
+              'is no longer in your catalog. Pick one for it.',
+          productId: product.id,
+          productName: product.displayName,
+        ),
+  ];
 }
 
 /// Per-product asset rules, mirroring the backend's `gateProduct`.

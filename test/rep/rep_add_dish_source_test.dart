@@ -356,15 +356,41 @@ void main() {
       expect(repo.created.single.categoryId, 'cat_starters');
     });
 
-    testWidgets('sends no section when the rep did not pick one',
+    testWidgets('sends the FIRST section when the rep did not pick one',
         (tester) async {
-      // Uncategorized is a real answer, not an omission — and it stays the
-      // default, because guessing the first section would file dishes into
-      // "Starters" all evening.
+      // A RE-DECISION. This used to send null — "a rep who has not chosen has
+      // not chosen" — and the cost of that was dishes reaching the live page
+      // under a tab called "uncategorized". The server files an unchosen dish
+      // into the first section now anyway; sending it from here means the rep
+      // sees where the dish is going before they press Add, not after.
       final repo = _FakeRepRepository()
         ..storedCategories = const [
+          CatalogCategory(id: 'cat_mains', name: 'Mains', position: 1),
           CatalogCategory(id: 'cat_starters', name: 'Starters', position: 0),
         ];
+      await _pump(tester, _app(repo, caps: _web));
+
+      await tester.tap(_source(RepDishSource.photo));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('rep_dish_pick_photo')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('rep_dish_name_field')),
+        'Paneer Tikka',
+      );
+      await tester.tap(find.byKey(const ValueKey('rep_dish_submit')));
+      await tester.pumpAndSettle();
+
+      // The first in the list the screen was handed — the same "first" the
+      // server would pick, and the one at the top of the picker.
+      expect(repo.created.single.categoryId, 'cat_mains');
+    });
+
+    testWidgets('sends no section only when the menu has none',
+        (tester) async {
+      // Null is now exactly one thing: nothing to file the dish into. Publish
+      // is what refuses that, with a row that says to create a section.
+      final repo = _FakeRepRepository()..storedCategories = const [];
       await _pump(tester, _app(repo, caps: _web));
 
       await tester.tap(_source(RepDishSource.photo));
