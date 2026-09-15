@@ -175,8 +175,15 @@ void main() {
     // "No catalog" and "catalog with nothing in it" are different states, and
     // the copy has to tell them apart or the user cannot tell what to do next.
     expect(find.text('No catalog yet'), findsNothing);
-    expect(find.text('No products yet'), findsOneWidget);
     expect(find.text('Cafe Mocha'), findsOneWidget);
+    // Below the header, the search box and the Sort/Show rows — past the fold
+    // of the default test surface, and a sliver past the fold is not built.
+    await tester.scrollUntilVisible(
+      find.text('No products yet'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('No products yet'), findsOneWidget);
 
     // The CTA has to be LIVE. It shipped wired to a null callback, which the
     // theme greys out — the catalog looked broken on web and on the APK alike,

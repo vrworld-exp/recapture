@@ -227,6 +227,8 @@ void main() {
       await tester.pumpWidget(harness(repo));
       await tester.pumpAndSettle();
 
+      // The Show row scrolls sideways, and Archived is its last built-in chip.
+      await tester.ensureVisible(find.text('Archived'));
       await tester.tap(find.text('Archived'));
       await tester.pumpAndSettle();
       expect(repo.calls.last.includeArchived, isTrue);

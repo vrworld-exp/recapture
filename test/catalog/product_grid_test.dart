@@ -680,7 +680,8 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       await container.read(catalogProductsProvider.notifier).loadMore();
 
-      final ids = container.read(catalogProductsProvider).items.map((p) => p.id);
+      final ids =
+          container.read(catalogProductsProvider).items.map((p) => p.id);
       expect(ids.toList(), ['p1', 'p2', 'p3']);
     });
 
@@ -888,7 +889,8 @@ void main() {
       expect(repo.reorders.single.take(2), ['p1', 'p0']);
     });
 
-    testWidgets('releasing over the gutter still lands the card', (tester) async {
+    testWidgets('releasing over the gutter still lands the card',
+        (tester) async {
       // THE bug this whole path exists for. The drop used to be a DragTarget's
       // onAccept, so a release over the 16px gap between two cards — or over
       // anything else that is not a card — hit no target and silently did
@@ -941,7 +943,8 @@ void main() {
       final scrollable = tester.state<ScrollableState>(
         find.byWidgetPredicate(
           (widget) =>
-              widget is Scrollable && widget.axisDirection == AxisDirection.down,
+              widget is Scrollable &&
+              widget.axisDirection == AxisDirection.down,
         ),
       );
       expect(scrollable.position.pixels, 0);
@@ -1041,6 +1044,64 @@ void main() {
       await tester.pump();
 
       expect(opened?.id, 'p1');
+    });
+  });
+
+  group('the sort lens', () {
+    FakeProductsRepository threeProducts() => FakeProductsRepository(
+          (_) async => pageOf([
+            product('p0', name: 'Alpha', price: 300, position: 0),
+            product('p1', name: 'Charlie', price: 100, position: 1),
+            product('p2', name: 'Bravo', price: 200, position: 2),
+          ]),
+        );
+
+    List<String> visibleIds(WidgetTester tester) => tester
+        .widgetList<ProductCard>(find.byType(ProductCard))
+        .map((card) => card.product.id)
+        .toList();
+
+    /// The Sort row scrolls sideways; the later chips start past 400px.
+    Future<void> tapSort(WidgetTester tester, String name) async {
+      final chip = find.byKey(ValueKey('catalog_sort_$name'));
+      await tester.ensureVisible(chip);
+      await tester.tap(chip);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('reorders the loaded page WITHOUT a request', (tester) async {
+      final repo = threeProducts();
+      await tester.pumpWidget(harness(repo, width: 400, height: 800));
+      await tester.pumpAndSettle();
+      expect(visibleIds(tester), ['p0', 'p1', 'p2']);
+      final requests = repo.calls.length;
+
+      await tapSort(tester, 'priceLow');
+      expect(visibleIds(tester), ['p1', 'p2', 'p0']);
+
+      await tapSort(tester, 'nameAz');
+      expect(visibleIds(tester), ['p0', 'p2', 'p1']);
+
+      await tapSort(tester, 'menuOrder');
+      expect(visibleIds(tester), ['p0', 'p1', 'p2']);
+
+      // A lens, not a query: the server orders by position only.
+      expect(repo.calls.length, requests);
+    });
+
+    testWidgets('a sort takes the drag handles away', (tester) async {
+      final repo = threeProducts();
+      await tester.pumpWidget(harness(repo, width: 400, height: 800));
+      await tester.pumpAndSettle();
+      expect(find.byIcon(Icons.drag_indicator), findsWidgets);
+
+      // The slots on screen no longer match the notifier's indices, so a drop
+      // written from them would move the wrong products.
+      await tapSort(tester, 'newest');
+      expect(find.byIcon(Icons.drag_indicator), findsNothing);
+
+      await tapSort(tester, 'menuOrder');
+      expect(find.byIcon(Icons.drag_indicator), findsWidgets);
     });
   });
 }

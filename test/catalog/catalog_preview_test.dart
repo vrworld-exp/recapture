@@ -41,7 +41,8 @@ import 'catalog_repo_delete_defaults.dart';
 import 'catalog_repo_publish_defaults.dart';
 
 import 'catalog_entities_test.dart' as golden;
-import 'product_grid_test.dart' show FakeProductsRepository, ListCall, pageOf, product;
+import 'product_grid_test.dart'
+    show FakeProductsRepository, ListCall, pageOf, product;
 
 /// A category, differing from the golden only where a test says so.
 CatalogCategory category(String id, {required String name, int position = 0}) =>
@@ -195,6 +196,27 @@ Widget harness({
         ),
       ),
     );
+
+/// Pumps [widget] on a surface as tall as the harness box.
+///
+/// The box alone is not enough: the ROOT stays at the default 800x600, and a
+/// chip laid out below that is off the render tree's bounds — every tap on it
+/// misses, whatever the box around it measures.
+Future<void> pumpTall(WidgetTester tester, Widget widget) async {
+  tester.view.physicalSize = const Size(400, 2400);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(widget);
+}
+
+/// Taps the Sort / Show chip with [key], scrolling its row to it first: the
+/// rows scroll sideways, and the later chips start past a phone's right edge.
+Future<void> tapChip(WidgetTester tester, String key) async {
+  final chip = find.byKey(ValueKey(key));
+  await tester.ensureVisible(chip);
+  await tester.tap(chip);
+  await tester.pumpAndSettle();
+}
 
 void main() {
   group('draft gates mirror the server rules', () {
@@ -564,7 +586,8 @@ void main() {
       await tester.pumpWidget(harness(
         catalogRepo: FakePreviewCatalogRepo(),
         productsRepo: FakeProductsRepository(
-          (_) async => pageOf([product('p1', thumbnailUrl: 'https://cdn/a.jpg')]),
+          (_) async =>
+              pageOf([product('p1', thumbnailUrl: 'https://cdn/a.jpg')]),
         ),
       ));
       await tester.pumpAndSettle();
@@ -593,7 +616,8 @@ void main() {
       // The headline counts products, not rules — "Broken" trips two.
       expect(find.textContaining("1 of 2 products won't publish yet"),
           findsOneWidget);
-      expect(find.textContaining('"Broken" has no 3D model yet'), findsOneWidget);
+      expect(
+          find.textContaining('"Broken" has no 3D model yet'), findsOneWidget);
       // The clean product carries no strip.
       final cards = tester.widgetList<PreviewProductCard>(
         find.byType(PreviewProductCard),
@@ -650,14 +674,15 @@ void main() {
       // Not rendered as a section — the public page has no heading for it...
       expect(find.text('Starters'), findsWidgets);
       // ...but named, so somebody who just created it can see it saved.
-      expect(find.byKey(const ValueKey('preview_empty_sections')),
-          findsOneWidget);
+      expect(
+          find.byKey(const ValueKey('preview_empty_sections')), findsOneWidget);
     });
 
     testWidgets('an empty catalog previews the BRANDED page a customer gets',
         (tester) async {
       await tester.pumpWidget(harness(
-        catalogRepo: FakePreviewCatalogRepo(catalog: catalogNamed('Cafe Mocha')),
+        catalogRepo:
+            FakePreviewCatalogRepo(catalog: catalogNamed('Cafe Mocha')),
         productsRepo: FakeProductsRepository((_) async => pageOf([])),
       ));
       await tester.pumpAndSettle();
@@ -795,7 +820,7 @@ void main() {
 
     testWidgets('defaults to menu order and claims the customer view',
         (tester) async {
-      await tester.pumpWidget(lensHarness());
+      await pumpTall(tester, lensHarness());
       await tester.pumpAndSettle();
 
       expect(ordered(tester), ['Alpha', 'Charlie', 'Bravo']);
@@ -805,54 +830,49 @@ void main() {
     });
 
     testWidgets('newest and oldest reorder the page', (tester) async {
-      await tester.pumpWidget(lensHarness());
+      await pumpTall(tester, lensHarness());
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('preview_sort_newest')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_sort_newest');
       expect(ordered(tester), ['Bravo', 'Charlie', 'Alpha']);
 
-      await tester.tap(find.byKey(const ValueKey('preview_sort_oldest')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_sort_oldest');
       expect(ordered(tester), ['Alpha', 'Charlie', 'Bravo']);
     });
 
     testWidgets('price and name sorts', (tester) async {
-      await tester.pumpWidget(lensHarness());
+      await pumpTall(tester, lensHarness());
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('preview_sort_priceHigh')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_sort_priceHigh');
       expect(ordered(tester), ['Alpha', 'Bravo', 'Charlie']);
 
-      await tester.tap(find.byKey(const ValueKey('preview_sort_nameAz')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_sort_nameAz');
       expect(ordered(tester), ['Alpha', 'Bravo', 'Charlie']);
     });
 
     testWidgets('the frame STOPS claiming the customer view under a lens',
         (tester) async {
-      await tester.pumpWidget(lensHarness());
+      await pumpTall(tester, lensHarness());
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('preview_sort_newest')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_sort_newest');
 
       // The one assertion this whole feature hangs on.
       expect(find.text('WHAT A CUSTOMER SEES'), findsNothing);
       expect(find.text('YOUR VIEW OF THE DRAFT'), findsOneWidget);
       expect(find.byKey(const ValueKey('preview_view_notice')), findsOneWidget);
       // And it says what customers actually get instead.
-      expect(find.textContaining('Customers get the menu order'), findsOneWidget);
+      expect(
+          find.textContaining('Customers get the menu order'), findsOneWidget);
     });
 
     testWidgets('Reset puts the page back and the claim with it',
         (tester) async {
-      await tester.pumpWidget(lensHarness());
+      await pumpTall(tester, lensHarness());
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('preview_sort_newest')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_sort_newest');
       await tester.tap(find.byKey(const ValueKey('preview_view_reset')));
       await tester.pumpAndSettle();
 
@@ -862,64 +882,119 @@ void main() {
 
     testWidgets('filters narrow the set and count what is hidden',
         (tester) async {
-      await tester.pumpWidget(lensHarness());
+      await pumpTall(tester, lensHarness());
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('preview_filter_photo')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_filter_photo');
 
       // Only the image-only dish survives "Photo only".
       expect(ordered(tester), ['Charlie']);
       expect(find.textContaining('2 products hidden'), findsOneWidget);
 
-      await tester.tap(find.byKey(const ValueKey('preview_filter_threeD')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_filter_threeD');
       expect(ordered(tester), ['Alpha', 'Bravo']);
 
-      await tester.tap(find.byKey(const ValueKey('preview_filter_nonVeg')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_filter_nonVeg');
       expect(ordered(tester), ['Charlie']);
     });
 
     testWidgets('a filter that matches nothing is not a branded empty page',
         (tester) async {
-      await tester.pumpWidget(harness(
-        catalogRepo: FakePreviewCatalogRepo(),
-        productsRepo: FakeProductsRepository(
-          // Every dish is veg, so "Non-veg" matches none of them.
-          (_) async => pageOf([oldest, newest]),
+      await pumpTall(
+        tester,
+        harness(
+          catalogRepo: FakePreviewCatalogRepo(),
+          productsRepo: FakeProductsRepository(
+            // Every dish is veg, so "Non-veg" matches none of them.
+            (_) async => pageOf([oldest, newest]),
+          ),
+          size: const Size(400, 2400),
         ),
-        size: const Size(400, 2400),
-      ));
+      );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('preview_filter_nonVeg')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_filter_nonVeg');
 
       expect(find.byKey(const ValueKey('preview_no_matches')), findsOneWidget);
       // "This is exactly what a customer would see" would be a lie about a
       // draft the author has merely narrowed.
       expect(find.text('Nothing on the menu yet'), findsNothing);
 
-      await tester.tap(
-          find.byKey(const ValueKey('preview_no_matches_reset')));
+      await tester.tap(find.byKey(const ValueKey('preview_no_matches_reset')));
       await tester.pumpAndSettle();
       expect(ordered(tester), ['Alpha', 'Bravo']);
     });
 
     testWidgets('the counts above the frame describe the DRAFT, not the view',
         (tester) async {
-      await tester.pumpWidget(lensHarness());
+      await pumpTall(tester, lensHarness());
       await tester.pumpAndSettle();
       expect(find.text('3 products'), findsOneWidget);
 
-      await tester.tap(find.byKey(const ValueKey('preview_filter_photo')));
-      await tester.pumpAndSettle();
+      await tapChip(tester, 'preview_filter_photo');
 
       // Still three products in the catalog; one of them is on screen. A
       // summary that moved with the filter would be answering the wrong
       // question right above a banner explaining the filter.
       expect(find.text('3 products'), findsOneWidget);
+    });
+  });
+
+  group('the category tabs', () {
+    Widget tabsHarness() => harness(
+          catalogRepo: FakePreviewCatalogRepo(categories: [
+            category('c1', name: 'Starters', position: 0),
+            category('c2', name: 'Mains', position: 1),
+          ]),
+          productsRepo: FakeProductsRepository(
+            (_) async => pageOf([
+              inCategory(
+                  product('p1',
+                      name: 'Soup', thumbnailUrl: 'https://cdn/a.jpg'),
+                  'c1'),
+              inCategory(
+                  product('p2',
+                      name: 'Steak', thumbnailUrl: 'https://cdn/b.jpg'),
+                  'c2'),
+              inCategory(
+                  product('p3',
+                      name: 'Cake', thumbnailUrl: 'https://cdn/c.jpg'),
+                  null),
+            ]),
+          ),
+          size: const Size(400, 2400),
+        );
+
+    List<String> ordered(WidgetTester tester) => tester
+        .widgetList<PreviewProductCard>(find.byType(PreviewProductCard))
+        .map((card) => card.product.displayName)
+        .toList();
+
+    testWidgets('All comes first and is the whole page', (tester) async {
+      await pumpTall(tester, tabsHarness());
+      await tester.pumpAndSettle();
+
+      expect(
+          find.byKey(const ValueKey('preview_category_all')), findsOneWidget);
+      expect(ordered(tester), ['Soup', 'Steak', 'Cake']);
+    });
+
+    testWidgets('a category tab narrows the page to that category',
+        (tester) async {
+      await pumpTall(tester, tabsHarness());
+      await tester.pumpAndSettle();
+
+      await tapChip(tester, 'preview_category_c2');
+      expect(ordered(tester), ['Steak']);
+      // A tab is what a customer has too, so the frame keeps its claim.
+      expect(find.text('WHAT A CUSTOMER SEES'), findsOneWidget);
+
+      // The Uncategorized bucket is a tab like any other.
+      await tapChip(tester, 'preview_category_');
+      expect(ordered(tester), ['Cake']);
+
+      await tapChip(tester, 'preview_category_all');
+      expect(ordered(tester), ['Soup', 'Steak', 'Cake']);
     });
   });
 }

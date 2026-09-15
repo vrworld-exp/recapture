@@ -1,7 +1,7 @@
 // lib/presentation/screens/catalog/product_grid_section.dart
 //
-// The product browsing surface: search, filters, the responsive grid, its four
-// states, and reordering.
+// The product browsing surface: search, sort, filters, the responsive grid, its
+// four states, and reordering.
 //
 // Delivered as SLIVERS rather than as a screen, so it composes into the catalog
 // shell's existing scroll view underneath the header card. One scrollable, not a
@@ -25,6 +25,7 @@ import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/product_card.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/product_view_controls.dart';
 
 /// Opens one product's overflow menu, anchored at the card's own context.
 typedef ProductMenuCallback = void Function(
@@ -70,7 +71,12 @@ const double kProductGridPrefetchExtent = 600;
 /// Callers own the scroll view. [handleScrollNotification] is the other half of
 /// this contract: the shell wires it into a `NotificationListener` around the
 /// scroll view so the grid can ask for its next page.
-class ProductGridSection extends ConsumerWidget {
+///
+/// Stateful for ONE thing: the sort. Every filter is a request parameter and
+/// lives in the notifier; the sort is a lens over the pages that came back (the
+/// server orders by position only) and so belongs to the rendering, the same
+/// way it does on the preview. See product_view_controls.dart.
+class ProductGridSection extends ConsumerStatefulWidget {
   const ProductGridSection({
     super.key,
     required this.onOpenProduct,
@@ -117,7 +123,31 @@ class ProductGridSection extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProductGridSection> createState() => _ProductGridSectionState();
+
+  static String _filteredEmptyBody(CatalogProductQuery query) {
+    final term = query.searchTerm;
+    if (term != null && query.activeFilterCount > 0) {
+      return 'Nothing matches "$term" with these filters.';
+    }
+    if (term != null) return 'Nothing matches "$term".';
+    return 'No products match these filters.';
+  }
+}
+
+class _ProductGridSectionState extends ConsumerState<ProductGridSection> {
+  /// The lens over the loaded pages. Menu order is the list as the server sent
+  /// it — the one the author set by dragging, and the only one a drag can
+  /// still edit (see `_ProductGrid.reorderable`).
+  ProductSort _sort = ProductSort.menuOrder;
+
+  void _setSort(ProductSort sort) {
+    if (sort == _sort) return;
+    setState(() => _sort = sort);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(catalogProductsProvider);
     final notifier = ref.read(catalogProductsProvider.notifier);
 
@@ -125,7 +155,9 @@ class ProductGridSection extends ConsumerWidget {
       slivers: [
         const SliverToBoxAdapter(child: _ProductSearchField()),
         const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.md)),
-        const SliverToBoxAdapter(child: _ProductFilterBar()),
+        SliverToBoxAdapter(
+          child: _ViewControls(sort: _sort, onSort: _setSort),
+        ),
         const SliverToBoxAdapter(child: SizedBox(height: AppSpacing.lg)),
         // What a select-all covered, and what a filter change just did to the
         // selection. Collapses to nothing when there is neither.
@@ -150,8 +182,8 @@ class ProductGridSection extends ConsumerWidget {
               title: 'No products yet',
               body: 'Add a product from a model you have already captured, '
                   'or upload a photo.',
-              actionLabel: onAddProduct == null ? null : 'Add product',
-              onAction: onAddProduct,
+              actionLabel: widget.onAddProduct == null ? null : 'Add product',
+              onAction: widget.onAddProduct,
               fillsViewport: false,
             ),
           )
@@ -163,7 +195,7 @@ class ProductGridSection extends ConsumerWidget {
               // The query is echoed so the user can see WHAT did not match —
               // "no results" on its own leaves them guessing whether the search
               // or the filters did it.
-              body: _filteredEmptyBody(state.query),
+              body: ProductGridSection._filteredEmptyBody(state.query),
               actionLabel: 'Clear filters',
               onAction: notifier.clearFilters,
               fillsViewport: false,
@@ -171,22 +203,18 @@ class ProductGridSection extends ConsumerWidget {
           )
         else
           _ProductGrid(
-            state: state,
-            onOpenProduct: onOpenProduct,
-            onProductMenu: onProductMenu,
+            // The sorted list IS the state the grid renders from, so a card's
+            // index on screen and its index in `state.items` agree — which the
+            // drag code relies on, and which is why dragging is only offered
+            // when the two lists are the same list.
+            state: state.copyWith(items: sortProducts(state.items, _sort)),
+            reorderable: _sort.isDefault,
+            onOpenProduct: widget.onOpenProduct,
+            onProductMenu: widget.onProductMenu,
           ),
         SliverToBoxAdapter(child: _GridFooter(state: state)),
       ],
     );
-  }
-
-  static String _filteredEmptyBody(CatalogProductQuery query) {
-    final term = query.searchTerm;
-    if (term != null && query.activeFilterCount > 0) {
-      return 'Nothing matches "$term" with these filters.';
-    }
-    if (term != null) return 'Nothing matches "$term".';
-    return 'No products match these filters.';
   }
 }
 
@@ -265,13 +293,48 @@ class _ProductSearchFieldState extends ConsumerState<_ProductSearchField> {
   }
 }
 
-// ── Filters ─────────────────────────────────────────────────────────────────
+// ── Sort and Show ───────────────────────────────────────────────────────────
 
-/// The filter chip row: category, type, availability, archived.
+/// The Sort row and the Show row, right under the search box — the same two
+/// the preview has, so the author meets one set of controls on both surfaces.
 ///
-/// Every chip is a REQUEST parameter. Nothing here filters the loaded page.
-class _ProductFilterBar extends ConsumerWidget {
-  const _ProductFilterBar();
+/// The two rows are NOT the same kind of thing, and the split is the point:
+///   • Sort is a lens over the loaded pages (see [ProductGridSection]).
+///   • Every Show chip is a REQUEST parameter. Nothing there filters the loaded
+///     page — a filter the client applied locally would stop matching past
+///     page 1.
+class _ViewControls extends StatelessWidget {
+  const _ViewControls({required this.sort, required this.onSort});
+
+  final ProductSort sort;
+  final ValueChanged<ProductSort> onSort;
+
+  @override
+  Widget build(BuildContext context) => ViewControlsPanel(
+        children: [
+          ControlRow(
+            label: 'Sort',
+            children: [
+              for (final option in ProductSort.values)
+                _CatalogFilterChip(
+                  key: ValueKey('catalog_sort_${option.name}'),
+                  label: option.label,
+                  selected: option == sort,
+                  // A sort is picked, not toggled: tapping the one that is on
+                  // keeps it on, because "no sort" is a chip of its own.
+                  onSelected: (_) => onSort(option),
+                ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          const _ProductFilterRow(),
+        ],
+      );
+}
+
+/// The filter chips: category, type, availability, archived.
+class _ProductFilterRow extends ConsumerWidget {
+  const _ProductFilterRow();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -279,9 +342,8 @@ class _ProductFilterBar extends ConsumerWidget {
     final notifier = ref.read(catalogProductsProvider.notifier);
     final categories = ref.watch(catalogCategoriesProvider).valueOrNull;
 
-    return Wrap(
-      spacing: AppSpacing.sm,
-      runSpacing: AppSpacing.sm,
+    return ControlRow(
+      label: 'Show',
       children: [
         _CatalogFilterChip(
           label: 'All',
@@ -345,6 +407,7 @@ class _ProductFilterBar extends ConsumerWidget {
 /// else about it (focus, hover, keyboard activation) comes from [InkWell].
 class _CatalogFilterChip extends StatelessWidget {
   const _CatalogFilterChip({
+    super.key,
     required this.label,
     required this.selected,
     required this.onSelected,
@@ -429,11 +492,18 @@ const Duration _kLiftDuration = Duration(milliseconds: 120);
 class _ProductGrid extends ConsumerStatefulWidget {
   const _ProductGrid({
     required this.state,
+    required this.reorderable,
     required this.onOpenProduct,
     this.onProductMenu,
   });
 
   final CatalogProductsState state;
+
+  /// False while a sort lens is on: `state.items` is then a reordering of the
+  /// notifier's list, and a drop written from those indices would move the
+  /// wrong products.
+  final bool reorderable;
+
   final ValueChanged<CatalogProduct> onOpenProduct;
   final ProductMenuCallback? onProductMenu;
 
@@ -661,8 +731,10 @@ class _ProductGridState extends ConsumerState<_ProductGrid>
   Widget build(BuildContext context) {
     final selection = ref.watch(bulkSelectionProvider);
     // Reordering is suspended while selecting: a drag that moved a card the
-    // user meant to tick is not a reorder anyone asked for.
-    final canReorder = widget.state.canReorder && !selection.isActive;
+    // user meant to tick is not a reorder anyone asked for. And while sorted:
+    // see [widget.reorderable].
+    final canReorder =
+        widget.reorderable && widget.state.canReorder && !selection.isActive;
     final items = _visible;
 
     return SliverLayoutBuilder(

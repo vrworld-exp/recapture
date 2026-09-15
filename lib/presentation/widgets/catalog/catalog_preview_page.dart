@@ -59,6 +59,7 @@ import '../../../domain/entities/business_profile.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/product_food_type.dart';
 import 'preview_product_card.dart';
+import 'product_view_controls.dart';
 
 /// How wide the imitated page is allowed to get.
 ///
@@ -89,31 +90,6 @@ const String kOwnerPreviewNotice =
 double previewCardHeight(double viewportHeight) =>
     ((viewportHeight - 180) / 2).clamp(200.0, 420.0);
 
-/// How far below the top of the scroll view a section heading has to climb
-/// before the category strip calls it the one being read. Roughly the height of
-/// the strip itself plus a heading, so the highlight changes when the new block
-/// actually takes over the screen, not when its first pixel appears.
-const double _kSectionSpyAnchor = 180;
-
-/// How the preview orders each section.
-///
-/// [menuOrder] is the page's own order and the only one that is a claim about
-/// the published page. The rest are the author's lenses on their own draft.
-enum PreviewSort {
-  menuOrder('Menu order'),
-  newest('Newest'),
-  oldest('Oldest'),
-  priceHigh('Price: high first'),
-  priceLow('Price: low first'),
-  nameAz('Name A–Z');
-
-  const PreviewSort(this.label);
-
-  final String label;
-
-  bool get isDefault => this == PreviewSort.menuOrder;
-}
-
 /// What the preview leaves out.
 ///
 /// Every one of these answers a question an author actually asks before
@@ -138,10 +114,10 @@ enum PreviewFilter {
 
 /// The scrollable preview body.
 ///
-/// Stateful because four things belong to the RENDERING rather than to the
-/// data: which card currently owns the single live 3D viewer, the section
-/// anchors the category strip scrolls to, which of those sections the reader is
-/// currently inside, and the sort/filter the author is looking through.
+/// Stateful because three things belong to the RENDERING rather than to the
+/// data: which card currently owns the single live 3D viewer, the category the
+/// strip has narrowed the page to, and the sort/filter the author is looking
+/// through.
 class CatalogPreviewPage extends StatefulWidget {
   const CatalogPreviewPage({
     super.key,
@@ -170,45 +146,43 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
   /// See the note at the top of preview_product_card.dart.
   String? _activeThreeDId;
 
-  /// Section anchors, so the category strip can scroll to its block.
-  final Map<String, GlobalKey> _sectionKeys = {};
-
-  /// Which section the reader is inside, as the strip reports it. Null until
-  /// the first scroll, which reads as "the first one".
-  String? _activeSectionId;
+  /// The category the strip has narrowed the page to, by [_idOf]. Null is the
+  /// first chip — All — which is the whole page.
+  ///
+  /// NOT a lens in the [_isLensed] sense: the public page's tabs narrow it the
+  /// same way, so a single category on screen is still what a customer can see.
+  String? _selectedSectionId;
 
   /// The author's lens on the draft. Both default to "show me the page", which
   /// is the only state that claims to be what a customer gets.
-  PreviewSort _sort = PreviewSort.menuOrder;
+  ProductSort _sort = ProductSort.menuOrder;
   PreviewFilter _filter = PreviewFilter.all;
 
   /// Whether anything is being shown other than the page itself.
   bool get _isLensed => !_sort.isDefault || !_filter.isDefault;
 
-  void _setSort(PreviewSort sort) {
+  void _setSort(ProductSort sort) {
     if (sort == _sort) return;
-    // The highlight is about a section that may not survive a filter change,
-    // and a reordered page is a different scroll position anyway.
-    setState(() {
-      _sort = sort;
-      _activeSectionId = null;
-    });
+    setState(() => _sort = sort);
   }
 
   void _setFilter(PreviewFilter filter) {
     if (filter == _filter) return;
-    setState(() {
-      _filter = filter;
-      _activeSectionId = null;
-    });
+    setState(() => _filter = filter);
   }
 
+  void _selectSection(String? id) {
+    if (id == _selectedSectionId) return;
+    setState(() => _selectedSectionId = id);
+  }
+
+  /// Back to the whole page: no lens, and every category.
   void _resetView() {
-    if (!_isLensed) return;
+    if (!_isLensed && _selectedSectionId == null) return;
     setState(() {
-      _sort = PreviewSort.menuOrder;
+      _sort = ProductSort.menuOrder;
       _filter = PreviewFilter.all;
-      _activeSectionId = null;
+      _selectedSectionId = null;
     });
   }
 
@@ -245,51 +219,10 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
       out.add(CatalogPreviewSection(
         id: section.id,
         title: section.title,
-        products: _sorted(kept),
+        products: sortProducts(kept, _sort),
       ));
     }
     return out;
-  }
-
-  /// [products] in the current sort order. Never sorts the caller's list.
-  List<CatalogProduct> _sorted(List<CatalogProduct> products) {
-    if (_sort.isDefault) return products;
-    final out = [...products];
-    switch (_sort) {
-      case PreviewSort.menuOrder:
-        break;
-      // A product with no date sorts LAST in both directions rather than
-      // pretending to be the oldest thing in the menu.
-      case PreviewSort.newest:
-        out.sort((a, b) => _compareDates(b.createdAt, a.createdAt));
-      case PreviewSort.oldest:
-        out.sort((a, b) => _compareDates(a.createdAt, b.createdAt));
-      // Priceless products sort last too — the public card has no price line
-      // for them, so they are not "free", they are unanswered.
-      case PreviewSort.priceHigh:
-        out.sort((a, b) => _comparePrices(b.price, a.price));
-      case PreviewSort.priceLow:
-        out.sort((a, b) => _comparePrices(a.price, b.price));
-      case PreviewSort.nameAz:
-        out.sort((a, b) =>
-            a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
-    }
-    return out;
-  }
-
-  /// Null sorts last whichever way the comparison is running.
-  static int _compareDates(DateTime? a, DateTime? b) {
-    if (a == null && b == null) return 0;
-    if (a == null) return 1;
-    if (b == null) return -1;
-    return a.compareTo(b);
-  }
-
-  static int _comparePrices(double? a, double? b) {
-    if (a == null && b == null) return 0;
-    if (a == null) return 1;
-    if (b == null) return -1;
-    return a.compareTo(b);
   }
 
   /// Drops the live viewer back to a thumbnail.
@@ -305,66 +238,20 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
   @override
   void didUpdateWidget(covariant CatalogPreviewPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // A refresh composes a new preview with new sections; a highlight left over
-    // from the old one would point at a block that may no longer exist.
-    if (!identical(oldWidget.preview, widget.preview)) _activeSectionId = null;
-  }
-
-  /// The spy/anchor identity of a section. The Uncategorized bucket has a null
-  /// id by design, so '' stands in for it — it is a real section to the reader.
-  static String _idOf(CatalogPreviewSection section) => section.id ?? '';
-
-  GlobalKey _keyFor(CatalogPreviewSection section) =>
-      _sectionKeys.putIfAbsent(_idOf(section), GlobalKey.new);
-
-  void _scrollTo(CatalogPreviewSection section) {
-    // Move the highlight on the press rather than waiting for the scroll to
-    // report it — the tap is the user telling us where they are going.
-    setState(() => _activeSectionId = _idOf(section));
-    final context = _keyFor(section).currentContext;
-    if (context == null) return;
-    Scrollable.ensureVisible(
-      context,
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-      alignment: 0.05,
-    );
-  }
-
-  /// Keeps the category strip pointing at the block on screen.
-  ///
-  /// Reads render boxes rather than scroll offsets because the sections are
-  /// laid out inside one list child of variable height, so there is no offset
-  /// table to consult. Only a CHANGE calls setState, so a flick down the page
-  /// rebuilds the strip a handful of times, not once per frame.
-  bool _onScroll(ScrollNotification notification) {
-    if (notification is ScrollUpdateNotification ||
-        notification is ScrollEndNotification) {
-      _syncActiveSection();
-    }
-    return false;
-  }
-
-  void _syncActiveSection() {
-    final sections = widget.preview.sections;
-    if (sections.length < 2) return;
-    final box = context.findRenderObject();
-    if (box is! RenderBox || !box.hasSize) return;
-    final anchor = box.localToGlobal(Offset.zero).dy + _kSectionSpyAnchor;
-
-    var active = _idOf(sections.first);
-    for (final section in sections) {
-      final sectionContext = _sectionKeys[_idOf(section)]?.currentContext;
-      final sectionBox = sectionContext?.findRenderObject();
-      if (sectionBox is! RenderBox || !sectionBox.hasSize) continue;
-      if (sectionBox.localToGlobal(Offset.zero).dy <= anchor) {
-        active = _idOf(section);
+    // A refresh composes a new preview with new sections; a selection left
+    // over from the old one may name a category that no longer exists (deleted
+    // on another device, or emptied), and the page would show nothing for it.
+    if (!identical(oldWidget.preview, widget.preview)) {
+      final id = _selectedSectionId;
+      if (id != null && !widget.preview.sections.any((s) => _idOf(s) == id)) {
+        _selectedSectionId = null;
       }
     }
-    if (active != _activeSectionId) {
-      setState(() => _activeSectionId = active);
-    }
   }
+
+  /// The strip identity of a section. The Uncategorized bucket has a null id
+  /// by design, so '' stands in for it — it is a real section to the reader.
+  static String _idOf(CatalogPreviewSection section) => section.id ?? '';
 
   @override
   Widget build(BuildContext context) {
@@ -376,99 +263,110 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
     final shown = [
       for (final section in sections) ...section.products,
     ].length;
+    // About the FILTER only — a category tab hides nothing a customer cannot
+    // reach with the same tab.
     final hidden = preview.products.length - shown;
 
-    return NotificationListener<ScrollNotification>(
-      onNotification: _onScroll,
-      child: LayoutBuilder(
-        builder: (context, constraints) => ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(
-            AppSpacing.screenPadding,
-            0,
-            AppSpacing.screenPadding,
-            AppSpacing.xxxl,
-          ),
-          children: [
-            Center(
-              child: ConstrainedBox(
-                constraints:
-                    const BoxConstraints(maxWidth: kPreviewPageMaxWidth),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (!preview.isEmpty) ...[
-                      const SizedBox(height: AppSpacing.sm),
-                      _PreviewSummaryBar(preview: preview),
-                    ],
+    // A selected category the filter has just emptied falls back to All rather
+    // than to a blank page: the strip has no chip for it to be highlighted on.
+    final selectedId = _selectedSectionId;
+    final narrowed = selectedId != null &&
+        sections.length > 1 &&
+        sections.any((s) => _idOf(s) == selectedId);
+    final visible = narrowed
+        ? [
+            for (final s in sections)
+              if (_idOf(s) == selectedId) s
+          ]
+        : sections;
+
+    return LayoutBuilder(
+      builder: (context, constraints) => ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.screenPadding,
+          0,
+          AppSpacing.screenPadding,
+          AppSpacing.xxxl,
+        ),
+        children: [
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: kPreviewPageMaxWidth),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (!preview.isEmpty) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    _PreviewSummaryBar(preview: preview),
+                  ],
+                  const SizedBox(height: AppSpacing.md),
+                  _PreviewNotice(body: widget.noticeBody),
+                  if (preview.hasWarnings) ...[
                     const SizedBox(height: AppSpacing.md),
-                    _PreviewNotice(body: widget.noticeBody),
-                    if (preview.hasWarnings) ...[
-                      const SizedBox(height: AppSpacing.md),
-                      _PreflightBanner(preview: preview),
-                    ],
-                    // Nothing to sort or filter in an empty draft, and a row of
-                    // dead controls over a branded empty page is noise.
-                    if (!preview.isEmpty) ...[
-                      const SizedBox(height: AppSpacing.md),
-                      _ViewControls(
-                        sort: _sort,
-                        filter: _filter,
-                        onSort: _setSort,
-                        onFilter: _setFilter,
-                      ),
-                    ],
-                    const SizedBox(height: AppSpacing.xxl),
-                    _FrameLabel(lensed: _isLensed),
-                    if (_isLensed) ...[
-                      const SizedBox(height: AppSpacing.sm),
-                      _ViewNotice(
-                        sort: _sort,
-                        filter: _filter,
-                        hidden: hidden,
-                        onReset: _resetView,
-                      ),
-                    ],
+                    _PreflightBanner(preview: preview),
+                  ],
+                  // Nothing to sort or filter in an empty draft, and a row of
+                  // dead controls over a branded empty page is noise.
+                  if (!preview.isEmpty) ...[
                     const SizedBox(height: AppSpacing.md),
-                    _PageFrame(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _PageHeader(preview: preview),
-                          if (preview.isEmpty)
-                            const _BrandedEmptyPage()
-                          else if (sections.isEmpty)
-                            // NOT the branded empty page: that one says "this is
-                            // what a customer would see", which would be a lie
-                            // about a draft the author has merely filtered.
-                            _NoMatchesView(
-                              filter: _filter,
-                              onReset: _resetView,
-                            )
-                          else ...[
-                            if (sections.length > 1)
-                              _CategoryStrip(
-                                sections: sections,
-                                activeId: _activeSectionId ??
-                                    _idOf(sections.first),
-                                onTap: _scrollTo,
-                              ),
-                            ..._sections(
-                              preview,
-                              sections,
-                              constraints.maxHeight,
-                            ),
-                            const SizedBox(height: AppSpacing.xl),
-                          ],
-                        ],
-                      ),
+                    _ViewControls(
+                      sort: _sort,
+                      filter: _filter,
+                      onSort: _setSort,
+                      onFilter: _setFilter,
                     ),
                   ],
-                ),
+                  const SizedBox(height: AppSpacing.xxl),
+                  _FrameLabel(lensed: _isLensed),
+                  if (_isLensed) ...[
+                    const SizedBox(height: AppSpacing.sm),
+                    _ViewNotice(
+                      sort: _sort,
+                      filter: _filter,
+                      hidden: hidden,
+                      onReset: _resetView,
+                    ),
+                  ],
+                  const SizedBox(height: AppSpacing.md),
+                  _PageFrame(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _PageHeader(preview: preview),
+                        if (preview.isEmpty)
+                          const _BrandedEmptyPage()
+                        else if (sections.isEmpty)
+                          // NOT the branded empty page: that one says "this is
+                          // what a customer would see", which would be a lie
+                          // about a draft the author has merely filtered.
+                          _NoMatchesView(
+                            filter: _filter,
+                            onReset: _resetView,
+                          )
+                        else ...[
+                          if (sections.length > 1)
+                            _CategoryStrip(
+                              sections: sections,
+                              selectedId: narrowed ? selectedId : null,
+                              onSelect: _selectSection,
+                            ),
+                          ..._sections(
+                            preview,
+                            visible,
+                            constraints.maxHeight,
+                            narrowed: narrowed,
+                          ),
+                          const SizedBox(height: AppSpacing.xl),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -476,15 +374,16 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
   List<Widget> _sections(
     CatalogPreview preview,
     List<CatalogPreviewSection> sections,
-    double viewportHeight,
-  ) {
+    double viewportHeight, {
+    required bool narrowed,
+  }) {
     final cardHeight = previewCardHeight(viewportHeight);
     final onFix = widget.onFix;
 
     return [
       for (final section in sections) ...[
         Padding(
-          key: _keyFor(section),
+          key: ValueKey('preview_section_${_idOf(section)}'),
           padding: const EdgeInsets.fromLTRB(
             AppSpacing.lg,
             AppSpacing.xl,
@@ -505,7 +404,8 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
               key: ValueKey('preview_card_${product.id}'),
               product: product,
               height: cardHeight,
-              gates: preview.gatesByProduct[product.id] ?? const <PublishGate>[],
+              gates:
+                  preview.gatesByProduct[product.id] ?? const <PublishGate>[],
               isThreeDActive: _activeThreeDId == product.id,
               onLoadThreeD: () => setState(() => _activeThreeDId = product.id),
               onUnloadThreeD: () => setState(() => _activeThreeDId = null),
@@ -519,9 +419,10 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
       // though: somebody who has just made "Drinks" and cannot find it in the
       // preview reads that as the create having failed. One line answers both.
       //
-      // Suppressed under a filter: the sentence is about the DRAFT, and beside a
-      // filtered page it reads as a claim about what the filter did.
-      if (!_isLensed && preview.emptySectionTitles.isNotEmpty)
+      // Suppressed under a filter or a category tab: the sentence is about the
+      // DRAFT, and beside a narrowed page it reads as a claim about what the
+      // narrowing did.
+      if (!_isLensed && !narrowed && preview.emptySectionTitles.isNotEmpty)
         Padding(
           key: const ValueKey('preview_empty_sections'),
           padding: const EdgeInsets.fromLTRB(
@@ -817,9 +718,8 @@ class _FrameLabel extends StatelessWidget {
 
 /// The sort and filter controls.
 ///
-/// Two scrolling rows rather than a menu: the options are few, naming them all
-/// is cheaper to read than opening something, and the row doubles as the
-/// display of what is currently on — which a closed menu cannot do.
+/// The same two rows the catalog page has under its search box — see
+/// [ControlRow] for why rows and not a menu.
 class _ViewControls extends StatelessWidget {
   const _ViewControls({
     required this.sort,
@@ -828,92 +728,40 @@ class _ViewControls extends StatelessWidget {
     required this.onFilter,
   });
 
-  final PreviewSort sort;
+  final ProductSort sort;
   final PreviewFilter filter;
-  final ValueChanged<PreviewSort> onSort;
+  final ValueChanged<ProductSort> onSort;
   final ValueChanged<PreviewFilter> onFilter;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
-      decoration: BoxDecoration(
-        color: AppColors.surface1,
-        borderRadius: BorderRadius.circular(AppRadius.sm),
-        border: Border.all(color: AppColors.surface2),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _ControlRow(
-            label: 'Sort',
-            children: [
-              for (final option in PreviewSort.values)
-                _ViewChip(
-                  key: ValueKey('preview_sort_${option.name}'),
-                  label: option.label,
-                  selected: option == sort,
-                  onTap: () => onSort(option),
-                ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          _ControlRow(
-            label: 'Show',
-            children: [
-              for (final option in PreviewFilter.values)
-                _ViewChip(
-                  key: ValueKey('preview_filter_${option.name}'),
-                  label: option.label,
-                  icon: option.icon,
-                  selected: option == filter,
-                  onTap: () => onFilter(option),
-                ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// One labelled, horizontally scrolling row of chips.
-class _ControlRow extends StatelessWidget {
-  const _ControlRow({required this.label, required this.children});
-
-  final String label;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return ViewControlsPanel(
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-          child: Text(
-            label.toUpperCase(),
-            style: const TextStyle(
-              fontSize: AppTypography.sizeLabel,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.2,
-              color: AppColors.textMuted,
-            ),
-          ),
+        ControlRow(
+          label: 'Sort',
+          children: [
+            for (final option in ProductSort.values)
+              _ViewChip(
+                key: ValueKey('preview_sort_${option.name}'),
+                label: option.label,
+                selected: option == sort,
+                onTap: () => onSort(option),
+              ),
+          ],
         ),
         const SizedBox(height: AppSpacing.sm),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-          child: Row(
-            children: [
-              for (final child in children)
-                Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.sm),
-                  child: child,
-                ),
-            ],
-          ),
+        ControlRow(
+          label: 'Show',
+          children: [
+            for (final option in PreviewFilter.values)
+              _ViewChip(
+                key: ValueKey('preview_filter_${option.name}'),
+                label: option.label,
+                icon: option.icon,
+                selected: option == filter,
+                onTap: () => onFilter(option),
+              ),
+          ],
         ),
       ],
     );
@@ -970,8 +818,7 @@ class _ViewChip extends StatelessWidget {
                 label,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: color,
-                      fontWeight:
-                          selected ? FontWeight.w700 : FontWeight.w500,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                     ),
               ),
             ],
@@ -996,7 +843,7 @@ class _ViewNotice extends StatelessWidget {
     required this.onReset,
   });
 
-  final PreviewSort sort;
+  final ProductSort sort;
   final PreviewFilter filter;
   final int hidden;
   final VoidCallback onReset;
@@ -1165,8 +1012,8 @@ class _PageHeader extends StatelessWidget {
     final profile = preview.profile;
     final coverUrl = profile?.coverImageUrl;
     final logoUrl = _publicOrNull(profile, 'logoUrl', profile?.logoUrl);
-    final phone = _publicOrNull(
-        profile, 'contact.phone', preview.catalog.contact?.phone);
+    final phone =
+        _publicOrNull(profile, 'contact.phone', preview.catalog.contact?.phone);
     final address = _publicOrNull(
         profile, 'contact.address', preview.catalog.contact?.address);
     final hasCover = coverUrl != null && coverUrl.isNotEmpty;
@@ -1401,59 +1248,27 @@ class _ContactChip extends StatelessWidget {
       );
 }
 
-/// The public page's category tabs. Here they only scroll to a block — the real
-/// page filters, and a preview that filtered would hide the very products the
-/// user came to check.
-///
-/// The highlight follows the SCROLL as well as the tap, which is what makes the
-/// strip worth having on a long menu: it answers "where am I?" continuously,
-/// not only for the two seconds after a press.
-class _CategoryStrip extends StatefulWidget {
+/// The public page's category tabs, doing what the real ones do: "All" first,
+/// which is the whole page, then one chip per category that NARROWS the page
+/// to that block. A tab is not a lens — a customer has the same tab.
+class _CategoryStrip extends StatelessWidget {
   const _CategoryStrip({
     required this.sections,
-    required this.activeId,
-    required this.onTap,
+    required this.selectedId,
+    required this.onSelect,
   });
 
   final List<CatalogPreviewSection> sections;
 
-  /// `section.id ?? ''` of the block being read.
-  final String activeId;
+  /// `section.id ?? ''` of the block being shown; null for All.
+  final String? selectedId;
 
-  final ValueChanged<CatalogPreviewSection> onTap;
-
-  @override
-  State<_CategoryStrip> createState() => _CategoryStripState();
-}
-
-class _CategoryStripState extends State<_CategoryStrip> {
-  final Map<String, GlobalKey> _chipKeys = {};
-
-  @override
-  void didUpdateWidget(covariant _CategoryStrip oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // A highlight that scrolls off its own strip is worse than no highlight.
-    if (oldWidget.activeId != widget.activeId) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _revealActive());
-    }
-  }
-
-  void _revealActive() {
-    final context = _chipKeys[widget.activeId]?.currentContext;
-    if (context == null || !mounted) return;
-    Scrollable.ensureVisible(
-      context,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOut,
-      alignment: 0.5,
-      // The chip lives in the horizontal strip; without this the page itself
-      // would scroll to reveal it and undo the jump the user just made.
-      alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
-    );
-  }
+  /// Called with the same identity, or null for All.
+  final ValueChanged<String?> onSelect;
 
   @override
   Widget build(BuildContext context) {
+    final total = [for (final s in sections) ...s.products].length;
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.fromLTRB(
@@ -1464,15 +1279,25 @@ class _CategoryStripState extends State<_CategoryStrip> {
       ),
       child: Row(
         children: [
-          for (final section in widget.sections)
+          Padding(
+            padding: const EdgeInsets.only(right: AppSpacing.sm),
+            child: _CategoryChip(
+              key: const ValueKey('preview_category_all'),
+              label: 'All',
+              count: total,
+              active: selectedId == null,
+              onTap: () => onSelect(null),
+            ),
+          ),
+          for (final section in sections)
             Padding(
               padding: const EdgeInsets.only(right: AppSpacing.sm),
               child: _CategoryChip(
-                key: _chipKeys.putIfAbsent(
-                    section.id ?? '', GlobalKey.new),
-                section: section,
-                active: (section.id ?? '') == widget.activeId,
-                onTap: () => widget.onTap(section),
+                key: ValueKey('preview_category_${section.id ?? ''}'),
+                label: section.title,
+                count: section.products.length,
+                active: (section.id ?? '') == selectedId,
+                onTap: () => onSelect(section.id ?? ''),
               ),
             ),
         ],
@@ -1484,12 +1309,14 @@ class _CategoryStripState extends State<_CategoryStrip> {
 class _CategoryChip extends StatelessWidget {
   const _CategoryChip({
     super.key,
-    required this.section,
+    required this.label,
+    required this.count,
     required this.active,
     required this.onTap,
   });
 
-  final CatalogPreviewSection section;
+  final String label;
+  final int count;
   final bool active;
   final VoidCallback onTap;
 
@@ -1524,16 +1351,15 @@ class _CategoryChip extends StatelessWidget {
               // Its own Text, not interpolated with the count: the category's
               // name is a value that other code (and tests) look for exactly.
               Text(
-                section.title,
+                label,
                 style: textTheme.bodySmall?.copyWith(
-                  color:
-                      active ? AppColors.goldGlow : AppColors.textSecondary,
+                  color: active ? AppColors.goldGlow : AppColors.textSecondary,
                   fontWeight: active ? FontWeight.w700 : FontWeight.w500,
                 ),
               ),
               const SizedBox(width: AppSpacing.xs),
               Text(
-                '${section.products.length}',
+                '$count',
                 style: textTheme.bodySmall?.copyWith(
                   color: active
                       ? AppColors.royalGold.withValues(alpha: 0.8)
