@@ -18,24 +18,34 @@ import 'package:flutter/foundation.dart' show immutable;
 /// The preset windows the range control offers.
 enum AnalyticsRangePreset {
   last7,
+  last15,
   last30,
   last90,
+  last365,
   custom,
 }
 
 extension AnalyticsRangePresetX on AnalyticsRangePreset {
   String get label => switch (this) {
         AnalyticsRangePreset.last7 => '7 days',
+        AnalyticsRangePreset.last15 => '15 days',
         AnalyticsRangePreset.last30 => '30 days',
         AnalyticsRangePreset.last90 => '90 days',
+        AnalyticsRangePreset.last365 => '12 months',
         AnalyticsRangePreset.custom => 'Custom',
       };
 
   /// How many days back the preset reaches, or null for [custom].
+  ///
+  /// [last365] is exactly the backend's ceiling ([kAnalyticsMaxRangeDays]),
+  /// so it is the widest window that is honoured as asked rather than
+  /// silently narrowed.
   int? get days => switch (this) {
         AnalyticsRangePreset.last7 => 7,
+        AnalyticsRangePreset.last15 => 15,
         AnalyticsRangePreset.last30 => 30,
         AnalyticsRangePreset.last90 => 90,
+        AnalyticsRangePreset.last365 => 365,
         AnalyticsRangePreset.custom => null,
       };
 }

@@ -416,18 +416,110 @@ export interface MirageAnalyticsKpis {
   arSessions: number;
   contactClicks: number;
   searches: number;
+  // Added with Mirage's phase-2 event wiring. Optional because a summary
+  // served from a cache written by an older Mirage build carries none of them.
+  /** Taps on the floating Menu pill that opens the full category list. */
+  menuOpens?: number;
+  /** Arrivals that landed straight on a dish from a QR or a shared link. */
+  productPageViews?: number;
+  modelLoads?: number;
+  modelFailures?: number;
+}
+
+export interface MirageFunnelStage {
+  key: string;
+  label: string;
+  count: number;
+}
+
+export interface MirageDeviceRow {
+  type: string;
+  sessions: number;
 }
 
 /**
- * Mirage's summary payload. Indexed because the aggregation returns several
- * cross-client panels (`byRestaurant`, `byDevice`, `topCategories`, `topZoomed`)
- * that a per-business dashboard must NOT surface — they are kept `unknown` so
- * nothing reads them by accident.
+ * A row of one of Mirage's per-restaurant leaderboards. `restaurantId` is
+ * the Mongo id the row was grouped under — the proxy compares it against the
+ * caller's own before forwarding anything.
+ */
+export interface MirageCategoryRow {
+  name: string;
+  opens: number;
+  sessions: number;
+  restaurantId?: string;
+  restaurantName?: string;
+}
+
+export interface MirageZoomRow {
+  productId: string;
+  name: string;
+  /** Completed 3-gesture bursts, not raw gestures (ZOOMS_PER_COUNT). */
+  zooms: number;
+  sessions: number;
+  restaurantId?: string;
+  restaurantName?: string;
+}
+
+export interface MirageSearchRow {
+  query: string;
+  searches: number;
+  sessions: number;
+  avgResults: number;
+  zeroResults: number;
+  restaurantId?: string;
+  restaurantName?: string;
+}
+
+export interface MirageFailureReason {
+  reason: string;
+  count: number;
+}
+
+export interface MirageFailingProduct {
+  productId: string;
+  name: string;
+  failures: number;
+  restaurantId?: string;
+  restaurantName?: string;
+}
+
+export interface MirageModelHealth {
+  loads: number;
+  failures: number;
+  failureRate: number | null;
+  samples: number;
+  avgLoadMs: number;
+  maxLoadMs: number;
+  slowLoads: number;
+  slowThresholdMs: number;
+  topFailures: MirageFailureReason[];
+  failingProducts: MirageFailingProduct[];
+}
+
+/**
+ * Mirage's summary payload.
+ *
+ * Every panel below is computed over the SAME `$match` as the KPIs
+ * (analyticsHelper.js `buildMatch`), so with the restaurant filter forced by
+ * the proxy they describe one business. `byRestaurant` is the exception in
+ * spirit — a cross-client comparison that exists for Mirage's operator — and
+ * it is left untyped under the index signature so nothing forwards it.
+ *
+ * All of the panels are optional: a body served from Mirage's five-minute
+ * cache after an older deploy carries none of them, and the proxy must answer
+ * with empty lists rather than fail.
  */
 export interface MirageAnalyticsSummary {
   range: MirageAnalyticsRange;
   kpis: MirageAnalyticsKpis;
   previousKpis?: MirageAnalyticsKpis;
+  totalsByType?: Record<string, number>;
+  funnel?: MirageFunnelStage[];
+  byDevice?: MirageDeviceRow[];
+  topCategories?: MirageCategoryRow[];
+  topZoomed?: MirageZoomRow[];
+  topSearches?: MirageSearchRow[];
+  modelHealth?: MirageModelHealth;
   [key: string]: unknown;
 }
 

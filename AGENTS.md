@@ -906,9 +906,29 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   ReCapture reads them with its admin credential and FORCES `restaurant` from the
   caller's mapping — an empty value makes Mirage's `buildMatch` drop the filter
   and return every business's numbers, so an unprovisioned catalog returns empty
-  with ZERO calls. Responses are built field by field; `byRestaurant`,
-  `byDevice`, `topCategories` and `topZoomed` are cross-client panels that must
-  never be spread into a per-business response.
+  with ZERO calls. Responses are built field by field — nothing spreads
+  Mirage's object. With the filter forced, every panel in Mirage's summary
+  (funnel, `byDevice`, `topCategories`, `topZoomed`, `topSearches`,
+  `modelHealth`) is aggregated over the same `$match` as the KPIs and IS
+  forwarded; `byRestaurant` is the one cross-client panel and never is. As a
+  second lock, every leaderboard row that carries a `restaurantId` is compared
+  against the caller's own and dropped on mismatch (`ownRows`). Per-product
+  rows (`topZoomed`, `failingProducts`, top-products) are joined back to
+  `CatalogProduct.mirageItemId` SCOPED TO THE CATALOG, so the client gets our
+  name and a tappable `catalogProductId`; a row that no longer maps keeps its
+  Mirage id and its numbers.
+- **The dashboard mirrors Mirage's own, section for section.**
+  `CatalogAnalyticsScreen` draws the same cards in the same order as
+  `mirage-fe/src/components/admin/analytics/AnalyticsDashboard.tsx` — sessions
+  hero, six KPI tiles, traffic, funnel, categories, searches, 3D & AR health,
+  top products, zoomed, devices, footer — with the same presets (7/15/30/90/
+  365/custom) and the same (i) explainers (`analytics_section_info.dart`
+  tracks Mirage's `sectionInfo.ts`; both describe the aggregations in
+  `analyticsController.js`, so change the copy in both when a number changes
+  meaning). Panels live in `presentation/widgets/catalog/analytics_panels.dart`.
+  ⚠ Cards inside the screen's `_Pair` and the wide KPI row sit under an
+  `IntrinsicHeight`; nothing inside them may use `LayoutBuilder`, which throws
+  when asked for intrinsics.
 
 ### Catalog names: STORED as a slug, SHOWN de-slugged
 

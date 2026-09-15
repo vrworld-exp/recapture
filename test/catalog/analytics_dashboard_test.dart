@@ -53,6 +53,7 @@ Map<String, dynamic> summaryPayload({
   int visitors = 830,
   int productViews = 402,
   int arViews = 96,
+  int contactClicks = 12,
   Map<String, dynamic>? previous = const {
     'pageViews': 1000,
     'sessions': 900,
@@ -62,7 +63,32 @@ Map<String, dynamic> summaryPayload({
     'arSessions': 100,
     'contactClicks': 10,
     'searches': 5,
+    'menuOpens': 4,
+    'productPageViews': 2,
+    'modelLoads': 150,
+    'modelFailures': 3,
   },
+  List<Map<String, dynamic>>? funnel,
+  List<Map<String, dynamic>> topCategories = const [
+    {'name': 'starters', 'opens': 40, 'sessions': 30},
+    {'name': 'mains', 'opens': 25, 'sessions': 20},
+  ],
+  List<Map<String, dynamic>> topSearches = const [
+    {
+      'query': 'paneer',
+      'searches': 9,
+      'sessions': 7,
+      'avgResults': 2.5,
+      'zeroResults': 0,
+    },
+    {
+      'query': 'sushi',
+      'searches': 4,
+      'sessions': 4,
+      'avgResults': 0,
+      'zeroResults': 4,
+    },
+  ],
 }) =>
     {
       'range': {'from': from, 'to': to, 'days': days},
@@ -73,10 +99,74 @@ Map<String, dynamic> summaryPayload({
         'productViews': productViews,
         'arViews': arViews,
         'arSessions': 80,
-        'contactClicks': 12,
+        'contactClicks': contactClicks,
         'searches': 7,
+        'menuOpens': 5,
+        'productPageViews': 3,
+        'modelLoads': 200,
+        'modelFailures': 4,
       },
       'previousKpis': previous,
+      'totalEvents': 3210,
+      'funnel': funnel ??
+          [
+            {
+              'key': 'client_page_view',
+              'label': 'Catalog opened',
+              'count': pageViews
+            },
+            {
+              'key': 'product_detail_opened',
+              'label': 'Product viewed',
+              'count': productViews,
+            },
+            {
+              'key': 'ar_view_clicked',
+              'label': 'AR launched',
+              'count': arViews
+            },
+            {
+              'key': 'contact_channel_clicked',
+              'label': 'Contact clicked',
+              'count': contactClicks,
+            },
+          ],
+      'byDevice': [
+        {'type': 'mobile', 'sessions': 700},
+        {'type': 'desktop', 'sessions': 400},
+      ],
+      'topCategories': topCategories,
+      'topZoomed': [
+        {
+          'productId': 'mirage-item-1',
+          'catalogProductId': '6a83dd464aea89d1d2d28d60',
+          'name': 'Walnut Chair',
+          'zooms': 6,
+          'sessions': 7,
+        },
+      ],
+      'topSearches': topSearches,
+      'modelHealth': {
+        'loads': 200,
+        'failures': 4,
+        'failureRate': 2.0,
+        'samples': 200,
+        'avgLoadMs': 1000,
+        'maxLoadMs': 4000,
+        'slowLoads': 0,
+        'slowThresholdMs': 5000,
+        'topFailures': [
+          {'reason': 'loadfailure', 'count': 4},
+        ],
+        'failingProducts': [
+          {
+            'productId': 'mirage-item-1',
+            'catalogProductId': '6a83dd464aea89d1d2d28d60',
+            'name': 'Walnut Chair',
+            'failures': 4,
+          },
+        ],
+      },
     };
 
 Map<String, dynamic> zeroSummaryPayload() => {
@@ -90,8 +180,30 @@ Map<String, dynamic> zeroSummaryPayload() => {
         'arSessions': 0,
         'contactClicks': 0,
         'searches': 0,
+        'menuOpens': 0,
+        'productPageViews': 0,
+        'modelLoads': 0,
+        'modelFailures': 0,
       },
       'previousKpis': null,
+      'totalEvents': 0,
+      'funnel': <Map<String, dynamic>>[],
+      'byDevice': <Map<String, dynamic>>[],
+      'topCategories': <Map<String, dynamic>>[],
+      'topZoomed': <Map<String, dynamic>>[],
+      'topSearches': <Map<String, dynamic>>[],
+      'modelHealth': {
+        'loads': 0,
+        'failures': 0,
+        'failureRate': null,
+        'samples': 0,
+        'avgLoadMs': 0,
+        'maxLoadMs': 0,
+        'slowLoads': 0,
+        'slowThresholdMs': 5000,
+        'topFailures': <Map<String, dynamic>>[],
+        'failingProducts': <Map<String, dynamic>>[],
+      },
     };
 
 Map<String, dynamic> timeseriesPayload({int days = 30}) => {
@@ -254,8 +366,8 @@ class FakeAnalyticsRepository
   }
 
   @override
-  dynamic noSuchMethod(Invocation invocation) =>
-      throw UnimplementedError('${invocation.memberName} is not exercised here');
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError(
+      '${invocation.memberName} is not exercised here');
 }
 
 class _StubAuth extends AuthNotifier {
@@ -323,9 +435,22 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('analytics_range_90')));
     await tester.pumpAndSettle();
     expect(repo.callsFor('summary').last.from, '2026-05-26');
+
+    // The two presets added to match Mirage's own strip. 12 months is exactly
+    // the backend's ceiling, so it is honoured as asked, never narrowed.
+    await tester.tap(find.byKey(const ValueKey('analytics_range_15')));
+    await tester.pumpAndSettle();
+    expect(repo.callsFor('summary').last.from, '2026-08-09');
+
+    await tester
+        .ensureVisible(find.byKey(const ValueKey('analytics_range_365')));
+    await tester.tap(find.byKey(const ValueKey('analytics_range_365')));
+    await tester.pumpAndSettle();
+    expect(repo.callsFor('summary').last.from, '2025-08-24');
   });
 
-  testWidgets('re-tapping the selected range spends no request', (tester) async {
+  testWidgets('re-tapping the selected range spends no request',
+      (tester) async {
     final repo = FakeAnalyticsRepository();
     await pumpAt(tester, harness(repo), size: const Size(900, 1600));
     repo.calls.clear();
@@ -338,7 +463,8 @@ void main() {
 
   // ── States ────────────────────────────────────────────────────────────────
 
-  testWidgets('a never-published catalog is told to publish, not that it is '
+  testWidgets(
+      'a never-published catalog is told to publish, not that it is '
       'quiet', (tester) async {
     final repo = FakeAnalyticsRepository(
       catalog: Catalog.fromMap({
@@ -358,7 +484,8 @@ void main() {
     expect(repo.calls, isEmpty);
   });
 
-  testWidgets('an empty window shows zeroed tiles and a next step, not an error',
+  testWidgets(
+      'an empty window shows zeroed tiles and a next step, not an error',
       (tester) async {
     final repo = FakeAnalyticsRepository()
       ..summary = zeroSummaryPayload()
@@ -388,14 +515,16 @@ void main() {
     expect(find.byKey(const ValueKey('analytics_unavailable')), findsNothing);
   });
 
-  testWidgets('ANALYTICS_UNAVAILABLE degrades softly and never shows the '
+  testWidgets(
+      'ANALYTICS_UNAVAILABLE degrades softly and never shows the '
       "server's own words", (tester) async {
     final repo = FakeAnalyticsRepository()
       ..failure = const CatalogFailure(
         code: 'ANALYTICS_UNAVAILABLE',
         // The message the API actually sends. It must not reach the screen —
         // the sentence comes from the client's own code table (F10).
-        message: 'Analytics are unavailable right now. Please try again shortly.',
+        message:
+            'Analytics are unavailable right now. Please try again shortly.',
         statusCode: 503,
       );
 
@@ -432,7 +561,8 @@ void main() {
     expect(repo.calls.length, 3);
     expect(repo.callsFor('summary').single.from, '2026-07-25');
     // And the dashboard is back.
-    expect(find.byKey(const ValueKey('analytics_top_products')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('analytics_top_products')), findsOneWidget);
   });
 
   testWidgets('a genuine failure is a different state with a mapped sentence',
@@ -455,38 +585,300 @@ void main() {
 
   // ── Metrics, badges and the split ─────────────────────────────────────────
 
-  testWidgets('all six metrics render', (tester) async {
+  testWidgets('the hero, all six tiles and every section render',
+      (tester) async {
     final repo = FakeAnalyticsRepository();
-    await pumpAt(tester, harness(repo), size: const Size(900, 1600));
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
 
+    // Sessions is the hero; the six tiles are Mirage's own six.
+    expect(
+        find.byKey(const ValueKey('analytics_tile_sessions')), findsOneWidget);
+    expect(find.byKey(const ValueKey('analytics_visitors')), findsOneWidget);
     for (final id in const [
       'page_views',
-      'visitors',
       'product_views',
-      'model_loads',
       'ar_views',
+      'contact_clicks',
+      'browse_taps',
+      'direct_links',
     ]) {
       expect(find.byKey(ValueKey('analytics_tile_$id')), findsOneWidget,
           reason: 'missing tile $id');
     }
-    // The sixth and seventh: the split and the list it is computed from.
-    expect(find.byKey(const ValueKey('analytics_split')), findsOneWidget);
-    expect(find.byKey(const ValueKey('analytics_top_products')), findsOneWidget);
+    // The three tiles the timeseries carries get a sparkline; the rest do not
+    // — there is no day-by-day series to draw for them.
+    expect(find.byKey(const ValueKey('analytics_sparkline_page_views')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('analytics_sparkline_contact_clicks')),
+        findsNothing);
+
+    // Every card, in Mirage's order.
+    for (final key in const [
+      'analytics_chart_card',
+      'analytics_funnel',
+      'analytics_categories',
+      'analytics_searches',
+      'analytics_health',
+      'analytics_top_products',
+      'analytics_split',
+      'analytics_zoomed',
+      'analytics_devices',
+      'analytics_footer',
+    ]) {
+      expect(find.byKey(ValueKey(key)), findsOneWidget, reason: 'missing $key');
+    }
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('3D model loads are summed from the rows, since the summary '
-      'carries no such counter', (tester) async {
+  testWidgets('browse taps and direct links read the two navigation counters',
+      (tester) async {
     final repo = FakeAnalyticsRepository();
-    await pumpAt(tester, harness(repo), size: const Size(900, 1600));
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
 
-    // 180 (Walnut Chair) + 0 (Ceramic Mug) + 20 (the deleted row).
+    expect(
+      tester
+          .widget<Text>(
+              find.byKey(const ValueKey('analytics_value_browse_taps')))
+          .data,
+      '5',
+    );
+    expect(
+      tester
+          .widget<Text>(
+              find.byKey(const ValueKey('analytics_value_direct_links')))
+          .data,
+      '3',
+    );
+  });
+
+  testWidgets('a tile with no prior window says so instead of showing nothing',
+      (tester) async {
+    final repo = FakeAnalyticsRepository()
+      ..summary = summaryPayload(previous: null);
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('analytics_tile_model_loads')),
-        matching: find.text('200'),
+        of: find.byKey(const ValueKey('analytics_tile_page_views')),
+        matching: find.text('no prior period'),
       ),
       findsOneWidget,
     );
+  });
+
+  // ── The funnel ────────────────────────────────────────────────────────────
+
+  testWidgets('the funnel captions each stage as a share of the one above it',
+      (tester) async {
+    final repo = FakeAnalyticsRepository()
+      ..summary = summaryPayload(
+        pageViews: 36,
+        productViews: 10,
+        arViews: 12,
+        contactClicks: 4,
+      );
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    final funnel = find.byKey(const ValueKey('analytics_funnel'));
+    // 10 of 36, 12 of 10 (actions, not people — a stage CAN exceed the one
+    // above it), 4 of 12.
+    expect(find.descendant(of: funnel, matching: find.text('28% of previous')),
+        findsOneWidget);
+    expect(find.descendant(of: funnel, matching: find.text('120% of previous')),
+        findsOneWidget);
+    expect(find.descendant(of: funnel, matching: find.text('33% of previous')),
+        findsOneWidget);
+    // The top stage has nothing above it.
+    expect(
+        find.descendant(
+            of: funnel, matching: find.textContaining('of previous')),
+        findsNWidgets(3));
+  });
+
+  testWidgets(
+      'the funnel is drawn from the counters when the backend sends '
+      'no funnel block', (tester) async {
+    final payload = summaryPayload(pageViews: 50, productViews: 25)
+      ..remove('funnel');
+    final repo = FakeAnalyticsRepository()..summary = payload;
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('analytics_funnel')),
+        matching: find.text('50% of previous'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  // ── The health panel ──────────────────────────────────────────────────────
+
+  testWidgets('3D & AR health reads the summary, not the product rows',
+      (tester) async {
+    final repo = FakeAnalyticsRepository();
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    // 200 from modelHealth.loads — NOT 180 + 0 + 20 summed off top-products.
+    expect(
+      tester
+          .widget<Text>(find
+              .byKey(const ValueKey('analytics_health_value_models_loaded')))
+          .data,
+      '200',
+    );
+    // AR entered: 80 sessions of 96 taps.
+    expect(find.textContaining('83.3% of 96 AR taps'), findsOneWidget);
+    expect(find.textContaining('1.0s average over 200 timed'), findsOneWidget);
+    expect(find.textContaining('2% of attempted loads'), findsOneWidget);
+    // The reason is humanised, and the failing model is named.
+    expect(find.text('Model file failed to load'), findsOneWidget);
+    expect(find.byKey(const ValueKey('analytics_failing_mirage-item-1')),
+        findsOneWidget);
+  });
+
+  // ── Leaderboards ──────────────────────────────────────────────────────────
+
+  testWidgets(
+      'searches show what was typed and flag the ones that found '
+      'nothing', (tester) async {
+    final repo = FakeAnalyticsRepository();
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    final card = find.byKey(const ValueKey('analytics_searches'));
+    expect(find.descendant(of: card, matching: find.text('paneer')),
+        findsOneWidget);
+    expect(find.descendant(of: card, matching: find.text('sushi')),
+        findsOneWidget);
+    expect(
+      find.descendant(
+          of: card, matching: find.textContaining('1 query found nothing')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('an empty search list explains itself', (tester) async {
+    final repo = FakeAnalyticsRepository()
+      ..summary = summaryPayload(topSearches: const []);
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    expect(find.textContaining('No searches in this range.'), findsOneWidget);
+    expect(find.textContaining('browsed rather than searched'), findsOneWidget);
+  });
+
+  testWidgets('categories are shown by display name with a More past five',
+      (tester) async {
+    final repo = FakeAnalyticsRepository()
+      ..summary = summaryPayload(
+        topCategories: [
+          for (var i = 0; i < 7; i++)
+            {'name': 'category_$i', 'opens': 70 - i * 10, 'sessions': 5},
+        ],
+      );
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    // Slug in, display name out.
+    expect(find.text('category 0'), findsOneWidget);
+    expect(find.text('category_0'), findsNothing);
+    // Five, then More (7) — which expands in place.
+    expect(find.text('category 5'), findsNothing);
+    final more = find.byKey(const ValueKey('analytics_categories_more'));
+    expect(find.descendant(of: more, matching: find.text('More (7)')),
+        findsOneWidget);
+    final button = find.descendant(of: more, matching: find.byType(TextButton));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(find.text('category 6'), findsOneWidget);
+  });
+
+  testWidgets('devices split sessions and print each share', (tester) async {
+    final repo = FakeAnalyticsRepository();
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    final card = find.byKey(const ValueKey('analytics_devices'));
+    // 700 of 1100 and 400 of 1100.
+    expect(
+        find.descendant(of: card, matching: find.text('64%')), findsOneWidget);
+    expect(
+        find.descendant(of: card, matching: find.text('36%')), findsOneWidget);
+    expect(find.descendant(of: card, matching: find.text('Mobile')),
+        findsOneWidget);
+    expect(find.descendant(of: card, matching: find.text('Desktop')),
+        findsOneWidget);
+  });
+
+  testWidgets('the footer states the event count and the provenance',
+      (tester) async {
+    final repo = FakeAnalyticsRepository();
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    final footer = find.byKey(const ValueKey('analytics_footer'));
+    expect(
+        find.descendant(
+            of: footer, matching: find.text('3,210 events in range')),
+        findsOneWidget);
+    expect(
+      find.descendant(
+        of: footer,
+        matching: find.text('Reported on server receive time (UTC)'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+      'the top-products table re-sorts on a column tap without '
+      're-fetching', (tester) async {
+    final repo = FakeAnalyticsRepository();
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+    repo.calls.clear();
+
+    // Ranked by views: Walnut Chair (220) leads.
+    final rows = find.byKey(const ValueKey('analytics_top_products'));
+    final chairY = tester
+        .getTopLeft(
+            find.descendant(of: rows, matching: find.text('Walnut Chair')))
+        .dy;
+    final mugY = tester
+        .getTopLeft(
+            find.descendant(of: rows, matching: find.text('Ceramic Mug')))
+        .dy;
+    expect(chairY, lessThan(mugY));
+
+    // AR rate: 60 of 220 is 27%; the image-only row has none.
+    expect(
+        find.descendant(of: rows, matching: find.text('27%')), findsOneWidget);
+    expect(
+        find.descendant(of: rows, matching: find.text('0%')), findsOneWidget);
+
+    // Sort by AR views: the deleted row (4) now outranks the mug (0).
+    await tester.ensureVisible(find.text('AR views'));
+    await tester.tap(find.text('AR views'));
+    await tester.pumpAndSettle();
+    final lampY = tester
+        .getTopLeft(find.descendant(of: rows, matching: find.text('Old Lamp')))
+        .dy;
+    final mugY2 = tester
+        .getTopLeft(
+            find.descendant(of: rows, matching: find.text('Ceramic Mug')))
+        .dy;
+    expect(lampY, lessThan(mugY2));
+    expect(repo.calls, isEmpty);
+  });
+
+  // ── Info hints ────────────────────────────────────────────────────────────
+
+  testWidgets('the (i) beside a section opens its explainer', (tester) async {
+    final repo = FakeAnalyticsRepository();
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    await tester.tap(find.byKey(const ValueKey('analytics_info_sessions')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('analytics_info_sheet_sessions')),
+        findsOneWidget);
+    expect(find.textContaining('Not the same as QR scans'), findsOneWidget);
   });
 
   testWidgets('large numbers abbreviate and keep the exact value in a tooltip',
@@ -521,11 +913,13 @@ void main() {
     await pumpAt(tester, harness(repo), size: const Size(900, 1600));
 
     expect(find.byKey(const ValueKey('analytics_badge_threeD')), findsWidgets);
-    expect(find.byKey(const ValueKey('analytics_badge_imageOnly')), findsWidgets);
+    expect(
+        find.byKey(const ValueKey('analytics_badge_imageOnly')), findsWidgets);
     expect(find.byKey(const ValueKey('analytics_badge_unknown')), findsWidgets);
   });
 
-  testWidgets('a product deleted locally stays counted, named Unknown and '
+  testWidgets(
+      'a product deleted locally stays counted, named Unknown and '
       'shown with its Mirage id', (tester) async {
     final repo = FakeAnalyticsRepository();
     await pumpAt(tester, harness(repo), size: const Size(900, 1600));
@@ -551,6 +945,8 @@ void main() {
 
   testWidgets('the chart is legible at 360 px and at 1600 px', (tester) async {
     for (final size in const [Size(360, 1400), Size(1600, 1200)]) {
+      // The chart is above the fold at both sizes; the assertion that
+      // matters — nothing overflowed — covers every card that was laid out.
       final repo = FakeAnalyticsRepository()
         ..timeseries = timeseriesPayload(days: 90);
 
@@ -584,6 +980,31 @@ void main() {
     // repaint, not a request. The RANGE is the thing that costs a round trip.
     expect(repo.calls, isEmpty);
     expect(find.byKey(const ValueKey('analytics_chart')), findsOneWidget);
+  });
+
+  testWidgets('the Table toggle shows exact daily figures, newest first',
+      (tester) async {
+    final repo = FakeAnalyticsRepository()
+      ..timeseries = timeseriesPayload(days: 3);
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+    repo.calls.clear();
+
+    await tester.tap(find.text('Table'));
+    await tester.pumpAndSettle();
+
+    expect(
+        find.byKey(const ValueKey('analytics_traffic_table')), findsOneWidget);
+    expect(find.byType(AnalyticsChart), findsNothing);
+    // Jul 27 (12 opens) is above Jul 26 (11 opens).
+    final table = find.byKey(const ValueKey('analytics_traffic_table'));
+    final newest = tester
+        .getTopLeft(find.descendant(of: table, matching: find.text('12')))
+        .dy;
+    final oldest = tester
+        .getTopLeft(find.descendant(of: table, matching: find.text('11')))
+        .dy;
+    expect(newest, lessThan(oldest));
+    expect(repo.calls, isEmpty);
   });
 
   testWidgets('an empty timeseries says so instead of drawing an empty axis',

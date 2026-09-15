@@ -1,7 +1,8 @@
 // lib/presentation/screens/catalog/catalog_analytics_screen.dart
 //
 // `/catalog/analytics` — what happened after publish (feature 66, surfacing
-// 61-65).
+// 61-65), section for section the same dashboard Mirage's own admin shows for
+// one restaurant.
 //
 // THIS SCREEN OPENS ONTO REAL HISTORY. Collection has been running on Mirage's
 // public page for months; nothing here starts it, and ReCapture emits no
@@ -24,6 +25,12 @@
 //     as a soft empty state off F10's code table, never as a crash.
 //   • A GENUINE FAILURE — mapped sentence, one retry.
 //
+// ONE WINDOW, EVERY PANEL. The range control scopes the hero, the tiles, the
+// chart and every card under them, so any two can be read against each
+// other. The order of the cards is Mirage's own — KPIs, traffic, funnel,
+// categories, searches, health, products, zoomed, devices, footer — so a
+// business flipping between the two sees the same story told the same way.
+//
 // LAYOUT COMES FROM CONSTRAINTS, NEVER FROM `kIsWeb`. The tile grid, the chart
 // and the split bar all read `LayoutBuilder`; a narrow browser window gets the
 // phone layout because it is narrow, not because it is a browser.
@@ -44,6 +51,9 @@ import '../../../domain/entities/catalog_analytics.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/catalog/analytics_chart.dart';
 import '../../widgets/catalog/analytics_format.dart';
+import '../../widgets/catalog/analytics_panels.dart';
+import '../../widgets/catalog/analytics_section_info.dart';
+import '../../widgets/catalog/analytics_sparkline.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 
@@ -68,7 +78,13 @@ class CatalogAnalyticsScreen extends ConsumerWidget {
           tooltip: 'Back',
           onPressed: () => navigateBack(context),
         ),
-        title: Text('Analytics', style: Theme.of(context).textTheme.titleLarge),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Analytics', style: Theme.of(context).textTheme.titleLarge),
+            const AnalyticsInfoHint(section: AnalyticsSection.overview),
+          ],
+        ),
       ),
       body: SafeArea(
         child: Center(
@@ -172,7 +188,8 @@ class _Dashboard extends ConsumerWidget {
           const SizedBox(height: AppSpacing.lg),
           state.report.when(
             loading: () => const _AnalyticsSkeleton(embedded: true),
-            error: (_, __) => _FailureBody(state: state, onRetry: notifier.refresh),
+            error: (_, __) =>
+                _FailureBody(state: state, onRetry: notifier.refresh),
             data: (report) => _ReportBody(report: report, range: state.range),
           ),
         ],
@@ -230,49 +247,70 @@ class _ReportBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final kpis = report.summary.kpis;
-    final previous = report.summary.previousKpis;
+    final summary = report.summary;
+    final kpis = summary.kpis;
+    final previous = summary.previousKpis;
+    final points = report.timeseries.points;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _RangeCaption(window: report.summary.window, range: range),
+        _RangeCaption(window: summary.window, range: range),
         const SizedBox(height: AppSpacing.md),
-        _TileGrid(
+        _KpiRow(
+          hero: _HeroData(
+            sessions: kpis.sessions,
+            previousSessions: previous?.sessions,
+            visitors: kpis.visitors,
+          ),
           tiles: [
             _TileData(
               id: 'page_views',
-              label: 'Catalog views',
+              label: 'Catalog opens',
+              section: AnalyticsSection.catalogOpens,
               value: kpis.pageViews,
               previous: previous?.pageViews,
-            ),
-            _TileData(
-              id: 'visitors',
-              label: 'Unique visitors',
-              value: kpis.visitors,
-              previous: previous?.visitors,
+              trend: [for (final p in points) p.pageViews],
+              color: AppColors.focusRing,
             ),
             _TileData(
               id: 'product_views',
               label: 'Product views',
+              section: AnalyticsSection.productViews,
               value: kpis.productViews,
               previous: previous?.productViews,
-            ),
-            _TileData(
-              id: 'model_loads',
-              label: '3D model loads',
-              value: report.topProducts.totalModelLoads,
-              // NO DELTA, deliberately. `modelLoads` exists per top-product row
-              // and nowhere else — there is no previous-window figure, and
-              // fetching the prior range to invent one would double every load
-              // of this screen for a single arrow.
-              previous: null,
+              trend: [for (final p in points) p.productViews],
+              color: AppColors.royalGold,
             ),
             _TileData(
               id: 'ar_views',
               label: 'AR launches',
+              section: AnalyticsSection.arLaunches,
               value: kpis.arViews,
               previous: previous?.arViews,
+              trend: [for (final p in points) p.arViews],
+              color: AppColors.success,
+            ),
+            _TileData(
+              id: 'contact_clicks',
+              label: 'Contact clicks',
+              section: AnalyticsSection.contactClicks,
+              value: kpis.contactClicks,
+              previous: previous?.contactClicks,
+            ),
+            _TileData(
+              id: 'browse_taps',
+              label: 'Browse taps',
+              section: AnalyticsSection.browseTaps,
+              value: kpis.menuOpens,
+              previous: previous?.menuOpens,
+            ),
+            _TileData(
+              id: 'direct_links',
+              label: 'Direct links',
+              section: AnalyticsSection.directLinks,
+              value: kpis.productPageViews,
+              previous: previous?.productPageViews,
             ),
           ],
         ),
@@ -281,15 +319,91 @@ class _ReportBody extends StatelessWidget {
           const _NoDataYet(),
         ] else ...[
           const SizedBox(height: AppSpacing.lg),
-          _ChartCard(points: report.timeseries.points),
+          _ChartCard(points: points),
+          const SizedBox(height: AppSpacing.lg),
+          // Paired cards from 720 px: the funnel beside the categories, the
+          // searches beside the health check — Mirage's own two-up, and the
+          // pairs a reader compares. One column below that.
+          _Pair(
+            first: AnalyticsFunnelCard(stages: summary.funnelStages),
+            second: AnalyticsCategoriesCard(rows: summary.topCategories),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          _Pair(
+            first: AnalyticsSearchesCard(
+              rows: summary.topSearches,
+              total: kpis.searches,
+            ),
+            second: AnalyticsModelHealthCard(
+              health: summary.modelHealth,
+              arViews: kpis.arViews,
+              arSessions: kpis.arSessions,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          AnalyticsTopProductsCard(topProducts: report.topProducts),
           const SizedBox(height: AppSpacing.lg),
           _SplitCard(topProducts: report.topProducts),
           const SizedBox(height: AppSpacing.lg),
-          _TopProductsCard(topProducts: report.topProducts),
+          _Pair(
+            first: AnalyticsZoomedCard(rows: summary.topZoomed),
+            second: AnalyticsDevicesCard(rows: summary.byDevice),
+            // The zoomed table wants the room; the device split does not.
+            firstFlex: 2,
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          AnalyticsFooter(totalEvents: summary.totalEvents),
         ],
       ],
     );
   }
+}
+
+/// Two cards side by side when there is room, stacked when there is not.
+///
+/// `IntrinsicHeight` so the pair shares a bottom edge — a funnel card that
+/// stops 80 px above the categories card beside it reads as a layout bug.
+///
+/// ⚠ NOTHING INSIDE A PAIR MAY USE `LayoutBuilder`. IntrinsicHeight asks its
+/// children for intrinsic dimensions and LayoutBuilder throws when asked —
+/// in debug, loudly, on first paint. The paired cards size themselves with
+/// flex and Wrap instead.
+class _Pair extends StatelessWidget {
+  const _Pair({
+    required this.first,
+    required this.second,
+    this.firstFlex = 1,
+  });
+
+  final Widget first;
+  final Widget second;
+  final int firstFlex;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 720) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                first,
+                const SizedBox(height: AppSpacing.lg),
+                second,
+              ],
+            );
+          }
+          return IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: firstFlex, child: first),
+                const SizedBox(width: AppSpacing.lg),
+                Expanded(child: second),
+              ],
+            ),
+          );
+        },
+      );
 }
 
 /// "1 Aug – 31 Aug · compared with the previous 30 days".
@@ -326,7 +440,7 @@ class _RangeCaption extends StatelessWidget {
 
 // ── Range control ───────────────────────────────────────────────────────────
 
-/// 7 / 30 / 90 and a custom window.
+/// 7 / 15 / 30 / 90 / 365 and a custom window — Mirage's own five.
 ///
 /// EVERY ONE OF THESE IS A REQUEST. The aggregation is server-side and cached
 /// there per resolved range, so switching windows re-reads rather than
@@ -349,8 +463,10 @@ class _RangeControl extends StatelessWidget {
 
   static const _presets = [
     AnalyticsRangePreset.last7,
+    AnalyticsRangePreset.last15,
     AnalyticsRangePreset.last30,
     AnalyticsRangePreset.last90,
+    AnalyticsRangePreset.last365,
   ];
 
   @override
@@ -394,60 +510,187 @@ class _RangeControl extends StatelessWidget {
   }
 }
 
-// ── Tiles ───────────────────────────────────────────────────────────────────
+// ── Hero and tiles ──────────────────────────────────────────────────────────
+
+class _HeroData {
+  const _HeroData({
+    required this.sessions,
+    required this.previousSessions,
+    required this.visitors,
+  });
+
+  final int sessions;
+  final int? previousSessions;
+  final int visitors;
+}
 
 class _TileData {
   const _TileData({
     required this.id,
     required this.label,
+    required this.section,
     required this.value,
     required this.previous,
+    this.trend,
+    this.color = AppColors.royalGold,
   });
 
   final String id;
   final String label;
+  final AnalyticsSection section;
   final int value;
 
   /// The same counter in the preceding window, or null where there is no
   /// comparison to draw. Null is NOT zero — see [analyticsDelta].
   final int? previous;
+
+  /// Day-by-day values for the sparkline, oldest first. Null for a counter
+  /// the timeseries does not carry.
+  final List<int>? trend;
+  final Color color;
 }
 
-/// The KPI row, wrapping into as many columns as the width affords.
+/// The hero figure and the six tiles.
+///
+/// Sessions is the hero, not visitors: QR traffic wipes browser storage per
+/// scan, so the visitor count over-counts, and a headline that runs high is
+/// the wrong one to quote to a business. Visitors is still shown, as the
+/// estimate it is, under the hero.
 ///
 /// The column count is derived from `LayoutBuilder`, which is what makes a
 /// narrowed browser window behave like a phone rather than like a squeezed
 /// desktop.
-class _TileGrid extends StatelessWidget {
-  const _TileGrid({required this.tiles});
+class _KpiRow extends StatelessWidget {
+  const _KpiRow({required this.hero, required this.tiles});
 
+  final _HeroData hero;
   final List<_TileData> tiles;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.maxWidth;
-          final columns = width >= 1000
-              ? 5
-              : width >= 720
-                  ? 3
-                  : 2;
           const gap = AppSpacing.sm;
-          final itemWidth = (width - gap * (columns - 1)) / columns;
 
-          return Wrap(
-            spacing: gap,
-            runSpacing: gap,
+          Widget grid(double gridWidth, int columns) {
+            final itemWidth = (gridWidth - gap * (columns - 1)) / columns;
+            return Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: [
+                for (final tile in tiles)
+                  SizedBox(width: itemWidth, child: _KpiTile(tile: tile)),
+              ],
+            );
+          }
+
+          // Wide: the hero takes a third, the six tiles fill two rows of
+          // three beside it. Narrow: the hero on top, then two columns.
+          if (width >= 900) {
+            final heroWidth = (width - gap) / 3;
+            // IntrinsicHeight, so the hero is as tall as the two tile rows
+            // beside it. A bare `stretch` cannot do this here: the row sits in
+            // a ListView, whose height is unbounded, and stretching into an
+            // unbounded height is the layout error, not the layout. (Nothing
+            // inside the hero or a tile uses LayoutBuilder — see `_Pair`.)
+            return IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(width: heroWidth, child: _HeroTile(hero: hero)),
+                  const SizedBox(width: gap),
+                  Expanded(child: grid(width - heroWidth - gap, 3)),
+                ],
+              ),
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              for (final tile in tiles)
-                SizedBox(
-                  width: itemWidth,
-                  child: _KpiTile(tile: tile),
-                ),
+              _HeroTile(hero: hero),
+              const SizedBox(height: gap),
+              grid(width, width >= 560 ? 3 : 2),
             ],
           );
         },
       );
+}
+
+class _HeroTile extends StatelessWidget {
+  const _HeroTile({required this.hero});
+
+  final _HeroData hero;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final exact = analyticsExact(context, hero.sessions);
+    final delta = analyticsDelta(
+      current: hero.sessions,
+      previous: hero.previousSessions,
+    );
+
+    return AppCard(
+      key: const ValueKey('analytics_tile_sessions'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Row(
+            children: [
+              Text(
+                'SESSIONS',
+                style: textTheme.bodySmall?.copyWith(
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const AnalyticsInfoHint(section: AnalyticsSection.sessions),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Semantics(
+            label: 'Sessions: $exact'
+                '${delta == null ? '' : ', ${analyticsDeltaLabel(delta)} '
+                    'versus the previous period'}',
+            excludeSemantics: true,
+            child: Tooltip(
+              message: exact,
+              child: Text(
+                analyticsCompact(context, hero.sessions),
+                key: const ValueKey('analytics_value_sessions'),
+                style: textTheme.displaySmall?.copyWith(
+                  color: AppColors.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          delta == null ? const _NoPriorPeriod() : _DeltaChip(delta: delta),
+          const SizedBox(height: AppSpacing.md),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  '${analyticsExact(context, hero.visitors)} unique visitors '
+                  '(estimate — QR scans often open in a private browser, '
+                  'which inflates this count)',
+                  key: const ValueKey('analytics_visitors'),
+                  style:
+                      textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+                ),
+              ),
+              const AnalyticsInfoHint(section: AnalyticsSection.visitors),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _KpiTile extends StatelessWidget {
@@ -461,49 +704,88 @@ class _KpiTile extends StatelessWidget {
     final exact = analyticsExact(context, tile.value);
     final compact = analyticsCompact(context, tile.value);
     final delta = analyticsDelta(current: tile.value, previous: tile.previous);
+    final trend = tile.trend;
 
     return AppCard(
       key: ValueKey('analytics_tile_${tile.id}'),
       padding: const EdgeInsets.all(AppSpacing.md),
-      child: Semantics(
-        // The EXACT number reaches a screen reader even when the tile shows
-        // "1.2k" — the abbreviation is a visual accommodation, not a redaction.
-        label: '${tile.label}: $exact'
-            '${delta == null ? '' : ', ${analyticsDeltaLabel(delta)} '
-                'versus the previous period'}',
-        excludeSemantics: true,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              tile.label,
-              style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
-              maxLines: 2,
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            // The tooltip is where the abbreviation is paid back — on web by
-            // hover, on a phone by long-press, both built in.
-            Tooltip(
-              message: exact,
-              child: Text(
-                compact,
-                key: ValueKey('analytics_value_${tile.id}'),
-                style: textTheme.titleLarge?.copyWith(
-                  color: AppColors.textPrimary,
-                  fontWeight: FontWeight.w600,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Semantics(
+                  // The EXACT number reaches a screen reader even when the
+                  // tile shows "1.2k" — the abbreviation is a visual
+                  // accommodation, not a redaction.
+                  label: '${tile.label}: $exact'
+                      '${delta == null ? '' : ', ${analyticsDeltaLabel(delta)} '
+                          'versus the previous period'}',
+                  excludeSemantics: true,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        tile.label,
+                        style: textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                        maxLines: 2,
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      // The tooltip is where the abbreviation is paid back —
+                      // on web by hover, on a phone by long-press.
+                      Tooltip(
+                        message: exact,
+                        child: Text(
+                          compact,
+                          key: ValueKey('analytics_value_${tile.id}'),
+                          style: textTheme.titleLarge?.copyWith(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-            if (delta != null) ...[
-              const SizedBox(height: AppSpacing.xs),
-              _DeltaChip(delta: delta),
+              AnalyticsInfoHint(section: tile.section),
             ],
+          ),
+          if (trend != null && trend.length > 1) ...[
+            const SizedBox(height: AppSpacing.xs),
+            AnalyticsSparkline(
+              key: ValueKey('analytics_sparkline_${tile.id}'),
+              values: trend,
+              color: tile.color,
+            ),
           ],
-        ),
+          const SizedBox(height: AppSpacing.xs),
+          delta == null ? const _NoPriorPeriod() : _DeltaChip(delta: delta),
+        ],
       ),
     );
   }
+}
+
+/// What a tile says where there is no comparison to draw.
+///
+/// Said out loud rather than left blank: an absent arrow next to a present
+/// one reads as "this one did not change", which is not what it means.
+class _NoPriorPeriod extends StatelessWidget {
+  const _NoPriorPeriod();
+
+  @override
+  Widget build(BuildContext context) => Text(
+        'no prior period',
+        style: Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.copyWith(color: AppColors.textMuted),
+      );
 }
 
 class _DeltaChip extends StatelessWidget {
@@ -515,6 +797,8 @@ class _DeltaChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final rising = delta > 0;
     final flat = delta == 0;
+    // Up is good for every metric on this dashboard — all of them count
+    // engagement.
     final color = flat
         ? AppColors.textMuted
         : rising
@@ -538,6 +822,20 @@ class _DeltaChip extends StatelessWidget {
           analyticsDeltaLabel(delta),
           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: color),
         ),
+        // The suffix gives way before the figure does: on a tile too narrow
+        // for both, "+25%" alone still says what happened, and the caption
+        // above the tiles says what it is compared against.
+        Flexible(
+          child: Text(
+            ' vs prev period',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: AppColors.textMuted),
+          ),
+        ),
       ],
     );
   }
@@ -556,54 +854,70 @@ class _ChartCard extends StatefulWidget {
 
 class _ChartCardState extends State<_ChartCard> {
   AnalyticsSeries _series = AnalyticsSeries.pageViews;
+  bool _table = false;
 
   @override
-  Widget build(BuildContext context) => AppCard(
-        key: const ValueKey('analytics_chart_card'),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Day by day',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: AppSpacing.xs,
-              runSpacing: AppSpacing.xs,
-              children: [
-                for (final series in AnalyticsSeries.values)
-                  ChoiceChip(
-                    key: ValueKey('analytics_series_${series.name}'),
-                    label: Text(series.shortLabel),
-                    selected: _series == series,
-                    onSelected: (_) => setState(() => _series = series),
-                  ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            if (widget.points.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
-                child: Text(
-                  'No day-by-day data for this range.',
-                  key: const ValueKey('analytics_chart_empty'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyMedium
-                      ?.copyWith(color: AppColors.textSecondary),
-                ),
-              )
-            else
-              AnalyticsChart(
-                key: const ValueKey('analytics_chart'),
-                points: widget.points,
-                series: _series,
-              ),
-          ],
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return AnalyticsSectionCard(
+      key: const ValueKey('analytics_chart_card'),
+      title: 'Traffic over time',
+      section: AnalyticsSection.traffic,
+      subtitle: 'Daily totals, UTC',
+      trailing: SegmentedButton<bool>(
+        key: const ValueKey('analytics_traffic_mode'),
+        showSelectedIcon: false,
+        style: const ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-      );
+        segments: const [
+          ButtonSegment(value: false, label: Text('Chart')),
+          ButtonSegment(value: true, label: Text('Table')),
+        ],
+        selected: {_table},
+        onSelectionChanged: (selection) =>
+            setState(() => _table = selection.first),
+      ),
+      child: widget.points.isEmpty
+          ? Padding(
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
+              child: Text(
+                'No day-by-day data for this range.',
+                key: const ValueKey('analytics_chart_empty'),
+                textAlign: TextAlign.center,
+                style: textTheme.bodyMedium
+                    ?.copyWith(color: AppColors.textSecondary),
+              ),
+            )
+          : _table
+              ? AnalyticsTrafficTable(points: widget.points)
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Wrap(
+                      spacing: AppSpacing.xs,
+                      runSpacing: AppSpacing.xs,
+                      children: [
+                        for (final series in AnalyticsSeries.values)
+                          ChoiceChip(
+                            key: ValueKey('analytics_series_${series.name}'),
+                            label: Text(series.shortLabel),
+                            selected: _series == series,
+                            onSelected: (_) => setState(() => _series = series),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    AnalyticsChart(
+                      key: const ValueKey('analytics_chart'),
+                      points: widget.points,
+                      series: _series,
+                    ),
+                  ],
+                ),
+    );
+  }
 }
 
 // ── 3D vs image-only split ──────────────────────────────────────────────────
@@ -635,13 +949,14 @@ class _SplitCard extends StatelessWidget {
     final total = topProducts.totalViews;
     final textTheme = Theme.of(context).textTheme;
 
-    return AppCard(
+    return AnalyticsSectionCard(
       key: const ValueKey('analytics_split'),
+      title: '3D vs image-only',
+      section: AnalyticsSection.split,
+      subtitle: 'Where the product views went',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('3D vs image-only', style: textTheme.titleMedium),
-          const SizedBox(height: AppSpacing.md),
           if (total == 0)
             Text(
               'No product views in this range yet.',
@@ -715,8 +1030,8 @@ class _SplitLegendRow extends StatelessWidget {
         Expanded(
           child: Text(
             kind.label,
-            style: textTheme.bodyMedium
-                ?.copyWith(color: AppColors.textSecondary),
+            style:
+                textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
           ),
         ),
         Tooltip(
@@ -727,172 +1042,6 @@ class _SplitLegendRow extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-// ── Top products ────────────────────────────────────────────────────────────
-
-class _TopProductsCard extends StatelessWidget {
-  const _TopProductsCard({required this.topProducts});
-
-  final TopProducts topProducts;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    return AppCard(
-      key: const ValueKey('analytics_top_products'),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('Most viewed', style: textTheme.titleMedium),
-          const SizedBox(height: AppSpacing.md),
-          if (topProducts.isEmpty)
-            Text(
-              'No product views in this range yet.',
-              style: textTheme.bodyMedium
-                  ?.copyWith(color: AppColors.textSecondary),
-            )
-          else
-            for (var i = 0; i < topProducts.rows.length; i++)
-              _TopProductRow(rank: i + 1, row: topProducts.rows[i]),
-        ],
-      ),
-    );
-  }
-}
-
-class _TopProductRow extends StatelessWidget {
-  const _TopProductRow({required this.rank, required this.row});
-
-  final int rank;
-  final TopProduct row;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
-    final content = Padding(
-      padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 24,
-            child: Text(
-              '$rank',
-              style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        row.displayName,
-                        style: textTheme.bodyMedium
-                            ?.copyWith(color: AppColors.textPrimary),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    _KindBadge(kind: row.kind),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _subtitle(context),
-                  style: textTheme.bodySmall
-                      ?.copyWith(color: AppColors.textMuted),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Tooltip(
-            message: '${analyticsExact(context, row.views)} views',
-            child: Text(
-              analyticsCompact(context, row.views),
-              style: textTheme.bodyMedium?.copyWith(
-                color: AppColors.textPrimary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (!row.isLinkable) return content;
-
-    // An `InkWell` rather than a `GestureDetector`: it is in the traversal
-    // order, so Tab reaches it and Enter opens the product — the keyboard pass
-    // this screen owes on web.
-    return InkWell(
-      key: ValueKey('analytics_row_${row.productId}'),
-      onTap: () => context.pushNamed(
-        AppRouteNames.productDetail,
-        pathParameters: {'productId': row.catalogProductId!},
-      ),
-      child: content,
-    );
-  }
-
-  /// The second line: AR launches, 3D loads, and — for an unmatched row — the
-  /// Mirage id, which is the only identity it has left.
-  String _subtitle(BuildContext context) {
-    final parts = <String>[
-      if (row.arViews > 0) '${analyticsExact(context, row.arViews)} AR',
-      if (row.modelLoads > 0)
-        '${analyticsExact(context, row.modelLoads)} 3D loads',
-    ];
-    if (row.kind == TopProductKind.unknown) {
-      // No longer in this catalog — deleted, or never ours. The views are real
-      // and stay counted; the id is what lets a business tell two of these
-      // apart.
-      parts.add('No longer in your catalog · ${row.productId}');
-    }
-    return parts.isEmpty ? 'No AR or 3D activity' : parts.join(' · ');
-  }
-}
-
-class _KindBadge extends StatelessWidget {
-  const _KindBadge({required this.kind});
-
-  final TopProductKind kind;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = switch (kind) {
-      TopProductKind.threeD => AppColors.royalGold,
-      TopProductKind.imageOnly => AppColors.focusRing,
-      TopProductKind.unknown => AppColors.textMuted,
-    };
-
-    return Container(
-      key: ValueKey('analytics_badge_${kind.name}'),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.sm,
-        vertical: 1,
-      ),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(AppRadius.xs),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
-      child: Text(
-        kind.label,
-        style: Theme.of(context)
-            .textTheme
-            .bodySmall
-            ?.copyWith(color: color, fontSize: 11),
-      ),
     );
   }
 }
@@ -942,19 +1091,25 @@ class _AnalyticsSkeleton extends StatelessWidget {
         LayoutBuilder(
           builder: (context, constraints) {
             final width = constraints.maxWidth;
-            final columns = width >= 1000
-                ? 5
-                : width >= 720
-                    ? 3
-                    : 2;
+            final columns = width >= 560 ? 3 : 2;
             const gap = AppSpacing.sm;
             final itemWidth = (width - gap * (columns - 1)) / columns;
-            return Wrap(
-              spacing: gap,
-              runSpacing: gap,
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                for (var i = 0; i < 5; i++)
-                  SizedBox(width: itemWidth, child: const _SkeletonBox(height: 84)),
+                const _SkeletonBox(height: 140),
+                const SizedBox(height: gap),
+                Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [
+                    for (var i = 0; i < 6; i++)
+                      SizedBox(
+                        width: itemWidth,
+                        child: const _SkeletonBox(height: 96),
+                      ),
+                  ],
+                ),
               ],
             );
           },
@@ -962,7 +1117,9 @@ class _AnalyticsSkeleton extends StatelessWidget {
         const SizedBox(height: AppSpacing.lg),
         const _SkeletonBox(height: 220),
         const SizedBox(height: AppSpacing.lg),
-        const _SkeletonBox(height: 140),
+        const _SkeletonBox(height: 180),
+        const SizedBox(height: AppSpacing.lg),
+        const _SkeletonBox(height: 180),
       ],
     );
 

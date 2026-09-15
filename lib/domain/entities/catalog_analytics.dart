@@ -69,11 +69,11 @@ class AnalyticsWindow {
   }
 }
 
-/// The eight headline counters, exactly the set the backend forwards.
+/// The twelve headline counters, exactly the set the backend forwards.
 ///
-/// Mirage's own summary also carries cross-restaurant panels; the backend
-/// refuses to spread them (`toKpis`), so this is the whole vocabulary and there
-/// is nothing else to reach for.
+/// Mirage's own summary also carries `byRestaurant`, the cross-client panel;
+/// the backend never spreads it, so this is the whole vocabulary of counters
+/// and there is nothing else to reach for.
 class AnalyticsKpis {
   const AnalyticsKpis({
     this.pageViews = 0,
@@ -84,23 +84,42 @@ class AnalyticsKpis {
     this.arSessions = 0,
     this.contactClicks = 0,
     this.searches = 0,
+    this.menuOpens = 0,
+    this.productPageViews = 0,
+    this.modelLoads = 0,
+    this.modelFailures = 0,
   });
 
-  /// Catalog views — the public page opened.
+  /// Catalog opens — the public page loaded. The top of the funnel.
   final int pageViews;
   final int sessions;
 
-  /// Unique visitors.
+  /// Unique visitors — an ESTIMATE. QR scans often open in a private or
+  /// in-app browser that wipes storage per scan, so this runs high.
   final int visitors;
 
   /// A product opened on the public page.
   final int productViews;
 
-  /// AR launches.
+  /// AR launches — the tap, not a confirmed session.
   final int arViews;
+
+  /// AR sessions the device actually entered.
   final int arSessions;
   final int contactClicks;
   final int searches;
+
+  /// Taps on the public page's floating Menu pill — "Browse taps".
+  final int menuOpens;
+
+  /// Arrivals that landed straight on one product — "Direct links".
+  final int productPageViews;
+
+  /// 3D models that finished loading.
+  final int modelLoads;
+
+  /// 3D models that gave up.
+  final int modelFailures;
 
   static const zero = AnalyticsKpis();
 
@@ -112,7 +131,11 @@ class AnalyticsKpis {
       arViews == 0 &&
       arSessions == 0 &&
       contactClicks == 0 &&
-      searches == 0;
+      searches == 0 &&
+      menuOpens == 0 &&
+      productPageViews == 0 &&
+      modelLoads == 0 &&
+      modelFailures == 0;
 
   factory AnalyticsKpis.fromMap(Map<String, dynamic>? map) => AnalyticsKpis(
         pageViews: catalogCount(map?['pageViews']),
@@ -123,15 +146,279 @@ class AnalyticsKpis {
         arSessions: catalogCount(map?['arSessions']),
         contactClicks: catalogCount(map?['contactClicks']),
         searches: catalogCount(map?['searches']),
+        menuOpens: catalogCount(map?['menuOpens']),
+        productPageViews: catalogCount(map?['productPageViews']),
+        modelLoads: catalogCount(map?['modelLoads']),
+        modelFailures: catalogCount(map?['modelFailures']),
       );
 }
 
-/// The summary report: this window's counters and the one before it.
+/// One step of "catalog opened → product viewed → AR launched → contact
+/// clicked".
+///
+/// These are ACTIONS, not people: one visitor opening six products adds six
+/// to the second stage, so a step can legitimately read higher than the one
+/// above it. The dashboard shows the ratio anyway — the trend across ranges is
+/// the information, not the absolute drop-off.
+class FunnelStage {
+  const FunnelStage({
+    required this.key,
+    required this.label,
+    this.count = 0,
+  });
+
+  /// Mirage's event type — the stable identity; [label] is display copy.
+  final String key;
+  final String label;
+  final int count;
+
+  factory FunnelStage.fromMap(Map<String, dynamic> map) => FunnelStage(
+        key: catalogText(map['key']) ?? '',
+        label: catalogText(map['label']) ?? '',
+        count: catalogCount(map['count']),
+      );
+}
+
+/// Sessions on one class of device.
+class DeviceShare {
+  const DeviceShare({required this.type, this.sessions = 0});
+
+  /// `mobile`, `tablet`, `desktop` or `unknown`, as Mirage classifies the
+  /// user agent at ingest.
+  final String type;
+  final int sessions;
+
+  String get label => switch (type.toLowerCase()) {
+        'mobile' => 'Mobile',
+        'tablet' => 'Tablet',
+        'desktop' => 'Desktop',
+        _ => 'Unknown',
+      };
+
+  factory DeviceShare.fromMap(Map<String, dynamic> map) => DeviceShare(
+        type: catalogText(map['type']) ?? 'unknown',
+        sessions: catalogCount(map['sessions']),
+      );
+}
+
+/// How often one category was opened on the public page.
+class CategoryOpens {
+  const CategoryOpens({
+    required this.name,
+    this.opens = 0,
+    this.sessions = 0,
+  });
+
+  /// The STORED slug form, as it was sent to Mirage. [displayName] is what
+  /// goes on the dashboard.
+  final String name;
+  final int opens;
+  final int sessions;
+
+  String get displayName => catalogDisplayName(name);
+
+  factory CategoryOpens.fromMap(Map<String, dynamic> map) => CategoryOpens(
+        name: catalogText(map['name']) ?? '',
+        opens: catalogCount(map['opens']),
+        sessions: catalogCount(map['sessions']),
+      );
+}
+
+/// A product visitors pinched in to inspect.
+///
+/// Zooming is deliberate in a way rotating is not, which makes it the sharpest
+/// read of genuine curiosity about a model. Three gestures make one counted
+/// zoom, so a nudge does not register.
+class ZoomedItem {
+  const ZoomedItem({
+    required this.productId,
+    required this.name,
+    this.catalogProductId,
+    this.zooms = 0,
+    this.sessions = 0,
+  });
+
+  /// The Mirage item id the public page reported.
+  final String productId;
+
+  /// OUR product id, where the row still maps to one. Null when it does not.
+  final String? catalogProductId;
+  final String name;
+  final int zooms;
+  final int sessions;
+
+  String get displayName => catalogDisplayName(name);
+
+  bool get isLinkable =>
+      catalogProductId != null && catalogProductId!.isNotEmpty;
+
+  factory ZoomedItem.fromMap(Map<String, dynamic> map) => ZoomedItem(
+        productId: catalogText(map['productId']) ?? '',
+        catalogProductId: catalogText(map['catalogProductId']),
+        name: catalogText(map['name']) ?? 'Unknown product',
+        zooms: catalogCount(map['zooms']),
+        sessions: catalogCount(map['sessions']),
+      );
+}
+
+/// What visitors typed into the public page's search box.
+class SearchQuery {
+  const SearchQuery({
+    required this.query,
+    this.searches = 0,
+    this.sessions = 0,
+    this.avgResults = 0,
+    this.zeroResults = 0,
+  });
+
+  /// Already lowercased and trimmed by the public page.
+  final String query;
+  final int searches;
+  final int sessions;
+
+  /// Mean number of products the query matched, to one decimal.
+  final double avgResults;
+
+  /// How many of those searches matched nothing — the products a business
+  /// may be missing. The column to read before the ranking.
+  final int zeroResults;
+
+  factory SearchQuery.fromMap(Map<String, dynamic> map) => SearchQuery(
+        query: catalogText(map['query']) ?? '',
+        searches: catalogCount(map['searches']),
+        sessions: catalogCount(map['sessions']),
+        avgResults: _nonNegativeDouble(map['avgResults']),
+        zeroResults: catalogCount(map['zeroResults']),
+      );
+}
+
+/// Why 3D models failed to load, grouped by the viewer's own reason string.
+class FailureReason {
+  const FailureReason({required this.reason, this.count = 0});
+
+  /// model-viewer's `detail.type`: `loadfailure`, `webglcontextlost`, or
+  /// `unknown`. Anything else falls through to [label] as-is.
+  final String reason;
+  final int count;
+
+  /// The person-readable line. "loadfailure" is a broken or missing asset and
+  /// is fixable; "webglcontextlost" is the device giving up and usually is
+  /// not — telling them apart is the point of the split.
+  String get label => switch (reason) {
+        'loadfailure' => 'Model file failed to load',
+        'webglcontextlost' => 'Device dropped the 3D canvas',
+        'unknown' => 'Unreported',
+        _ => reason,
+      };
+
+  factory FailureReason.fromMap(Map<String, dynamic> map) => FailureReason(
+        reason: catalogText(map['reason']) ?? 'unknown',
+        count: catalogCount(map['count']),
+      );
+}
+
+/// A product whose 3D model keeps failing — the health panel's call to action.
+class FailingProduct {
+  const FailingProduct({
+    required this.productId,
+    required this.name,
+    this.catalogProductId,
+    this.failures = 0,
+  });
+
+  final String productId;
+  final String? catalogProductId;
+  final String name;
+  final int failures;
+
+  String get displayName => catalogDisplayName(name);
+
+  bool get isLinkable =>
+      catalogProductId != null && catalogProductId!.isNotEmpty;
+
+  factory FailingProduct.fromMap(Map<String, dynamic> map) => FailingProduct(
+        productId: catalogText(map['productId']) ?? '',
+        catalogProductId: catalogText(map['catalogProductId']),
+        name: catalogText(map['name']) ?? 'Unknown product',
+        failures: catalogCount(map['failures']),
+      );
+}
+
+/// Whether the 3D and AR experience actually works on visitors' devices.
+///
+/// Every other panel assumes it does; this is the one that checks.
+class ModelHealth {
+  const ModelHealth({
+    this.loads = 0,
+    this.failures = 0,
+    this.failureRate,
+    this.samples = 0,
+    this.avgLoadMs = 0,
+    this.maxLoadMs = 0,
+    this.slowLoads = 0,
+    this.slowThresholdMs = kDefaultSlowLoadMs,
+    this.topFailures = const <FailureReason>[],
+    this.failingProducts = const <FailingProduct>[],
+  });
+
+  /// Mirage's own SLOW_MODEL_LOAD_MS, for a payload that omits it.
+  static const int kDefaultSlowLoadMs = 5000;
+
+  final int loads;
+  final int failures;
+
+  /// Percent of attempted loads that failed, or **null when nothing was
+  /// attempted** — "no models loaded" and "every model loaded" must not read
+  /// alike.
+  final double? failureRate;
+
+  /// Loads that carried a usable timing — the denominator behind [avgLoadMs].
+  final int samples;
+  final int avgLoadMs;
+  final int maxLoadMs;
+  final int slowLoads;
+  final int slowThresholdMs;
+  final List<FailureReason> topFailures;
+  final List<FailingProduct> failingProducts;
+
+  static const empty = ModelHealth();
+
+  int get attempts => loads + failures;
+
+  factory ModelHealth.fromMap(Map<String, dynamic>? map) {
+    final rawReasons = map?['topFailures'];
+    final rawProducts = map?['failingProducts'];
+    final threshold = catalogCount(map?['slowThresholdMs']);
+    final rate = map?['failureRate'];
+    return ModelHealth(
+      loads: catalogCount(map?['loads']),
+      failures: catalogCount(map?['failures']),
+      failureRate: rate is num ? rate.toDouble() : null,
+      samples: catalogCount(map?['samples']),
+      avgLoadMs: catalogCount(map?['avgLoadMs']),
+      maxLoadMs: catalogCount(map?['maxLoadMs']),
+      slowLoads: catalogCount(map?['slowLoads']),
+      slowThresholdMs: threshold > 0 ? threshold : kDefaultSlowLoadMs,
+      topFailures: _listOf(rawReasons, FailureReason.fromMap),
+      failingProducts: _listOf(rawProducts, FailingProduct.fromMap),
+    );
+  }
+}
+
+/// The summary report: this window's counters, the window before it, and
+/// every panel that is computed over the same slice.
 class AnalyticsSummary {
   const AnalyticsSummary({
     required this.window,
     this.kpis = AnalyticsKpis.zero,
     this.previousKpis,
+    this.totalEvents = 0,
+    this.funnel = const <FunnelStage>[],
+    this.byDevice = const <DeviceShare>[],
+    this.topCategories = const <CategoryOpens>[],
+    this.topZoomed = const <ZoomedItem>[],
+    this.topSearches = const <SearchQuery>[],
+    this.modelHealth = ModelHealth.empty,
   });
 
   final AnalyticsWindow window;
@@ -143,7 +430,50 @@ class AnalyticsSummary {
   /// as "no change": the dashboard shows no delta at all rather than 0%.
   final AnalyticsKpis? previousKpis;
 
+  /// Every event in the window, of any type — the footer's "N events".
+  final int totalEvents;
+
+  /// The four funnel stages as the backend sent them. Prefer [funnelStages],
+  /// which falls back to the counters when this is empty.
+  final List<FunnelStage> funnel;
+  final List<DeviceShare> byDevice;
+  final List<CategoryOpens> topCategories;
+  final List<ZoomedItem> topZoomed;
+  final List<SearchQuery> topSearches;
+  final ModelHealth modelHealth;
+
   static const empty = AnalyticsSummary(window: AnalyticsWindow.empty);
+
+  /// The funnel, always four stages.
+  ///
+  /// A backend one deploy behind sends no `funnel` block; the same four
+  /// numbers are on the counters, so the panel is drawn from those rather than
+  /// left blank. When both are present the backend's own list wins, so a
+  /// stage Mirage adds or relabels shows up without a client release.
+  List<FunnelStage> get funnelStages => funnel.isNotEmpty
+      ? funnel
+      : [
+          FunnelStage(
+            key: 'client_page_view',
+            label: 'Catalog opened',
+            count: kpis.pageViews,
+          ),
+          FunnelStage(
+            key: 'product_detail_opened',
+            label: 'Product viewed',
+            count: kpis.productViews,
+          ),
+          FunnelStage(
+            key: 'ar_view_clicked',
+            label: 'AR launched',
+            count: kpis.arViews,
+          ),
+          FunnelStage(
+            key: 'contact_channel_clicked',
+            label: 'Contact clicked',
+            count: kpis.contactClicks,
+          ),
+        ];
 
   factory AnalyticsSummary.fromMap(Map<String, dynamic>? map) {
     final previous = map?['previousKpis'];
@@ -153,6 +483,13 @@ class AnalyticsSummary {
       previousKpis: previous is Map<String, dynamic>
           ? AnalyticsKpis.fromMap(previous)
           : null,
+      totalEvents: catalogCount(map?['totalEvents']),
+      funnel: _listOf(map?['funnel'], FunnelStage.fromMap),
+      byDevice: _listOf(map?['byDevice'], DeviceShare.fromMap),
+      topCategories: _listOf(map?['topCategories'], CategoryOpens.fromMap),
+      topZoomed: _listOf(map?['topZoomed'], ZoomedItem.fromMap),
+      topSearches: _listOf(map?['topSearches'], SearchQuery.fromMap),
+      modelHealth: ModelHealth.fromMap(_mapOf(map?['modelHealth'])),
     );
   }
 }
@@ -194,19 +531,19 @@ enum AnalyticsSeries { pageViews, productViews, arViews, sessions }
 
 extension AnalyticsSeriesX on AnalyticsSeries {
   String get label => switch (this) {
-        AnalyticsSeries.pageViews => 'Catalog views',
+        AnalyticsSeries.pageViews => 'Catalog opens',
         AnalyticsSeries.productViews => 'Product views',
         AnalyticsSeries.arViews => 'AR launches',
-        AnalyticsSeries.sessions => 'Visits',
+        AnalyticsSeries.sessions => 'Sessions',
       };
 
   /// The short form for the chart's own selector, where four chips have to fit
   /// across 360 px.
   String get shortLabel => switch (this) {
-        AnalyticsSeries.pageViews => 'Views',
+        AnalyticsSeries.pageViews => 'Opens',
         AnalyticsSeries.productViews => 'Products',
         AnalyticsSeries.arViews => 'AR',
-        AnalyticsSeries.sessions => 'Visits',
+        AnalyticsSeries.sessions => 'Sessions',
       };
 
   int valueOf(AnalyticsPoint point) => switch (this) {
@@ -444,3 +781,15 @@ class CatalogAnalyticsReport {
 
 Map<String, dynamic>? _mapOf(dynamic raw) =>
     raw is Map<String, dynamic> ? raw : null;
+
+/// A list of parsed rows, dropping anything that is not a map rather than
+/// failing the whole report on one bad row.
+List<T> _listOf<T>(dynamic raw, T Function(Map<String, dynamic>) parse) => [
+      if (raw is List)
+        for (final item in raw)
+          if (item is Map<String, dynamic>) parse(item),
+    ];
+
+/// A non-negative decimal, defaulting to 0 for anything unusable.
+double _nonNegativeDouble(dynamic raw) =>
+    raw is num && raw >= 0 ? raw.toDouble() : 0;

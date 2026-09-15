@@ -45,18 +45,50 @@ class RecordingMirage extends FakeMirage {
   topRows: MirageTopProductRow[] = [];
   summaryKpis: Record<string, number> = {};
 
+  /**
+   * Which restaurant the per-restaurant panels are grouped under. Tests set it
+   * to the seeded id to see rows forwarded, and to anything else to see them
+   * dropped.
+   */
+  panelRestaurantId = 'not-the-callers';
+
   async analyticsSummary(query: MirageAnalyticsQuery) {
     this.queries.push(query);
     const base = await super.analyticsSummary(query);
+    const owner = { restaurantId: this.panelRestaurantId, restaurantName: 'Blue Cafe' };
     return {
       ...base,
       kpis: { ...base.kpis, ...this.summaryKpis },
-      // Cross-client panels Mirage really returns. Nothing here may reach a
-      // per-business response.
+      totalsByType: { client_page_view: 30, product_detail_opened: 12 },
+      funnel: [
+        { key: 'client_page_view', label: 'Menu opened', count: 30 },
+        { key: 'product_detail_opened', label: 'Product viewed', count: 12 },
+        { key: 'ar_view_clicked', label: 'AR launched', count: 5 },
+        { key: 'contact_channel_clicked', label: 'Contact clicked', count: 2 },
+      ],
+      // The one panel that exists FOR cross-client comparison. Never forwarded.
       byRestaurant: [{ name: 'Someone Else Cafe', events: 9999 }],
-      byDevice: [{ device: 'ios', events: 12 }],
-      topCategories: [{ name: 'chairs' }],
-      topZoomed: [{ name: 'Their Product' }],
+      byDevice: [
+        { type: 'mobile', sessions: 7 },
+        { type: 'desktop', sessions: 3 },
+      ],
+      topCategories: [{ name: 'starters', opens: 4, sessions: 3, ...owner }],
+      topZoomed: [{ productId: 'mi-3d', name: 'Chair (as it was)', zooms: 6, sessions: 4, ...owner }],
+      topSearches: [
+        { query: 'paneer', searches: 3, sessions: 2, avgResults: 1.5, zeroResults: 1, ...owner },
+      ],
+      modelHealth: {
+        loads: 40,
+        failures: 4,
+        failureRate: 9.1,
+        samples: 40,
+        avgLoadMs: 1200,
+        maxLoadMs: 4000,
+        slowLoads: 0,
+        slowThresholdMs: 5000,
+        topFailures: [{ reason: 'loadfailure', count: 4 }],
+        failingProducts: [{ productId: 'mi-3d', name: 'Chair (as it was)', failures: 4, ...owner }],
+      },
     };
   }
 
@@ -92,6 +124,7 @@ beforeEach(() => {
   mirage.queries.length = 0;
   mirage.topRows = [];
   mirage.summaryKpis = {};
+  mirage.panelRestaurantId = 'not-the-callers';
   setMirageClient(mirage);
   clearAnalyticsCache();
   Object.assign(env, {
@@ -219,7 +252,7 @@ describe('the boundary translation', () => {
     expect(res.body.kpis).toMatchObject({ pageViews: 41, arViews: 7 });
   });
 
-  it('strips every cross-client panel', async () => {
+  it('never forwards byRestaurant — the one genuinely cross-client panel', async () => {
     const { id, auth } = await makeUser();
     await seed(id);
 
@@ -230,10 +263,103 @@ describe('the boundary translation', () => {
     // object a spread would have copied.
     expect(body).not.toContain('Someone Else Cafe');
     expect(body).not.toContain('byRestaurant');
-    expect(body).not.toContain('byDevice');
-    expect(body).not.toContain('topCategories');
-    expect(body).not.toContain('topZoomed');
-    expect(Object.keys(res.body).sort()).toEqual(['kpis', 'previousKpis', 'range', 'status']);
+    expect(Object.keys(res.body).sort()).toEqual([
+      'byDevice',
+      'funnel',
+      'kpis',
+      'modelHealth',
+      'previousKpis',
+      'range',
+      'status',
+      'topCategories',
+      'topSearches',
+      'topZoomed',
+      'totalEvents',
+    ]);
+  });
+
+  it('forwards the scoped panels, joined to our products', async () => {
+    const { id, auth } = await makeUser();
+    const { catalogId, restaurantId } = await seed(id);
+    mirage.panelRestaurantId = restaurantId;
+    mirage.summaryKpis = { menuOpens: 2, productPageViews: 1, modelLoads: 40, modelFailures: 4 };
+
+    await CatalogProduct.create({
+      catalogId,
+      userId: new Types.ObjectId(id),
+      type: 'THREE_D',
+      name: 'Garden Chair',
+      position: 0,
+      mirageItemId: 'mi-3d',
+      assets: { glbUrl: 'https://test.cloudfront.net/m.glb' },
+    });
+
+    const res = await request(app).get('/catalog/analytics/summary').set(auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.kpis).toMatchObject({
+      menuOpens: 2,
+      productPageViews: 1,
+      modelLoads: 40,
+      modelFailures: 4,
+    });
+    expect(res.body.totalEvents).toBe(42);
+    expect(res.body.funnel.map((s: { count: number }) => s.count)).toEqual([30, 12, 5, 2]);
+    expect(res.body.byDevice).toEqual([
+      { type: 'mobile', sessions: 7 },
+      { type: 'desktop', sessions: 3 },
+    ]);
+    // The restaurant fields are consumed by the scope check, not echoed.
+    expect(res.body.topCategories).toEqual([{ name: 'starters', opens: 4, sessions: 3 }]);
+    expect(res.body.topSearches).toEqual([
+      { query: 'paneer', searches: 3, sessions: 2, avgResults: 1.5, zeroResults: 1 },
+    ]);
+    // Per-product rows are joined back the same way top-products is: our name,
+    // our id, so the row is tappable.
+    expect(res.body.topZoomed).toEqual([
+      {
+        productId: 'mi-3d',
+        catalogProductId: expect.stringMatching(/^[a-f0-9]{24}$/),
+        name: 'Garden Chair',
+        zooms: 6,
+        sessions: 4,
+      },
+    ]);
+    expect(res.body.modelHealth).toMatchObject({
+      loads: 40,
+      failures: 4,
+      failureRate: 9.1,
+      avgLoadMs: 1200,
+      slowThresholdMs: 5000,
+      topFailures: [{ reason: 'loadfailure', count: 4 }],
+    });
+    expect(res.body.modelHealth.failingProducts[0]).toMatchObject({
+      productId: 'mi-3d',
+      name: 'Garden Chair',
+      failures: 4,
+    });
+    expect(JSON.stringify(res.body)).not.toContain('restaurantName');
+  });
+
+  it('drops any leaderboard row grouped under another restaurant', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    // The fake's default: every per-restaurant row names someone else. With the
+    // filter forced upstream this cannot happen; if it ever does, the answer is
+    // a missing row, never a leaked one.
+    mirage.panelRestaurantId = new Types.ObjectId().toHexString();
+
+    const res = await request(app).get('/catalog/analytics/summary').set(auth);
+
+    expect(res.status).toBe(200);
+    expect(res.body.topCategories).toEqual([]);
+    expect(res.body.topZoomed).toEqual([]);
+    expect(res.body.topSearches).toEqual([]);
+    expect(res.body.modelHealth.failingProducts).toEqual([]);
+    // Device split and the funnel carry no restaurant id; they are scoped by
+    // the forced filter alone and still come through.
+    expect(res.body.byDevice).toHaveLength(2);
+    expect(res.body.funnel).toHaveLength(4);
   });
 
   it('passes the timeseries through without re-filling or re-sorting', async () => {

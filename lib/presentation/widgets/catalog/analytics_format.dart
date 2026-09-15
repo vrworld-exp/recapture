@@ -77,3 +77,16 @@ String analyticsDeltaLabel(double delta) {
   final percent = (delta * 100).round();
   return '${percent > 0 ? '+' : ''}$percent%';
 }
+
+/// A rate the server already rounded to one decimal, printed the way a
+/// person writes it: `83.3`, `100`, `2` — never `2.0`.
+///
+/// Dart's `toString` on a whole double keeps the `.0`; Mirage's page (JS)
+/// drops it, and the two dashboards should print the same figure the same
+/// way.
+String analyticsRate(double value) {
+  final rounded = (value * 10).round() / 10;
+  return rounded == rounded.roundToDouble()
+      ? rounded.round().toString()
+      : rounded.toStringAsFixed(1);
+}

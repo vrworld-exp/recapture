@@ -39,6 +39,10 @@ Map<String, dynamic> summaryGolden() => {
         'arSessions': 141,
         'contactClicks': 76,
         'searches': 42,
+        'menuOpens': 27,
+        'productPageViews': 19,
+        'modelLoads': 265,
+        'modelFailures': 14,
       },
       'previousKpis': {
         'pageViews': 1050,
@@ -49,6 +53,88 @@ Map<String, dynamic> summaryGolden() => {
         'arSessions': 118,
         'contactClicks': 61,
         'searches': 35,
+        'menuOpens': 21,
+        'productPageViews': 12,
+        'modelLoads': 230,
+        'modelFailures': 9,
+      },
+      'totalEvents': 4871,
+      'funnel': [
+        {'key': 'client_page_view', 'label': 'Menu opened', 'count': 1247},
+        {
+          'key': 'product_detail_opened',
+          'label': 'Product viewed',
+          'count': 388
+        },
+        {'key': 'ar_view_clicked', 'label': 'AR launched', 'count': 152},
+        {
+          'key': 'contact_channel_clicked',
+          'label': 'Contact clicked',
+          'count': 76
+        },
+      ],
+      'byDevice': [
+        {'type': 'mobile', 'sessions': 702},
+        {'type': 'desktop', 'sessions': 188},
+        {'type': 'unknown', 'sessions': 23},
+      ],
+      'topCategories': [
+        {'name': 'living_room', 'opens': 143, 'sessions': 97},
+        {'name': 'kitchen', 'opens': 88, 'sessions': 61},
+      ],
+      'topZoomed': [
+        {
+          'productId': 'mirage-item-001',
+          'catalogProductId': '6a83dd464aea89d1d2d28d60',
+          'name': 'Walnut Chair',
+          'zooms': 31,
+          'sessions': 26,
+        },
+        {
+          'productId': 'mirage-item-003',
+          'catalogProductId': null,
+          'name': 'Oak Stool',
+          'zooms': 5,
+          'sessions': 4,
+        },
+      ],
+      'topSearches': [
+        {
+          'query': 'chair',
+          'searches': 18,
+          'sessions': 15,
+          'avgResults': 3.4,
+          'zeroResults': 0,
+        },
+        {
+          'query': 'lamp',
+          'searches': 6,
+          'sessions': 6,
+          'avgResults': 0,
+          'zeroResults': 6,
+        },
+      ],
+      'modelHealth': {
+        'loads': 265,
+        'failures': 14,
+        'failureRate': 5.0,
+        'samples': 251,
+        'avgLoadMs': 1830,
+        'maxLoadMs': 9120,
+        'slowLoads': 7,
+        'slowThresholdMs': 5000,
+        'topFailures': [
+          {'reason': 'loadfailure', 'count': 11},
+          {'reason': 'webglcontextlost', 'count': 3},
+        ],
+        'failingProducts': [
+          {
+            'productId': 'mirage-item-003',
+            'catalogProductId': null,
+            'name': 'Oak Stool',
+            'failures': 9,
+          },
+        ],
       },
     };
 
@@ -152,7 +238,7 @@ void main() {
   });
 
   group('AnalyticsKpis', () {
-    test('parses all eight counters field by field', () {
+    test('parses all twelve counters field by field', () {
       final kpis = AnalyticsSummary.fromMap(summaryGolden()).kpis;
 
       expect(kpis.pageViews, 1247);
@@ -163,6 +249,24 @@ void main() {
       expect(kpis.arSessions, 141);
       expect(kpis.contactClicks, 76);
       expect(kpis.searches, 42);
+      expect(kpis.menuOpens, 27);
+      expect(kpis.productPageViews, 19);
+      expect(kpis.modelLoads, 265);
+      expect(kpis.modelFailures, 14);
+    });
+
+    test('the four newer counters default to zero from an older backend', () {
+      // A backend one deploy behind sends the eight it always did. The tiles
+      // read 0 for the rest, which is the truth for that payload.
+      final map = summaryGolden()
+        ..['kpis'] = <String, dynamic>{'pageViews': 3, 'sessions': 2};
+      final kpis = AnalyticsSummary.fromMap(map).kpis;
+
+      expect(kpis.pageViews, 3);
+      expect(kpis.menuOpens, 0);
+      expect(kpis.productPageViews, 0);
+      expect(kpis.modelLoads, 0);
+      expect(kpis.modelFailures, 0);
     });
 
     test('the previous window parses too, and is a DIFFERENT set of numbers',
@@ -201,8 +305,7 @@ void main() {
 
       // One lonely non-zero counter is still activity. A range where the only
       // event was a contact click is not an empty range.
-      final map = summaryGolden()
-        ..['kpis'] = {'contactClicks': 1};
+      final map = summaryGolden()..['kpis'] = {'contactClicks': 1};
       expect(AnalyticsSummary.fromMap(map).kpis.isAllZero, isFalse);
     });
 
@@ -245,7 +348,8 @@ void main() {
       // Mirage gap-fills and returns an ascending, continuous axis. Re-sorting
       // here would invent an order the summary totals disagree with.
       final dates = [
-        for (final point in AnalyticsTimeseries.fromMap(timeseriesGolden()).points)
+        for (final point
+            in AnalyticsTimeseries.fromMap(timeseriesGolden()).points)
           point.date,
       ];
 
@@ -253,7 +357,8 @@ void main() {
     });
 
     test('a point exposes its UTC day for the axis', () {
-      final point = AnalyticsTimeseries.fromMap(timeseriesGolden()).points.first;
+      final point =
+          AnalyticsTimeseries.fromMap(timeseriesGolden()).points.first;
 
       expect(point.day, DateTime.parse('2026-08-23'));
     });
@@ -284,7 +389,8 @@ void main() {
       // field is a bug that looks like "the data is the same" on screen.
       final point = AnalyticsTimeseries.fromMap(timeseriesGolden()).points[1];
       final values = {
-        for (final series in AnalyticsSeries.values) series: series.valueOf(point),
+        for (final series in AnalyticsSeries.values)
+          series: series.valueOf(point),
       };
 
       expect(values[AnalyticsSeries.pageViews], 58);
@@ -313,7 +419,8 @@ void main() {
 
     test('every kind string maps to its enum', () {
       final kinds = [
-        for (final row in TopProducts.fromMap(topProductsGolden()).rows) row.kind,
+        for (final row in TopProducts.fromMap(topProductsGolden()).rows)
+          row.kind,
       ];
 
       expect(kinds, [
@@ -336,8 +443,8 @@ void main() {
       expect(TopProductKindX.fromApiValue(''), TopProductKind.unknown);
       // Case-insensitive, because the backend constant is the contract and a
       // casing drift should not blank a row.
-      expect(TopProductKindX.fromApiValue('image_only'),
-          TopProductKind.imageOnly);
+      expect(
+          TopProductKindX.fromApiValue('image_only'), TopProductKind.imageOnly);
     });
 
     test('a locally deleted product stays counted and is unlinkable', () {
