@@ -289,12 +289,13 @@ export async function renderCatalogQr(params: {
    * produces a different arrangement of modules than it does without. Both
    * arrangements decode to the same string — a square already printed keeps
    * working — but a caller that has promised byte-identity across renders must
-   * pass the same value every time, and a caller whose squares are already on
-   * stickers in the world (the owner's catalog QR) should not flip it on the
-   * printed ones without meaning to.
+   * pass the same value every time, and a caller that flips it must put it in
+   * its ETag key, or clients holding the old square get a 304 for the new one.
    *
-   * The standee sheets pass it; the owner's catalog QR does not, deliberately,
-   * so that surface's bytes are exactly what they were before the mark existed.
+   * Every issued square passes it now — the standee sheets, and since the
+   * owner's / rep's / admin's catalog QR were brought into line with them, those
+   * too. A square printed before the mark still decodes to the same URL, so it
+   * keeps working; it just does not match the ones downloaded after.
    */
   logo?: boolean;
 }): Promise<RenderedQr> {

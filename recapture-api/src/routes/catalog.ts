@@ -1374,7 +1374,9 @@ router.get(
     // Keyed on everything that can change the bytes and nothing that cannot.
     // The catalog's revision is deliberately ABSENT: editing a product does not
     // change the code, and including it would invalidate a cache on every save.
-    const etag = strongETag({ url, name: catalog.name, format, size: clamped });
+    // `logo` IS in the key: the mark changes the pattern, so a client holding
+    // the plain square from before it was drawn must not get a 304 for it.
+    const etag = strongETag({ url, name: catalog.name, format, size: clamped, logo: true });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
@@ -1387,6 +1389,10 @@ router.get(
       catalogName: catalog.name,
       format,
       size: clamped,
+      // The Mayasabha mark in the middle, the same square a standee carries —
+      // one look for every code of ours on a table. See the `logo` note on
+      // `renderCatalogQr` for what this does to the pattern.
+      logo: true,
     });
 
     track(AnalyticsEvent.CATALOG_QR_RENDERED, {

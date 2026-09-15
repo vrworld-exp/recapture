@@ -1988,7 +1988,13 @@ router.get(
     const { format, size } = parsed.data;
     const clamped = clampQrSize(size);
 
-    const etag = strongETag({ url, name: activation.catalog.name, format, size: clamped });
+    const etag = strongETag({
+      url,
+      name: activation.catalog.name,
+      format,
+      size: clamped,
+      logo: true,
+    });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
@@ -2001,6 +2007,8 @@ router.get(
       catalogName: activation.catalog.name,
       format,
       size: clamped,
+      // Same as the owner and rep routes, and it must stay that way — see above.
+      logo: true,
     });
 
     res.setHeader('Content-Type', rendered.contentType);

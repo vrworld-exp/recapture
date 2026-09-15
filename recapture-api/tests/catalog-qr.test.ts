@@ -370,7 +370,7 @@ describe('GET /catalog/qr?format=pdf', () => {
     expect(pdf).toContain('/Subtype /Image');
   });
 
-  it('carries NO mark — this square is already on stickers in the world', async () => {
+  it('carries the Mayasabha mark, the same square a standee prints', async () => {
     const { id, auth } = await makeUser();
     await seed(id);
     const publicUrl = await publish(auth);
@@ -378,20 +378,29 @@ describe('GET /catalog/qr?format=pdf', () => {
     const pdf = await request(app).get('/catalog/qr?format=pdf').set(auth).buffer(true);
     const png = await request(app).get('/catalog/qr?format=png').set(auth).buffer(true);
 
-    // The standee sheets draw the Mayasabha mark in the middle of the code.
-    // That changes the PATTERN (level H, a well cleared in the centre), and an
-    // owner's QR that has been printed must keep rendering the pattern that
-    // was printed. So: one image, no RGB, and a PNG that is black and white.
+    // The PDF draws the mark as its own RGB XObject over the well, once, the
+    // way the standee sheet does — the code itself stays the 1-bit image.
     const text = pdf.body.toString('latin1');
-    expect(text.match(/\/Subtype \/Image/g)).toHaveLength(1);
-    expect(text).not.toContain('/DeviceRGB');
-    expect(text).not.toContain('/Logo');
+    expect(text.match(/\/Logo Do/g)).toHaveLength(1);
+    expect(text).toContain('/ColorSpace /DeviceRGB /BitsPerComponent 8');
+    expect(text).toContain('/BitsPerComponent 1');
+    expect(text).not.toContain('/DCTDecode');
 
+    // The PNG is no longer black and white: the artwork is in the middle, and
+    // the code around it still reads — the well is paid for by level H.
     const image = await Jimp.read(png.body);
     const { width, height, data } = image.bitmap;
-    const at = (Math.floor(height / 2) * width + Math.floor(width / 2)) * 4;
-    expect(data[at]).toBe(data[at + 1]);
-    expect(data[at + 1]).toBe(data[at + 2]);
+    let coloured = false;
+    for (let y = Math.floor(height * 0.4); y < height * 0.6 && !coloured; y++) {
+      for (let x = Math.floor(width * 0.4); x < width * 0.6; x++) {
+        const at = (y * width + x) * 4;
+        if (data[at] !== data[at + 1] || data[at + 1] !== data[at + 2]) {
+          coloured = true;
+          break;
+        }
+      }
+    }
+    expect(coloured).toBe(true);
     expect(await decodeQr(png.body)).toBe(publicUrl);
   });
 
@@ -426,10 +435,10 @@ describe('GET /catalog/qr?format=pdf', () => {
     expect(pdf.slice(startxref, startxref + 4)).toBe('xref');
 
     const offsets = [...pdf.matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
-    // SEVEN, not six, since the sheet gained a second base font: Helvetica-Bold
-    // carries the standee code, set larger and letter-spaced so eight characters
-    // can be read off a sheet lying on a table.
-    expect(offsets).toHaveLength(7);
+    // EIGHT: catalog, pages, page, contents, the code, two base fonts
+    // (Helvetica-Bold carries the standee code on that sheet), and — last, so
+    // nothing before it moved — the Mayasabha mark as its own RGB image.
+    expect(offsets).toHaveLength(8);
     offsets.forEach((offset, index) => {
       expect(pdf.slice(offset, offset + `${index + 1} 0 obj`.length)).toBe(`${index + 1} 0 obj`);
     });

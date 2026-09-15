@@ -1708,6 +1708,7 @@ router.get(
       name: catalog.name,
       format,
       size: clamped,
+      logo: true,
     });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
@@ -1721,6 +1722,8 @@ router.get(
       catalogName: catalog.name,
       format,
       size: clamped,
+      // Same as the owner route, and it must stay that way — see above.
+      logo: true,
     });
 
     track(AnalyticsEvent.CATALOG_QR_RENDERED, {
