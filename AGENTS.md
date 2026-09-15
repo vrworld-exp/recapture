@@ -917,6 +917,17 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   `CatalogProduct.mirageItemId` SCOPED TO THE CATALOG, so the client gets our
   name and a tappable `catalogProductId`; a row that no longer maps keeps its
   Mirage id and its numbers.
+- **A dashboard day is a day in IST, end to end.** `ANALYTICS_TIMEZONE`
+  (`Asia/Kolkata`, one constant — every catalog here is an Indian business) is
+  sent to Mirage as `?tz=` on all three reads; Mirage cuts `from`/`to` at that
+  zone's midnights and buckets the timeseries with `$dateToString {timezone}`
+  (`mirage-be` `parseDateRange`, default UTC so its own admin is unchanged).
+  `resolveRange` computes "today" in the zone, and every response states it as
+  `range.timezone`. The client cuts presets on the IST calendar
+  (`kAnalyticsZoneOffset`, safe only because IST has no DST) and labels the
+  chart and footer from `range.timezone` — never from its own constant, so a
+  backend that changed the zone would change the heading with it. Do not
+  re-bucket on either side: the rows must add up to the summary's totals.
 - **The dashboard mirrors Mirage's own, section for section.**
   `CatalogAnalyticsScreen` draws the same cards in the same order as
   `mirage-fe/src/components/admin/analytics/AnalyticsDashboard.tsx` — sessions

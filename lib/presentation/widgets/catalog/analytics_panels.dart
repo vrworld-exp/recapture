@@ -1331,9 +1331,17 @@ class AnalyticsTrafficTable extends StatelessWidget {
 /// The provenance line under everything: how many events, on whose clock,
 /// with what excluded, and how stale.
 class AnalyticsFooter extends StatelessWidget {
-  const AnalyticsFooter({super.key, required this.totalEvents});
+  const AnalyticsFooter({
+    super.key,
+    required this.totalEvents,
+    this.zoneLabel = '',
+  });
 
   final int totalEvents;
+
+  /// The zone the days are cut in, as the report stated it. Empty when the
+  /// server did not say.
+  final String zoneLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1348,7 +1356,12 @@ class AnalyticsFooter extends StatelessWidget {
       children: [
         Text('${analyticsExact(context, totalEvents)} events in range',
             style: style),
-        Text('Reported on server receive time (UTC)', style: style),
+        Text(
+          zoneLabel.isEmpty
+              ? 'Reported on server receive time'
+              : 'Reported on server receive time, days in $zoneLabel',
+          style: style,
+        ),
         Text('Bots and uptime pingers excluded at ingest', style: style),
         Text('Cached up to 5 minutes', style: style),
       ],

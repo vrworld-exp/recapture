@@ -23,8 +23,10 @@ import { CatalogProduct } from '@/models/CatalogProduct';
 import { User } from '@/models/User';
 import {
   clearAnalyticsCache,
+  dayStringInZone,
   resolveRange,
   ANALYTICS_MAX_DAYS,
+  ANALYTICS_TIMEZONE,
 } from '@/services/catalogAnalyticsService';
 import {
   MirageError,
@@ -526,6 +528,53 @@ describe('the date range', () => {
         new Date(`${capped.from}T00:00:00Z`).getTime()) /
       86_400_000;
     expect(Math.round(spanDays)).toBe(ANALYTICS_MAX_DAYS);
+  });
+
+  // ── The zone ──────────────────────────────────────────────────────────────
+  //
+  // A "day" on the dashboard is a day in the business's zone, not a UTC day.
+  // Get this wrong and a Saturday dinner rush lands half on Sunday, under a
+  // chart heading that says otherwise.
+
+  it('asks Mirage for every report in the business zone and echoes it', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+
+    const [summary, series, top] = await Promise.all([
+      request(app).get('/catalog/analytics/summary').set(auth),
+      request(app).get('/catalog/analytics/timeseries').set(auth),
+      request(app).get('/catalog/analytics/top-products').set(auth),
+    ]);
+
+    expect(ANALYTICS_TIMEZONE).toBe('Asia/Kolkata');
+    for (const query of mirage.queries) expect(query.tz).toBe('Asia/Kolkata');
+    expect(summary.body.range.timezone).toBe('Asia/Kolkata');
+    expect(series.body.range.timezone).toBe('Asia/Kolkata');
+    expect(top.body.range.timezone).toBe('Asia/Kolkata');
+  });
+
+  it('"today" is today in the business zone, not in UTC', () => {
+    // 20:00 UTC on the 14th is already 01:30 on the 15th in Kolkata.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-14T20:00:00.000Z'));
+    try {
+      expect(dayStringInZone(new Date())).toBe('2026-09-15');
+      expect(dayStringInZone(new Date(), 'UTC')).toBe('2026-09-14');
+      const range = resolveRange({});
+      expect(range.to).toBe('2026-09-15');
+      expect(range.from).toBe('2026-08-16');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the empty payload for an unprovisioned catalog names the zone too', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id, { provisioned: false });
+
+    const res = await request(app).get('/catalog/analytics/summary').set(auth);
+
+    expect(res.body.range.timezone).toBe('Asia/Kolkata');
   });
 });
 

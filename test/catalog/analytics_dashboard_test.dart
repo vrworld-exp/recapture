@@ -91,7 +91,12 @@ Map<String, dynamic> summaryPayload({
   ],
 }) =>
     {
-      'range': {'from': from, 'to': to, 'days': days},
+      'range': {
+        'from': from,
+        'to': to,
+        'days': days,
+        'timezone': 'Asia/Kolkata',
+      },
       'kpis': {
         'pageViews': pageViews,
         'sessions': 1100,
@@ -207,7 +212,11 @@ Map<String, dynamic> zeroSummaryPayload() => {
     };
 
 Map<String, dynamic> timeseriesPayload({int days = 30}) => {
-      'range': {'from': '2026-07-25', 'to': '2026-08-24'},
+      'range': {
+        'from': '2026-07-25',
+        'to': '2026-08-24',
+        'timezone': 'Asia/Kolkata',
+      },
       'points': [
         for (var i = 0; i < days; i++)
           {
@@ -666,6 +675,71 @@ void main() {
     );
   });
 
+  // ── The zone ──────────────────────────────────────────────────────────────
+  //
+  // A day on this screen is a day in IST. The presets are cut on the IST
+  // calendar whatever the device clock says, and the headings take the zone
+  // from the report itself.
+
+  testWidgets('a preset ends on TODAY IN IST, not on the UTC date',
+      (tester) async {
+    final repo = FakeAnalyticsRepository();
+    // 20:00 UTC on the 23rd is 01:30 on the 24th in Kolkata.
+    await pumpAt(
+      tester,
+      ProviderScope(
+        overrides: [
+          authProvider.overrideWith(_StubAuth.new),
+          catalogRepositoryProvider.overrideWithValue(repo),
+          analyticsClockProvider.overrideWithValue(
+            () => DateTime.utc(2026, 8, 23, 20),
+          ),
+        ],
+        child: const MaterialApp(home: CatalogAnalyticsScreen()),
+      ),
+      size: const Size(900, 1600),
+    );
+
+    expect(repo.callsFor('summary').single.to, '2026-08-24');
+    expect(repo.callsFor('summary').single.from, '2026-07-25');
+  });
+
+  test('a custom window keeps the calendar day the picker handed back', () {
+    // The picker returns LOCAL midnight of the tapped day. On any device east
+    // of Greenwich, converting that to UTC first lands on the day before.
+    final selection = AnalyticsRangeSelection.custom(
+      from: DateTime(2026, 8, 1),
+      to: DateTime(2026, 8, 24),
+    );
+    expect(selection.from, '2026-08-01');
+    expect(selection.to, '2026-08-24');
+  });
+
+  testWidgets('the chart and the footer name the zone the report states',
+      (tester) async {
+    final repo = FakeAnalyticsRepository();
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    expect(find.text('Daily totals, IST'), findsOneWidget);
+    expect(find.text('Reported on server receive time, days in IST'),
+        findsOneWidget);
+  });
+
+  testWidgets('a report that states no zone makes no claim about one',
+      (tester) async {
+    final summary = summaryPayload();
+    final timeseries = timeseriesPayload();
+    (summary['range'] as Map<String, dynamic>).remove('timezone');
+    (timeseries['range'] as Map<String, dynamic>).remove('timezone');
+    final repo = FakeAnalyticsRepository()
+      ..summary = summary
+      ..timeseries = timeseries;
+    await pumpAt(tester, harness(repo), size: const Size(900, 3200));
+
+    expect(find.text('Reported on server receive time'), findsOneWidget);
+    expect(find.textContaining('IST'), findsNothing);
+  });
+
   // ── The funnel ────────────────────────────────────────────────────────────
 
   testWidgets('the funnel captions each stage as a share of the one above it',
@@ -821,7 +895,7 @@ void main() {
     expect(
       find.descendant(
         of: footer,
-        matching: find.text('Reported on server receive time (UTC)'),
+        matching: find.text('Reported on server receive time, days in IST'),
       ),
       findsOneWidget,
     );

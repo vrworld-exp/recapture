@@ -29,7 +29,12 @@ import 'package:recapture/domain/entities/catalog_analytics.dart';
 ///
 /// Every counter is distinct and non-zero on purpose — see the header.
 Map<String, dynamic> summaryGolden() => {
-      'range': {'from': '2026-07-27', 'to': '2026-08-25', 'days': 30},
+      'range': {
+        'from': '2026-07-27',
+        'to': '2026-08-25',
+        'days': 30,
+        'timezone': 'Asia/Kolkata',
+      },
       'kpis': {
         'pageViews': 1247,
         'sessions': 913,
@@ -227,6 +232,29 @@ void main() {
         ..['range'] = {'from': '2025-08-25', 'to': '2026-08-25', 'days': 365};
 
       expect(AnalyticsSummary.fromMap(map).window.days, 365);
+    });
+
+    test('carries the zone the server stated, with a label a person reads', () {
+      final window = AnalyticsSummary.fromMap(summaryGolden()).window;
+      expect(window.timezone, 'Asia/Kolkata');
+      expect(window.timezoneLabel, 'IST');
+
+      expect(
+          const AnalyticsWindow(from: '', to: '', days: 0, timezone: 'UTC')
+              .timezoneLabel,
+          'UTC');
+      expect(
+          const AnalyticsWindow(
+                  from: '', to: '', days: 0, timezone: 'Europe/London')
+              .timezoneLabel,
+          'Europe/London');
+      // An older backend says nothing; the client claims nothing.
+      final map = summaryGolden()
+        ..['range'] = <String, dynamic>{
+          'from': '2026-07-27',
+          'to': '2026-08-25'
+        };
+      expect(AnalyticsSummary.fromMap(map).window.timezoneLabel, '');
     });
 
     test('derives days when the backend omits the count', () {

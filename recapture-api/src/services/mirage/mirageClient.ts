@@ -1082,6 +1082,7 @@ function analyticsParams(query: MirageAnalyticsQuery): Record<string, ScalarFiel
     to: query.to,
     days: query.days,
     limit: query.limit,
+    tz: query.tz,
   };
 }
 

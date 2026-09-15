@@ -40,6 +40,7 @@ import {
 } from '@/validation/catalogSchemas';
 import { listCatalogActivity } from '@/services/catalogActivityService';
 import {
+  ANALYTICS_TIMEZONE,
   EMPTY_SUMMARY,
   getCatalogAnalyticsSummary,
   getCatalogAnalyticsTimeseries,
@@ -152,7 +153,12 @@ function failImageKey(
     case 'OBJECT_NOT_FOUND':
       return fail(res, 409, 'OBJECT_NOT_FOUND', 'Upload the image before saving it.');
     case 'TOO_LARGE':
-      return fail(res, 413, 'PAYLOAD_TOO_LARGE', 'That image is too large. Please choose a smaller one.');
+      return fail(
+        res,
+        413,
+        'PAYLOAD_TOO_LARGE',
+        'That image is too large. Please choose a smaller one.'
+      );
   }
 }
 
@@ -465,12 +471,7 @@ router.post(
     // The bytes, not the header, decide what this is.
     const sniffed = sniffProductImageContentType(body);
     if (sniffed === null) {
-      return fail(
-        res,
-        415,
-        'UNSUPPORTED_MEDIA_TYPE',
-        'That file is not a JPEG, PNG or WebP.'
-      );
+      return fail(res, 415, 'UNSUPPORTED_MEDIA_TYPE', 'That file is not a JPEG, PNG or WebP.');
     }
 
     const userId = req.user!.userId;
@@ -734,9 +735,7 @@ router.get(
       ),
     });
 
-    res
-      .status(200)
-      .json({ status: 'success', items: result.items, nextCursor: result.nextCursor });
+    res.status(200).json({ status: 'success', items: result.items, nextCursor: result.nextCursor });
   })
 );
 
@@ -958,12 +957,7 @@ router.post(
     // The bytes, not the header, decide what this is.
     const sniffed = sniffProductImageContentType(body);
     if (sniffed === null) {
-      return fail(
-        res,
-        415,
-        'UNSUPPORTED_MEDIA_TYPE',
-        'That file is not a JPEG, PNG or WebP.'
-      );
+      return fail(res, 415, 'UNSUPPORTED_MEDIA_TYPE', 'That file is not a JPEG, PNG or WebP.');
     }
 
     const userId = req.user!.userId;
@@ -1204,7 +1198,7 @@ for (const [path, archived] of [
 
       track(AnalyticsEvent.CATALOG_PRODUCT_ARCHIVED, {
         user_id_hash: hashIdentifier(userId),
-          product_id: result.product.id,
+        product_id: result.product.id,
         archived,
       });
 
@@ -1441,11 +1435,7 @@ router.get(
 // `restaurant` in the request is IGNORED — see catalogAnalyticsService.
 
 /** Maps an analytics result onto the house envelope. One place, three routes. */
-function respondToAnalytics<T>(
-  res: Response,
-  result: AnalyticsResult<T>,
-  empty: () => T
-): void {
+function respondToAnalytics<T>(res: Response, result: AnalyticsResult<T>, empty: () => T): void {
   switch (result.outcome) {
     case 'NOT_FOUND':
       return noCatalog(res);
@@ -1488,7 +1478,7 @@ router.get(
 
     const result = await getCatalogAnalyticsTimeseries(req.user!.userId, parsed.data);
     respondToAnalytics(res, result, () => ({
-      range: resolveRange(parsed.data),
+      range: { ...resolveRange(parsed.data), timezone: ANALYTICS_TIMEZONE },
       points: [],
     }));
   })
@@ -1502,7 +1492,7 @@ router.get(
 
     const result = await getCatalogAnalyticsTopProducts(req.user!.userId, parsed.data);
     respondToAnalytics(res, result, () => ({
-      range: resolveRange(parsed.data),
+      range: { ...resolveRange(parsed.data), timezone: ANALYTICS_TIMEZONE },
       rows: [],
       totals: {
         '3D': { views: 0, arViews: 0, products: 0 },

@@ -75,7 +75,9 @@ const Map<AnalyticsSection, AnalyticsSectionInfo> kAnalyticsSectionInfo = {
         'at the top scopes every panel on this screen, so any two cards can '
         'always be read against each other.',
     counting: [
-      'Events are stamped with server receive time and bucketed by UTC day.',
+      'Events are stamped with server receive time and bucketed by calendar '
+          'day in Indian Standard Time (IST), so a late evening stays on the '
+          'day it happened.',
       'Bots, crawlers and uptime pingers are dropped at ingest and never '
           'reach these numbers.',
       'Results are cached for up to 5 minutes — pull to refresh rebuilds '
@@ -204,7 +206,7 @@ const Map<AnalyticsSection, AnalyticsSectionInfo> kAnalyticsSectionInfo = {
     body: 'The funnel plotted day by day. Read it for shape — weekends, a '
         'campaign, a quiet stretch — rather than for exact values.',
     counting: [
-      'Each bar is one UTC calendar day.',
+      'Each bar is one calendar day in Indian Standard Time (IST).',
       'Pick a series with the chips; every series is drawn on its own scale.',
     ],
     caveat: 'The last bar is today and is still filling in, so a dip at the '

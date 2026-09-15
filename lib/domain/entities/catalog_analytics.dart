@@ -10,11 +10,12 @@
 // fetched for ONE window, so nothing on screen can mix a 7-day chart with a
 // 90-day tile.
 //
-// ⚠ A DAY HERE IS A UTC DAY. Mirage buckets on `receivedAt` with an explicit
-// `timezone: "UTC"`, and the range filter is UTC too, so a shop closing at 1am
-// local sees that evening split across two rows. Deliberate, and documented
-// upstream in `catalogAnalyticsService.ts` — inventing a local day on this side
-// would produce points that do not add up to the summary's totals.
+// A DAY HERE IS A DAY IN THE BUSINESS'S ZONE. The backend asks Mirage to cut
+// the range and bucket the timeseries in `ANALYTICS_TIMEZONE` (IST) and states
+// the zone back on every report as `range.timezone`. The screen labels itself
+// from that field — never from an assumption — so a backend that changed the
+// zone would change the heading with it. Re-bucketing on this side would break
+// the one thing that matters: the rows adding up to the summary's totals.
 //
 // Parsed field by field like every other catalog entity: these DTOs are
 // hand-synced with the backend's, so a client one deploy behind must render
@@ -33,16 +34,30 @@ class AnalyticsWindow {
     required this.from,
     required this.to,
     required this.days,
+    this.timezone = '',
   });
 
-  /// `YYYY-MM-DD`, UTC — kept as the server's own string because that is what
-  /// goes back on the next request. Use [fromDate] / [toDate] to render.
+  /// `YYYY-MM-DD` in [timezone] — kept as the server's own string because that
+  /// is what goes back on the next request. Use [fromDate] / [toDate] to render.
   final String from;
   final String to;
 
   /// Length in days. The summary sends it; the other two reports do not, so it
   /// is derived from the bounds there.
   final int days;
+
+  /// The IANA zone the days are cut in, as the server stated it — e.g.
+  /// `Asia/Kolkata`. Empty when the server did not say (an older backend), in
+  /// which case the screen says nothing about the zone rather than guessing.
+  final String timezone;
+
+  /// The zone as a person reads it on a heading: `IST`, `UTC`, or the IANA
+  /// name for anything else. Empty when unknown.
+  String get timezoneLabel => switch (timezone) {
+        'Asia/Kolkata' || 'Asia/Calcutta' => 'IST',
+        'UTC' || 'Etc/UTC' => 'UTC',
+        _ => timezone,
+      };
 
   DateTime? get fromDate => DateTime.tryParse(from);
   DateTime? get toDate => DateTime.tryParse(to);
@@ -57,6 +72,7 @@ class AnalyticsWindow {
       from: from,
       to: to,
       days: stated > 0 ? stated : _spanDays(from, to),
+      timezone: catalogText(map?['timezone']) ?? '',
     );
   }
 
@@ -504,7 +520,8 @@ class AnalyticsPoint {
     this.sessions = 0,
   });
 
-  /// `YYYY-MM-DD`, UTC.
+  /// `YYYY-MM-DD`, a calendar day in the report's zone
+  /// ([AnalyticsWindow.timezone]).
   final String date;
   final int pageViews;
   final int productViews;
@@ -563,7 +580,7 @@ class AnalyticsTimeseries {
 
   final AnalyticsWindow window;
 
-  /// One row per UTC day. Mirage fills the gaps and the backend neither re-fills
+  /// One row per calendar day. Mirage fills the gaps and the backend neither re-fills
   /// nor re-sorts, so this is already a continuous, ascending axis — the chart
   /// must not sort it again and invent an order the totals disagree with.
   final List<AnalyticsPoint> points;

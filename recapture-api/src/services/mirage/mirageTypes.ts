@@ -404,6 +404,8 @@ export interface MirageAnalyticsRange {
   /** ISO instants. */
   from: string;
   to: string;
+  /** The IANA zone the days were cut and bucketed in. Absent from an older Mirage. */
+  timezone?: string;
   days?: number;
 }
 
@@ -550,4 +552,9 @@ export interface MirageAnalyticsQuery {
   days?: number;
   /** top-products only. Mirage clamps to 100. */
   limit?: number;
+  /**
+   * IANA zone name. Mirage cuts `from`/`to` at that zone's midnights and
+   * buckets the timeseries by its calendar days; omitted, it is UTC.
+   */
+  tz?: string;
 }

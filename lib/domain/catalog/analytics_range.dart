@@ -9,11 +9,22 @@
 // contains days the 7-day request never asked for, and `visitors` is a DISTINCT
 // count that cannot be re-derived by adding days together.
 //
-// Dates are UTC DAYS, matching the backend's own `resolveRange` and Mirage's
-// `timezone: "UTC"` bucketing. Building them from the device's local midnight
-// would ask for a window an hour or thirteen away from the one the numbers are
-// bucketed into.
+// DATES ARE CALENDAR DAYS IN THE BUSINESS'S ZONE — Indian Standard Time —
+// matching the backend's `resolveRange` and the zone it asks Mirage to cut and
+// bucket by (`ANALYTICS_TIMEZONE`). A preset is "the last N days ending today
+// in IST", whatever the device's clock is set to: a manager checking from a
+// laptop still on UTC, or a rep travelling, sees the same window the business
+// lives in. The backend echoes the zone back on every report and the screen
+// labels itself from that, never from this constant.
 import 'package:flutter/foundation.dart' show immutable;
+
+/// The zone every preset is computed in. IST has no daylight saving, so a
+/// fixed offset IS the zone — the one thing that makes this safe to do
+/// without a timezone database on the client.
+const Duration kAnalyticsZoneOffset = Duration(hours: 5, minutes: 30);
+
+/// The IANA name of that zone, as the backend states it in `range.timezone`.
+const String kAnalyticsZoneName = 'Asia/Kolkata';
 
 /// The preset windows the range control offers.
 enum AnalyticsRangePreset {
@@ -65,7 +76,7 @@ class AnalyticsRangeSelection {
     required this.to,
   });
 
-  /// A preset window ending [now] (UTC).
+  /// A preset window ending on [now]'s calendar day in IST.
   ///
   /// [now] is injected rather than read from the clock inside, because a
   /// notifier that reads the wall clock is a test that cannot assert on the
@@ -84,7 +95,7 @@ class AnalyticsRangeSelection {
         now: now,
       );
     }
-    final end = _utcDay(now);
+    final end = _zoneDay(now);
     return AnalyticsRangeSelection._(
       preset: preset,
       from: _dayString(end.subtract(Duration(days: days))),
@@ -92,15 +103,20 @@ class AnalyticsRangeSelection {
     );
   }
 
-  /// An explicit window. Bounds are normalised to UTC days and ordered, so a
-  /// picker that hands back `to` before `from` cannot produce a request the
-  /// backend rejects with INVALID_REQUEST.
+  /// An explicit window. Bounds are the CALENDAR DAYS the picker handed back
+  /// and are ordered, so a picker that hands back `to` before `from` cannot
+  /// produce a request the backend rejects with INVALID_REQUEST.
+  ///
+  /// The day is read off the value as given, never converted first: the date
+  /// picker returns local midnight of the day the user tapped, and converting
+  /// that to any other zone can land on the day before — "24 Aug" becoming a
+  /// request for the 23rd on every device east of Greenwich.
   factory AnalyticsRangeSelection.custom({
     required DateTime from,
     required DateTime to,
   }) {
-    final a = _utcDay(from);
-    final b = _utcDay(to);
+    final a = _calendarDay(from);
+    final b = _calendarDay(to);
     final start = a.isAfter(b) ? b : a;
     final end = a.isAfter(b) ? a : b;
     return AnalyticsRangeSelection._(
@@ -112,7 +128,8 @@ class AnalyticsRangeSelection {
 
   final AnalyticsRangePreset preset;
 
-  /// `YYYY-MM-DD`, UTC — sent verbatim as the `from` / `to` query parameters.
+  /// `YYYY-MM-DD`, an IST calendar day — sent verbatim as the `from` / `to`
+  /// query parameters.
   final String from;
   final String to;
 
@@ -143,11 +160,16 @@ class AnalyticsRangeSelection {
   @override
   String toString() => 'AnalyticsRangeSelection(${preset.name}: $from..$to)';
 
-  /// Midnight UTC on the same calendar day, discarding the time.
-  static DateTime _utcDay(DateTime value) {
-    final utc = value.toUtc();
-    return DateTime.utc(utc.year, utc.month, utc.day);
+  /// The calendar day an instant falls on in IST, as a UTC midnight (so day
+  /// arithmetic on it never crosses a local DST boundary).
+  static DateTime _zoneDay(DateTime value) {
+    final shifted = value.toUtc().add(kAnalyticsZoneOffset);
+    return DateTime.utc(shifted.year, shifted.month, shifted.day);
   }
+
+  /// The year-month-day of a value as it stands, ignoring its zone.
+  static DateTime _calendarDay(DateTime value) =>
+      DateTime.utc(value.year, value.month, value.day);
 
   static String _dayString(DateTime day) =>
       '${day.year.toString().padLeft(4, '0')}-'

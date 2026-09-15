@@ -46,7 +46,21 @@ import {
   type MirageAnalyticsSummary,
 } from '@/services/mirage';
 
-/** Mirage's own default and ceiling (analyticsHelper.js:183-184). */
+/**
+ * The zone every day on the dashboard is a day IN.
+ *
+ * Mirage cuts the range at this zone's midnights and buckets the timeseries by
+ * its calendar days (`?tz=`, analyticsHelper.js `parseDateRange`), and this
+ * side computes "today" in it — so the chart, the range caption and the
+ * summary's totals all agree on what a day is. One constant, not per-business:
+ * every catalog on this deployment is an Indian business, and a zone that
+ * varied per catalog would need to be stored, edited and migrated for a
+ * difference no customer has asked for. The client reads the zone back off
+ * `range.timezone` and never assumes it.
+ */
+export const ANALYTICS_TIMEZONE = 'Asia/Kolkata';
+
+/** Mirage's own default and ceiling (analyticsHelper.js). */
 export const ANALYTICS_DEFAULT_DAYS = 30;
 export const ANALYTICS_MAX_DAYS = 365;
 export const ANALYTICS_MAX_TOP_PRODUCTS = 100;
@@ -55,7 +69,7 @@ export const ANALYTICS_MAX_TOP_PRODUCTS = 100;
 export const ANALYTICS_UNAVAILABLE = 'ANALYTICS_UNAVAILABLE' as const;
 
 export interface AnalyticsRange {
-  /** `YYYY-MM-DD`, the form Mirage's parser expects. */
+  /** `YYYY-MM-DD` in [ANALYTICS_TIMEZONE], the form Mirage's parser expects. */
   from: string;
   to: string;
 }
@@ -144,8 +158,16 @@ export interface ModelHealthDto {
   failingProducts: FailingProductDto[];
 }
 
+export interface AnalyticsRangeDto {
+  from: string;
+  to: string;
+  days: number;
+  /** The IANA zone the days are cut in — always [ANALYTICS_TIMEZONE]. */
+  timezone: string;
+}
+
 export interface AnalyticsSummaryDto {
-  range: { from: string; to: string; days: number };
+  range: AnalyticsRangeDto;
   kpis: AnalyticsKpisDto;
   /** The immediately preceding window of equal length — the dashboard's delta. */
   previousKpis: AnalyticsKpisDto | null;
@@ -161,13 +183,11 @@ export interface AnalyticsSummaryDto {
 
 export interface AnalyticsTimeseriesPointDto {
   /**
-   * `YYYY-MM-DD`, UTC. THE BOUNDARY RULE: Mirage stores `receivedAt` in UTC and
-   * buckets on it with an explicit `timezone: "UTC"`
-   * (analyticsController.js:399-401), so a "day" here is a UTC day, not the
-   * business's local one. A shop closing at 1 a.m. sees that evening split
-   * across two rows. Left as-is deliberately — inventing a local day on our side
-   * would disagree with the range filter, which is also UTC, and produce totals
-   * that do not add up to the summary's.
+   * `YYYY-MM-DD` in [ANALYTICS_TIMEZONE]. THE BOUNDARY RULE: Mirage stores
+   * `receivedAt` in UTC and buckets it with `$dateToString { timezone }` set to
+   * the zone we ask for, and cuts the range filter at that zone's midnights
+   * too — so a "day" here is the business's own day, and the rows add up to
+   * the summary's totals. Re-bucketing on this side would break exactly that.
    */
   date: string;
   pageViews: number;
@@ -215,7 +235,30 @@ export type AnalyticsResult<T> =
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const dayString = (date: Date): string => date.toISOString().slice(0, 10);
+/** The `YYYY-MM-DD` an instant falls on in [ANALYTICS_TIMEZONE]. */
+export function dayStringInZone(instant: Date, timeZone = ANALYTICS_TIMEZONE): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(instant);
+  const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/** `YYYY-MM-DD` plus `days` calendar days — string arithmetic, no zone. */
+const addDays = (dayKey: string, days: number): string =>
+  new Date(new Date(`${dayKey}T00:00:00.000Z`).getTime() + days * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+
+/** Whole calendar days between two day keys. */
+const spanDays = (from: string, to: string): number =>
+  Math.round(
+    (new Date(`${to}T00:00:00.000Z`).getTime() - new Date(`${from}T00:00:00.000Z`).getTime()) /
+      DAY_MS
+  );
 
 export interface RangeInput {
   from?: string;
@@ -224,23 +267,19 @@ export interface RangeInput {
 
 /**
  * Resolves the requested window, defaulting and capping the same way Mirage
- * does.
+ * does — in [ANALYTICS_TIMEZONE], on calendar days.
  *
  * Doing it HERE as well as there is not redundancy: our cache key is built from
  * the resolved range, and a range Mirage silently narrows would otherwise give
- * two different cache entries the same key.
+ * two different cache entries the same key. "Today" is today in the business's
+ * zone: at 02:00 IST the UTC date is still yesterday, and a default window
+ * that ended there would hide the evening that just happened.
  */
 export function resolveRange(input: RangeInput): AnalyticsRange {
-  const to = input.to ? new Date(`${input.to}T00:00:00.000Z`) : new Date();
-  const from = input.from
-    ? new Date(`${input.from}T00:00:00.000Z`)
-    : new Date(to.getTime() - ANALYTICS_DEFAULT_DAYS * DAY_MS);
-
-  const span = to.getTime() - from.getTime();
-  const capped =
-    span > ANALYTICS_MAX_DAYS * DAY_MS ? new Date(to.getTime() - ANALYTICS_MAX_DAYS * DAY_MS) : from;
-
-  return { from: dayString(capped), to: dayString(to) };
+  const to = input.to ?? dayStringInZone(new Date());
+  const from = input.from ?? addDays(to, -ANALYTICS_DEFAULT_DAYS);
+  const capped = spanDays(from, to) > ANALYTICS_MAX_DAYS ? addDays(to, -ANALYTICS_MAX_DAYS) : from;
+  return { from: capped, to };
 }
 
 // ── Cache ───────────────────────────────────────────────────────────────────
@@ -294,7 +333,11 @@ export function clearAnalyticsCache(): void {
 /** The caller's Mirage restaurant id, or null when they have never published. */
 async function scopeFor(
   userId: string
-): Promise<{ outcome: 'OK'; catalogId: Types.ObjectId; restaurantId: string } | { outcome: 'NOT_FOUND' } | { outcome: 'EMPTY' }> {
+): Promise<
+  | { outcome: 'OK'; catalogId: Types.ObjectId; restaurantId: string }
+  | { outcome: 'NOT_FOUND' }
+  | { outcome: 'EMPTY' }
+> {
   const catalog = await Catalog.findOne({ userId: new Types.ObjectId(userId), deletedAt: null })
     .select({ _id: 1, mirageRestaurantId: 1 })
     .lean()
@@ -321,7 +364,9 @@ async function report<T>(
   key: string,
   run: (query: MirageAnalyticsQuery) => Promise<T>,
   query: MirageAnalyticsQuery
-): Promise<{ outcome: 'OK'; data: T } | { outcome: 'UNAVAILABLE'; code: typeof ANALYTICS_UNAVAILABLE }> {
+): Promise<
+  { outcome: 'OK'; data: T } | { outcome: 'UNAVAILABLE'; code: typeof ANALYTICS_UNAVAILABLE }
+> {
   const hit = cached<T>(key);
   if (hit !== undefined) return { outcome: 'OK', data: hit };
 
@@ -581,18 +626,11 @@ export async function getCatalogAnalyticsSummary(
   const result = await report(
     cacheKey('summary', scope.catalogId, range),
     (query) => getMirageClient().analyticsSummary(query),
-    { restaurantId: scope.restaurantId, from: range.from, to: range.to }
+    { restaurantId: scope.restaurantId, from: range.from, to: range.to, tz: ANALYTICS_TIMEZONE }
   );
   if (result.outcome !== 'OK') return result;
 
-  const days = Math.max(
-    1,
-    Math.round(
-      (new Date(`${range.to}T00:00:00.000Z`).getTime() -
-        new Date(`${range.from}T00:00:00.000Z`).getTime()) /
-        DAY_MS
-    )
-  );
+  const days = Math.max(1, spanDays(range.from, range.to));
 
   // The join is NOT cached with the report: a product renamed or deleted
   // between two reads should show its current name on the very next one.
@@ -604,7 +642,7 @@ export async function getCatalogAnalyticsSummary(
   return {
     outcome: 'OK',
     data: {
-      range: { from: range.from, to: range.to, days },
+      range: { from: range.from, to: range.to, days, timezone: ANALYTICS_TIMEZONE },
       ...toSummary(result.data, scope.restaurantId, local),
     },
   };
@@ -615,7 +653,12 @@ export async function getCatalogAnalyticsSummary(
 export async function getCatalogAnalyticsTimeseries(
   userId: string,
   input: RangeInput
-): Promise<AnalyticsResult<{ range: AnalyticsRange; points: AnalyticsTimeseriesPointDto[] }>> {
+): Promise<
+  AnalyticsResult<{
+    range: AnalyticsRange & { timezone: string };
+    points: AnalyticsTimeseriesPointDto[];
+  }>
+> {
   const scope = await scopeFor(userId);
   if (scope.outcome !== 'OK') return scope;
   if (!isMirageConfigured()) return { outcome: 'UNAVAILABLE', code: ANALYTICS_UNAVAILABLE };
@@ -624,14 +667,14 @@ export async function getCatalogAnalyticsTimeseries(
   const result = await report(
     cacheKey('timeseries', scope.catalogId, range),
     (query) => getMirageClient().analyticsTimeseries(query),
-    { restaurantId: scope.restaurantId, from: range.from, to: range.to }
+    { restaurantId: scope.restaurantId, from: range.from, to: range.to, tz: ANALYTICS_TIMEZONE }
   );
   if (result.outcome !== 'OK') return result;
 
   return {
     outcome: 'OK',
     data: {
-      range,
+      range: { ...range, timezone: ANALYTICS_TIMEZONE },
       // Mirage already fills gaps so the chart draws a continuous axis
       // (analyticsController.js:428-445); we do not re-fill or re-sort.
       points: result.data.map((point) => ({
@@ -673,7 +716,7 @@ const KIND_FOR_TYPE: Record<ProductType, TopProductKind> = {
 export async function getCatalogAnalyticsTopProducts(
   userId: string,
   input: RangeInput & { limit?: number }
-): Promise<AnalyticsResult<{ range: AnalyticsRange } & TopProductsDto>> {
+): Promise<AnalyticsResult<{ range: AnalyticsRange & { timezone: string } } & TopProductsDto>> {
   const scope = await scopeFor(userId);
   if (scope.outcome !== 'OK') return scope;
   if (!isMirageConfigured()) return { outcome: 'UNAVAILABLE', code: ANALYTICS_UNAVAILABLE };
@@ -684,7 +727,13 @@ export async function getCatalogAnalyticsTopProducts(
   const result = await report(
     `${cacheKey('top-products', scope.catalogId, range)}:${limit}`,
     (query) => getMirageClient().analyticsTopProducts(query),
-    { restaurantId: scope.restaurantId, from: range.from, to: range.to, limit }
+    {
+      restaurantId: scope.restaurantId,
+      from: range.from,
+      to: range.to,
+      limit,
+      tz: ANALYTICS_TIMEZONE,
+    }
   );
   if (result.outcome !== 'OK') return result;
 
@@ -725,12 +774,15 @@ export async function getCatalogAnalyticsTopProducts(
     };
   });
 
-  return { outcome: 'OK', data: { range, rows, totals } };
+  return {
+    outcome: 'OK',
+    data: { range: { ...range, timezone: ANALYTICS_TIMEZONE }, rows, totals },
+  };
 }
 
 /** The empty payloads an unprovisioned catalog gets, with no Mirage call. */
 export const EMPTY_SUMMARY = (range: AnalyticsRange): AnalyticsSummaryDto => ({
-  range: { from: range.from, to: range.to, days: 0 },
+  range: { from: range.from, to: range.to, days: 0, timezone: ANALYTICS_TIMEZONE },
   kpis: ZERO_KPIS,
   previousKpis: null,
   totalEvents: 0,

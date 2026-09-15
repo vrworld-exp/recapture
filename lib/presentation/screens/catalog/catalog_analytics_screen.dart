@@ -319,7 +319,14 @@ class _ReportBody extends StatelessWidget {
           const _NoDataYet(),
         ] else ...[
           const SizedBox(height: AppSpacing.lg),
-          _ChartCard(points: points),
+          _ChartCard(
+            points: points,
+            // The timeseries states its own zone; the summary's is the same
+            // deployment constant and covers a payload that omitted it.
+            zoneLabel: report.timeseries.window.timezoneLabel.isNotEmpty
+                ? report.timeseries.window.timezoneLabel
+                : summary.window.timezoneLabel,
+          ),
           const SizedBox(height: AppSpacing.lg),
           // Paired cards from 720 px: the funnel beside the categories, the
           // searches beside the health check — Mirage's own two-up, and the
@@ -352,7 +359,10 @@ class _ReportBody extends StatelessWidget {
             firstFlex: 2,
           ),
           const SizedBox(height: AppSpacing.lg),
-          AnalyticsFooter(totalEvents: summary.totalEvents),
+          AnalyticsFooter(
+            totalEvents: summary.totalEvents,
+            zoneLabel: summary.window.timezoneLabel,
+          ),
         ],
       ],
     );
@@ -844,9 +854,13 @@ class _DeltaChip extends StatelessWidget {
 // ── Chart ───────────────────────────────────────────────────────────────────
 
 class _ChartCard extends StatefulWidget {
-  const _ChartCard({required this.points});
+  const _ChartCard({required this.points, required this.zoneLabel});
 
   final List<AnalyticsPoint> points;
+
+  /// `IST` / `UTC` — off the report's own `range.timezone`; empty when the
+  /// server did not say, in which case the subtitle does not claim one.
+  final String zoneLabel;
 
   @override
   State<_ChartCard> createState() => _ChartCardState();
@@ -863,7 +877,9 @@ class _ChartCardState extends State<_ChartCard> {
       key: const ValueKey('analytics_chart_card'),
       title: 'Traffic over time',
       section: AnalyticsSection.traffic,
-      subtitle: 'Daily totals, UTC',
+      subtitle: widget.zoneLabel.isEmpty
+          ? 'Daily totals'
+          : 'Daily totals, ${widget.zoneLabel}',
       trailing: SegmentedButton<bool>(
         key: const ValueKey('analytics_traffic_mode'),
         showSelectedIcon: false,
