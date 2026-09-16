@@ -53,7 +53,7 @@ ReCapture/
 └── recapture-api/             ← Node/TS backend
     └── src/
         ├── config/            ← env.ts (typed, fail-fast), db.ts, s3.ts
-        ├── routes/            ← thin Express routers (auth, projects, health)
+        ├── routes/            ← thin Express routers (auth, projects, notifications, health, …)
         ├── services/          ← business logic (pure-ish; no Express types)
         ├── models/            ← Mongoose schemas + interfaces
         ├── middleware/        ← auth, validate, errorHandler, notFound, requestLogger
@@ -940,6 +940,69 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   ⚠ Cards inside the screen's `_Pair` and the wide KPI row sit under an
   `IntrinsicHeight`; nothing inside them may use `LayoutBuilder`, which throws
   when asked for intrinsics.
+
+### In-app notifications (the bell)
+
+- **PULL, not push.** There is no real-time channel in v1. `GET /notifications`
+  is re-read on the same occasions the app re-reads projects and the profile:
+  app start (the bell on the Projects hub watches `notificationsProvider`), the
+  hub's focus/pull refresh (`_refreshNotifications` rides `_refresh` and
+  `_refreshSilently`), opening Profile, and opening or pulling the
+  Notifications screen. A message an admin sends is seen the next time the
+  user does any of those — the accepted lag. Adding a push/socket channel is a
+  decision that belongs here first.
+- **ONE document per message, receipts per reader.** `Notification`
+  (`models/Notification.ts`) is the admin's message — `audienceType: ALL` or
+  `USERS` + `audienceUserIds` — and `NotificationReceipt` is "this user read
+  this one", written on the FIRST read with `$setOnInsert` (unique on
+  `{userId, notificationId}`, so a double-tap is one row). Unread is the
+  ABSENCE of a receipt; the count is computed per request over the same bounded
+  set the list shows (`NOTIFICATIONS_FEED_LIMIT`, default 100), so the badge
+  never promises more than the screen has. Do not add per-user copies or an
+  `unread` flag. Receipts SURVIVE retraction — they are history.
+- **Visibility is ONE predicate** (`visibleTo` in
+  `services/notificationsService.ts`): not soft-deleted, in the audience, not
+  past `expiresAt`. The feed AND every per-notification write use it, so a
+  user can only mark read what they could have seen, and nonexistent /
+  retracted / expired / not-for-you all answer the identical
+  `404 NOTIFICATION_NOT_FOUND` (enumeration-safe).
+- **A broadcast reaches users created AFTER it.** That is deliberate and the
+  welcome greeting depends on it: `ensureWelcomeNotification()` seeds ONE
+  `audienceType: ALL` row keyed `welcome_v1` (unique partial index on `key`,
+  idempotent on every boot from `index.ts`, best-effort — a failed seed logs
+  and the API keeps serving). Every account that existed at the seed and every
+  first login after it finds it unread, which is what puts the first badge on
+  the bell. To send a NEW greeting, bump the key suffix; never edit a seeded
+  row in place. The cost of the rule: a time-bound broadcast ("renew by
+  Friday") is also seen by a user who signs up after Friday unless it carries
+  an `expiresAt` — set one.
+- **Sending is ADMIN-only and has no client UI yet.** `POST/GET/DELETE
+  /admin/notifications` (`requireRole('ADMIN')`; the body is `.strict()`,
+  `notificationSchemas.ts`). `action.url` is either an in-app path (leading
+  `/`, resolved by the client's router with `push`) or an `https://` link
+  (opened through `catalogLinkActionsProvider` — the same seam as the catalog
+  link); `http:` and anything else is a 400. `scripts/send-notification.ts`
+  is the CLI door until a dashboard exists. Recipient ids on the admin list are
+  opaque; no phone/email ever rides on any notification DTO.
+- **The text is treated as the reader's business.** A notification can name
+  one person's overdue invoice. Analytics on both sides
+  (`notification_sent/retracted/read`, client `notification_*`) carry the
+  hashed actor, the `kind`, the audience shape and a `scope` — never the
+  title, message, detail or action url.
+- **Client:** `AppNotification` / `NotificationsFeed`
+  (`domain/entities/app_notification.dart`; unknown `kind` → `info`, malformed
+  rows skipped), `NotificationsNotifier` (epoch-guarded like `ProfileNotifier`;
+  DROPS the feed on logout; `refresh()` is SILENT — never throws, keeps the
+  last good feed; `markRead`/`markAllRead` are optimistic with rollback and
+  adopt the server's `unreadCount` on disagreement). ⚠ Read the feed through
+  the **`AsyncData` CASE**, never `.valueOrNull` — Riverpod carries the
+  previous value along the logout reset's loading transition, and
+  `unreadNotificationCountProvider` is written that way so the badge really
+  does zero. `NotificationBellAction` is ALWAYS present and tappable (the badge
+  alone depends on the network; it caps at `9+`); it sits BEFORE Catalog in
+  the hub's app bar. `/notifications` is a top-level go() destination like
+  `/profile`, with BACK mapped to `/projects`. Guardrails:
+  `recapture-api/tests/notifications.test.ts` + `test/notifications/*`.
 
 ### Catalog names: STORED as a slug, SHOWN de-slugged
 

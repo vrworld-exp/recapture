@@ -15,6 +15,7 @@ import remoteConfigRouter from '@/routes/remoteConfig';
 import adminRouter from '@/routes/admin';
 import publicRouter from '@/routes/public';
 import repRouter from '@/routes/rep';
+import notificationsRouter from '@/routes/notifications';
 
 /** `flutter run -d chrome` binds a fresh random port each launch. */
 const LOCALHOST_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
@@ -79,6 +80,9 @@ export function createApp(): express.Express {
   // Catalog authoring (requireAuth inside the router). Owner-scoped: every
   // route resolves the caller's single catalog from the token.
   app.use('/catalog', catalogRouter);
+  // The signed-in user's in-app notification feed (requireAuth inside the
+  // router). Pull-only: no push channel, the client re-fetches on refresh.
+  app.use('/notifications', notificationsRouter);
   // Public (no JWT) — consumed at client startup, possibly pre-login.
   app.use('/remote-config', remoteConfigRouter);
   // Staff-only (requireAuth + requireRole ≥ MODEL_ARTIST inside the router).

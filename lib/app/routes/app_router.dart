@@ -54,6 +54,7 @@ import '../../presentation/screens/catalog/publish_screen.dart';
 import '../../presentation/widgets/catalog/publish_body.dart'
     show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
+import '../../presentation/screens/notifications/notifications_screen.dart';
 import '../../presentation/screens/capture/pre_capture_screen.dart';
 import '../../presentation/screens/capture/permissions_screen.dart';
 import '../../presentation/screens/capture/level_a_intro_screen.dart';
@@ -100,6 +101,11 @@ abstract final class AppRoutes {
   /// The signed-in user's own account screen (avatar, name, masked contact,
   /// Sign out). Protected like every non-auth route.
   static const profile = '/profile';
+
+  /// The in-app notification feed — the bell's destination. A standalone
+  /// top-level destination like /profile, reached with go() from the Projects
+  /// app bar. Protected like every non-auth route.
+  static const notifications = '/notifications';
 
   // ── Catalog (the storefront authoring surface) ────────────────────────────
   // Declared as ONE flat group under /catalog so a deep link from a QR-adjacent
@@ -280,6 +286,7 @@ abstract final class AppRouteNames {
   static const createProject = 'createProject';
   static const projectPhotos = 'projectPhotos';
   static const profile = 'profile';
+  static const notifications = 'notifications';
   static const catalog = 'catalog';
   static const catalogSettings = 'catalogSettings';
   static const catalogPreview = 'catalogPreview';
@@ -449,6 +456,15 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.profile,
         name: AppRouteNames.profile,
         builder: (_, __) => const FlowBackScope(child: ProfileScreen()),
+      ),
+      // The notification feed — same standalone shape as /profile: go()ed from
+      // the Projects app bar, so a cold deep-link and the in-app entry are the
+      // same location, and BACK maps /notifications → /projects via
+      // FlowBackScope when there is nothing to pop.
+      GoRoute(
+        path: AppRoutes.notifications,
+        name: AppRouteNames.notifications,
+        builder: (_, __) => const FlowBackScope(child: NotificationsScreen()),
       ),
       // The catalog shell — a STANDALONE top-level destination like /profile,
       // reached with go() from the Projects app bar, so a cold deep-link to

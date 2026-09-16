@@ -6,6 +6,7 @@
 // unvalidated property shape can exist anywhere else. The human-readable mirror
 // lives in docs/analytics-tracking-plan.md and MUST be kept in sync with this.
 import { z } from 'zod';
+import { NOTIFICATION_AUDIENCE_TYPES, NOTIFICATION_KINDS } from '@/models/Notification';
 // Reuse the SAME enum constants POST /projects validates against — analytics
 // must never declare divergent object_size/mode literals.
 import { OBJECT_SIZE_VALUES, CAPTURE_MODE_VALUES } from '@/validation/projectSchemas';
@@ -140,6 +141,13 @@ export const AnalyticsEvent = {
   // phone: the first is a public identifier for one restaurant's menu, the
   // second is a person.
   QR_CODE_ACTIVATED: 'qr_code_activated',
+  // ── In-app notifications (/notifications, /admin/notifications) ───────────
+  // The hashed actor/reader, the kind and the audience shape. Never the title
+  // or body: an admin may name a specific customer's overdue invoice in one,
+  // and a message addressed to a person is that person's business.
+  NOTIFICATION_SENT: 'notification_sent',
+  NOTIFICATION_RETRACTED: 'notification_retracted',
+  NOTIFICATION_READ: 'notification_read',
 } as const;
 
 export type AnalyticsEventName = (typeof AnalyticsEvent)[keyof typeof AnalyticsEvent];
@@ -974,6 +982,37 @@ const qrCodeAssignedProps = z
  * clause makes this EXHAUSTIVE: forgetting a schema for any AnalyticsEventName
  * is a compile error.
  */
+// ── In-app notifications ─────────────────────────────────────────────────────
+//
+// `kind` and `audience` are enums; `recipient_count` is null for a broadcast.
+// No title, message, detail or action url — see the registry note.
+const notificationSentProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    kind: z.enum(NOTIFICATION_KINDS),
+    audience: z.enum(NOTIFICATION_AUDIENCE_TYPES),
+    recipient_count: z.number().int().nonnegative().nullable(),
+    has_action: z.boolean(),
+    has_detail: z.boolean(),
+  })
+  .strict();
+
+const notificationRetractedProps = z
+  .object({
+    actor_id_hash: z.string().min(1),
+    kind: z.enum(NOTIFICATION_KINDS),
+    audience: z.enum(NOTIFICATION_AUDIENCE_TYPES),
+  })
+  .strict();
+
+// `scope`: one notification tapped, or "mark all read".
+const notificationReadProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    scope: z.enum(['one', 'all']),
+  })
+  .strict();
+
 export const EVENT_SCHEMAS = {
   [AnalyticsEvent.APP_OPENED]: appOpenedProps,
   [AnalyticsEvent.AUTH_OTP_SENT]: authOtpSentProps,
@@ -1035,6 +1074,9 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,
   [AnalyticsEvent.QR_CODE_SCANNED]: qrCodeScannedProps,
   [AnalyticsEvent.QR_CODE_ACTIVATED]: qrCodeActivatedProps,
+  [AnalyticsEvent.NOTIFICATION_SENT]: notificationSentProps,
+  [AnalyticsEvent.NOTIFICATION_RETRACTED]: notificationRetractedProps,
+  [AnalyticsEvent.NOTIFICATION_READ]: notificationReadProps,
 } satisfies Record<AnalyticsEventName, z.ZodTypeAny>;
 
 /** Compile-time map: event name → its validated property type. */

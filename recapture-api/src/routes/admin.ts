@@ -62,6 +62,15 @@ import {
   GenerationInfrastructureError,
 } from '@/services/onDemandModelGenerationService';
 import { consumeRateWindow } from '@/utils/rateLimit';
+import {
+  createNotificationSchema,
+  notificationIdParamsSchema,
+} from '@/validation/notificationSchemas';
+import {
+  createNotification,
+  listNotificationsForAdmin,
+  retractNotification,
+} from '@/services/notificationsService';
 import { env } from '@/config/env';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -2306,6 +2315,70 @@ router.get(
     }
 
     res.status(200).json({ status: 'success', ...result });
+  })
+);
+
+// ── In-app notifications (ADMIN) ─────────────────────────────────────────────
+//
+// The send surface. ADMIN-only rather than MODEL_ARTIST: a message that lands
+// on every customer's phone under the app's own name is the business speaking,
+// and an artist's remit is models. There is no client UI for this yet — it is
+// driven by curl / the dashboard-to-come; the shapes are stable.
+//
+// A notification is ONE document whoever it is for; who has read it lives in
+// receipts (services/notificationsService.ts). Recipient ids on the list are
+// opaque — no phone/email ever rides here.
+
+/** POST /admin/notifications — send one (broadcast or to explicit user ids). */
+router.post(
+  '/notifications',
+  requireRole('ADMIN'),
+  validateBody(createNotificationSchema),
+  asyncHandler(async (req, res) => {
+    const notification = await createNotification(req.body, req.user!.userId);
+    res.status(201).json({ status: 'success', notification });
+  })
+);
+
+/** GET /admin/notifications — every live notification with its read count. */
+router.get(
+  '/notifications',
+  requireRole('ADMIN'),
+  asyncHandler(async (_req, res) => {
+    const notifications = await listNotificationsForAdmin();
+    res.status(200).json({ status: 'success', notifications });
+  })
+);
+
+/**
+ * DELETE /admin/notifications/:id — retract (soft-delete). It leaves every
+ * feed at once; receipts are kept as history. Already-retracted and
+ * nonexistent both answer 404.
+ */
+router.delete(
+  '/notifications/:id',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const params = notificationIdParamsSchema.safeParse(req.params);
+    if (!params.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: params.error.issues[0]?.message ?? 'Invalid request',
+      });
+      return;
+    }
+
+    const result = await retractNotification(params.data.id, req.user!.userId);
+    if (!result.ok) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOTIFICATION_NOT_FOUND',
+        message: 'Notification not found.',
+      });
+      return;
+    }
+    res.status(200).json({ status: 'success' });
   })
 );
 

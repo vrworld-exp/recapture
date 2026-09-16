@@ -138,6 +138,14 @@ const envSchema = z.object({
   /** Sliding window for the avatar upload-slot cap (seconds). */
   AVATAR_UPLOAD_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 
+  // ── In-app notifications (/notifications) ──────────────────────────────────
+  /**
+   * How many notifications one feed read returns (newest first). Also the
+   * bound on "mark all read" and on the unread count, so the badge never
+   * promises more than the screen shows. A feed is not an archive.
+   */
+  NOTIFICATIONS_FEED_LIMIT: z.coerce.number().int().positive().max(500).default(100),
+
   // ── Meshy AI model generation (staff-triggered — docs/meshy-integration-*.md) ─
   /**
    * Meshy API key — a SECRET (env only, never logged, never shipped to the

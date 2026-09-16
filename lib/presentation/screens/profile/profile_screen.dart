@@ -37,6 +37,7 @@ import '../../../application/auth/profile_provider.dart';
 import '../../../application/auth/user_role_notifier.dart';
 import '../../../data/datasources/avatar_image_picker.dart';
 import '../../../dev/dev_log/dev_upload_log.dart';
+import '../../../application/notifications/notifications_notifier.dart';
 import '../../../domain/entities/avatar_upload_failure.dart';
 import '../../../domain/entities/user_profile.dart';
 import '../../../domain/entities/user_role.dart';
@@ -78,6 +79,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     // survives, parked in the plugin — reclaim it on mount, or the photo the
     // user chose is simply gone with no sign anything happened.
     unawaited(_recoverLostAvatar());
+    // Opening Profile is one of the occasions the pull-only notification feed
+    // is re-read on (alongside the hub refresh and the feed screen itself).
+    // Fire-and-forget: it never throws and must not delay the profile.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(ref.read(notificationsProvider.notifier).refresh());
+    });
   }
 
   String get _deviceType =>

@@ -1,4 +1,6 @@
 // lib/presentation/screens/projects/projects_screen.dart
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +26,8 @@ import '../../widgets/project_card.dart';
 import '../../widgets/project_options_sheet.dart';
 import '../../widgets/projects_empty_state.dart';
 import '../catalog/catalog_screen.dart';
+import '../../widgets/notification_bell_action.dart';
+import '../../../application/notifications/notifications_notifier.dart';
 import 'live_projects_view.dart';
 import 'capture_mode_sheet.dart';
 import 'model_building_screen.dart';
@@ -104,6 +108,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   Future<void> _refreshSilently() async {
     if (!mounted || _refreshInFlight) return;
     _refreshInFlight = true;
+    _refreshNotifications();
     try {
       await _notifier.refresh();
     } catch (_) {
@@ -112,6 +117,13 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       _refreshInFlight = false;
     }
   }
+
+  /// The notification feed rides every projects refresh — the hub is where
+  /// the bell lives, and "refresh the home page" is one of the occasions a
+  /// pull-only feed is re-read on. Fire-and-forget and never throws: it must
+  /// not delay the list, and a failure keeps the last badge.
+  void _refreshNotifications() =>
+      unawaited(ref.read(notificationsProvider.notifier).refresh());
 
   String get _deviceType =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
@@ -124,6 +136,7 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   Future<void> _refresh() async {
     if (_refreshInFlight) return; // single in-flight fetch — dedupe rapid pulls
     _refreshInFlight = true;
+    _refreshNotifications();
     try {
       await _notifier.refresh();
       _logRefresh('success');
@@ -577,9 +590,13 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
         elevation: 0,
         automaticallyImplyLeading: false,
         title: Text('Projects', style: Theme.of(context).textTheme.titleLarge),
-        // Catalog first, then the account — the storefront is a destination
-        // the user works in; Profile is where they go to leave.
-        actions: const [CatalogEntryAction(), _ProfileAvatarAction()],
+        // Bell, then Catalog, then the account — what is waiting for the
+        // user, the storefront they work in, and where they go to leave.
+        actions: const [
+          NotificationBellAction(),
+          CatalogEntryAction(),
+          _ProfileAvatarAction(),
+        ],
       ),
       // Creating a project belongs to My projects; the Live tab is read-only.
       floatingActionButton: showLive

@@ -55,6 +55,8 @@ String? flowBackRouteFor(String location) {
     AppRoutes.otpVerify => AppRoutes.auth,
     AppRoutes.createProject => AppRoutes.projects,
     AppRoutes.profile => AppRoutes.projects,
+    // The bell's destination: same top-level go() shape as /profile.
+    AppRoutes.notifications => AppRoutes.projects,
     // The catalog shell is a top-level destination reached with go() from
     // Projects, so it has nothing to pop — back lands on Projects rather than
     // exiting the app. Its sub-screens map back to the shell as they land.

@@ -7,6 +7,7 @@ import { env } from '@/config/env';
 import { log, toError } from '@/worker/workerLog';
 import { runWorkerRuntime } from '@/worker/workerRuntime';
 import { axiosBackendMakeAlive } from './utils/axiosBackendMakeAlive';
+import { ensureWelcomeNotification } from '@/services/notificationsService';
 
 /**
  * Keep the process alive when something escapes a request handler.
@@ -71,8 +72,26 @@ async function main(): Promise<void> {
   });
 
   await connectDB();
+  await seedWelcomeNotification();
   await axiosBackendMakeAlive();      // // This fn keep alive our remote backend server.
   startInProcessWorker();
+}
+
+/**
+ * The one SYSTEM-seeded notification: the greeting every account sees first.
+ * Idempotent (unique on its key), so every boot runs it and only the first
+ * ever inserts. Best-effort: a failure here is logged and the API keeps
+ * serving — a missing greeting is not a reason to refuse every request.
+ */
+async function seedWelcomeNotification(): Promise<void> {
+  try {
+    const inserted = await ensureWelcomeNotification();
+    if (inserted) console.log('👋 Seeded the welcome notification');
+  } catch (err) {
+    log('error', 'Welcome notification seed failed — API still serving', {
+      error: toError(err).message,
+    });
+  }
 }
 
 /**

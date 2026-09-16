@@ -133,6 +133,23 @@ abstract final class AnalyticsEvents {
   /// Props: { device_type }.
   static const String profileSignOut = 'profile_sign_out';
 
+  // ── In-app notifications ───────────────────────────────────────────────────
+  // ONLY the scope/kind — never the title or body. A notification can be
+  // addressed to one person about their own account, so its text is that
+  // person's business and stays on the device.
+
+  /// The Notifications screen became visible. Fires once per screen entry.
+  /// Props: { device_type, unread_count }.
+  static const String notificationsScreenOpened = 'notifications_screen_opened';
+
+  /// A notification was marked read — one tapped, or "mark all read".
+  /// Props: { scope: one|all, kind? }.
+  static const String notificationRead = 'notification_read';
+
+  /// A notification's action button was tapped.
+  /// Props: { kind, target: in_app|external }.
+  static const String notificationActionOpened = 'notification_action_opened';
+
   // ── Profile picture ────────────────────────────────────────────────────────
   // Same PII posture as the two events above, and then some: an avatar is a
   // photograph of the user's face. These carry ONLY device_type (plus a mapped
