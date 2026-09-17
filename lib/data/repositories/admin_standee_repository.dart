@@ -76,14 +76,81 @@ class BatchSheetDownload {
     required this.standees,
     required this.pages,
     required this.skippedRetired,
+    this.copies = 1,
+    this.cards = 0,
   });
 
   final QrDownloadFile file;
 
-  /// Cards actually on the sheet. Retired codes are not among them.
+  /// DISTINCT codes on the sheet. Retired codes are not among them.
   final int standees;
   final int pages;
   final int skippedRetired;
+
+  /// Times each code was printed. 1 is the plain sheet.
+  final int copies;
+
+  /// Cards on the paper — `standees × copies` — as the server counted them.
+  final int cards;
+}
+
+/// The ceiling on copies when the server did not say. Mirrors
+/// `STANDEE_SHEET_MAX_COPIES` in `recapture-api/src/services/standeeSheetPdf.ts`.
+const int kStandeeSheetMaxCopiesFallback = 50;
+
+/// What a batch's sheet WOULD contain, read before the download.
+///
+/// The dialog in front of the Download button shows this — how many codes will
+/// print, the grid, and the page count for whatever number of copies the admin
+/// types — so a fifty-six-page file is a number on screen before it is a file
+/// on its way. Hand-synced with `planBatchStandeeSheet` in
+/// `recapture-api/src/services/standeeSheetService.ts`.
+class BatchSheetPlan {
+  const BatchSheetPlan({
+    required this.standees,
+    required this.skippedRetired,
+    required this.columns,
+    required this.rows,
+    required this.perPage,
+    required this.maxCopies,
+  });
+
+  /// DISTINCT codes that will print. Retired codes are not among them.
+  final int standees;
+  final int skippedRetired;
+  final int columns;
+  final int rows;
+
+  /// Cards one A4 page holds at the server's layout.
+  final int perPage;
+
+  /// Most copies of one code the server will print.
+  final int maxCopies;
+
+  /// Cards on the paper for [copies] of each code.
+  int cardsFor(int copies) => standees * copies;
+
+  /// Pages for [copies] of each code — THE SAME ARITHMETIC as the server's
+  /// `sheetPageCount`, so the number in the dialog is the number of pages the
+  /// printer produces. Never below one; never computed from a zero grid.
+  int pagesFor(int copies) {
+    if (perPage < 1) return 0;
+    final cards = cardsFor(copies);
+    return cards <= 0 ? 1 : (cards + perPage - 1) ~/ perPage;
+  }
+
+  factory BatchSheetPlan.fromMap(Map<String, dynamic> map) {
+    int read(String key, [int fallback = 0]) =>
+        (map[key] as num?)?.toInt() ?? fallback;
+    return BatchSheetPlan(
+      standees: read('standees'),
+      skippedRetired: read('skippedRetired'),
+      columns: read('columns'),
+      rows: read('rows'),
+      perPage: read('perPage'),
+      maxCopies: read('maxCopies', kStandeeSheetMaxCopiesFallback),
+    );
+  }
 }
 
 abstract interface class AdminStandeeRepository {
@@ -166,11 +233,21 @@ abstract interface class AdminStandeeRepository {
   /// presses, fifty near-identical files, fifty sheets of paper for fifty
   /// squares.
   ///
+  /// [copies] prints EVERY code that many times, the copies side by side
+  /// before the next code — a restaurant is handed ten standees of one code.
+  /// 1 is the plain sheet. Bounded by [BatchSheetPlan.maxCopies].
+  ///
   /// Throws [CatalogFailure] with [AdminStandeeErrorCodes.batchTooLarge] for a
   /// run past the server's per-request ceiling (the recovery is the vendor CSV,
   /// not a retry) and [AdminStandeeErrorCodes.nothingToPrint] when every code
   /// in the batch is retired.
-  Future<BatchSheetDownload> batchSheet(String batchId);
+  Future<BatchSheetDownload> batchSheet(String batchId, {int copies = 1});
+
+  /// What [batchSheet] would contain, without rendering it.
+  ///
+  /// Refuses exactly what [batchSheet] refuses, with the same codes, so a
+  /// dialog that got a plan is a dialog whose Download button will work.
+  Future<BatchSheetPlan> batchSheetPlan(String batchId);
 
   /// Everyone an admin may hand a standee to.
   ///
@@ -437,9 +514,13 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
       ).then((res) => res.file);
 
   @override
-  Future<BatchSheetDownload> batchSheet(String batchId) async {
+  Future<BatchSheetDownload> batchSheet(String batchId,
+      {int copies = 1}) async {
     final res = await _bytes(
       '/admin/qr-batches/$batchId/sheet',
+      // OMITTED at 1, so the plain download is the same request it always
+      // was — same URL, same ETag, same cached bytes.
+      query: {if (copies != 1) 'copies': copies},
       fallbackName: 'standee-sheet.pdf',
       fallbackMime: 'application/pdf',
     );
@@ -452,12 +533,33 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
       // error. A zero simply drops that clause from what the screen says.
       standees: _headerInt(res.headers, 'x-standee-sheet-standees'),
       pages: _headerInt(res.headers, 'x-standee-sheet-pages'),
-      skippedRetired: _headerInt(res.headers, 'x-standee-sheet-skipped-retired'),
+      skippedRetired:
+          _headerInt(res.headers, 'x-standee-sheet-skipped-retired'),
+      // Falls back to what was ASKED for, not to zero: a stripped header must
+      // not turn "10 copies each" into a sentence that says nothing about it.
+      copies: _headerInt(res.headers, 'x-standee-sheet-copies', copies),
+      cards: _headerInt(res.headers, 'x-standee-sheet-cards'),
     );
   }
 
-  static int _headerInt(Headers headers, String name) =>
-      int.tryParse(headers.value(name) ?? '') ?? 0;
+  @override
+  Future<BatchSheetPlan> batchSheetPlan(String batchId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/admin/qr-batches/$batchId/sheet/plan',
+        );
+        final plan = res.data?['plan'];
+        if (plan is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return BatchSheetPlan.fromMap(plan);
+      });
+
+  static int _headerInt(Headers headers, String name, [int fallback = 0]) =>
+      int.tryParse(headers.value(name) ?? '') ?? fallback;
 
   /// The shared bytes-mode GET.
   ///
@@ -497,7 +599,8 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
                 res.headers.value('content-disposition'),
               ) ??
               fallbackName,
-          mimeType: res.headers.value(Headers.contentTypeHeader) ?? fallbackMime,
+          mimeType:
+              res.headers.value(Headers.contentTypeHeader) ?? fallbackMime,
         ),
         headers: res.headers,
       );

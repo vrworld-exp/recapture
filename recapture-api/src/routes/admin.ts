@@ -5,7 +5,7 @@
 // (photo soft-delete, project soft/hard delete). Every route runs requireAuth →
 // requireRole('MODEL_ARTIST') — ADMIN passes by role inheritance; destructive
 // routes add their own requireRole('ADMIN'). Standard envelope throughout.
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { Types } from 'mongoose';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
@@ -27,10 +27,7 @@ import {
   type AdminSubmitModelBody,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
-import {
-  getAdminUserDetail,
-  readUserAvatarBytes,
-} from '@/services/adminUsersService';
+import { getAdminUserDetail, readUserAvatarBytes } from '@/services/adminUsersService';
 import {
   listAllCapturedProjects,
   getAdminProjectDetail,
@@ -85,10 +82,12 @@ import {
   slugifyBatchLabel,
   QrBatchTooLargeError,
   QrResolverNotConfiguredError,
+  type BatchSheetSource,
 } from '@/services/qrCodeService';
 import {
   adminBatchCodesQuerySchema,
   assignStandeeSchema,
+  batchSheetQuerySchema,
   mintQrBatchSchema,
   qrCodeParam,
   repPublishedQuerySchema,
@@ -97,6 +96,7 @@ import {
   type MintQrBatchInput,
 } from '@/validation/qrSchemas';
 import {
+  planBatchStandeeSheet,
   renderBatchStandeeSheet,
   renderStandeeSheet,
   STANDEE_ARTWORK_VERSION,
@@ -230,11 +230,10 @@ router.get(
 
 /** Which KINDS of contact an account carried, for the owner-view audit event.
  * Deliberately not a pair of booleans — see the event's schema note. */
-function contactChannelsOf(user: { email: string | null; phone: string | null }):
-  | 'none'
-  | 'sms'
-  | 'mail'
-  | 'both' {
+function contactChannelsOf(user: {
+  email: string | null;
+  phone: string | null;
+}): 'none' | 'sms' | 'mail' | 'both' {
   if (user.phone !== null && user.email !== null) return 'both';
   if (user.phone !== null) return 'sms';
   if (user.email !== null) return 'mail';
@@ -1551,13 +1550,18 @@ router.get(
 );
 
 /**
- * GET /admin/qr-batches/:batchId/sheet — the whole batch, ready to print.
+ * GET /admin/qr-batches/:batchId/sheet?copies= — the whole batch, ready to print.
  *
  * THE OTHER HALF OF THE PILOT PATH. `GET /admin/qr-codes/:code/qr` renders ONE
  * standee, which is right for sending a rep a single code and absurd for a run
  * of fifty: fifty presses, fifty near-identical files, fifty sheets of paper for
  * fifty squares. This is one file — nine standees to an A4 page by default, with
  * cut guides — that an admin sends straight to a printer.
+ *
+ * `copies` (1–STANDEE_SHEET_MAX_COPIES, default 1) prints EVERY code that many
+ * times, the copies side by side before the next code. A restaurant is handed
+ * ten standees of one code — ten tables, one menu — and without this the admin
+ * prints the file ten times and collates by hand. The card itself is unchanged.
  *
  * ⚠ The squares are a FIXED PHYSICAL SIZE (STANDEE_SHEET_QR_INCHES, 1.67in) and
  * are never scaled to fit more on a page. See `services/standeeSheetPdf.ts` for
@@ -1577,64 +1581,133 @@ router.get(
  * year from a handful of staff, whose only interesting property (the codes) is
  * barred from analytics.
  */
+/**
+ * Loads what a batch sheet is rendered from, or answers the refusal itself.
+ *
+ * Shared by the sheet and its plan, which is the point: the plan exists to
+ * tell an admin BEFORE the download what the download will say, so the two
+ * must refuse the same batches for the same reasons. Returns null once a
+ * response has been written.
+ */
+async function loadBatchSheetOrRespond(
+  batchId: string,
+  res: Response
+): Promise<BatchSheetSource | null> {
+  if (!Types.ObjectId.isValid(batchId)) {
+    res.status(400).json({
+      status: 'error',
+      code: 'INVALID_REQUEST',
+      message: 'Invalid batch id',
+    });
+    return null;
+  }
+
+  let source;
+  try {
+    source = await loadBatchSheet(new Types.ObjectId(batchId));
+  } catch (err) {
+    if (err instanceof QrResolverNotConfiguredError) {
+      res.status(409).json({
+        status: 'error',
+        code: 'RESOLVER_NOT_CONFIGURED',
+        message: 'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment',
+      });
+      return null;
+    }
+    if (err instanceof QrBatchTooLargeError) {
+      res.status(409).json({
+        status: 'error',
+        code: 'BATCH_TOO_LARGE',
+        message:
+          `This batch has ${err.printable} codes. A printable sheet covers up to ` +
+          `${err.limit} at a time — use the vendor CSV for a run this size.`,
+      });
+      return null;
+    }
+    throw err;
+  }
+
+  if (source === null) {
+    res.status(404).json({
+      status: 'error',
+      code: 'NOT_FOUND',
+      message: 'Batch not found',
+    });
+    return null;
+  }
+
+  // A batch whose every code is retired would render blank paper. Refused
+  // rather than delivered, for the same reason one retired code is.
+  if (source.items.length === 0) {
+    res.status(409).json({
+      status: 'error',
+      code: 'NOTHING_TO_PRINT',
+      message: 'Every code in this batch is retired. Mint replacements instead.',
+    });
+    return null;
+  }
+
+  return source;
+}
+
+/**
+ * GET /admin/qr-batches/:batchId/sheet/plan — what the sheet WOULD contain.
+ *
+ * The dialog in front of the download reads this: how many codes will print,
+ * how many were retired and skipped, and the grid — so it can say "50 standees
+ * × 10 copies = 500 cards over 56 pages" while the admin is still choosing the
+ * number, and before a 56-page file is on its way. Refuses exactly what the
+ * sheet refuses, through the same loader, so a batch the plan describes is a
+ * batch the sheet will render.
+ *
+ * Does NOT take `copies`: the arithmetic is `ceil(standees × copies / perPage)`
+ * and the client does it live as the field changes, from the `perPage` here.
+ * The count that is then SAID after the download is still the server's, in
+ * `X-Standee-Sheet-Pages`.
+ */
 router.get(
-  '/qr-batches/:batchId/sheet',
+  '/qr-batches/:batchId/sheet/plan',
   requireRole('ADMIN'),
   asyncHandler(async (req, res) => {
-    const { batchId } = req.params;
-    if (!Types.ObjectId.isValid(batchId)) {
-      res.status(400).json({
-        status: 'error',
-        code: 'INVALID_REQUEST',
-        message: 'Invalid batch id',
-      });
-      return;
-    }
+    const source = await loadBatchSheetOrRespond(req.params.batchId, res);
+    if (source === null) return;
 
-    let source;
+    let plan;
     try {
-      source = await loadBatchSheet(new Types.ObjectId(batchId));
+      plan = planBatchStandeeSheet(source);
     } catch (err) {
-      if (err instanceof QrResolverNotConfiguredError) {
+      if (err instanceof StandeeSheetLayoutError) {
         res.status(409).json({
           status: 'error',
-          code: 'RESOLVER_NOT_CONFIGURED',
-          message: 'PUBLIC_RESOLVER_BASE_URL is not configured on this deployment',
-        });
-        return;
-      }
-      if (err instanceof QrBatchTooLargeError) {
-        res.status(409).json({
-          status: 'error',
-          code: 'BATCH_TOO_LARGE',
-          message:
-            `This batch has ${err.printable} codes. A printable sheet covers up to ` +
-            `${err.limit} at a time — use the vendor CSV for a run this size.`,
+          code: 'SHEET_LAYOUT_INVALID',
+          message: err.message,
         });
         return;
       }
       throw err;
     }
 
-    if (source === null) {
-      res.status(404).json({
-        status: 'error',
-        code: 'NOT_FOUND',
-        message: 'Batch not found',
-      });
-      return;
-    }
+    res.status(200).json({ status: 'success', plan });
+  })
+);
 
-    // A batch whose every code is retired would render blank paper. Refused
-    // rather than delivered, for the same reason one retired code is.
-    if (source.items.length === 0) {
-      res.status(409).json({
+router.get(
+  '/qr-batches/:batchId/sheet',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const parsed = batchSheetQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({
         status: 'error',
-        code: 'NOTHING_TO_PRINT',
-        message: 'Every code in this batch is retired. Mint replacements instead.',
+        code: 'INVALID_REQUEST',
+        message: parsed.error.issues[0]?.message ?? 'Invalid request',
       });
       return;
     }
+    const { copies } = parsed.data;
+
+    const source = await loadBatchSheetOrRespond(req.params.batchId, res);
+    if (source === null) return;
 
     // ── The conditional check happens BEFORE any rendering ──────────────────
     // Unlike the single-code sheet, where rendering first and comparing after
@@ -1657,6 +1730,8 @@ router.get(
         env.STANDEE_SHEET_COLUMNS,
         env.STANDEE_SHEET_ROWS,
       ],
+      // How many times each card is drawn — a different file, so a different tag.
+      copies,
       label: source.label,
       // And what a card LOOKS like — the one input the others cannot express.
       artwork: STANDEE_ARTWORK_VERSION,
@@ -1670,7 +1745,7 @@ router.get(
 
     let sheet;
     try {
-      sheet = await renderBatchStandeeSheet(source);
+      sheet = await renderBatchStandeeSheet(source, { copies });
     } catch (err) {
       if (err instanceof StandeeSheetLayoutError) {
         res.status(409).json({
@@ -1687,6 +1762,8 @@ router.get(
     // pages, 2 retired and skipped". None of it is in the PDF, and none of it
     // fits in a body that is already the file.
     res.setHeader('X-Standee-Sheet-Standees', String(sheet.standees));
+    res.setHeader('X-Standee-Sheet-Copies', String(sheet.copies));
+    res.setHeader('X-Standee-Sheet-Cards', String(sheet.cards));
     res.setHeader('X-Standee-Sheet-Pages', String(sheet.pages));
     res.setHeader('X-Standee-Sheet-Skipped-Retired', String(sheet.skippedRetired));
     res.setHeader('Content-Type', sheet.contentType);
@@ -1989,7 +2066,8 @@ router.get(
       res.status(409).json({
         status: 'error',
         code: 'CATALOG_NOT_PUBLISHED',
-        message: 'This restaurant has not been published yet — the QR code is created when it goes live.',
+        message:
+          'This restaurant has not been published yet — the QR code is created when it goes live.',
       });
       return;
     }

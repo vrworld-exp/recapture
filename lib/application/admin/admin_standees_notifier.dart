@@ -19,6 +19,7 @@ import '../../data/repositories/admin_standee_repository.dart';
 import '../../data/repositories/catalog_failure.dart';
 import '../../domain/entities/qr_standee.dart';
 import '../catalog/catalog_qr_service.dart';
+import 'batch_sheet_plan.dart';
 
 @immutable
 class AdminStandeesState {
@@ -78,8 +79,7 @@ const Object _unset = Object();
 class AdminStandeesNotifier extends AutoDisposeNotifier<AdminStandeesState> {
   bool _disposed = false;
 
-  AdminStandeeRepository get _repo =>
-      ref.read(adminStandeeRepositoryProvider);
+  AdminStandeeRepository get _repo => ref.read(adminStandeeRepositoryProvider);
 
   @override
   AdminStandeesState build() {
@@ -150,7 +150,10 @@ class AdminStandeesNotifier extends AutoDisposeNotifier<AdminStandeesState> {
   /// Goes out through the SAME [QrDeliverer] seam everything else here uses —
   /// share sheet on mobile, blob download in the browser — so this needed no
   /// platform code and behaves identically on both targets.
-  Future<void> deliverSheet(String batchId) async {
+  ///
+  /// [copies] is how many times each code is printed, side by side — the
+  /// number the dialog in front of this button collected. 1 is the plain sheet.
+  Future<void> deliverSheet(String batchId, {int copies = 1}) async {
     if (state.downloadingSheetFor != null) return;
     state = state.copyWith(
       downloadingSheetFor: batchId,
@@ -159,13 +162,13 @@ class AdminStandeesNotifier extends AutoDisposeNotifier<AdminStandeesState> {
     );
 
     try {
-      final sheet = await _repo.batchSheet(batchId);
+      final sheet = await _repo.batchSheet(batchId, copies: copies);
       if (_disposed) return;
       await ref.read(qrDelivererProvider).deliver(sheet.file);
       if (_disposed) return;
       state = state.copyWith(
         downloadingSheetFor: null,
-        notice: _sheetNotice(sheet),
+        notice: batchSheetNotice(sheet),
       );
     } on CatalogFailure catch (failure) {
       if (_disposed) return;
@@ -184,20 +187,6 @@ class AdminStandeesNotifier extends AutoDisposeNotifier<AdminStandeesState> {
         ),
       );
     }
-  }
-
-  /// NAMES THE SKIPPED CODES when there were any — "48 standees" against a run
-  /// of 50 reads as a bug until something says why.
-  ///
-  /// Degrades to a bare confirmation when the counts did not arrive: they are
-  /// response headers, and a proxy that strips them must not turn a good
-  /// download into "Saved 0 standees".
-  String _sheetNotice(BatchSheetDownload sheet) {
-    if (sheet.standees == 0) return 'Printable sheet saved.';
-    final pages = sheet.pages == 1 ? '1 page' : '${sheet.pages} pages';
-    final head = 'Saved ${sheet.standees} standees over $pages.';
-    if (sheet.skippedRetired == 0) return head;
-    return '$head ${sheet.skippedRetired} retired and were skipped.';
   }
 
   void dismissNotice() => state = state.copyWith(notice: null, failure: null);

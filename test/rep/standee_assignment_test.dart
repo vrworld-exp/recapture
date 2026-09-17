@@ -72,7 +72,8 @@ QrStandeeCode _code(
       assignedTo: assignedTo,
     );
 
-RepStandee _standee(String code, {QrCodeState state = QrCodeState.unassigned}) =>
+RepStandee _standee(String code,
+        {QrCodeState state = QrCodeState.unassigned}) =>
     RepStandee(code: code, state: state, url: 'https://scan.test/r/$code');
 
 // ── Fakes ──────────────────────────────────────────────────────────────────
@@ -165,7 +166,12 @@ class _FakeAdminRepo implements AdminStandeeRepository {
       throw UnimplementedError();
 
   @override
-  Future<BatchSheetDownload> batchSheet(String batchId) async =>
+  Future<BatchSheetDownload> batchSheet(String batchId,
+          {int copies = 1}) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<BatchSheetPlan> batchSheetPlan(String batchId) async =>
       throw UnimplementedError();
 }
 
@@ -241,7 +247,7 @@ class _FakeRepRepo with RepRepoCatalogDefaults implements RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
-  ProductFoodType? foodType,
+    ProductFoodType? foodType,
   }) async =>
       throw UnimplementedError();
 
@@ -341,8 +347,8 @@ void main() {
       await notifier.unassign('AAAA1111');
 
       expect(repo.unassigned, ['AAAA1111']);
-      expect(container.read(provider).codes.valueOrNull!.first.assignedTo,
-          isNull);
+      expect(
+          container.read(provider).codes.valueOrNull!.first.assignedTo, isNull);
     });
 
     test('a failed assign leaves the list on screen', () async {
@@ -369,15 +375,16 @@ void main() {
 
   group('the assignee label', () {
     test('prefers a display name, falls back to the masked contact', () {
-      expect(_person('r', name: 'Asha', masked: '+91 ••••• ••210').label,
-          'Asha');
+      expect(
+          _person('r', name: 'Asha', masked: '+91 ••••• ••210').label, 'Asha');
       expect(_person('r', masked: '+91 ••••• ••210').label, '+91 ••••• ••210');
       // Never blank: an admin picking from a list of empty rows cannot choose.
       expect(_person('r').label, 'Unnamed account');
     });
 
     test('the second line appears only when it adds something', () {
-      expect(_person('r', name: 'Asha', masked: '+91 ••••• ••210').secondaryLabel,
+      expect(
+          _person('r', name: 'Asha', masked: '+91 ••••• ••210').secondaryLabel,
           '+91 ••••• ••210');
       // The mask is already the title here, so repeating it would be noise.
       expect(_person('r', masked: '+91 ••••• ••210').secondaryLabel, isNull);

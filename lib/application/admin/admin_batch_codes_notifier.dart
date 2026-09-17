@@ -16,6 +16,7 @@ import '../../data/repositories/admin_standee_repository.dart';
 import '../../data/repositories/catalog_failure.dart';
 import '../../domain/entities/qr_standee.dart';
 import '../catalog/catalog_qr_service.dart';
+import 'batch_sheet_plan.dart';
 
 /// How many codes one page holds.
 ///
@@ -89,8 +90,9 @@ class AdminBatchCodesState {
   }) =>
       AdminBatchCodesState(
         codes: codes ?? this.codes,
-        nextAfter:
-            identical(nextAfter, _unset) ? this.nextAfter : nextAfter as String?,
+        nextAfter: identical(nextAfter, _unset)
+            ? this.nextAfter
+            : nextAfter as String?,
         loadingMore: loadingMore ?? this.loadingMore,
         busyCode:
             identical(busyCode, _unset) ? this.busyCode : busyCode as String?,
@@ -150,7 +152,8 @@ class AdminBatchCodesNotifier
           await _repo.codes(arg, after: cursor, limit: kStandeePageSize);
       if (_disposed) return;
       state = state.copyWith(
-        codes: AsyncData([...state.codes.valueOrNull ?? const [], ...page.codes]),
+        codes:
+            AsyncData([...state.codes.valueOrNull ?? const [], ...page.codes]),
         nextAfter: page.nextAfter,
         loadingMore: false,
       );
@@ -347,40 +350,25 @@ class AdminBatchCodesNotifier
   /// The sheet is captured on the way through so the confirmation can say what
   /// is actually in the file — the counts arrive as response headers, not in
   /// the body, and by the time the PDF is open there is nowhere left to say it.
-  Future<void> deliverBatchSheet() async {
+  ///
+  /// [copies] is how many times each code is printed, side by side — the
+  /// number the dialog in front of this button collected. 1 is the plain sheet.
+  Future<void> deliverBatchSheet({int copies = 1}) async {
     if (state.downloadingSheet) return;
     state = state.copyWith(downloadingSheet: true, failure: null, notice: null);
 
     BatchSheetDownload? sheet;
     await _deliver(
       () async {
-        final fetched = await _repo.batchSheet(arg);
+        final fetched = await _repo.batchSheet(arg, copies: copies);
         sheet = fetched;
         return fetched.file;
       },
       onDone: (s) =>
-          s.copyWith(downloadingSheet: false, notice: _sheetNotice(sheet)),
+          s.copyWith(downloadingSheet: false, notice: batchSheetNotice(sheet)),
       onFail: (s, failure) =>
           s.copyWith(downloadingSheet: false, failure: failure),
     );
-  }
-
-  /// The confirmation, which NAMES THE SKIPPED CODES when there were any.
-  ///
-  /// Same reasoning as [_bulkNotice]: "48 standees" against a batch of 50 reads
-  /// as a bug; the same sentence with "2 retired" after it reads as the system
-  /// working.
-  ///
-  /// Degrades to a bare confirmation when the counts did not arrive. They are
-  /// response headers, and a proxy that strips them — or a browser that was not
-  /// told to expose them — must not turn a good download into "Saved 0
-  /// standees".
-  String _sheetNotice(BatchSheetDownload? sheet) {
-    if (sheet == null || sheet.standees == 0) return 'Printable sheet saved.';
-    final pages = sheet.pages == 1 ? '1 page' : '${sheet.pages} pages';
-    final head = 'Saved ${sheet.standees} standees over $pages.';
-    if (sheet.skippedRetired == 0) return head;
-    return '$head ${sheet.skippedRetired} retired and were skipped.';
   }
 
   /// Fetch → deliver → settle, with the two failure shapes both surfaces need.

@@ -15,16 +15,7 @@
 // Every layout knob may trade rows and columns away; none of them may shrink the
 // code, because a QR smaller than the distance it is scanned from does not work.
 // `does not scale the square to fit more on a page` is that rule as a test.
-import {
-  describe,
-  it,
-  expect,
-  beforeAll,
-  afterAll,
-  beforeEach,
-  afterEach,
-  vi,
-} from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import mongoose, { Types } from 'mongoose';
 import jwt from 'jsonwebtoken';
@@ -103,11 +94,25 @@ async function seedBatch(adminId: string, count: number, label = 'Vendor A — r
   return mintBatch({ count, label, createdByUserId: new Types.ObjectId(adminId) });
 }
 
-function fetchSheet(auth: { Authorization: string }, batchId: string) {
+function fetchSheet(
+  auth: { Authorization: string },
+  batchId: string,
+  query: Record<string, string | number> = {}
+) {
   return request(app)
     .get(`/admin/qr-batches/${batchId}/sheet`)
+    .query(query)
     .set(auth)
     .responseType('blob');
+}
+
+function fetchPlan(auth: { Authorization: string }, batchId: string) {
+  return request(app).get(`/admin/qr-batches/${batchId}/sheet/plan`).set(auth);
+}
+
+/** The printed codes, in the order they are drawn — one entry per CARD. */
+function drawnCodes(pdf: string): string[] {
+  return [...pdf.matchAll(/\(([A-Z0-9]{8})\) Tj/g)].map((m) => m[1]!);
 }
 
 /**
@@ -204,9 +209,7 @@ describe('what a square cut off the sheet actually encodes', () => {
     expect(res.status).toBe(200);
 
     const decoded = extractImages(res.body).map(decodeImage);
-    const csvUrls = (await exportBatchCsv(batchId))!
-      .split('\n')
-      .map((line) => line.split(',')[1]);
+    const csvUrls = (await exportBatchCsv(batchId))!.split('\n').map((line) => line.split(',')[1]);
 
     // Not "contains the same set" — the SAME ORDER. Card 3 of the sheet, line 3
     // of the CSV and row 3 of the admin screen are one standee, and a reshuffle
@@ -376,17 +379,230 @@ describe('paging a batch across A4 sheets', () => {
     // fiddlier: every offset in the xref must be the exact byte position of its
     // object. Twenty codes over three pages is 4 + 1 (the mark) + 6 + 20 = 31.
     const startxref = Number(
-      pdf.slice(pdf.lastIndexOf('startxref') + 9).trim().split('\n')[0]
+      pdf
+        .slice(pdf.lastIndexOf('startxref') + 9)
+        .trim()
+        .split('\n')[0]
     );
     expect(pdf.slice(startxref, startxref + 4)).toBe('xref');
 
     const offsets = [...pdf.matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => Number(m[1]));
     expect(offsets).toHaveLength(31);
     offsets.forEach((offset, index) => {
-      expect(pdf.slice(offset, offset + `${index + 1} 0 obj`.length)).toBe(
-        `${index + 1} 0 obj`
-      );
+      expect(pdf.slice(offset, offset + `${index + 1} 0 obj`.length)).toBe(`${index + 1} 0 obj`);
     });
+  });
+});
+
+// ── Copies: the same code, several times over ───────────────────────────────
+
+describe('printing each code several times (?copies=)', () => {
+  it('draws every code `copies` times, the copies CONSECUTIVE, then the next code', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 3);
+    const codes = (await QrCode.find({ batchId }).sort({ code: 1 }).lean().exec()).map(
+      (c) => c.code
+    );
+
+    const res = await fetchSheet(admin.auth, batchId.toString(), { copies: 4 });
+    expect(res.status).toBe(200);
+    const pdf = res.body.toString('latin1');
+
+    // Twelve cards: AAAA ×4, then BBBB ×4, then CCCC ×4 — a restaurant's four
+    // standees come off the sheet together, not one from each page.
+    expect(drawnCodes(pdf)).toEqual([
+      ...Array<string>(4).fill(codes[0]!),
+      ...Array<string>(4).fill(codes[1]!),
+      ...Array<string>(4).fill(codes[2]!),
+    ]);
+    expect(codePlacements(pdf)).toHaveLength(12);
+    expect(markPlacements(pdf)).toHaveLength(12);
+    expect([...pdf.matchAll(/[\d.]+ [\d.]+ [\d.]+ [\d.]+ re\nS/g)]).toHaveLength(12);
+  });
+
+  it('keeps the copies consecutive ACROSS a page break', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 2);
+    const codes = (await QrCode.find({ batchId }).sort({ code: 1 }).lean().exec()).map(
+      (c) => c.code
+    );
+
+    // Ten of each at nine-up: page 1 is nine of code A, page 2 is the tenth A
+    // then nine of B, page 3 is the last B. The order is the ONE thing the
+    // request is about, so it is asserted card by card rather than by count.
+    const res = await fetchSheet(admin.auth, batchId.toString(), { copies: 10 });
+    const pdf = res.body.toString('latin1');
+
+    expect(drawnCodes(pdf)).toEqual([
+      ...Array<string>(10).fill(codes[0]!),
+      ...Array<string>(10).fill(codes[1]!),
+    ]);
+    expect(pdf).toContain('/Count 3');
+    expect(res.headers['x-standee-sheet-pages']).toBe('3');
+  });
+
+  it('every copy scans to the same url, at the same undiminished size', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 2);
+
+    const res = await fetchSheet(admin.auth, batchId.toString(), { copies: 3 });
+    const pdf = res.body.toString('latin1');
+    const csvUrls = (await exportBatchCsv(batchId))!.split('\n').map((line) => line.split(',')[1]);
+
+    // ONE image per CODE, not per card: the three copies of a code draw the
+    // same object, so the file does not grow three-fold — and there is no way
+    // for copy 2 to encode something copy 1 does not.
+    const images = extractImages(res.body);
+    expect(images).toHaveLength(2);
+    expect(images.map(decodeImage)).toEqual(csvUrls);
+
+    // Six placements, every one of them at the fixed physical size. Copies
+    // change how many cards there are and nothing about any card.
+    const squares = codePlacements(pdf);
+    expect(squares).toHaveLength(6);
+    for (const square of squares) {
+      expect(square[1]).toBe(QR_SIDE_PT);
+      expect(square[2]).toBe(QR_SIDE_PT);
+    }
+    expect([...pdf.matchAll(/\(Created for mirage menu\) Tj/g)]).toHaveLength(6);
+  });
+
+  it('reports the counts in the headers and names the copies in the footer', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 5, 'Vendor C — run 2');
+
+    const res = await fetchSheet(admin.auth, batchId.toString(), { copies: 2 });
+    const pdf = res.body.toString('latin1');
+
+    expect(res.headers['x-standee-sheet-standees']).toBe('5');
+    expect(res.headers['x-standee-sheet-copies']).toBe('2');
+    expect(res.headers['x-standee-sheet-cards']).toBe('10');
+    expect(res.headers['x-standee-sheet-pages']).toBe(String(Math.ceil(10 / PER_PAGE)));
+    // The footer says why the sheet repeats itself; the plain sheet's footer
+    // (asserted elsewhere) carries no such clause.
+    expect(pdf).toContain(
+      '(Vendor C - run 2   |   Page 1 of 2   |   5 standees, 2 copies each) Tj'
+    );
+    // And the file does not collide with the plain one in a downloads folder.
+    expect(res.headers['content-disposition']).toBe(
+      'attachment; filename="standee-sheet-vendor-c-run-2-x2.pdf"'
+    );
+  });
+
+  it('defaults to one, which is byte-identical to the plain sheet', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 4);
+
+    const plain = await fetchSheet(admin.auth, batchId.toString());
+    const one = await fetchSheet(admin.auth, batchId.toString(), { copies: 1 });
+
+    expect(one.body.equals(plain.body)).toBe(true);
+    expect(one.headers.etag).toBe(plain.headers.etag);
+    expect(plain.headers['x-standee-sheet-copies']).toBe('1');
+    expect(plain.headers['x-standee-sheet-cards']).toBe('4');
+  });
+
+  it('is part of the ETag — ten-up and one-up are different files', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 2);
+
+    const one = await fetchSheet(admin.auth, batchId.toString());
+    const ten = await fetchSheet(admin.auth, batchId.toString(), { copies: 10 });
+
+    expect(ten.headers.etag).not.toBe(one.headers.etag);
+    // A cached one-up sheet answering a ten-up request would be the silent
+    // failure: the admin prints one of each and finds out at the restaurant.
+    const conditional = await request(app)
+      .get(`/admin/qr-batches/${batchId.toString()}/sheet`)
+      .query({ copies: 10 })
+      .set(admin.auth)
+      .set('If-None-Match', one.headers.etag);
+    expect(conditional.status).toBe(200);
+  });
+
+  it('refuses 0, 51 and a fraction with a 400 the admin can read', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 1);
+
+    for (const copies of ['0', '51', '2.5', 'ten']) {
+      const res = await fetchSheet(admin.auth, batchId.toString(), { copies });
+      expect(res.status).toBe(400);
+      expect(envelope(res).code).toBe('INVALID_REQUEST');
+    }
+    expect((await fetchSheet(admin.auth, batchId.toString(), { copies: 50 })).status).toBe(200);
+  });
+});
+
+// ── The plan in front of the download ───────────────────────────────────────
+
+describe('GET /admin/qr-batches/:batchId/sheet/plan', () => {
+  it('describes the sheet before it is rendered: counts, grid, and the copies ceiling', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 5);
+    const codes = await QrCode.find({ batchId }).sort({ code: 1 }).lean().exec();
+    await QrCode.updateOne({ _id: codes[0]!._id }, { $set: { state: 'RETIRED' } });
+
+    const res = await fetchPlan(admin.auth, batchId.toString());
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      status: 'success',
+      plan: {
+        standees: 4,
+        skippedRetired: 1,
+        columns: 3,
+        rows: 3,
+        perPage: PER_PAGE,
+        maxCopies: 50,
+      },
+    });
+  });
+
+  it('follows the grid the sheet actually uses, clamped like the sheet is', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 1);
+
+    // The 4in square the layout test uses: 3 × 3 collapses to 1 × 2. The plan
+    // must say two per page — a dialog promising nine at that size would be
+    // wrong by a factor of four and a half on the page count.
+    Object.assign(env, { STANDEE_SHEET_QR_INCHES: 4 });
+    const res = await fetchPlan(admin.auth, batchId.toString());
+
+    expect(res.body.plan).toMatchObject({ columns: 1, rows: 2, perPage: 2 });
+  });
+
+  it('agrees with the sheet on the page count for any number of copies', async () => {
+    const admin = await makeUser('ADMIN');
+    const { batchId } = await seedBatch(admin.id, 7);
+
+    const plan = (await fetchPlan(admin.auth, batchId.toString())).body.plan;
+    for (const copies of [1, 2, 9, 50]) {
+      const sheet = await fetchSheet(admin.auth, batchId.toString(), { copies });
+      // The dialog's arithmetic, done here exactly as the client does it.
+      const predicted = Math.max(1, Math.ceil((plan.standees * copies) / plan.perPage));
+      expect(sheet.headers['x-standee-sheet-pages']).toBe(String(predicted));
+    }
+  });
+
+  it('refuses what the sheet refuses, with the same codes', async () => {
+    const admin = await makeUser('ADMIN');
+    const artist = await makeUser('MODEL_ARTIST');
+    const { batchId } = await seedBatch(admin.id, 3);
+
+    expect((await fetchPlan(artist.auth, batchId.toString())).status).toBe(403);
+    expect((await fetchPlan(admin.auth, 'not-an-id')).status).toBe(400);
+    expect((await fetchPlan(admin.auth, new Types.ObjectId().toHexString())).status).toBe(404);
+
+    Object.assign(env, { STANDEE_SHEET_MAX_CODES: 2 });
+    const tooLarge = await fetchPlan(admin.auth, batchId.toString());
+    expect(tooLarge.status).toBe(409);
+    expect(tooLarge.body.code).toBe('BATCH_TOO_LARGE');
+    Object.assign(env, SHEET_DEFAULTS);
+
+    await QrCode.updateMany({ batchId }, { $set: { state: 'RETIRED' } });
+    const nothing = await fetchPlan(admin.auth, batchId.toString());
+    expect(nothing.status).toBe(409);
+    expect(nothing.body.code).toBe('NOTHING_TO_PRINT');
   });
 });
 

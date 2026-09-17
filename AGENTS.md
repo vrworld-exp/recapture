@@ -648,11 +648,26 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   by default, which at 1.67in is exactly what the page holds) rather than
   shrinking the code. Never invert that trade: nine-up came out of the page
   margins, and the next one would have to come out of the square.
+- **The batch sheet prints each code `copies` times, side by side.** A restaurant
+  is handed several standees of ONE code (ten tables, one menu), so
+  `GET /admin/qr-batches/:id/sheet?copies=N` (1–`STANDEE_SHEET_MAX_COPIES`=50,
+  a constant in `standeeSheetPdf.ts`, mirrored client-side as the field's
+  fallback ceiling) draws every code N times CONSECUTIVELY — all copies of code
+  A, then all of B, in the usual row-then-column order, across page breaks —
+  from ONE image object per code. Nothing about a card changes with `copies`.
+  `copies` is in the ETag; the file name gains `-xN` when N > 1. The client
+  asks the number in `standee_sheet_dialog.dart` before downloading, fed by
+  `GET /admin/qr-batches/:id/sheet/plan` (`{standees, skippedRetired, columns,
+  rows, perPage, maxCopies}`), which goes through the SAME loader as the sheet
+  and so refuses exactly what the sheet refuses; the dialog computes
+  `ceil(standees × copies / perPage)` live — the same `sheetPageCount` formula
+  the server uses for `X-Standee-Sheet-Pages`.
 - **RETIRED codes are SKIPPED on a batch sheet, not refused.** The single-code
   endpoints answer `409 CODE_RETIRED` because rendering one hands somebody a dead
   sheet; a whole batch cannot be refused over one dead code. The count comes back
-  in `X-Standee-Sheet-Skipped-Retired` (and `-Standees`/`-Pages`) because the body
-  is the PDF — all three are in `app.ts`'s CORS `exposedHeaders`, without which
+  in `X-Standee-Sheet-Skipped-Retired` (and `-Standees`/`-Copies`/`-Cards`/
+  `-Pages`) because the body is the PDF — all five are in `app.ts`'s CORS
+  `exposedHeaders`, without which
   the **web** admin silently loses the "2 retired were skipped" line. An
   *entirely* retired batch is `409 NOTHING_TO_PRINT`; a run past
   `STANDEE_SHEET_MAX_CODES` is `409 BATCH_TOO_LARGE` (recovery is the vendor CSV,

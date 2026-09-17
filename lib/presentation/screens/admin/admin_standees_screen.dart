@@ -9,8 +9,9 @@
 // THE DOWNLOAD SITS ON THE ROW, not only inside the batch. Getting a run onto
 // paper is the second thing an admin does with a batch — right after minting it
 // — and it needs nothing from the code list, so making them open the batch to
-// find the button would be a step for no one. One press produces one PDF: nine
-// standees to an A4 page, cut guides, as many pages as the run needs.
+// find the button would be a step for no one. One press asks how many copies of
+// each code (a restaurant gets ten standees of one code) and produces one PDF:
+// nine cards to an A4 page, cut guides, as many pages as the run needs.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -25,6 +26,7 @@ import '../../../domain/entities/qr_standee.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import 'standee_sheet_dialog.dart';
 
 class AdminStandeesScreen extends ConsumerWidget {
   const AdminStandeesScreen({super.key});
@@ -95,15 +97,35 @@ class AdminStandeesScreen extends ConsumerWidget {
                       // report which one the confirmation is about.
                       onDownload: state.downloadingSheetFor != null
                           ? null
-                          : () => ref
-                              .read(adminStandeesProvider.notifier)
-                              .deliverSheet(batches[i].id),
+                          : () => _downloadSheet(context, ref, batches[i]),
                     ),
                   ),
           ),
         ),
       ),
     );
+  }
+
+  /// Ask how many of each, THEN download.
+  ///
+  /// The dialog owns the question (a restaurant gets ten standees of one
+  /// code, so "how many copies" is real) and the page arithmetic; the
+  /// notifier owns the download, so the spinner stays on the row that was
+  /// pressed and a failure lands there rather than in a dialog already gone.
+  Future<void> _downloadSheet(
+    BuildContext context,
+    WidgetRef ref,
+    QrBatchSummary batch,
+  ) async {
+    final copies = await showStandeeSheetDialog(
+      context,
+      batchId: batch.id,
+      label: batch.label,
+    );
+    if (copies == null || !context.mounted) return;
+    await ref
+        .read(adminStandeesProvider.notifier)
+        .deliverSheet(batch.id, copies: copies);
   }
 
   /// Mint, then go STRAIGHT into the new batch.

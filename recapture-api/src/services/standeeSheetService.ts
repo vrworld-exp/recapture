@@ -20,7 +20,13 @@ import type { IQrCode } from '@/models/QrCode';
 import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { resolverUrlFor, slugifyBatchLabel, type BatchSheetSource } from '@/services/qrCodeService';
 import { qrLogoForPdf } from '@/services/qrLogo';
-import { buildStandeeSheetPdf, computeSheetLayout } from '@/services/standeeSheetPdf';
+import {
+  buildStandeeSheetPdf,
+  clampCopies,
+  computeSheetLayout,
+  sheetPageCount,
+  STANDEE_SHEET_MAX_COPIES,
+} from '@/services/standeeSheetPdf';
 
 /** The line printed under every standee code. */
 export const STANDEE_TAGLINE = 'Created for mirage menu';
@@ -109,11 +115,45 @@ export interface RenderedBatchSheet {
   body: Buffer;
   contentType: string;
   filename: string;
-  /** Cards actually on the sheet — retired codes are not among them. */
+  /** DISTINCT codes on the sheet — retired codes are not among them. */
   standees: number;
+  /** Times each code is printed. */
+  copies: number;
+  /** Cards on the paper: `standees × copies`. */
+  cards: number;
   pages: number;
   /** Retired codes left off, so the caller can say so rather than look short. */
   skippedRetired: number;
+}
+
+/**
+ * What a batch sheet WOULD contain, before anybody renders it.
+ *
+ * The dialog in front of the download shows this — how many codes, the grid,
+ * and (from `perPage`) how many pages any number of copies comes to — so an
+ * admin about to print ten copies of fifty codes sees "56 pages" before the
+ * printer does. `maxCopies` travels with it so the field's ceiling is the
+ * server's, not a number the client remembers.
+ */
+export interface BatchSheetPlan {
+  standees: number;
+  skippedRetired: number;
+  columns: number;
+  rows: number;
+  perPage: number;
+  maxCopies: number;
+}
+
+export function planBatchStandeeSheet(source: BatchSheetSource): BatchSheetPlan {
+  const layout = computeSheetLayout();
+  return {
+    standees: source.items.length,
+    skippedRetired: source.skippedRetired,
+    columns: layout.columns,
+    rows: layout.rows,
+    perPage: layout.perPage,
+    maxCopies: STANDEE_SHEET_MAX_COPIES,
+  };
 }
 
 /**
@@ -125,13 +165,19 @@ export interface RenderedBatchSheet {
  * sheet and a standee printed one-up are the same physical object and must not
  * start saying different things. The layout differs; what is on a card does not.
  *
+ * `copies` prints every code that many times, consecutively — a restaurant is
+ * handed ten standees of ONE code, so the ten come off the sheet together. It
+ * changes how many cards there are and nothing about any card.
+ *
  * Takes a [BatchSheetSource] the caller has already loaded and been authorized
  * for — same contract as [renderStandeeSheet], which takes a record rather than
  * a code. Nothing here knows who may print a batch.
  */
 export async function renderBatchStandeeSheet(
-  source: BatchSheetSource
+  source: BatchSheetSource,
+  options: { copies?: number } = {}
 ): Promise<RenderedBatchSheet> {
+  const copies = clampCopies(options.copies);
   const layout = computeSheetLayout();
   // Async only for this: the mark is decoded once per process and awaited
   // here, so the sheet builder itself can stay a pure function of its inputs.
@@ -143,13 +189,20 @@ export async function renderBatchStandeeSheet(
       tagline: STANDEE_TAGLINE,
       label: source.label,
       logo,
+      copies,
     }),
     contentType: 'application/pdf',
     // Named for the batch, like the vendor CSV beside it — an admin with a
     // downloads folder of these has to tell one print run from another unopened.
-    filename: `standee-sheet-${slugifyBatchLabel(source.label)}.pdf`,
+    // A copies suffix when there are copies, so the ten-up file and the plain
+    // one do not collide in that folder either.
+    filename:
+      `standee-sheet-${slugifyBatchLabel(source.label)}` +
+      `${copies === 1 ? '' : `-x${copies}`}.pdf`,
     standees: source.items.length,
-    pages: Math.max(1, Math.ceil(source.items.length / layout.perPage)),
+    copies,
+    cards: source.items.length * copies,
+    pages: sheetPageCount(source.items.length, copies, layout),
     skippedRetired: source.skippedRetired,
   };
 }

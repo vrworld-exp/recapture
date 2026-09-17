@@ -75,7 +75,8 @@ class _FakeRepo implements AdminStandeeRepository {
     // ECHOES the requested count rather than a fixed number, so an assertion
     // about what the confirmation says is about the code under test and not
     // about a constant buried in this fake.
-    return QrMintResult(batchId: 'b-new', minted: count, assignedTo: mintAssignee);
+    return QrMintResult(
+        batchId: 'b-new', minted: count, assignedTo: mintAssignee);
   }
 
   /// Who the server reports the run went to. Null unless a test says
@@ -161,9 +162,15 @@ class _FakeRepo implements AdminStandeeRepository {
   int sheetPages = 1;
   int sheetSkippedRetired = 0;
 
+  /// Every copies value asked for, in order, so a test can assert the number
+  /// the dialog collected is the number the request carried.
+  final List<int> sheetCopies = [];
+
   @override
-  Future<BatchSheetDownload> batchSheet(String batchId) async {
+  Future<BatchSheetDownload> batchSheet(String batchId,
+      {int copies = 1}) async {
     filesFor.add('sheet:$batchId');
+    sheetCopies.add(copies);
     if (fileThrows != null) throw fileThrows!;
     return BatchSheetDownload(
       file: QrDownloadFile(
@@ -174,7 +181,26 @@ class _FakeRepo implements AdminStandeeRepository {
       standees: sheetStandees,
       pages: sheetPages,
       skippedRetired: sheetSkippedRetired,
+      // Echoes the request, as the server does in X-Standee-Sheet-Copies.
+      copies: copies,
+      cards: sheetStandees * copies,
     );
+  }
+
+  CatalogFailure? planThrows;
+  BatchSheetPlan plan = const BatchSheetPlan(
+    standees: 6,
+    skippedRetired: 0,
+    columns: 3,
+    rows: 3,
+    perPage: 9,
+    maxCopies: 50,
+  );
+
+  @override
+  Future<BatchSheetPlan> batchSheetPlan(String batchId) async {
+    if (planThrows != null) throw planThrows!;
+    return plan;
   }
 
   // ── Assignment ───────────────────────────────────────────────────────────
@@ -196,9 +222,7 @@ class _FakeRepo implements AdminStandeeRepository {
   }) async {
     assigned.add((code: code, repUserId: repUserId));
     if (assignThrows != null) throw assignThrows!;
-    return repList
-        .firstWhere((r) => r.id == repUserId)
-        .person;
+    return repList.firstWhere((r) => r.id == repUserId).person;
   }
 
   @override
@@ -298,7 +322,8 @@ void main() {
   });
 
   group('paging one batch', () {
-    test('appends the next page rather than replacing what is loaded', () async {
+    test('appends the next page rather than replacing what is loaded',
+        () async {
       final repo = _FakeRepo()
         ..pages = {
           null: QrCodePage(codes: [_code('AAAA1111')], nextAfter: 'AAAA1111'),
@@ -407,10 +432,11 @@ void main() {
     });
   });
 
-group('bulk assignment at mint time', () {
+  group('bulk assignment at mint time', () {
     test('passes the chosen holder through to the repository', () async {
       final repo = _FakeRepo()
-        ..mintAssignee = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+        ..mintAssignee =
+            const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
       final container = _containerWith(repo, _FakeDeliverer());
       container.listen(adminStandeesProvider, (_, __) {});
       await pumpEventQueue();
@@ -439,7 +465,8 @@ group('bulk assignment at mint time', () {
 
     test('names the holder in the confirmation', () async {
       final repo = _FakeRepo()
-        ..mintAssignee = const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
+        ..mintAssignee =
+            const StandeeAssignee(id: 'rep-1', displayName: 'Ravi');
       final container = _containerWith(repo, _FakeDeliverer());
       container.listen(adminStandeesProvider, (_, __) {});
       await pumpEventQueue();
@@ -492,14 +519,15 @@ group('bulk assignment at mint time', () {
     });
   });
 
-
-group('assigning a whole batch', () {
-    QrStandeeCode held(String code, {QrCodeState state = QrCodeState.unassigned}) =>
+  group('assigning a whole batch', () {
+    QrStandeeCode held(String code,
+            {QrCodeState state = QrCodeState.unassigned}) =>
         QrStandeeCode(
           code: code,
           state: state,
           url: 'https://scan.test/r/$code',
-          assignedTo: const StandeeAssignee(id: 'old', displayName: 'Old Holder'),
+          assignedTo:
+              const StandeeAssignee(id: 'old', displayName: 'Old Holder'),
         );
 
     test('sends the batch id and the chosen rep', () async {
@@ -575,11 +603,13 @@ group('assigning a whole batch', () {
       // list gives them a row they can do nothing with. If the local patch
       // claimed otherwise, the screen would disagree with the server the moment
       // anything refetched.
-      expect(rows.firstWhere((c) => c.code == 'AAAA1111').assignedTo?.id, 'rep-1');
+      expect(
+          rows.firstWhere((c) => c.code == 'AAAA1111').assignedTo?.id, 'rep-1');
       expect(rows.firstWhere((c) => c.code == 'DEAD0000').assignedTo, isNull);
     });
 
-    test('says how many were skipped, so a short count explains itself', () async {
+    test('says how many were skipped, so a short count explains itself',
+        () async {
       final repo = _FakeRepo()
         ..bulkAssigned = 18
         ..bulkSkippedRetired = 2
@@ -684,7 +714,11 @@ group('assigning a whole batch', () {
       // The asymmetry with assign is deliberate: clearing a stale holder off a
       // sheet nobody can use is exactly the tidy-up being done here.
       expect(
-        container.read(provider).codes.valueOrNull?.every((c) => c.assignedTo == null),
+        container
+            .read(provider)
+            .codes
+            .valueOrNull
+            ?.every((c) => c.assignedTo == null),
         isTrue,
       );
       expect(repo.unassignedBatches, ['b1']);
@@ -704,7 +738,6 @@ group('assigning a whole batch', () {
       expect(container.read(provider).failure, isNull);
     });
   });
-
 
   group('the printable batch sheet', () {
     test('delivers the PDF from the batch list row, without opening the batch',
@@ -756,6 +789,50 @@ group('assigning a whole batch', () {
         container.read(adminStandeesProvider).notice,
         'Saved 6 standees over 1 page.',
       );
+      // No copies asked for is ONE copy — the plain sheet, the request it
+      // always was.
+      expect(repo.sheetCopies, [1]);
+    });
+
+    test('carries the copies the dialog collected, and says so afterwards',
+        () async {
+      final repo = _FakeRepo()
+        ..sheetStandees = 10
+        ..sheetPages = 12;
+      final container = _containerWith(repo, _FakeDeliverer());
+      container.listen(adminStandeesProvider, (_, __) {});
+      await pumpEventQueue();
+
+      await container
+          .read(adminStandeesProvider.notifier)
+          .deliverSheet('b1', copies: 10);
+
+      expect(repo.sheetCopies, [10]);
+      // "10 standees over 12 pages" reads as a bug until something says
+      // "10 copies each".
+      expect(
+        container.read(adminStandeesProvider).notice,
+        'Saved 10 standees × 10 copies over 12 pages.',
+      );
+    });
+
+    test('the batch screen passes copies through the same way', () async {
+      final repo = _FakeRepo()
+        ..sheetStandees = 4
+        ..sheetPages = 2
+        ..sheetSkippedRetired = 1;
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b7');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).deliverBatchSheet(copies: 3);
+
+      expect(repo.sheetCopies, [3]);
+      expect(
+        container.read(provider).notice,
+        'Saved 4 standees × 3 copies over 2 pages. 1 retired and were skipped.',
+      );
     });
 
     test('a download with no counts still confirms, rather than saying zero',
@@ -777,7 +854,8 @@ group('assigning a whole batch', () {
       expect(state.failure, isNull);
     });
 
-    test('a refused sheet surfaces its typed code and keeps the list', () async {
+    test('a refused sheet surfaces its typed code and keeps the list',
+        () async {
       final repo = _FakeRepo()
         ..fileThrows = const CatalogFailure(
           code: 'BATCH_TOO_LARGE',
@@ -821,8 +899,10 @@ group('assigning a whole batch', () {
       final notifier = container.read(adminStandeesProvider.notifier);
       final first = notifier.deliverSheet('b1');
       // Mid-flight: this row is marked, the other is not.
-      expect(container.read(adminStandeesProvider).isDownloadingSheet('b1'), isTrue);
-      expect(container.read(adminStandeesProvider).isDownloadingSheet('b2'), isFalse);
+      expect(container.read(adminStandeesProvider).isDownloadingSheet('b1'),
+          isTrue);
+      expect(container.read(adminStandeesProvider).isDownloadingSheet('b2'),
+          isFalse);
 
       await notifier.deliverSheet('b2');
       await first;

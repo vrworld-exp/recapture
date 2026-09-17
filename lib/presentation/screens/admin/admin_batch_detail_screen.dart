@@ -40,6 +40,7 @@ import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import 'assign_standee_sheet.dart';
+import 'standee_sheet_dialog.dart';
 
 class AdminBatchDetailScreen extends ConsumerWidget {
   const AdminBatchDetailScreen({required this.batchId, super.key});
@@ -92,8 +93,9 @@ class AdminBatchDetailScreen extends ConsumerWidget {
           IconButton(
             key: const ValueKey('admin_batch_sheet'),
             tooltip: 'Download printable standee sheets',
-            onPressed:
-                state.downloadingSheet ? null : notifier.deliverBatchSheet,
+            onPressed: state.downloadingSheet
+                ? null
+                : () => _downloadSheet(context, notifier, batchId),
             icon: state.downloadingSheet
                 ? const SizedBox(
                     width: 18,
@@ -187,6 +189,22 @@ class AdminBatchDetailScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Ask how many of each, THEN download the sheet.
+///
+/// Same split as the inventory row: the dialog owns the question and the page
+/// arithmetic, the notifier owns the download, so the spinner stays on the app
+/// bar button and a failure lands on this screen rather than in a dialog that
+/// has already closed.
+Future<void> _downloadSheet(
+  BuildContext context,
+  AdminBatchCodesNotifier notifier,
+  String batchId,
+) async {
+  final copies = await showStandeeSheetDialog(context, batchId: batchId);
+  if (copies == null || !context.mounted) return;
+  await notifier.deliverBatchSheet(copies: copies);
 }
 
 /// The whole batch at once — the other half of bulk assignment.

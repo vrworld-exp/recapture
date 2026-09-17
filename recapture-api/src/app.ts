@@ -47,9 +47,10 @@ const corsOptions: CorsOptions = {
   // a re-render. Without this the QR endpoint works but the download is called
   // "qr" with no extension and the cache never hits.
   //
-  // The `X-Standee-Sheet-*` trio is the batch sheet's out-of-band answer to
-  // "what did I just download": how many standees, over how many pages, and how
-  // many retired codes were left off. The body is the PDF, so there is nowhere
+  // The `X-Standee-Sheet-*` headers are the batch sheet's out-of-band answer to
+  // "what did I just download": how many standees, how many copies of each and
+  // so how many cards, over how many pages, and how many retired codes were
+  // left off. The body is the PDF, so there is nowhere
   // else to put it — and without the exposure the web admin silently loses the
   // "2 retired were skipped" line that stops a short-looking sheet reading as a
   // bug. Native is unaffected either way; browsers are the ones that filter.
@@ -57,6 +58,8 @@ const corsOptions: CorsOptions = {
     'Content-Disposition',
     'ETag',
     'X-Standee-Sheet-Standees',
+    'X-Standee-Sheet-Copies',
+    'X-Standee-Sheet-Cards',
     'X-Standee-Sheet-Pages',
     'X-Standee-Sheet-Skipped-Retired',
   ],

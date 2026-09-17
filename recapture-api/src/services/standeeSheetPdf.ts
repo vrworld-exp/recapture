@@ -88,8 +88,32 @@ const CUT_LINE_WIDTH = 0.75;
 const CUT_LINE_GREY = 0.85;
 
 /** Caption block under the square: the code, then the line saying what this is. */
-const CAPTION_HEIGHT_PT =
-  GAP_QR_TO_CODE + CODE_SIZE + GAP_CODE_TO_TAGLINE + TAGLINE_SIZE;
+const CAPTION_HEIGHT_PT = GAP_QR_TO_CODE + CODE_SIZE + GAP_CODE_TO_TAGLINE + TAGLINE_SIZE;
+
+/**
+ * Most times ONE code may be repeated on a sheet.
+ *
+ * A restaurant is handed several standees carrying the SAME code — ten tables,
+ * one menu — so the sheet prints each code `copies` times, side by side, rather
+ * than the admin printing the file ten times and collating. Fifty is a request
+ * bound like STANDEE_SHEET_MAX_CODES, not a policy: it keeps a 500-code batch
+ * at fifty-up under three thousand pages. A constant rather than an env
+ * setting because the client's field is capped to the same number, and a
+ * ceiling that could drift between the two would be a 400 nobody can explain.
+ */
+export const STANDEE_SHEET_MAX_COPIES = 50;
+
+/**
+ * `copies` as a whole number in `1..STANDEE_SHEET_MAX_COPIES`.
+ *
+ * The route's schema already rejects anything else with a 400; this is the
+ * builder refusing to trust that, because the one thing worse than a 400 is a
+ * sheet with zero cards or a `for` loop over a NaN.
+ */
+export function clampCopies(copies: number | undefined): number {
+  if (copies === undefined || !Number.isFinite(copies)) return 1;
+  return Math.min(STANDEE_SHEET_MAX_COPIES, Math.max(1, Math.floor(copies)));
+}
 
 // ── Layout ──────────────────────────────────────────────────────────────────
 
@@ -141,12 +165,8 @@ export function computeSheetLayout(): StandeeSheetLayout {
 
   // `+ gutter` on both sides of the divide because n cards carry n-1 gutters:
   // pretending every card trails one makes the fit a plain division.
-  const fitColumns = Math.floor(
-    (usableWidth + CARD_GUTTER_PT) / (cardWidth + CARD_GUTTER_PT)
-  );
-  const fitRows = Math.floor(
-    (usableHeight + CARD_GUTTER_PT) / (cardHeight + CARD_GUTTER_PT)
-  );
+  const fitColumns = Math.floor((usableWidth + CARD_GUTTER_PT) / (cardWidth + CARD_GUTTER_PT));
+  const fitRows = Math.floor((usableHeight + CARD_GUTTER_PT) / (cardHeight + CARD_GUTTER_PT));
 
   if (fitColumns < 1 || fitRows < 1) {
     throw new StandeeSheetLayoutError(
@@ -179,9 +199,25 @@ export function computeSheetLayout(): StandeeSheetLayout {
     cardWidth,
     cardHeight,
     originX: (A4_WIDTH_PT - gridWidth) / 2,
-    originY:
-      PAGE_MARGIN_PT + FOOTER_BAND_PT + (usableHeight - gridHeight) / 2,
+    originY: PAGE_MARGIN_PT + FOOTER_BAND_PT + (usableHeight - gridHeight) / 2,
   };
+}
+
+/**
+ * How many A4 pages `standees × copies` cards take at [layout].
+ *
+ * THE ONE FORMULA. The sheet builder, the `X-Standee-Sheet-Pages` header and
+ * the plan the client shows before downloading all go through here, so the
+ * number an admin reads in the dialog is the number of pages that come out of
+ * the printer. Never below one: an empty sheet is refused upstream, and a
+ * `/Count 0` PDF is not a document.
+ */
+export function sheetPageCount(
+  standees: number,
+  copies: number,
+  layout: Pick<StandeeSheetLayout, 'perPage'>
+): number {
+  return Math.max(1, Math.ceil((standees * copies) / layout.perPage));
 }
 
 // ── The sheet ───────────────────────────────────────────────────────────────
@@ -297,6 +333,13 @@ function drawFooter(text: string): string {
  * five hundred small 1-bit codes and one 320px RGB picture, not five hundred
  * pictures — every card's content stream names the same resource.
  *
+ * COPIES REPEAT A CARD, NOT A BITMAP. With `copies` at ten, every code is drawn
+ * ten times — the ten cards CONSECUTIVE, so a restaurant's ten standees come
+ * off the sheet together and the next code follows in the same row-then-column
+ * order — but each code is still encoded and compressed ONCE. The ten cards
+ * name the same image object. What a card looks like does not change with
+ * `copies`: same square, same size, same mark, same caption.
+ *
  * Deterministic, like every other PDF in this codebase: the same batch renders
  * byte-identical bytes twice, because nothing timestamps and `imageXObject`
  * deflates with fixed settings.
@@ -309,13 +352,17 @@ export function buildStandeeSheetPdf(params: {
   label: string;
   /** The mark, already decoded — see `qrLogoForPdf`. */
   logo: RgbBitmap;
+  /** Times each code is printed, side by side. 1 (the default) is the plain sheet. */
+  copies?: number;
 }): Buffer {
   const { items, tagline, label, logo } = params;
+  const copies = clampCopies(params.copies);
   const layout = computeSheetLayout();
-  const pageCount = Math.max(1, Math.ceil(items.length / layout.perPage));
+  const cardCount = items.length * copies;
+  const pageCount = sheetPageCount(items.length, copies, layout);
 
   // 1 catalog, 2 pages, 3 /F1, 4 /F2, 5 the mark; then two objects per page;
-  // then the code images.
+  // then the code images — ONE PER CODE, however many copies of it are drawn.
   const LOGO_OBJ = 5;
   const FIRST_PAGE_OBJ = 6;
   const firstImageObj = FIRST_PAGE_OBJ + pageCount * 2;
@@ -331,12 +378,29 @@ export function buildStandeeSheetPdf(params: {
 
   for (let page = 0; page < pageCount; page++) {
     const start = page * layout.perPage;
-    const onPage = items.slice(start, start + layout.perPage);
+    const end = Math.min(cardCount, start + layout.perPage);
 
     const ops: string[] = [];
     const resources: string[] = [];
+    // Page-local resource names, one per DISTINCT code on this page. With
+    // copies at 1 every slot is a new code and this is `/Im${slot}`, exactly
+    // as before; with copies at ten, nine slots may name one or two images.
+    const names = new Map<number, string>();
 
-    onPage.forEach((item, slot) => {
+    for (let card = start; card < end; card++) {
+      const slot = card - start;
+      // Which code this card carries: the copies of a code are consecutive, so
+      // cards 0–9 are code 0, cards 10–19 are code 1, and so on.
+      const itemIndex = Math.floor(card / copies);
+      const item = items[itemIndex]!;
+
+      let imageName = names.get(itemIndex);
+      if (imageName === undefined) {
+        imageName = `/Im${names.size}`;
+        names.set(itemIndex, imageName);
+        resources.push(`${imageName} ${firstImageObj + itemIndex} 0 R`);
+      }
+
       const column = slot % layout.columns;
       // Filled left to right, TOP row first — the order a person reads and the
       // order `listBatchCodes` and the vendor CSV emit, so row 3 of the sheet is
@@ -344,22 +408,19 @@ export function buildStandeeSheetPdf(params: {
       const row = Math.floor(slot / layout.columns);
 
       const x = layout.originX + column * (layout.cardWidth + CARD_GUTTER_PT);
-      const y =
-        layout.originY +
-        (layout.rows - 1 - row) * (layout.cardHeight + CARD_GUTTER_PT);
+      const y = layout.originY + (layout.rows - 1 - row) * (layout.cardHeight + CARD_GUTTER_PT);
 
-      ops.push(
-        drawCard(item, matrices[start + slot]!, tagline, layout, `/Im${slot}`, x, y)
-      );
-      resources.push(`/Im${slot} ${firstImageObj + start + slot} 0 R`);
-    });
+      ops.push(drawCard(item, matrices[itemIndex]!, tagline, layout, imageName, x, y));
+    }
 
     // A pipe rather than a dash: labels carry dashes of their own (the house
     // shape is "Vendor A - Oct 2026, run 3"), and a separator that looks like
-    // part of the name it separates is not one.
+    // part of the name it separates is not one. The copies clause appears only
+    // when there are copies, so the plain sheet's footer is unchanged.
+    const each = copies === 1 ? '' : `, ${copies} copies each`;
     ops.push(
       drawFooter(
-        `${label}   |   Page ${page + 1} of ${pageCount}   |   ${items.length} standees`
+        `${label}   |   Page ${page + 1} of ${pageCount}   |   ${items.length} standees${each}`
       )
     );
 

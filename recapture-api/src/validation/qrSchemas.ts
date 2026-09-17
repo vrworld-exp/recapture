@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { env } from '@/config/env';
 import { normalizeQrCode } from '@/utils/qrCodes';
+import { STANDEE_SHEET_MAX_COPIES } from '@/services/standeeSheetPdf';
 
 /**
  * A printed code, accepted in whatever form a human typed it and TRANSFORMED to
@@ -15,16 +16,14 @@ import { normalizeQrCode } from '@/utils/qrCodes';
  * character-for-character on what a valid code is, and the only way to
  * guarantee that is for both to import this.
  */
-export const qrCodeParam = z
-  .string()
-  .transform((raw, ctx) => {
-    const normalized = normalizeQrCode(raw);
-    if (!normalized) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid QR code' });
-      return z.NEVER;
-    }
-    return normalized;
-  });
+export const qrCodeParam = z.string().transform((raw, ctx) => {
+  const normalized = normalizeQrCode(raw);
+  if (!normalized) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid QR code' });
+    return z.NEVER;
+  }
+  return normalized;
+});
 
 /**
  * POST /admin/qr-batches.
@@ -48,7 +47,11 @@ export const mintQrBatchSchema = z
         (n) => n <= env.QR_BATCH_MAX_SIZE,
         () => ({ message: `count must be at most ${env.QR_BATCH_MAX_SIZE}` })
       ),
-    label: z.string().trim().min(1, 'label is required').max(120, 'label must be at most 120 characters'),
+    label: z
+      .string()
+      .trim()
+      .min(1, 'label is required')
+      .max(120, 'label must be at most 120 characters'),
     /**
      * Hand the whole run to one staff member as it is minted.
      *
@@ -111,6 +114,27 @@ export const standeeQrQuerySchema = z
   .strict();
 
 export type StandeeQrQuery = z.infer<typeof standeeQrQuerySchema>;
+
+/**
+ * GET /admin/qr-batches/:batchId/sheet?copies= — the whole batch, printed.
+ *
+ * `copies` is how many times EACH code appears, side by side: a restaurant
+ * gets ten standees of one code, so ten is a real request and one is the plain
+ * sheet. Bounded by the same constant the plan endpoint reports as
+ * `maxCopies`, so the client's field and this refusal cannot disagree.
+ */
+export const batchSheetQuerySchema = z
+  .object({
+    copies: z.coerce
+      .number()
+      .int('copies must be a whole number')
+      .min(1, 'copies must be at least 1')
+      .max(STANDEE_SHEET_MAX_COPIES, `copies must be at most ${STANDEE_SHEET_MAX_COPIES}`)
+      .default(1),
+  })
+  .strict();
+
+export type BatchSheetQuery = z.infer<typeof batchSheetQuerySchema>;
 
 /**
  * POST /admin/qr-codes/:code/assignment — hand this standee to that rep.
