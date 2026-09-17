@@ -45,6 +45,12 @@ disagree.
 | 4 | [Rep tools — notify-owner nudge, activation copy](stage-04-rep-tools.md) | BE + FE | 2 | S | nothing |
 | 5 | [Enforcement — sweep, pause job, Mirage entitlement, flag on](stage-05-enforcement.md) | BE + FE + **Mirage** | 1–4 | L (two parts) | `subscriptionGatesEnabled: true` — **this is launch** |
 | A | [Gaps addendum — disputes, standee issuance, receipts, admin alerts, 2 copy fixes](gaps-addendum.md) | BE + FE | 3 | M | nothing — ship before the Stage 5 flip |
+| B | [Edge-cases hardening — Prompt B (grace copy, early-renewal warning, PAUSED_90D, cash refund row)](edge-cases-hardening.md) | BE + FE | A, 5A | S | nothing — ship before the Stage 5 flip |
+
+[`edge-cases-hardening.md`](edge-cases-hardening.md) is also the **complete edge-case matrix**
+(plan A–D plus 34 E-series cases for webhooks, the job queue, payment failures and the lapse
+lifecycle) with the stage each one is handled in. Stages 3 and 5 were patched from it — a fresh
+run of those prompts already includes the fixes.
 
 [`gaps-addendum.md`](gaps-addendum.md) also lists three items the plan asks for that **no prompt
 can build** without a decision or an owner: owner-initiated cancel (G7), the marketing site's

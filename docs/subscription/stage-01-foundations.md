@@ -93,7 +93,8 @@ no display rounding here (AC-8.1).
 
 - `subscriptionPlans.ts`: `DEFAULT_PLAN_CATALOG: PlanCatalog` with the README constants, and
   `planCatalogSchema` (Zod, `.strict()`, every number `.int().positive()`, `plans` keyed by
-  `z.enum(PLAN_IDS)` — all three required).
+  `z.enum(PLAN_IDS)` — all three required; `yearlyDiscountPct` is `.int().min(0).max(90)` so a
+  typo can never produce a ₹0 yearly order that Razorpay rejects — E42).
 - `planCatalogService.ts`: `getPlanCatalog(): Promise<PlanCatalog>`. Read
   `ClientConfig.findOne().sort({ updatedAt: -1 }).lean()`, take `doc?.subscriptionPlans`; if
   absent → defaults; if present but fails `planCatalogSchema.safeParse` → `console.warn` with the

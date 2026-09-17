@@ -238,6 +238,10 @@ Client: `Analytics.logEvent('subscription_screen_viewed', { surface: 'owner' | '
 - Do NOT reset `trialUsedAt` on `DELETE /catalog` or on catalog re-create (D2).
 - Do NOT compute `daysLeft` on the client (D6) — render the server's number.
 - Do NOT add `accountPhone` or any owner contact to the subscription DTOs.
+- Do NOT route `startTrial` (or any later subscription mutation) through the offline action
+  queue (`domain/entities/offline_action.dart` / `offline_queue_box.dart`). A trial start
+  replayed from a queue after reconnect could fire twice or fire for a restaurant the rep has
+  since left; if offline, the button shows "Needs a connection" and does nothing (E40).
 - Do NOT touch `PublishFlow`, `PublishGateway`, or the publish body layout beyond `_fix` and
   `canFix`.
 
@@ -310,6 +314,10 @@ Client: `Analytics.logEvent('subscription_screen_viewed', { surface: 'owner' | '
 
 ## Assumptions
 
+- Assumed: `startTrial` also refuses when the catalog has **ever** paid (any `PAID` or
+  `MANUAL/VERIFIED` `PaymentRecord`) → 409 `TRIAL_NOT_ELIGIBLE`; a trial is for restaurants that
+  have never been customers, and without this a lapsed payer could get 30 free days (E41). If
+  product wants trials for lapsed payers, drop that check only.
 - Assumed: a trial may be started on a CANCELLED/PAUSED row whose `trialUsedAt` is unset (a
   comped pilot that lapsed). If trials are only for never-subscribed catalogs, change the
   `findOneAndUpdate` filter to `{ catalogId, trialUsedAt: null, status: 'CANCELLED' }`.

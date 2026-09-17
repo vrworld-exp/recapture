@@ -103,6 +103,14 @@ export async function applyPaidPeriod(input: {
   `trialUsedAt` untouched. Upsert if no row (an owner may pay before any trial).
 - `needsArResume = previousStatus in ['PAUSED','CANCELLED']` — Stage 5 consumes it by enqueueing
   the resume job; in this stage just return it and log.
+- Paying while TRIAL or COMPED also starts a fresh period from `paidAt` (the trial/comp simply
+  ends early; `trialUsedAt` stays). Stated once here so no caller special-cases it (E10).
+- **Over-cap on resume (E11):** after the write, if the catalog's *published* 3D count
+  (`countThreeDDishes` over products with `mirageItemId` set, not archived) exceeds
+  `planSnapshot.threeDDishCap`, create an owner in-app notification "Your menu has N 3D dishes;
+  <Plan> covers M. The next publish will ask you to upgrade." and `track('subscription_over_cap_on_activate')`.
+  Do **not** block the activation or hide dishes — the cap is enforced at publish only (§3a);
+  this is the honest nudge for the loophole.
 - COMP variant: `applyComp({ catalogId, until, actor, note })` → `status: 'COMPED'`,
   `source: 'COMP'`, `threeDDishCap: -1`, `periodStart: now`, `periodEnd: until`, plus a
   `PaymentRecord{ kind:'COMP', amountPaise: 0, initiatedBy: actor, note }`.
@@ -121,11 +129,16 @@ export async function applyPaidPeriod(input: {
    idempotencyKey: 'order:' + providerOrderId, initiatedBy: actor, expiresAt: now + orderTtlHours }`.
    On E11000 for `providerOrderId` (a double-tap that raced step 2) → re-read and return the
    winner (rule 2).
-6. Return `{ outcome: 'OK', order: { providerOrderId, amountPaise, currency, keyId: env.RAZORPAY_KEY_ID, quote, expiresAt } }`.
+6. Return `{ outcome: 'OK', order: { providerOrderId, amountPaise, currency, keyId: env.RAZORPAY_KEY_ID, quote, expiresAt, currentPeriodEnd, daysForfeited } }`
+   — `daysForfeited` = days left on the current ACTIVE/TRIAL/COMPED period that a payment now
+   would discard (0 when GRACE/PAUSED/NONE); the client shows a warning above the Pay button
+   when it is > 0 (E9).
 
 Route `POST /catalog/subscription/order` (owner only — **not** on `/rep`, AC-6.5), body
 `z.object({ planId: z.enum(PLAN_IDS), interval: z.enum(BILLING_INTERVALS) }).strict()`, rate
-window `checkout:${catalogId}` 10/hour.
+window `checkout:${catalogId}` 10/hour — **consumed only when a new Razorpay order is created**,
+not when the open one is returned, so an owner retrying a failed UPI attempt is never locked out
+(E8).
 
 ### Step 4: Webhook — `routes/webhooks.ts` + `services/subscription/webhookService.ts`
 
@@ -136,32 +149,63 @@ window `checkout:${catalogId}` 10/hour.
 - Handle `event === 'payment.captured'` and `'order.paid'` (either can arrive first; both mean
   the same thing). Extract `orderId = payload.payment.entity.order_id`, `paymentId`, `amount`.
   Ignore every other event with 200 `{ status: 'success', ignored: true }`.
-- `recordOnlinePayment({ orderId, paymentId, amountPaise })`:
-  1. `PaymentRecord.findOne({ providerOrderId: orderId, kind: 'CHECKOUT_CREATED' })` — if none →
-     200 with `unknownOrder: true` and a `console.warn` (a test-mode or foreign order; never 4xx,
-     Razorpay would retry forever).
-  2. Insert `PaymentRecord{ kind: 'PAID', idempotencyKey: 'payment:' + paymentId, providerOrderId,
-     providerPaymentId, amountPaise, quote: checkout.quote, initiatedBy: checkout.initiatedBy }`.
-     E11000 → **already processed → return 200, do nothing else** (B2).
-  3. If `amountPaise !== checkout.amountPaise` → insert the PAID row anyway but with
-     `note: 'AMOUNT_MISMATCH'`, do **not** activate, alert via `console.error` + analytics. An
-     admin resolves it manually.
-  4. **Duplicate detection (B3):** if the subscription is already ACTIVE with
-     `periodStart >= checkout.createdAt` (i.e. another payment already activated this period),
-     mark the new PAID row `note: 'DUPLICATE_SUSPECTED'`, `track('subscription_duplicate_payment_flagged')`,
-     and **do not** extend the period. Otherwise `applyPaidPeriod(... source: 'ONLINE', paidAt: now)`.
-  5. Mark the CHECKOUT_CREATED row `expiresAt: now` (closed) — the one allowed mutation of a
-     ledger row besides `verificationStatus`.
+- `recordOnlinePayment({ orderId, paymentId, amountPaise, notes })` — **two phases, each
+  idempotent on its own**, because the process can die between them:
+  1. `checkout = PaymentRecord.findOne({ providerOrderId: orderId, kind: 'CHECKOUT_CREATED' })`.
+     **If none** → do NOT give up: this is the "our insert failed after Razorpay created the
+     order" case (E3 in `edge-cases-hardening.md`). Read `notes.catalogId / planId / interval`
+     (we wrote them at order create). If all three parse and the catalog exists (not deleted),
+     synthesise the quote from `getPlanCatalog()` and continue with `orphanOrder: true`; if the
+     amount does not equal that quote, or notes are missing → insert a PAID row with
+     `note: 'UNKNOWN_ORDER'`, `alertAdmins('UNKNOWN_ORDER')`, return 200. Never 4xx (Razorpay
+     would retry, then disable the webhook).
+  2. **Phase 1 — record.** Insert `PaymentRecord{ kind: 'PAID', idempotencyKey: 'payment:' + paymentId,
+     providerOrderId, providerPaymentId, amountPaise, quote, initiatedBy, appliedAt: null }`.
+     On E11000 → load the existing row instead of returning; **do not** return yet.
+  3. **Phase 2 — apply, guarded by `appliedAt`.** If `paid.appliedAt` is set → 200, done (B2).
+     Otherwise decide the outcome:
+     - `amountPaise !== quote.totalPaise` → `note: 'AMOUNT_MISMATCH'`, no activation, `alertAdmins`.
+     - catalog `deletedAt` set → `note: 'ORPHAN_PAYMENT'`, no activation, `alertAdmins` (this
+       is a legitimate refund case — see the hardening file, E5).
+     - subscription already ACTIVE with `periodStart >= checkout.createdAt` → `note: 'DUPLICATE_SUSPECTED'`,
+       `track('subscription_duplicate_payment_flagged')`, no extension.
+     - else `applyPaidPeriod({ source: 'ONLINE', paidAt: now, ... })`.
+     Then **one** conditional write: `findOneAndUpdate({ _id: paid._id, appliedAt: null }, { $set: { appliedAt: now, note } })`.
+     If that returns null another worker applied it first — fine, both paths are idempotent
+     (`applyPaidPeriod` is an upsert-by-catalog with the same values).
+  4. Close the CHECKOUT_CREATED row: `expiresAt: now`. (`appliedAt` and `expiresAt` are the two
+     allowed post-insert writes on a ledger row, plus the MANUAL verification fields.)
 - Always answer 200 once the signature is valid; failures after that are logged and left to
-  reconciliation.
+  reconciliation, which also scans **PAID rows with `appliedAt: null`** older than 2 min and
+  re-runs Phase 2 on them (E2).
+- Also handle `payment.failed` → `track('subscription_payment_failed', { catalog_id, error_code: payload.payment.entity.error_code })`,
+  no ledger row, no state change (the open order stays open so the owner can retry; the client
+  gets its failure from the SDK). And `refund.processed` / `refund.failed` → find the REFUNDED
+  row by `providerRefundId` and set `note` to `REFUND_PROCESSED` / `REFUND_FAILED:<reason>`;
+  failed → `alertAdmins('REFUND_FAILED')`. A `refund.processed` whose `providerRefundId` matches
+  **no** REFUNDED row means someone refunded from the Razorpay dashboard directly: insert a
+  REFUNDED row with `note: 'EXTERNAL_REFUND'`, `refundsPaymentId` resolved from the payment id,
+  and alert admins — the ledger must never be less true than Razorpay's (E38).
 
 ### Step 5: Reconciliation — `services/subscription/reconcileService.ts`
 
-`reconcileOpenOrders(now)`: for each `CHECKOUT_CREATED` with `createdAt < now - 5 min` and
-`expiresAt > now`: `fetchOrder`; if `status === 'paid'` → `fetchPaymentsForOrder`, take the
-captured one, call `recordOnlinePayment` (idempotent, so a late webhook is harmless). Rows with
-`expiresAt <= now` are left as-is (they simply stop matching "open"). Called from the worker loop
-at most every `SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS`; skipped entirely when
+`reconcileOpenOrders(now)` does three scans, in this order:
+
+1. **Half-applied payments:** `PAID` rows with `appliedAt: null` and `createdAt < now - 2 min` →
+   re-run Phase 2 of `recordOnlinePayment` (E2). This is the crash-recovery path; it needs no
+   Razorpay call.
+2. **Open orders:** each `CHECKOUT_CREATED` with `createdAt < now - 5 min` and `expiresAt > now`
+   → `fetchOrder`; if `status === 'paid'` → `fetchPaymentsForOrder`, take the captured one, call
+   `recordOnlinePayment` (idempotent, so a late webhook is harmless). Count these as
+   `rescuedByReconcile`.
+3. **Late payments on expired orders:** `CHECKOUT_CREATED` with `expiresAt` in the last 48 h and
+   no PAID row for the same `providerOrderId` → same `fetchOrder` check (a UPI collect can be
+   approved hours later; the quote is honoured, E7).
+
+Rows with `expiresAt <= now` older than 48 h are left as-is. If `rescuedByReconcile > 0` in **two
+consecutive** runs → `alertAdmins('WEBHOOKS_SILENT')`: Razorpay disables a webhook after repeated
+non-2xx responses, and reconciliation catching payments is the only symptom (E4). Called from
+the worker loop at most every `SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS`; skipped entirely when
 `!isRazorpayConfigured()`.
 
 ### Step 6: Manual payments (Door 3)
@@ -176,7 +220,14 @@ at most every `SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS`; skipped entirely when
 - Admin: `POST /admin/catalogs/:id/subscription/manual-payment`, `requireRole('ADMIN')`, body
   `{ action: 'VERIFY' | 'REJECT', paymentRecordId, note? }` **or** `{ action: 'CREATE_AND_VERIFY', …request fields }`.
   VERIFY: `findOneAndUpdate({ _id, kind:'MANUAL', verificationStatus:'PENDING_VERIFICATION' }, { $set: { verificationStatus:'VERIFIED', verifiedBy: admin, verifiedAt: now } })`
-  — if it returns null → 409 `ALREADY_DECIDED`. Only on that transition call `applyPaidPeriod(source:'MANUAL', paidAt: now, planSnapshot: record.quote.planSnapshot)` (AC-6.3).
+  — if it returns null → 409 `ALREADY_DECIDED`. **Before** the update: if the catalog is
+  soft-deleted → 409 `CATALOG_DELETED` and the request is auto-`REJECTED` with
+  `note: 'CATALOG_DELETED'` (and `DELETE /catalog` itself rejects every pending request the same
+  way — E37); if
+  `record.amountPaise !== record.quote.totalPaise` the request must carry `override: true` and a
+  `note` ≥ 20 chars, else 422 `AMOUNT_MISMATCH` (a rep typing ₹1,000 for a ₹1,199 plan is caught
+  here, not after activation — E12). Only on that transition call
+  `applyPaidPeriod(source:'MANUAL', paidAt: now, planSnapshot: record.quote.planSnapshot)` (AC-6.3).
   REJECT: same conditional update to `REJECTED` with `note`; no subscription write.
   Even when `initiatedBy.userId === verifiedBy.userId`, both are stored (AC-6.4).
 - `GET /admin/subscriptions/manual-payments?status=PENDING_VERIFICATION` — the approval queue,
@@ -197,8 +248,12 @@ at most every `SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS`; skipped entirely when
      `PaymentRecord{ kind:'REFUNDED', amountPaise, refundsPaymentId, providerRefundId, initiatedBy: admin, note }`.
   4. **Never** touch the subscription period (the duplicate did not extend it).
   A MANUAL/COMP row is not refundable here (no provider id) → 422 `NOT_REFUNDABLE`.
-- `GET /admin/subscriptions?state=EXPIRING_7D|GRACE|PAUSED|TRIAL` (MODEL_ARTIST+ read; keep
-  the router default) → list of `{ catalogId, catalogName, status, periodEnd, graceEndsAt, daysLeft, planId }`,
+  Rate window `admin-refund:${adminUserId}` — `ADMIN_REFUND_MAX_PER_WINDOW` (default 5) per
+  `ADMIN_REFUND_WINDOW_SECONDS` (default 3600): a leaked admin token cannot drain the account in
+  one loop, and a real admin never needs six refunds an hour (E43).
+- `GET /admin/subscriptions?state=EXPIRING_7D|GRACE|PAUSED|TRIAL` — **`requireRole('ADMIN')`,
+  including this read and the manual-payment queue.** The `/admin` router's default is
+  MODEL_ARTIST, which is a 3D-artist role; revenue state is not theirs to see (E39) → list of `{ catalogId, catalogName, status, periodEnd, graceEndsAt, daysLeft, planId }`,
   cursor-paginated with `utils/cursor.ts`, sorted by `periodEnd asc`.
 
 ### Step 8: Ledger read for the owner

@@ -56,12 +56,14 @@ These have lead times. Start them **before** any code, in parallel.
 | 3B | 🤖 | [`stage-03-payments.md`](stage-03-payments.md) **Part B** | Claude Code @ ReCapture | 3a |
 | 3b | 👤 | Internal testing build; on a real Android phone pay with test UPI `success@razorpay`; owner screen flips to Active without leaving the app. | Google Play Console, a physical Android device | 3B |
 | A | 🤖 | [`gaps-addendum.md`](gaps-addendum.md) **Prompt A** (disputes, standees, receipt, admin alerts, copy) | Claude Code @ ReCapture | 3b |
+| 3-cap | 👤 | Razorpay → Settings → **Payment capture** → auto-capture **ON** (otherwise payments sit "authorized", never "captured", and are auto-refunded after 5 days — E6). | Razorpay Dashboard | 3-pre |
 | 4 | 🤖 | [`stage-04-rep-tools.md`](stage-04-rep-tools.md) | Claude Code @ ReCapture | 2a (can run in parallel with 3) |
 | 4a | 👤 | If a real SMS vendor was chosen in 0.4: wire it into `sendTemplatedSms` (a one-file change; ask the agent), add its env keys to Render. Otherwise skip — the in-app bell delivers the nudge. | Render, MSG91/Twilio console | 4 |
 | 5B | 🤖 | [`stage-05-enforcement.md`](stage-05-enforcement.md) **Part B** (Mirage) | Claude Code @ `mirage-be`, then @ `mirage-fe` | — (independent; do it early) |
 | 5b | 👤 | Deploy **mirage-be** to wherever it is hosted today; push `mirage-fe` `production` branch → GitHub Actions FTP-deploys `dist/` to `mirage.mayasabhaxr.com`. Run the Part B **probe** (`PUT update-restaurant {arEnabled:false}` → page shows photos only → set `true`). | mirage-be host, GitHub Actions (mirage-fe), a phone on the public URL | 5B |
 | 5A | 🤖 | [`stage-05-enforcement.md`](stage-05-enforcement.md) **Part A** | Claude Code @ ReCapture | 3A, 5b |
-| 5a | 👤 | Deploy backend (flag still absent). Confirm the worker log shows `subscription_sweep_ran` every 10 min with zeros. | Render → Logs | 5A |
+| 5a | 👤 | Deploy backend (flag still absent). Confirm the worker log shows `subscription_sweep_ran` every 10 min with zeros. **Keep the instance awake** (Render cron / `axiosBackendMakeAlive`) — a sleeping instance runs no sweep and no reconcile (E17). | Render → Logs, Render → Cron | 5A |
+| B | 🤖 | [`edge-cases-hardening.md`](edge-cases-hardening.md) **Prompt B** (grace copy, early-renewal warning, PAUSED_90D, cash refund row) | Claude Code @ ReCapture | A, 5A |
 | 5c | 👤 | **Go live on Razorpay:** KYC approved → Settings → API Keys → generate **live** keys; Webhooks → add the same URL/events in **live** mode. Set `rzp_live_` values on the **production** Render service. Boot refuses if `NODE_ENV=production` gets a test key (B8) — that is the check working. | Razorpay Dashboard (live mode), Render production Environment | 0.1 approved |
 | 5d | 👤 | **Production app release:** promote the Internal-testing build (contains Stages 2–4, A, 5A UI) to **Production** on Play. Wait for rollout to reach existing installs (≥ 48 h) **before** flipping the flag — an old app cannot render the new gate rows' Fix buttons. | Google Play Console → Production | 3b, 4, 5a |
 | 5e | 👤 | Grandfather: `cd recapture-api && npx tsx scripts/grandfather-catalogs-comped.ts --dry-run` against production `MONGODB_URI`, read the list, then run without `--dry-run`. | Your machine with the prod URI in `.env` (never commit it) | 5a |
@@ -79,12 +81,15 @@ These have lead times. Start them **before** any code, in parallel.
 - **Test mode (before Stage 3):** API keys; webhook URL `https://<staging-host>/webhooks/razorpay`; events `payment.captured`, `order.paid`, `payment.dispute.created`, `payment.dispute.closed`; choose a webhook secret (any long random string — it is *your* `RAZORPAY_WEBHOOK_SECRET`).
 - **Live mode (Stage 5c):** repeat keys + webhook for the production host. Toggle "Test mode" off in the dashboard header to see live keys.
 - **Checkout settings:** enable UPI, cards, net banking; disable EMI/pay-later/wallets you do not want; set the brand name and logo shown in the sheet.
+- **Settings → Payment capture:** auto-capture **ON** (E6).
 - **After launch:** Payments → check settlements land in the bank (T+2/T+3); Disputes tab is where B9 cases appear.
+- **If the admin bell says `WEBHOOKS_SILENT`:** Settings → Webhooks → the webhook was auto-disabled after repeated failures — fix the server first, then re-enable it (E4). Payments were still recorded by reconciliation; nothing is lost.
 
 ### 3.2 Render (recapture-api)
 - Add to `render.yaml` (`sync: false`) and set in Environment: `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`. Optional tunables with defaults: `SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS`, `SUBSCRIPTION_SWEEP_INTERVAL_MS`, `SUBSCRIPTION_NUDGE_MAX_PER_WINDOW`, `SUBSCRIPTION_NUDGE_WINDOW_SECONDS`.
 - Staging service gets **test** keys; production gets **live** keys; never the same values on both.
 - The worker: confirm `RUN_WORKER_IN_PROCESS` is what production uses today; the sweep and reconcile ticks run inside that loop, so a worker that is off means no pauses and no reconciliation.
+- **Sleep:** a Render instance that spins down runs no sweep and no reconcile until an HTTP request wakes it. Add a Render **Cron Job** (or any external ping) hitting `/health` every 10 min, or use the existing `axiosBackendMakeAlive` util (E17).
 - Logs: search `subscription_sweep_ran`, `razorpay_webhook_rejected`, `subscription_payment_recorded`.
 
 ### 3.3 MongoDB Atlas
@@ -194,6 +199,7 @@ The order
 4. gaps-addendum.md      -> only the section called "Prompt A"
 5. stage-04-rep-tools.md (can be done any time after stage 2)
 6. stage-05-enforcement.md -> Part B first (this one is for the Mirage folders), then Part A
+7. edge-cases-hardening.md -> only the section called "Prompt B" (small; do it after 4 and 6)
 
 Doing one prompt (repeat this for every file)
 1. Open a terminal in the ReCapture folder and start Claude Code.

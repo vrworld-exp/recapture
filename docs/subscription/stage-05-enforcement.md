@@ -76,13 +76,19 @@ a resume is something an owner who just paid is waiting on.
 2. Load `CatalogSubscription`; compute `desired = isEntitledTo3D(status)`. If
    `desired !== job.payload.enabled` → **abort as success** with a log line (D4: the owner paid
    between enqueue and run; the resume job that payment enqueued will do the right thing).
-3. `warmUpMirage()`, then `getMirageClient().updateRestaurant(mirageRestaurantId, { arEnabled: desired })`.
+3. `warmUpMirage()`, then `getMirageClient().updateRestaurant(mirageRestaurantId, { arEnabled: desired })`
+   — the body is **exactly** `{ arEnabled }`. Mirage's update is partial; sending `name` (or
+   anything from the catalog) here would rename the restaurant and break every printed QR
+   (`customerUrl` resolves by name). Pin it with a test that asserts the call's argument keys
+   (E36).
 4. `$set arEntitlementSyncedAt: now` on the subscription.
-Retryable Mirage errors propagate for the worker's backoff; terminal ones fail the job and
-`console.error` — the customer page keeps its previous state, which is the safe direction for
-a pause (late) and needs an admin re-run for a resume (add
+Retryable Mirage errors propagate for the worker's backoff; when attempts are exhausted or the
+error is terminal the job fails, `console.error`s and calls `alertAdmins('ENTITLEMENT_FAILED')`
+(the gaps-addendum helper) — the customer page keeps its previous state, which is the safe
+direction for a pause (late) and needs an admin re-run for a resume (add
 `POST /admin/catalogs/:id/subscription/resync-ar` (ADMIN) that enqueues a job with the current
-desired state).
+desired state). The admin subscription detail screen shows `arEntitlementSyncedAt` next to the
+status so a stale sync is visible (E18).
 
 ### Step 3: Sweep — `services/subscription/lifecycleSweep.ts`
 
@@ -96,12 +102,53 @@ desired state).
   `findOneAndUpdate({ _id, status: 'GRACE', graceEndsAt: { $lte: now } }, { $set: { status: 'PAUSED', pausedAt: now } })`
   — the conditional filter is the D4 guard; if it returns null the row changed under us (paid)
   and nothing is enqueued. On success enqueue the entitlement job with `enabled: false`.
+- **Remember which state GRACE came from:** `$set graceFrom: <previous status>` on the to-GRACE
+  transition so the client can say "Trial ended — choose a plan within N days" /
+  "Complimentary period ended" / "Payment overdue" instead of one sentence for all three (E16).
+- **In-app reminders, no SMS vendor needed (E14):** a fourth scan creates owner in-app
+  notifications (`createNotification`, `audience: USERS [ownerId]`) at 7 days before `periodEnd`,
+  1 day before, on entering GRACE, and at grace midpoint — one row per catalog per milestone,
+  deduped by `idempotencyKey: 'reminder:' + catalogId + ':' + milestone + ':' + periodEnd.getTime()`
+  on a small `ReminderLog` model (`catalogId, milestone, periodEnd, channel: 'IN_APP', sentAt`).
+  Each reminder notification carries `expiresAt: graceEndsAt ?? periodEnd + graceDays` so an
+  owner who first logs in months later does not find four stale countdowns (E44).
+  This is the plan's §10 `ReminderLog`, populated for the in-app channel only; SMS/WhatsApp remain
+  Stage 6 and will write the same rows with a different `channel`. An owner who never opens the
+  app sees nothing — that is the accepted trade-off of §13 item 6, and the rep's nudge covers it.
 - Nothing here touches `Catalog.status`, `publishedRevision`, or Mirage items.
 
 Worker tick: every `SUBSCRIPTION_SWEEP_INTERVAL_MS` (env, default `600_000`), from the same
 place Stage 3's reconcile runs, guarded by `try/catch` + log so a sweep error never kills the
-loop. **Clock rule (D3):** the comparisons are `$lte: now` — the sweep can only be late, never
+loop. **The worker only runs while the Render instance is awake (E17):** an instance that sleeps
+pauses nobody and reconciles nothing until the next HTTP request wakes it. That is the safe
+direction (late, never early), but it means the sweep interval is a floor, not a promise; the
+rollout runbook must either keep the instance awake (`utils/axiosBackendMakeAlive.ts` already
+exists for this, or a Render cron ping) or accept multi-hour lateness. **Clock rule (D3):** the comparisons are `$lte: now` — the sweep can only be late, never
 early.
+
+### Step 3a: A blocked automatic publish must not be silent (E35)
+
+`catalogModelPromotionService` (and the finalize sweep) call the gated `requestPublish` when a
+3D model finishes generating. With the flag on, a catalog that is PAUSED, or at its plan cap,
+gets `{ outcome: 'BLOCKED' }` there and the promotion service only logs it — the dish's model is
+ready and nobody is told. In that branch, when the blocking gates include a subscription code,
+create an owner in-app notification: "The 3D model for <dish> is ready. Publish needs an
+active plan" / "… your <Plan> is full — upgrade to publish it", `action.route:
+'/catalog/subscription'`, deduped per product via `idempotencyKey: 'promo-blocked:' + productId`.
+Non-subscription gates keep today's log-only behaviour.
+
+`requestRetry` (RETRY_FAILED) deliberately does **not** re-run gates — a retry re-sends failed
+rows of a run that was allowed when it started (plan C7, D5). Leave it; do not add the gate
+there (E45).
+
+### Step 3b: Provisioning while not entitled (E15)
+
+A catalog can be provisioned in Mirage for the first time while its subscription is PAUSED or
+CANCELLED (a photo-only publish is allowed then). Mirage's `arEnabled` defaults to `true`, so
+that restaurant would be entitled on the public page while unpaid. In
+`catalogProvisioningService`, right after `mirageRestaurantId` is written, enqueue the
+entitlement job with `enabled: isEntitledTo3D(status)` when a subscription row exists and is
+**not** entitled; do nothing when it is entitled or no row exists.
 
 ### Step 4: Wire resume
 
@@ -281,6 +328,9 @@ the 3D viewer, the AR button, and 3D-dependent features stop.
   `getDataForNewUi`; for the single-item/product endpoints include `restaurant.arEnabled` in the
   response object they already build (field by field, no spread).
 - `isPublished === false` handling is unchanged: unpublish still 404s; pause never does.
+- `get-data-for-new-ui` and the single-item reads answer with `Cache-Control: no-store` (or
+  `max-age=60` at most) so an intermediary/CDN cannot keep serving `arEnabled: true` after a
+  pause (E47).
 
 ### Step 2: Frontend
 
