@@ -37,6 +37,7 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart'
 import 'package:recapture/data/repositories/catalog_repository.dart'
     show BrandingSlot, CatalogQrFormat, CatalogQrImage;
 import 'package:recapture/data/repositories/rep_repository.dart';
+import 'package:recapture/data/repositories/standee_sheet.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
@@ -367,7 +368,7 @@ class FakeRepRepository implements RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
-  ProductFoodType? foodType,
+    ProductFoodType? foodType,
   }) async =>
       throw UnimplementedError();
 
@@ -415,6 +416,18 @@ class FakeRepRepository implements RepRepository {
     StandeeQrFormat format = StandeeQrFormat.pdf,
     int? size,
   }) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<StandeeSheetPlan> standeeSheetPlan(String code) async =>
       throw UnimplementedError();
 }
 

@@ -34,11 +34,12 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/admin/admin_batch_codes_notifier.dart';
-import '../../../data/repositories/admin_standee_repository.dart';
 import '../../../domain/entities/qr_standee.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../../application/standee_sheet_plan.dart';
+import '../../widgets/standee_copies_dialog.dart';
 import 'assign_standee_sheet.dart';
 import 'standee_sheet_dialog.dart';
 
@@ -157,9 +158,10 @@ class AdminBatchDetailScreen extends ConsumerWidget {
                         code: code,
                         busy: state.isBusy(code.code),
                         onSend: code.state.isPrintable
-                            ? () => notifier.deliverStandee(
+                            ? () => _downloadStandee(
+                                  context,
+                                  notifier,
                                   code.code,
-                                  format: StandeeQrFormat.pdf,
                                 )
                             : null,
                         // Offered for the same states that can be printed. A
@@ -189,6 +191,28 @@ class AdminBatchDetailScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Ask how many and which layout, THEN download one code's sheet.
+///
+/// The row's button used to download one one-up sheet on the spot. A
+/// restaurant is handed several standees of ONE code, so the button now asks.
+Future<void> _downloadStandee(
+  BuildContext context,
+  AdminBatchCodesNotifier notifier,
+  String code,
+) async {
+  final choice = await showStandeeCopiesDialog(
+    context,
+    code: code,
+    plan: adminStandeeSheetPlanProvider(code),
+  );
+  if (choice == null || !context.mounted) return;
+  await notifier.deliverStandeeSheet(
+    code,
+    copies: choice.copies,
+    layout: choice.layout,
+  );
 }
 
 /// Ask how many of each, THEN download the sheet.

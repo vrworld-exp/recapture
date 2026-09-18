@@ -110,8 +110,26 @@ export const standeeQrQuerySchema = z
   .object({
     format: z.enum(['png', 'pdf']).default('png'),
     size: z.coerce.number().int().positive().optional(),
+    /**
+     * PDF ONLY, both of them. `copies` is how many of this one code print;
+     * `layout` is whether they print one-up (one big square per page) or on
+     * the batch grid (nine cut-out cards per page). A PNG is one picture, so
+     * either with `format=png` is a request that cannot mean anything — and
+     * is refused rather than silently ignored, because a client that sent
+     * `copies=10` and got one file back has a bug it should hear about.
+     */
+    copies: z.coerce
+      .number()
+      .int('copies must be a whole number')
+      .min(1, 'copies must be at least 1')
+      .max(STANDEE_SHEET_MAX_COPIES, `copies must be at most ${STANDEE_SHEET_MAX_COPIES}`)
+      .default(1),
+    layout: z.enum(['single', 'grid']).default('single'),
   })
-  .strict();
+  .strict()
+  .refine((q) => q.format === 'pdf' || (q.copies === 1 && q.layout === 'single'), {
+    message: 'copies and layout apply to the PDF sheet only',
+  });
 
 export type StandeeQrQuery = z.infer<typeof standeeQrQuerySchema>;
 

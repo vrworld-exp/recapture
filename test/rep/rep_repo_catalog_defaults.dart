@@ -21,6 +21,7 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show BulkProductAction, kCatalogUnchanged;
 import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
+import 'package:recapture/data/repositories/standee_sheet.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -163,4 +164,19 @@ mixin RepRepoCatalogDefaults implements RepRepository {
     Object? categoryId = kCatalogUnchanged,
   }) =>
       throw UnimplementedError('rep bulk move is not exercised by this test');
+
+  // ── One standee's sheet, with copies and a layout ─────────────────────────
+  // Throwing defaults, like everything else here: a suite that exercises the
+  // download dialog overrides both.
+  @override
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) =>
+      throw UnimplementedError('standee sheet is not exercised by this test');
+
+  @override
+  Future<StandeeSheetPlan> standeeSheetPlan(String code) =>
+      throw UnimplementedError('standee plan is not exercised by this test');
 }

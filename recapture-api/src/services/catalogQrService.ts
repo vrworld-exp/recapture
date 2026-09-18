@@ -168,7 +168,8 @@ function halfWidth(text: string, fontSize: number): number {
 function buildPdf(
   image: QrBitmap,
   caption: { primary: string; secondary: string; primaryCode: boolean },
-  logo?: { matrix: QrMatrix; artwork: RgbBitmap }
+  logo?: { matrix: QrMatrix; artwork: RgbBitmap },
+  pages = 1
 ): Buffer {
   const qrSide = 360;
   const qrX = (A4_WIDTH_PT - qrSide) / 2;
@@ -214,18 +215,35 @@ function buildPdf(
     'ET',
   ].join('\n');
 
-  // 1 catalog, 2 pages, 3 page, 4 contents, 5 the code, 6 and 7 the fonts, and
-  // 8 the mark when there is one — last, so a plain sheet's numbering is
-  // exactly what it was before the mark existed.
-  const xobjects = logo ? '/Im0 5 0 R /Logo 8 0 R' : '/Im0 5 0 R';
+  // 1 catalog, 2 pages, then ONE OBJECT PER PAGE (3 for a one-page sheet),
+  // then contents, the code, the two fonts, and the mark when there is one —
+  // last, so a plain sheet's numbering is exactly what it was before the mark
+  // existed. `pages` copies of the sheet are `pages` page objects that all
+  // name the SAME content stream and the same image: a PDF page's /Contents
+  // is a reference, and ten references to one stream is how ten identical
+  // pages cost one square's worth of bytes. For pages = 1 every number below
+  // is the one it always was.
+  const count = Math.max(1, Math.floor(pages));
+  const CONTENTS_OBJ = 3 + count;
+  const IMAGE_OBJ = CONTENTS_OBJ + 1;
+  const F1_OBJ = IMAGE_OBJ + 1;
+  const F2_OBJ = F1_OBJ + 1;
+  const LOGO_OBJ = F2_OBJ + 1;
+  const xobjects = logo ? `/Im0 ${IMAGE_OBJ} 0 R /Logo ${LOGO_OBJ} 0 R` : `/Im0 ${IMAGE_OBJ} 0 R`;
+
+  const kids = Array.from({ length: count }, (_, i) => `${3 + i} 0 R`).join(' ');
+  const pageObjects = Array.from({ length: count }, () =>
+    Buffer.from(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4_WIDTH_PT} ${A4_HEIGHT_PT}] ` +
+        `/Resources << /XObject << ${xobjects} >> /Font << /F1 ${F1_OBJ} 0 R /F2 ${F2_OBJ} 0 R >> >> ` +
+        `/Contents ${CONTENTS_OBJ} 0 R >>`
+    )
+  );
 
   return assemblePdf([
     Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
-    Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
-    Buffer.from(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4_WIDTH_PT} ${A4_HEIGHT_PT}] ` +
-        `/Resources << /XObject << ${xobjects} >> /Font << /F1 6 0 R /F2 7 0 R >> >> /Contents 4 0 R >>`
-    ),
+    Buffer.from(`<< /Type /Pages /Kids [${kids}] /Count ${count} >>`),
+    ...pageObjects,
     contentStreamObject(content),
     imageXObject(image),
     Buffer.from(HELVETICA_OBJECT),
@@ -298,6 +316,12 @@ export async function renderCatalogQr(params: {
    * keeps working; it just does not match the ones downloaded after.
    */
   logo?: boolean;
+  /**
+   * PDF only: how many identical pages the sheet has. A restaurant is handed
+   * several standees of one code, and printing the file ten times is the
+   * step this removes. Ignored for PNG, which is one picture by definition.
+   */
+  copies?: number;
 }): Promise<RenderedQr> {
   const size = clampQrSize(params.size);
   const logo = params.logo === true;
@@ -328,7 +352,8 @@ export async function renderCatalogQr(params: {
             secondary: params.publicUrl,
             primaryCode: false,
           },
-      logo ? { matrix, artwork: await qrLogoForPdf() } : undefined
+      logo ? { matrix, artwork: await qrLogoForPdf() } : undefined,
+      params.copies
     ),
     contentType: 'application/pdf',
     filename: `${slug}-qr.pdf`,

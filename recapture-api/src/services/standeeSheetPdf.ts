@@ -418,9 +418,12 @@ export function buildStandeeSheetPdf(params: {
     // part of the name it separates is not one. The copies clause appears only
     // when there are copies, so the plain sheet's footer is unchanged.
     const each = copies === 1 ? '' : `, ${copies} copies each`;
+    // Pluralised, because the single-code sheet lays out ONE standee on this
+    // grid and "1 standees, 10 copies each" reads as a typo on every page.
+    const noun = items.length === 1 ? 'standee' : 'standees';
     ops.push(
       drawFooter(
-        `${label}   |   Page ${page + 1} of ${pageCount}   |   ${items.length} standees${each}`
+        `${label}   |   Page ${page + 1} of ${pageCount}   |   ${items.length} ${noun}${each}`
       )
     );
 

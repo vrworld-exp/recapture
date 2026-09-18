@@ -29,11 +29,7 @@ import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { QrCode } from '@/models/QrCode';
 import { User } from '@/models/User';
-import {
-  qrCodeParam,
-  repPublishedQuerySchema,
-  standeeQrQuerySchema,
-} from '@/validation/qrSchemas';
+import { qrCodeParam, repPublishedQuerySchema, standeeQrQuerySchema } from '@/validation/qrSchemas';
 import {
   brandingBytesQuerySchema,
   brandingCommitSchema,
@@ -52,11 +48,7 @@ import {
   updateProductSchema,
 } from '@/validation/catalogSchemas';
 import { repActivationSchema, attachQrCodeSchema } from '@/validation/repSchemas';
-import {
-  activate,
-  attachCodeToCatalog,
-  retireCode,
-} from '@/services/activationService';
+import { activate, attachCodeToCatalog, retireCode } from '@/services/activationService';
 import {
   listDelegatedCatalogs,
   resolveDelegatedCatalog,
@@ -66,7 +58,12 @@ import {
   listRepStandees,
   listRepPublishedStandees,
 } from '@/services/standeeAssignmentService';
-import { renderStandeeSheet, STANDEE_ARTWORK_VERSION } from '@/services/standeeSheetService';
+import {
+  planStandeeSheet,
+  renderStandeeSheet,
+  STANDEE_ARTWORK_VERSION,
+} from '@/services/standeeSheetService';
+import { StandeeSheetLayoutError } from '@/services/standeeSheetPdf';
 import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { QrResolverNotConfiguredError } from '@/services/qrCodeService';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
@@ -640,9 +637,7 @@ router.patch(
     );
 
     res.setHeader('Cache-Control', 'no-store');
-    res
-      .status(200)
-      .json({ status: 'success', profile: { ...result.profile, ...account } });
+    res.status(200).json({ status: 'success', profile: { ...result.profile, ...account } });
   })
 );
 
@@ -749,12 +744,7 @@ router.post(
 
     const sniffed = sniffProductImageContentType(body);
     if (sniffed === null) {
-      return fail(
-        res,
-        415,
-        'UNSUPPORTED_MEDIA_TYPE',
-        'That file is not a JPEG, PNG or WebP.'
-      );
+      return fail(res, 415, 'UNSUPPORTED_MEDIA_TYPE', 'That file is not a JPEG, PNG or WebP.');
     }
 
     const rate = await consumeRateWindow(
@@ -833,9 +823,7 @@ router.put(
     );
 
     res.setHeader('Cache-Control', 'no-store');
-    res
-      .status(200)
-      .json({ status: 'success', profile: { ...result.profile, ...account } });
+    res.status(200).json({ status: 'success', profile: { ...result.profile, ...account } });
   })
 );
 
@@ -1173,12 +1161,7 @@ router.post(
 
     const sniffed = sniffProductImageContentType(body);
     if (sniffed === null) {
-      return fail(
-        res,
-        415,
-        'UNSUPPORTED_MEDIA_TYPE',
-        'That file is not a JPEG, PNG or WebP.'
-      );
+      return fail(res, 415, 'UNSUPPORTED_MEDIA_TYPE', 'That file is not a JPEG, PNG or WebP.');
     }
 
     const rate = await consumeRateWindow(
@@ -1291,11 +1274,7 @@ router.patch(
       );
     }
 
-    const result = await updateProduct(
-      String(catalog.userId),
-      params.data.productId,
-      parsed.data
-    );
+    const result = await updateProduct(String(catalog.userId), params.data.productId, parsed.data);
 
     switch (result.outcome) {
       case 'NO_CATALOG':
@@ -1817,11 +1796,11 @@ router.get(
       return fail(res, 404, 'CODE_NOT_FOUND', 'That code is not one of ours.');
     }
 
-    const { format, size } = parsed.data;
+    const { format, size, copies, layout } = parsed.data;
 
     let rendered;
     try {
-      rendered = await renderStandeeSheet({ record, format, size });
+      rendered = await renderStandeeSheet({ record, format, size, copies, layout });
     } catch (err) {
       if (err instanceof QrResolverNotConfiguredError) {
         return fail(
@@ -1843,13 +1822,25 @@ router.get(
       );
     }
 
-    // The SAME key the admin route uses — url, format, size, artwork version
-    // and nothing else — so the two endpoints agree that identical bytes have
-    // an identical tag.
+    // The SAME key the admin route uses — url, format, size, copies, layout
+    // (and the grid's geometry when it is in play), artwork version and
+    // nothing else — so the two endpoints agree that identical bytes have an
+    // identical tag.
     const etag = strongETag({
       url: rendered.url,
       format,
       size: rendered.size,
+      copies,
+      layout,
+      grid:
+        layout === 'grid'
+          ? [
+              env.STANDEE_SHEET_QR_INCHES,
+              env.STANDEE_SHEET_QR_DPI,
+              env.STANDEE_SHEET_COLUMNS,
+              env.STANDEE_SHEET_ROWS,
+            ]
+          : null,
       artwork: STANDEE_ARTWORK_VERSION,
     });
     res.setHeader('ETag', etag);
@@ -1859,9 +1850,55 @@ router.get(
       return;
     }
 
+    if (format === 'pdf') {
+      // What the client says after the download — "10 copies over 2 pages".
+      // The same headers the batch sheet uses, so one client reader covers both.
+      res.setHeader('X-Standee-Sheet-Copies', String(rendered.copies));
+      res.setHeader('X-Standee-Sheet-Pages', String(rendered.pages));
+    }
     res.setHeader('Content-Type', rendered.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
     res.status(200).send(rendered.body);
+  })
+);
+
+/**
+ * GET /rep/standees/:code/qr/plan — what one of this rep's codes would take
+ * to print. The rep's door to the same plan `/admin/qr-codes/:code/qr/plan`
+ * serves, gated the same way the sheet is: a code the rep does not hold is a
+ * 404 indistinguishable from one that does not exist.
+ */
+router.get(
+  '/standees/:code/qr/plan',
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) return invalidCode(res);
+
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const record = await findRepStandee(repUserId, code.data);
+    if (!record) {
+      return fail(res, 404, 'CODE_NOT_FOUND', 'That code is not one of ours.');
+    }
+    if (record.state === 'RETIRED') {
+      return fail(
+        res,
+        409,
+        'CODE_RETIRED',
+        'That standee was retired. Ask for a replacement rather than reprinting it.'
+      );
+    }
+
+    let plan;
+    try {
+      plan = planStandeeSheet();
+    } catch (err) {
+      if (err instanceof StandeeSheetLayoutError) {
+        return fail(res, 409, 'SHEET_LAYOUT_INVALID', err.message);
+      }
+      throw err;
+    }
+
+    res.status(200).json({ status: 'success', plan });
   })
 );
 
@@ -1898,9 +1935,7 @@ router.get(
     // Resolved to an absolute instant HERE, so the service takes a date and is
     // trivially testable against a fixed clock rather than against "now".
     const since =
-      days === undefined
-        ? undefined
-        : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      days === undefined ? undefined : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     let result;
     try {

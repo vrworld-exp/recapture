@@ -36,6 +36,7 @@ import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show ProductImageSlot;
 import 'package:recapture/data/repositories/rep_repository.dart';
+import 'package:recapture/data/repositories/standee_sheet.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/product_food_type.dart';
@@ -173,6 +174,18 @@ class _FakeAdminRepo implements AdminStandeeRepository {
   @override
   Future<BatchSheetPlan> batchSheetPlan(String batchId) async =>
       throw UnimplementedError();
+
+  @override
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<StandeeSheetPlan> standeeSheetPlan(String code) async =>
+      throw UnimplementedError();
 }
 
 class _FakeRepRepo with RepRepoCatalogDefaults implements RepRepository {
@@ -203,6 +216,32 @@ class _FakeRepRepo with RepRepoCatalogDefaults implements RepRepository {
       mimeType: 'application/pdf',
     );
   }
+
+  /// Every (code, copies, layout) the sheet was asked for, in order.
+  final List<({String code, int copies, StandeeSheetLayout layout})> sheets =
+      [];
+
+  @override
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async {
+    sheets.add((code: code, copies: copies, layout: layout));
+    return StandeeSheetDownload(
+      file: QrDownloadFile(
+        bytes: Uint8List.fromList([1, 2, 3]),
+        fileName: 'standee-$code-qr.pdf',
+        mimeType: 'application/pdf',
+      ),
+      copies: copies,
+      pages: layout == StandeeSheetLayout.single ? copies : (copies + 8) ~/ 9,
+    );
+  }
+
+  @override
+  Future<StandeeSheetPlan> standeeSheetPlan(String code) async =>
+      const StandeeSheetPlan(columns: 3, rows: 3, perPage: 9, maxCopies: 50);
 
   @override
   Future<QrCodePreflight> preflight(String code) async =>
@@ -428,17 +467,37 @@ void main() {
       );
     });
 
-    testWidgets('saving hands the file to the platform seam', (tester) async {
+    testWidgets(
+        'saving asks how many and which layout, THEN hands the file over',
+        (tester) async {
       final repo = _FakeRepRepo(assignedStandees: [_standee('ABCD2345')]);
       final deliverer = _FakeDeliverer();
       await tester.pumpWidget(_repStandeesApp(repo, deliverer: deliverer));
       await tester.pumpAndSettle();
 
+      // The Save button no longer downloads on the spot: it asks first, and
+      // nothing is fetched until the dialog's own Download is pressed.
       await tester.tap(find.byKey(const ValueKey('rep_standee_save_ABCD2345')));
       await tester.pumpAndSettle();
+      expect(find.text('Download standee'), findsOneWidget);
+      expect(repo.sheets, isEmpty);
+      expect(repo.filesFor, isEmpty);
 
-      expect(repo.filesFor, ['ABCD2345']);
-      expect(deliverer.delivered.single.fileName, 'standee-ABCD2345.pdf');
+      await tester.enterText(
+        find.byKey(const ValueKey('standee_copies_field')),
+        '10',
+      );
+      await tester.tap(find.byKey(const ValueKey('standee_layout_grid')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('standee_copies_download')));
+      await tester.pumpAndSettle();
+
+      // The number and layout in the dialog are the number and layout in the
+      // request — through the REP's door, which is the one this rep may use.
+      expect(repo.sheets, [
+        (code: 'ABCD2345', copies: 10, layout: StandeeSheetLayout.grid),
+      ]);
+      expect(deliverer.delivered.single.fileName, 'standee-ABCD2345-qr.pdf');
     });
 
     test('only activatable standees are recommended', () async {

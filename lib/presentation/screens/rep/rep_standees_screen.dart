@@ -23,12 +23,12 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_standees_notifier.dart';
-import '../../../data/repositories/admin_standee_repository.dart'
-    show StandeeQrFormat;
+import '../../../application/standee_sheet_plan.dart';
 import '../../../domain/entities/qr_standee.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/standee_copies_dialog.dart';
 
 class RepStandeesScreen extends ConsumerWidget {
   const RepStandeesScreen({super.key});
@@ -95,9 +95,10 @@ class RepStandeesScreen extends ConsumerWidget {
                                 )
                             : null,
                         onSave: standee.isPrintable
-                            ? () => notifier.deliverStandee(
+                            ? () => _saveStandee(
+                                  context,
+                                  notifier,
                                   standee.code,
-                                  format: StandeeQrFormat.pdf,
                                 )
                             : null,
                       );
@@ -108,6 +109,29 @@ class RepStandeesScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Ask how many and which layout, THEN save one standee's sheet.
+///
+/// The Save button used to download one one-up sheet on the spot. A
+/// restaurant is handed several standees of ONE code, so it asks first; the
+/// notifier still owns the download, so the spinner stays on the row.
+Future<void> _saveStandee(
+  BuildContext context,
+  RepStandeesNotifier notifier,
+  String code,
+) async {
+  final choice = await showStandeeCopiesDialog(
+    context,
+    code: code,
+    plan: repStandeeSheetPlanProvider(code),
+  );
+  if (choice == null || !context.mounted) return;
+  await notifier.deliverStandeeSheet(
+    code,
+    copies: choice.copies,
+    layout: choice.layout,
+  );
 }
 
 class _StandeeTile extends StatelessWidget {

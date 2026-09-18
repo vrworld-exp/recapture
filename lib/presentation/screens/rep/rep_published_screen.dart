@@ -36,10 +36,12 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_published_notifier.dart';
+import '../../../application/standee_sheet_plan.dart';
 import '../../../domain/entities/qr_standee.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/standee_copies_dialog.dart';
 import '../../../application/catalog/catalog_link_service.dart';
 
 class RepPublishedScreen extends ConsumerWidget {
@@ -119,7 +121,7 @@ class RepPublishedScreen extends ConsumerWidget {
                               busy: state.isBusy(row.code),
                               onOpen: () => _openMenu(context, ref, row),
                               onDownload: () =>
-                                  notifier.deliverSheet(row.code),
+                                  _downloadStandee(context, notifier, row.code),
                             );
                           },
                         ),
@@ -317,6 +319,28 @@ class _WindowChips extends StatelessWidget {
       );
 }
 
+/// Ask how many and which layout, THEN download one row's sheet.
+///
+/// Same split as the rep's standee list: the dialog owns the question, the
+/// notifier owns the download, so a failure lands on the row.
+Future<void> _downloadStandee(
+  BuildContext context,
+  RepPublishedNotifier notifier,
+  String code,
+) async {
+  final choice = await showStandeeCopiesDialog(
+    context,
+    code: code,
+    plan: repStandeeSheetPlanProvider(code),
+  );
+  if (choice == null || !context.mounted) return;
+  await notifier.deliverStandeeSheet(
+    code,
+    copies: choice.copies,
+    layout: choice.layout,
+  );
+}
+
 class _PublishedTile extends StatelessWidget {
   const _PublishedTile({
     required this.standee,
@@ -406,7 +430,8 @@ class _PublishedTile extends StatelessWidget {
                   icon: const Icon(Icons.save_alt),
                   color: AppColors.textSecondary,
                 ),
-              const Icon(Icons.open_in_new, size: 16, color: AppColors.textMuted),
+              const Icon(Icons.open_in_new,
+                  size: 16, color: AppColors.textMuted),
             ],
           ),
         ),

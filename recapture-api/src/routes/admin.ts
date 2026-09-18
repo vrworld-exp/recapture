@@ -97,6 +97,7 @@ import {
 } from '@/validation/qrSchemas';
 import {
   planBatchStandeeSheet,
+  planStandeeSheet,
   renderBatchStandeeSheet,
   renderStandeeSheet,
   STANDEE_ARTWORK_VERSION,
@@ -1919,11 +1920,11 @@ router.get(
       return;
     }
 
-    const { format, size } = parsed.data;
+    const { format, size, copies, layout } = parsed.data;
 
     let rendered;
     try {
-      rendered = await renderStandeeSheet({ record, format, size });
+      rendered = await renderStandeeSheet({ record, format, size, copies, layout });
     } catch (err) {
       if (err instanceof QrResolverNotConfiguredError) {
         res.status(409).json({
@@ -1950,11 +1951,25 @@ router.get(
     // what it encodes, which is the entire premise of the resolver. Nor is the
     // HOLDER — assigning a standee does not alter one pixel of the sheet, so a
     // reassignment must not invalidate a cached copy. The ARTWORK version is,
-    // because a change to the drawing is invisible to every other key.
+    // because a change to the drawing is invisible to every other key. COPIES
+    // and LAYOUT are, because ten-up on the grid is a different file from
+    // one-up — and the grid's geometry with them, for the same reason the
+    // batch sheet keys on it.
     const etag = strongETag({
       url: rendered.url,
       format,
       size: rendered.size,
+      copies,
+      layout,
+      grid:
+        layout === 'grid'
+          ? [
+              env.STANDEE_SHEET_QR_INCHES,
+              env.STANDEE_SHEET_QR_DPI,
+              env.STANDEE_SHEET_COLUMNS,
+              env.STANDEE_SHEET_ROWS,
+            ]
+          : null,
       artwork: STANDEE_ARTWORK_VERSION,
     });
     res.setHeader('ETag', etag);
@@ -1964,9 +1979,76 @@ router.get(
       return;
     }
 
+    if (format === 'pdf') {
+      // What the client says after the download — "10 copies over 2 pages".
+      // The same headers the batch sheet uses, so one client reader covers both.
+      res.setHeader('X-Standee-Sheet-Copies', String(rendered.copies));
+      res.setHeader('X-Standee-Sheet-Pages', String(rendered.pages));
+    }
     res.setHeader('Content-Type', rendered.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
     res.status(200).send(rendered.body);
+  })
+);
+
+/**
+ * GET /admin/qr-codes/:code/qr/plan — what one code's sheet would take.
+ *
+ * Read by the dialog in front of the single-standee download, which asks how
+ * many copies and which layout (one-up, or the batch grid) before fetching:
+ * the grid's per-page count is the server's, env-tuned and clamped to A4, so
+ * "10 copies on the grid is 2 pages" cannot be computed without asking. Also
+ * refuses a retired code up front, with the same 409 the render would, so the
+ * dialog can say so instead of offering a Download button that will fail.
+ */
+router.get(
+  '/qr-codes/:code/qr/plan',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const code = qrCodeParam.safeParse(req.params.code);
+    if (!code.success) {
+      res.status(400).json({
+        status: 'error',
+        code: 'INVALID_REQUEST',
+        message: 'Invalid QR code',
+      });
+      return;
+    }
+
+    const record = await findByCode(code.data);
+    if (!record) {
+      res.status(404).json({
+        status: 'error',
+        code: 'NOT_FOUND',
+        message: 'No such code',
+      });
+      return;
+    }
+    if (record.state === 'RETIRED') {
+      res.status(409).json({
+        status: 'error',
+        code: 'CODE_RETIRED',
+        message: 'This standee was retired. Mint a replacement rather than reprinting it.',
+      });
+      return;
+    }
+
+    let plan;
+    try {
+      plan = planStandeeSheet();
+    } catch (err) {
+      if (err instanceof StandeeSheetLayoutError) {
+        res.status(409).json({
+          status: 'error',
+          code: 'SHEET_LAYOUT_INVALID',
+          message: err.message,
+        });
+        return;
+      }
+      throw err;
+    }
+
+    res.status(200).json({ status: 'success', plan });
   })
 );
 

@@ -19,6 +19,7 @@ import 'bytes_response.dart';
 import 'catalog_failure.dart';
 import 'catalog_repository.dart'
     show CatalogQrFormat, CatalogQrFormatX, CatalogQrImage;
+import 'standee_sheet.dart';
 
 /// Error codes the standee endpoints return that a screen actually branches on.
 abstract final class AdminStandeeErrorCodes {
@@ -198,6 +199,21 @@ abstract interface class AdminStandeeRepository {
     StandeeQrFormat format,
     int? size,
   });
+
+  /// The printable PDF for one code, [copies] times, in [layout].
+  ///
+  /// [standeeFile] with a count and a layout: a restaurant is handed several
+  /// standees of ONE code, and this is the file with all of them in it. PDF
+  /// only — a PNG is one picture. Refuses the same codes [standeeFile] does.
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  });
+
+  /// What [standeeSheet] would take, without rendering it — the grid, and
+  /// the copies ceiling. Refuses a retired code up front, the same way.
+  Future<StandeeSheetPlan> standeeSheetPlan(String code);
 
   /// What an ACTIVE standee turned into: the restaurant and who activated it.
   ///
@@ -398,6 +414,47 @@ class RemoteAdminStandeeRepository implements AdminStandeeRepository {
         fallbackMime:
             format == StandeeQrFormat.png ? 'image/png' : 'application/pdf',
       ).then((res) => res.file);
+
+  @override
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async {
+    final res = await _bytes(
+      '/admin/qr-codes/$code/qr',
+      query: {
+        'format': StandeeQrFormat.pdf.apiValue,
+        // OMITTED at their defaults, so one copy one-up is the same request
+        // [standeeFile] makes — same URL, same ETag, same cached bytes.
+        if (copies != 1) 'copies': copies,
+        if (layout != StandeeSheetLayout.single) 'layout': layout.apiValue,
+      },
+      fallbackName: 'standee-$code.pdf',
+      fallbackMime: 'application/pdf',
+    );
+    return StandeeSheetDownload(
+      file: res.file,
+      copies: _headerInt(res.headers, 'x-standee-sheet-copies', copies),
+      pages: _headerInt(res.headers, 'x-standee-sheet-pages'),
+    );
+  }
+
+  @override
+  Future<StandeeSheetPlan> standeeSheetPlan(String code) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/admin/qr-codes/$code/qr/plan',
+        );
+        final plan = res.data?['plan'];
+        if (plan is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return StandeeSheetPlan.fromMap(plan);
+      });
 
   @override
   Future<StandeeActivation> activation(String code) =>

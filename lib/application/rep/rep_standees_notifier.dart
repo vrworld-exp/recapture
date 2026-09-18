@@ -21,6 +21,7 @@ import '../../data/repositories/admin_standee_repository.dart'
     show StandeeQrFormat;
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/rep_repository.dart';
+import '../../data/repositories/standee_sheet.dart';
 import '../../domain/entities/qr_standee.dart';
 import '../catalog/catalog_qr_service.dart';
 
@@ -117,8 +118,43 @@ class RepStandeesNotifier extends AutoDisposeNotifier<RepStandeesState> {
       if (_disposed) return;
       await ref.read(qrDelivererProvider).deliver(file);
       if (_disposed) return;
-      state =
-          state.copyWith(busyCode: null, notice: 'Standee $code saved.');
+      state = state.copyWith(busyCode: null, notice: 'Standee $code saved.');
+    } on CatalogFailure catch (failure) {
+      if (_disposed) return;
+      state = state.copyWith(busyCode: null, failure: failure);
+    } catch (_) {
+      if (_disposed) return;
+      state = state.copyWith(
+        busyCode: null,
+        failure: const CatalogFailure(
+          code: 'QR_SAVE_FAILED',
+          message: "We couldn't save that file. Please try again.",
+        ),
+      );
+    }
+  }
+
+  /// [deliverStandee] with a count and a layout — what the dialog in front of
+  /// the row's Save button collected. A restaurant is handed several standees
+  /// of one code, and this is the one file with all of them in it.
+  Future<void> deliverStandeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async {
+    if (state.busyCode != null) return;
+    state = state.copyWith(busyCode: code, failure: null, notice: null);
+
+    try {
+      final sheet =
+          await _repo.standeeSheet(code, copies: copies, layout: layout);
+      if (_disposed) return;
+      await ref.read(qrDelivererProvider).deliver(sheet.file);
+      if (_disposed) return;
+      state = state.copyWith(
+        busyCode: null,
+        notice: standeeSheetNotice(code, sheet),
+      );
     } on CatalogFailure catch (failure) {
       if (_disposed) return;
       state = state.copyWith(busyCode: null, failure: failure);

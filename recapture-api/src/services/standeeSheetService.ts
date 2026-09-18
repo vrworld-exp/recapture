@@ -47,6 +47,49 @@ export const STANDEE_ARTWORK_VERSION = 'mark-1';
 
 export type StandeeSheetFormat = 'png' | 'pdf';
 
+/**
+ * How ONE code's copies are laid out on paper.
+ *
+ * `single` is the one-up sheet — one big square per A4 page, the file this
+ * endpoint always produced — repeated `copies` pages. `grid` is the batch
+ * sheet's layout (nine 1.67in cards to a page by default, with cut guides)
+ * with just this code on it, `copies` times. Two layouts because they are two
+ * different physical objects: the one-up sheet is a table stand, the grid
+ * card is a sticker-sized cutout. Both draw the same square.
+ */
+export type SingleStandeeLayout = 'single' | 'grid';
+
+/** What one code's sheet would take, before it is rendered — for the dialog. */
+export interface StandeeSheetPlan {
+  /** The grid, for the `grid` layout: cards per page and its shape. */
+  columns: number;
+  rows: number;
+  perPage: number;
+  maxCopies: number;
+}
+
+/**
+ * Pages one code takes at `copies` in `layout` — the one formula, shared with
+ * the render below so the number the dialog shows is the number that prints.
+ */
+export function singleStandeePages(
+  copies: number,
+  layout: SingleStandeeLayout,
+  perPage: number
+): number {
+  return layout === 'single' ? copies : Math.max(1, Math.ceil(copies / perPage));
+}
+
+export function planStandeeSheet(): StandeeSheetPlan {
+  const layout = computeSheetLayout();
+  return {
+    columns: layout.columns,
+    rows: layout.rows,
+    perPage: layout.perPage,
+    maxCopies: STANDEE_SHEET_MAX_COPIES,
+  };
+}
+
 export type RenderStandeeSheetResult =
   /**
    * Retirement means a standee was replaced. Rendering one hands somebody a
@@ -63,6 +106,9 @@ export type RenderStandeeSheetResult =
       /** What the QR encodes — used for the caller's ETag, never logged. */
       url: string;
       size: number;
+      /** PDF only: what is in the file. A PNG is one picture and has neither. */
+      copies: number;
+      pages: number;
     };
 
 /**
@@ -77,12 +123,43 @@ export async function renderStandeeSheet(params: {
   record: Pick<IQrCode, 'code' | 'state'>;
   format: StandeeSheetFormat;
   size?: number;
+  /** PDF only — see [SingleStandeeLayout]. Defaults to one copy, one-up. */
+  copies?: number;
+  layout?: SingleStandeeLayout;
 }): Promise<RenderStandeeSheetResult> {
   const { record, format } = params;
   if (record.state === 'RETIRED') return { outcome: 'CODE_RETIRED' };
 
   const url = resolverUrlFor(record.code);
   const size = clampQrSize(params.size);
+  const copies = format === 'pdf' ? clampCopies(params.copies) : 1;
+  const layout = params.layout ?? 'single';
+
+  if (format === 'pdf' && layout === 'grid') {
+    // The batch sheet's builder with a one-item batch: the SAME card, the
+    // same square, the same mark, `copies` of it side by side — so a card cut
+    // off this sheet and one cut off a batch sheet are indistinguishable.
+    const grid = computeSheetLayout();
+    const suffix = copies === 1 ? '' : `-x${copies}`;
+    return {
+      outcome: 'RENDERED',
+      body: buildStandeeSheetPdf({
+        items: [{ code: record.code, url }],
+        tagline: STANDEE_TAGLINE,
+        // The footer names the batch on a batch sheet; here it names the code,
+        // which is the only thing that tells two of these apart in a pile.
+        label: `Standee ${record.code}`,
+        logo: await qrLogoForPdf(),
+        copies,
+      }),
+      contentType: 'application/pdf',
+      filename: `standee-${record.code.toLowerCase()}-qr-grid${suffix}.pdf`,
+      url,
+      size,
+      copies,
+      pages: singleStandeePages(copies, 'grid', grid.perPage),
+    };
+  }
 
   const rendered = await renderCatalogQr({
     publicUrl: url,
@@ -99,15 +176,22 @@ export async function renderStandeeSheet(params: {
     // The Mayasabha mark in the middle of the square — the thing that makes a
     // standee read as ours on a table full of other people's payment codes.
     logo: true,
+    copies,
   });
 
   return {
     outcome: 'RENDERED',
     body: rendered.body,
     contentType: rendered.contentType,
-    filename: rendered.filename,
+    // `-x10` when there are copies, so the ten-page file and the one-page file
+    // do not collide in a downloads folder. A PNG is never suffixed: copies do
+    // not apply to it.
+    filename:
+      copies === 1 ? rendered.filename : rendered.filename.replace(/\.pdf$/, `-x${copies}.pdf`),
     url,
     size,
+    copies,
+    pages: format === 'pdf' ? singleStandeePages(copies, 'single', 1) : 0,
   };
 }
 

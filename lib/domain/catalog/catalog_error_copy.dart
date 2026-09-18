@@ -93,6 +93,17 @@ const Map<String, CatalogErrorCopy> _copy = {
     'The download was cancelled or blocked.',
     'Try again, or photograph the code on screen.',
   ),
+  // ── One standee's sheet (admin and rep) ───────────────────────────────────
+  // Both are REFUSALS, not outages: the same press gets the same answer, so
+  // neither may fall through to "try again in a moment".
+  'CODE_RETIRED': CatalogErrorCopy(
+    'This standee was retired, so it cannot be printed again.',
+    'Use a replacement standee.',
+  ),
+  'CODE_NOT_FOUND': CatalogErrorCopy(
+    'That code is not one of yours.',
+    'Check the eight characters, or ask an admin to assign it to you.',
+  ),
   // ── The printable batch sheet (admin) ─────────────────────────────────────
   // Both refusals name a DIFFERENT button as the way out, which is exactly why
   // they cannot be left to fall through to "try again in a moment": an admin

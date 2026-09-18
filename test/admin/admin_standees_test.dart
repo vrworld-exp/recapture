@@ -22,6 +22,7 @@ import 'package:recapture/data/repositories/catalog_repository.dart'
     show CatalogQrFormat, CatalogQrImage;
 import 'package:recapture/domain/entities/standee_activation.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
+import 'package:recapture/data/repositories/standee_sheet.dart';
 import 'package:recapture/domain/entities/qr_standee.dart';
 
 QrBatchSummary _batch({String id = 'b1', int unassigned = 5}) => QrBatchSummary(
@@ -186,6 +187,35 @@ class _FakeRepo implements AdminStandeeRepository {
       cards: sheetStandees * copies,
     );
   }
+
+  // ── One standee's sheet, with copies and a layout ──────────────────────────
+  /// Every (code, copies, layout) the sheet was asked for, in order.
+  final List<({String code, int copies, StandeeSheetLayout layout})>
+      standeeSheets = [];
+  int standeeSheetPages = 1;
+
+  @override
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async {
+    standeeSheets.add((code: code, copies: copies, layout: layout));
+    if (fileThrows != null) throw fileThrows!;
+    return StandeeSheetDownload(
+      file: QrDownloadFile(
+        bytes: Uint8List.fromList([8, 9]),
+        fileName: 'standee-$code-qr.pdf',
+        mimeType: 'application/pdf',
+      ),
+      copies: copies,
+      pages: standeeSheetPages,
+    );
+  }
+
+  @override
+  Future<StandeeSheetPlan> standeeSheetPlan(String code) async =>
+      const StandeeSheetPlan(columns: 3, rows: 3, perPage: 9, maxCopies: 50);
 
   CatalogFailure? planThrows;
   BatchSheetPlan plan = const BatchSheetPlan(
@@ -381,6 +411,73 @@ void main() {
       expect(repo.filesFor, ['AAAA1111']);
       expect(deliverer.delivered.single.fileName, 'standee-AAAA1111.pdf');
       expect(container.read(provider).busyCode, isNull);
+    });
+
+    test('a standee sheet carries the copies and layout the dialog collected',
+        () async {
+      final repo = _FakeRepo()..standeeSheetPages = 2;
+      final deliverer = _FakeDeliverer();
+      final container = _containerWith(repo, deliverer);
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).deliverStandeeSheet(
+            'AAAA1111',
+            copies: 10,
+            layout: StandeeSheetLayout.grid,
+          );
+
+      // THE assertion: what was chosen is what was requested. A dialog that
+      // said "10 on the grid" and fetched one one-up sheet would be found out
+      // at the restaurant, after the paper is cut.
+      expect(repo.standeeSheets, [
+        (code: 'AAAA1111', copies: 10, layout: StandeeSheetLayout.grid),
+      ]);
+      expect(deliverer.delivered.single.mimeType, 'application/pdf');
+      expect(
+        container.read(provider).notice,
+        'Standee AAAA1111 saved — 10 copies over 2 pages.',
+      );
+      expect(container.read(provider).busyCode, isNull);
+    });
+
+    test('one copy one-up says exactly what the plain download said', () async {
+      final repo = _FakeRepo();
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).deliverStandeeSheet('AAAA1111');
+
+      expect(repo.standeeSheets.single.copies, 1);
+      expect(repo.standeeSheets.single.layout, StandeeSheetLayout.single);
+      expect(container.read(provider).notice, 'Standee AAAA1111 saved.');
+    });
+
+    test('a refused standee sheet surfaces its typed code and keeps the list',
+        () async {
+      final repo = _FakeRepo()
+        ..fileThrows = const CatalogFailure(
+          code: 'CODE_RETIRED',
+          message: 'retired',
+          statusCode: 409,
+        );
+      final container = _containerWith(repo, _FakeDeliverer());
+      final provider = adminBatchCodesProvider('b1');
+      container.listen(provider, (_, __) {});
+      await pumpEventQueue();
+
+      await container.read(provider.notifier).deliverStandeeSheet(
+            'AAAA1111',
+            copies: 3,
+          );
+
+      final state = container.read(provider);
+      expect(state.failure?.code, 'CODE_RETIRED');
+      expect(state.codes.valueOrNull, hasLength(1));
+      expect(state.busyCode, isNull);
     });
 
     test('the batch CSV goes through the same seam', () async {

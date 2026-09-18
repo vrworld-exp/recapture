@@ -16,6 +16,7 @@ import '../../application/catalog/qr_download_file.dart';
 import '../../domain/entities/qr_code_preflight.dart';
 import '../../domain/entities/qr_standee.dart';
 import 'admin_standee_repository.dart' show StandeeQrFormat;
+import 'standee_sheet.dart';
 import 'bytes_response.dart';
 import 'catalog_repository.dart'
     show
@@ -127,6 +128,7 @@ abstract interface class RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
+
     /// Omit for veg — the server default. Only an explicit choice is sent.
     ProductFoodType? foodType,
   });
@@ -185,6 +187,19 @@ abstract interface class RepRepository {
     StandeeQrFormat format,
     int? size,
   });
+
+  /// The printable PDF for one of THIS rep's standees, [copies] times, in
+  /// [layout] — [standeeFile] with a count and a layout, gated the same way.
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  });
+
+  /// What [standeeSheet] would take — the grid and the copies ceiling. A code
+  /// the rep does not hold answers [RepErrorCodes.codeNotFound], as
+  /// [standeeFile] does.
+  Future<StandeeSheetPlan> standeeSheetPlan(String code);
 
   /// The RESTAURANT's own QR code — the square a customer scans to open the
   /// menu, rendered from the delegated catalog's frozen `publicUrl`.
@@ -856,6 +871,72 @@ class RemoteRepRepository implements RepRepository {
       throw CatalogFailure.fromDio(withDecodedBody(error));
     }
   }
+
+  @override
+  Future<StandeeSheetDownload> standeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async {
+    // Same bytes-mode shape as [standeeFile], for the same reason: a 409
+    // CODE_RETIRED must arrive as its code, not as an undecodable byte array.
+    try {
+      final res = await _dio.get<List<int>>(
+        '/rep/standees/$code/qr',
+        queryParameters: {
+          'format': StandeeQrFormat.pdf.apiValue,
+          // OMITTED at their defaults, so one copy one-up is the request
+          // [standeeFile] makes — same URL, same ETag, same cached bytes.
+          if (copies != 1) 'copies': copies,
+          if (layout != StandeeSheetLayout.single) 'layout': layout.apiValue,
+        },
+        options: Options(responseType: ResponseType.bytes),
+      );
+
+      final data = res.data;
+      if (data == null || data.isEmpty) {
+        throw const CatalogFailure(
+          code: 'MALFORMED_RESPONSE',
+          message: 'Something went wrong. Please try again.',
+        );
+      }
+
+      int header(String name, [int fallback = 0]) =>
+          int.tryParse(res.headers.value(name) ?? '') ?? fallback;
+
+      return StandeeSheetDownload(
+        file: QrDownloadFile(
+          bytes: Uint8List.fromList(data),
+          fileName: fileNameFromDisposition(
+                res.headers.value('content-disposition'),
+              ) ??
+              'standee-$code.pdf',
+          mimeType:
+              res.headers.value(Headers.contentTypeHeader) ?? 'application/pdf',
+        ),
+        copies: header('x-standee-sheet-copies', copies),
+        pages: header('x-standee-sheet-pages'),
+      );
+    } on DioException catch (error) {
+      throw CatalogFailure.fromDio(withDecodedBody(error));
+    }
+  }
+
+  @override
+  Future<StandeeSheetPlan> standeeSheetPlan(String code) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/rep/standees/$code/qr/plan',
+        );
+        final plan = res.data?['plan'];
+        if (plan is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return StandeeSheetPlan.fromMap(plan);
+      });
 
   @override
   Future<CatalogQrImage> catalogQr(

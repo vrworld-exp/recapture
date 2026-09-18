@@ -662,6 +662,19 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   and so refuses exactly what the sheet refuses; the dialog computes
   `ceil(standees × copies / perPage)` live — the same `sheetPageCount` formula
   the server uses for `X-Standee-Sheet-Pages`.
+- **The single-code sheet takes `copies` and `layout` too.** `GET /admin/
+  qr-codes/:code/qr?format=pdf&copies=N&layout=single|grid` and the rep's
+  `/rep/standees/:code/qr` (same schema, `standeeQrQuerySchema`). `single` is
+  the one-up sheet repeated N pages — N page objects sharing ONE content stream
+  and ONE image (`catalogQrService.buildPdf(…, pages)`; for N = 1 the object
+  numbering is exactly what it was). `grid` is `buildStandeeSheetPdf` with a
+  one-item batch, footer `Standee <code>`. Both are PDF-only: `copies`/`layout`
+  with `format=png` is a 400. Both are in the ETag, plus the grid geometry when
+  `layout=grid`; filenames gain `-grid` and/or `-xN`. `…/qr/plan` (both doors)
+  returns `{columns, rows, perPage, maxCopies}` for the dialog
+  (`standee_copies_dialog.dart`, shared by the admin batch screen and the rep's
+  standee and published lists). Client: `standeeSheet(code, {copies, layout})`
+  + `standeeSheetPlan(code)` on both repositories; `standeeFile` is unchanged.
 - **RETIRED codes are SKIPPED on a batch sheet, not refused.** The single-code
   endpoints answer `409 CODE_RETIRED` because rendering one hands somebody a dead
   sheet; a whole batch cannot be refused over one dead code. The count comes back

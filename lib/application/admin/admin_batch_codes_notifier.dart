@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/admin_standee_repository.dart';
 import '../../data/repositories/catalog_failure.dart';
+import '../../data/repositories/standee_sheet.dart';
 import '../../domain/entities/qr_standee.dart';
 import '../catalog/catalog_qr_service.dart';
 import 'batch_sheet_plan.dart';
@@ -174,6 +175,32 @@ class AdminBatchCodesNotifier
     await _deliver(
       () => _repo.standeeFile(code, format: format),
       onDone: (s) => s.copyWith(busyCode: null, notice: 'Standee $code saved.'),
+      onFail: (s, failure) => s.copyWith(busyCode: null, failure: failure),
+    );
+  }
+
+  /// Fetches one code's sheet — [copies] of it, in [layout] — and hands it
+  /// to the platform. What the dialog in front of the row's button collected.
+  Future<void> deliverStandeeSheet(
+    String code, {
+    int copies = 1,
+    StandeeSheetLayout layout = StandeeSheetLayout.single,
+  }) async {
+    if (state.busyCode != null) return;
+    state = state.copyWith(busyCode: code, failure: null, notice: null);
+
+    StandeeSheetDownload? sheet;
+    await _deliver(
+      () async {
+        final fetched =
+            await _repo.standeeSheet(code, copies: copies, layout: layout);
+        sheet = fetched;
+        return fetched.file;
+      },
+      onDone: (s) => s.copyWith(
+        busyCode: null,
+        notice: standeeSheetNotice(code, sheet!),
+      ),
       onFail: (s, failure) => s.copyWith(busyCode: null, failure: failure),
     );
   }
