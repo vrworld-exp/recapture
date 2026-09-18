@@ -52,6 +52,14 @@ export interface ICatalogPublishRun extends Document {
   /** Run-level failure. Per-target failures live on `entries[]`. */
   error?: PublishRunError;
   entries: PublishRunEntry[];
+  /**
+   * How many READY-model dishes the run's SNAPSHOT carried, per §3b of the
+   * subscription plan. WORKER-OWNED, written once right after the snapshot is
+   * taken, and AUDIT ONLY: the gate that enforces the cap ran at request time
+   * over the same list, and nothing in the worker branches on this number.
+   * Absent on runs from before the field existed.
+   */
+  threeDDishCount?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -112,6 +120,7 @@ const CatalogPublishRunSchema = new Schema<ICatalogPublishRun>(
     idempotencyKey: { type: String, maxlength: 128 },
     error: { type: PublishRunErrorSchema },
     entries: { type: [PublishRunEntrySchema], required: true, default: [] },
+    threeDDishCount: { type: Number, min: 0 },
   },
   { timestamps: true }
 );

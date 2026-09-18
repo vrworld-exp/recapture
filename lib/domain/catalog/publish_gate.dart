@@ -46,6 +46,12 @@ enum PublishGateCode {
   /// Categories exist and this product is in none of them.
   productUncategorized,
   publishingUnavailable,
+  /// No subscription row, or a lapsed one and the menu has 3D dishes. SERVER
+  /// ONLY — the client cannot see the subscription; [evaluateDraftGates] must
+  /// never attempt it. Dormant until the backend's Stage 5 flag flips.
+  subscriptionRequired,
+  /// More 3D dishes than the plan in force covers. Server only, as above.
+  subscriptionCapacityExceeded,
   unknown,
 }
 
@@ -63,6 +69,9 @@ extension PublishGateCodeX on PublishGateCode {
         PublishGateCode.catalogNoCategories => 'CATALOG_NO_CATEGORIES',
         PublishGateCode.productUncategorized => 'PRODUCT_UNCATEGORIZED',
         PublishGateCode.publishingUnavailable => 'PUBLISHING_UNAVAILABLE',
+        PublishGateCode.subscriptionRequired => 'SUBSCRIPTION_REQUIRED',
+        PublishGateCode.subscriptionCapacityExceeded =>
+          'SUBSCRIPTION_CAPACITY_EXCEEDED',
         PublishGateCode.unknown => 'UNKNOWN',
       };
 
@@ -79,6 +88,9 @@ extension PublishGateCodeX on PublishGateCode {
         'CATALOG_NO_CATEGORIES' => PublishGateCode.catalogNoCategories,
         'PRODUCT_UNCATEGORIZED' => PublishGateCode.productUncategorized,
         'PUBLISHING_UNAVAILABLE' => PublishGateCode.publishingUnavailable,
+        'SUBSCRIPTION_REQUIRED' => PublishGateCode.subscriptionRequired,
+        'SUBSCRIPTION_CAPACITY_EXCEEDED' =>
+          PublishGateCode.subscriptionCapacityExceeded,
         _ => PublishGateCode.unknown,
       };
 
@@ -103,6 +115,12 @@ extension PublishGateCodeX on PublishGateCode {
         // is one screen and one action away — the label says the action.
         PublishGateCode.catalogNoCategories => 'Create a category',
         PublishGateCode.productUncategorized => 'Pick a category',
+        // The subscription rows have a label but, in this stage, no screen:
+        // both publish screens answer `canFix: false` for them, so the button
+        // never renders. Stage 2 wires the trial / plan screens and turns
+        // these into the action ("Start trial", "Upgrade plan").
+        PublishGateCode.subscriptionRequired => 'Subscription needed',
+        PublishGateCode.subscriptionCapacityExceeded => 'Plan limit reached',
         PublishGateCode.productThumbnailMissing => null,
         PublishGateCode.productModelNotReady => null,
         PublishGateCode.publishingUnavailable => null,

@@ -63,6 +63,7 @@ import {
   type CatalogSnapshot,
 } from '@/services/catalog/publishSnapshot';
 import { MirageError, warmUpMirage } from '@/services/mirage';
+import { countThreeDDishes } from '@/services/subscription/threeDDishCount';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
 import { sweepPromotedProducts } from '@/services/catalogModelPromotionService';
@@ -249,6 +250,27 @@ function buildContext(
   };
 }
 
+/**
+ * Audit write: how many 3D dishes this run's snapshot carries, on the run.
+ *
+ * The same rule the request-time gate applied (`countThreeDDishes`), over the
+ * same set — the snapshot holds archived and soft-deleted rows too (so their
+ * DELETEs can be planned), and those are excluded HERE, by the caller, exactly
+ * as `publishableProducts` excludes them before the gate. A dish awaiting its
+ * first model is not READY and drops out on its own. Nothing branches on the
+ * number; it is there so a cap dispute can be settled from the run.
+ */
+async function recordThreeDDishCount(
+  runId: Types.ObjectId,
+  snapshot: CatalogSnapshot
+): Promise<void> {
+  const live = snapshot.products.filter((product) => !product.deletedAt && !product.archivedAt);
+  await CatalogPublishRun.updateOne(
+    { _id: runId },
+    { $set: { threeDDishCount: countThreeDDishes(live) } }
+  ).exec();
+}
+
 export const mirageCatalogPublishProcessor: JobProcessor = async (job) => {
   const { catalogId, publishRunId, mode, productIds } = parsePayload(job);
   const runId = new Types.ObjectId(publishRunId);
@@ -286,6 +308,7 @@ export const mirageCatalogPublishProcessor: JobProcessor = async (job) => {
     const totals = planTotals(plan);
 
     await resetRunCounts(runId, totals.total);
+    await recordThreeDDishCount(runId, snapshot);
     track(AnalyticsEvent.CATALOG_PUBLISH_STARTED, {
       user_id_hash: userIdHash,
       catalog_id: catalogId,

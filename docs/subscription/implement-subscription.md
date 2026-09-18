@@ -192,7 +192,7 @@ What you have
 - Each file is a ready-made instruction for Claude Code. You do not write any code yourself.
 - Stage 3 and stage 5 have two halves inside: Part A and Part B. Treat each half as its own prompt.
 
-The order
+------------------- The order ----------------------------
 1. stage-01-foundations.md
 2. stage-02-trial-and-status.md
 3. stage-03-payments.md  -> Part A first, then Part B

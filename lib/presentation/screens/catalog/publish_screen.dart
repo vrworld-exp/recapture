@@ -91,12 +91,28 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
       case PublishGateCode.productThumbnailMissing:
       case PublishGateCode.productModelNotReady:
       case PublishGateCode.publishingUnavailable:
+      // The subscription screens do not exist yet (Stage 2); `_canFix` keeps
+      // the button off these rows until they do.
+      case PublishGateCode.subscriptionRequired:
+      case PublishGateCode.subscriptionCapacityExceeded:
       case PublishGateCode.unknown:
         return;
     }
     if (!mounted) return;
     await ref.read(publishProvider.notifier).refresh();
   }
+
+  /// Whether this screen has somewhere to send the user for [gate].
+  ///
+  /// The two subscription gates carry a label but, in this stage, no screen —
+  /// the trial and plan screens are Stage 2. Until then the row shows the
+  /// server's sentence and nothing to press.
+  bool _canFix(PublishGate gate) => switch (gate.code) {
+        PublishGateCode.subscriptionRequired ||
+        PublishGateCode.subscriptionCapacityExceeded =>
+          false,
+        _ => true,
+      };
 
   /// Opens the preview, which shows the SAME warnings against the products they
   /// are about — the checklist says what is wrong, the preview shows where.
@@ -233,6 +249,7 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
                 ref.read(publishProvider.notifier).retryFailed(),
             onUnpublish: _confirmUnpublish,
             onFixGate: _fix,
+            canFix: _canFix,
             onOpenPreview: _openPreview,
             onRename: (name) =>
                 ref.read(publishProvider.notifier).renameAndPublish(name),

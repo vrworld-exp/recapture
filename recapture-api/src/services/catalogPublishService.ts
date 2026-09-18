@@ -29,6 +29,7 @@ import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogDelegation } from '@/models/CatalogDelegation';
 import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun, type ICatalogPublishRun } from '@/models/CatalogPublishRun';
+import { CatalogSubscription } from '@/models/CatalogSubscription';
 import { Job } from '@/models/Job';
 import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
@@ -47,6 +48,12 @@ import { hasActiveRun, releaseAbandonedRun } from '@/services/catalog/publishRun
 import { CatalogSyncErrorCode, syncFailure } from '@/services/catalog/publishSyncErrors';
 import { mirageCategoryName } from '@/services/catalog/categorySync';
 import { getMirageClient, isMirageConfigured, MirageError } from '@/services/mirage';
+import {
+  evaluateSubscriptionGate,
+  isSubscriptionGateEnabled,
+} from '@/services/subscription/subscriptionGate';
+import { countThreeDDishes } from '@/services/subscription/threeDDishCount';
+import { track, AnalyticsEvent } from '@/utils/analytics';
 import { isValidCatalogSlug } from '@/utils/catalogNames';
 
 // ── Gates ───────────────────────────────────────────────────────────────────
@@ -78,6 +85,10 @@ export const PublishGateCode = {
   CATEGORY_NAME_INVALID: 'CATEGORY_NAME_INVALID',
   /** MIRAGE_* config is absent on this deployment. */
   PUBLISHING_UNAVAILABLE: 'PUBLISHING_UNAVAILABLE',
+  /** No subscription row, or a lapsed one with 3D dishes to publish (§5). Off until Stage 5. */
+  SUBSCRIPTION_REQUIRED: 'SUBSCRIPTION_REQUIRED',
+  /** More READY-model dishes than the plan in force covers (§3a). Off until Stage 5. */
+  SUBSCRIPTION_CAPACITY_EXCEEDED: 'SUBSCRIPTION_CAPACITY_EXCEEDED',
 } as const;
 
 export type PublishGateCodeValue = (typeof PublishGateCode)[keyof typeof PublishGateCode];
@@ -89,6 +100,12 @@ export interface PublishGate {
   /** The product this is about, when it is about one. */
   productId?: string;
   productName?: string;
+  /**
+   * Numbers the client may want to render beside the sentence — the 3D count
+   * and the cap on SUBSCRIPTION_CAPACITY_EXCEEDED. Never a message, never
+   * catalog content; the sentence stays the thing the checklist shows.
+   */
+  meta?: Record<string, string | number>;
 }
 
 /**
@@ -391,7 +408,8 @@ function isAwaitingFirstModel(product: ICatalogProduct): boolean {
  */
 export async function evaluatePublishGates(
   catalog: ICatalog,
-  products: readonly ICatalogProduct[]
+  products: readonly ICatalogProduct[],
+  options: EvaluatePublishGatesOptions = {}
 ): Promise<PublishGate[]> {
   const gates: PublishGate[] = [];
 
@@ -433,7 +451,49 @@ export async function evaluatePublishGates(
   ]);
   gates.push(...modelGates, ...categoryGates);
 
+  // LAST, so the checklist's existing row order is untouched. Behind an ops
+  // flag that is absent everywhere until Stage 5; a config outage reads as
+  // "off" (see isSubscriptionGateEnabled), never as "no subscription".
+  if (await isSubscriptionGateEnabled()) {
+    const subscription = await CatalogSubscription.findOne({ catalogId: catalog._id })
+      .lean()
+      .exec();
+    const threeDDishCount = countThreeDDishes(live);
+    const subscriptionGates = evaluateSubscriptionGate({ subscription, threeDDishCount });
+    gates.push(...subscriptionGates);
+
+    if (options.isPublishAttempt && subscriptionGates.length > 0) {
+      for (const gate of subscriptionGates) {
+        track(AnalyticsEvent.PUBLISH_BLOCKED_BY_SUBSCRIPTION, {
+          catalog_id: (catalog._id as Types.ObjectId).toHexString(),
+          // Not `gate_code`: the emitter strips any prop whose NAME contains
+          // "code" as a suspected secret, and the event would arrive blank.
+          gate: gate.code as SubscriptionGateCodeValue,
+          subscription_status: subscription?.status ?? 'NONE',
+          three_d_dish_count: threeDDishCount,
+          three_d_dish_cap: subscription?.threeDDishCap ?? -1,
+        });
+      }
+    }
+  }
+
   return gates;
+}
+
+/** The two gate codes the subscription layer can produce. */
+type SubscriptionGateCodeValue =
+  | typeof PublishGateCode.SUBSCRIPTION_REQUIRED
+  | typeof PublishGateCode.SUBSCRIPTION_CAPACITY_EXCEEDED;
+
+export interface EvaluatePublishGatesOptions {
+  /**
+   * True from the publish and retry endpoints, false (the default) from the
+   * status read. The gates are the same either way; the difference is that a
+   * blocked ATTEMPT is the number `publish_blocked_by_subscription` counts,
+   * and the publish screen re-reads status on a loop while the checklist is
+   * up — counting each of those would make the metric say nothing.
+   */
+  isPublishAttempt?: boolean;
 }
 
 // ── The immutable mapping ───────────────────────────────────────────────────
@@ -688,7 +748,7 @@ export async function requestPublish(
   }
 
   const products = await CatalogProduct.find({ catalogId, deletedAt: null }).exec();
-  const gates = await evaluatePublishGates(catalog, products);
+  const gates = await evaluatePublishGates(catalog, products, { isPublishAttempt: true });
   if (gates.length > 0) return { outcome: 'BLOCKED', gates };
 
   // Provisioning is idempotent and returns the stored mapping without a Mirage

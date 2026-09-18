@@ -75,8 +75,15 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
   /// rename one — and the rep's category manager
   /// (`/rep/catalogs/:id/categories`) closed that. The body still asks, so a
   /// gate that grows a label before it grows a screen can be turned off here
-  /// rather than offering a button that opens nothing.
-  bool _canFix(PublishGate gate) => true;
+  /// rather than offering a button that opens nothing. The two subscription
+  /// gates are exactly that case until Stage 2 builds the rep's trial and
+  /// plan screens.
+  bool _canFix(PublishGate gate) => switch (gate.code) {
+        PublishGateCode.subscriptionRequired ||
+        PublishGateCode.subscriptionCapacityExceeded =>
+          false,
+        _ => true,
+      };
 
   /// Sends the rep to whatever fixes [gate], then re-reads.
   ///
@@ -108,6 +115,9 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
       case PublishGateCode.productThumbnailMissing:
       case PublishGateCode.productModelNotReady:
       case PublishGateCode.publishingUnavailable:
+      // The rep's subscription screens are Stage 2; `_canFix` says so.
+      case PublishGateCode.subscriptionRequired:
+      case PublishGateCode.subscriptionCapacityExceeded:
       case PublishGateCode.unknown:
         return;
     }

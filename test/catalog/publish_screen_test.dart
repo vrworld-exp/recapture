@@ -204,6 +204,44 @@ void main() {
       expect(find.byIcon(Icons.hourglass_empty), findsOneWidget);
     });
 
+    testWidgets('renders the subscription gates with the server\'s sentence '
+        'and, in this stage, nothing to press', (tester) async {
+      final repo = FakePublishRepository(
+        status: statusPayload(
+          gates: [
+            gatePayload(
+              code: 'SUBSCRIPTION_REQUIRED',
+              message: 'No subscription yet — start a free trial or activate '
+                  'a plan to publish.',
+            ),
+            gatePayload(
+              code: 'SUBSCRIPTION_CAPACITY_EXCEEDED',
+              message: 'Menu has 17 3D dishes; your Signature plan covers 15. '
+                  'Upgrade to publish all of them.',
+            ),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('publish_gate_checklist')),
+          findsOneWidget);
+      expect(find.textContaining('start a free trial'), findsOneWidget);
+      expect(find.textContaining('your Signature plan covers 15'),
+          findsOneWidget);
+      // Blockers, not waits — and no destination exists yet (Stage 2), so
+      // the labels stay off the screen rather than opening nothing.
+      expect(find.byIcon(Icons.hourglass_empty), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Subscription needed'),
+          findsNothing);
+      expect(find.widgetWithText(TextButton, 'Plan limit reached'),
+          findsNothing);
+      expect(_ctaOf(tester).onPressed, isNull);
+      expect(repo.publishCalls, 0);
+    });
+
     testWidgets('deep-links into the preview, where the warnings sit on the '
         'products they are about', (tester) async {
       final repo = FakePublishRepository(

@@ -263,6 +263,20 @@ there.
   `code`. The emitter strips any property whose NAME contains `code` as a
   suspected OTP/secret leak, so a prop called `code` would be dropped silently.
 
+### `publish_blocked_by_subscription`
+- **When:** `POST /catalog/publish` (or the rep's delegated publish) was
+  refused by a subscription gate. Fires once per subscription gate on the
+  attempt. NOT emitted by the status read, which runs the same gates on a poll
+  loop while the checklist is up. Dormant until Stage 5 sets
+  `subscriptionGatesEnabled: true` on the config document.
+- **Props:** `catalog_id` (string),
+  `gate` (`SUBSCRIPTION_REQUIRED`|`SUBSCRIPTION_CAPACITY_EXCEEDED`),
+  `subscription_status` (`TRIAL`|`ACTIVE`|`GRACE`|`PAUSED`|`CANCELLED`|`COMPED`|`NONE`),
+  `three_d_dish_count` (int ≥ 0), `three_d_dish_cap` (int ≥ -1; -1 = uncapped)
+- **Note:** the gate travels as `gate`, NOT `gate_code`, for the same reason
+  `failure_reason` is not `code` above — the emitter strips property names
+  containing `code`.
+
 ## Pre-printed standee inventory
 
 ### `qr_batch_minted`

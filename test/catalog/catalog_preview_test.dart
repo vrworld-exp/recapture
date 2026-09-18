@@ -310,6 +310,28 @@ void main() {
         isNot(contains(PublishGateCode.productModelNotReady)),
       );
     });
+
+    test('the subscription gates are server-only and never appear in a draft',
+        () {
+      // The client has no view of the subscription row; both codes come only
+      // from the publish endpoint and the status read.
+      final gates = evaluateDraftGates(
+        catalogName: '',
+        products: [
+          for (var i = 0; i < 40; i++)
+            withGlb(product('p$i'), 'https://cdn/$i.glb'),
+        ],
+        categoryIds: const [],
+      );
+      expect(
+        gates.map((g) => g.code),
+        isNot(contains(PublishGateCode.subscriptionRequired)),
+      );
+      expect(
+        gates.map((g) => g.code),
+        isNot(contains(PublishGateCode.subscriptionCapacityExceeded)),
+      );
+    });
   });
 
   group('composition', () {

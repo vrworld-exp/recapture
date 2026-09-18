@@ -14,6 +14,7 @@
 // tests pin those fallbacks — several of them are deliberate product decisions,
 // not arbitrary defaults.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/publish_gate.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
@@ -564,6 +565,29 @@ void main() {
       expect(ProductSyncStatus.pending.apiValue, 'PENDING');
       expect(ProductSyncStatus.synced.apiValue, 'SYNCED');
       expect(ProductSyncStatus.failed.apiValue, 'FAILED');
+    });
+
+    test('PublishGateCode round-trips the subscription codes', () {
+      for (final code in [
+        PublishGateCode.subscriptionRequired,
+        PublishGateCode.subscriptionCapacityExceeded,
+      ]) {
+        expect(PublishGateCodeX.fromApiValue(code.apiValue), code);
+      }
+      expect(
+        PublishGateCodeX.fromApiValue('SUBSCRIPTION_REQUIRED'),
+        PublishGateCode.subscriptionRequired,
+      );
+      expect(
+        PublishGateCodeX.fromApiValue('SUBSCRIPTION_CAPACITY_EXCEEDED'),
+        PublishGateCode.subscriptionCapacityExceeded,
+      );
+      // Neither clears itself: a lapsed plan is not a wait.
+      expect(PublishGateCode.subscriptionRequired.resolvesItself, isFalse);
+      expect(
+        PublishGateCode.subscriptionCapacityExceeded.resolvesItself,
+        isFalse,
+      );
     });
 
     test('parsing is case-insensitive and total', () {

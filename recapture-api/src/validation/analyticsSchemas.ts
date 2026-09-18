@@ -31,6 +31,8 @@ import {
   PUBLISH_TARGET_KINDS,
 } from '@/models/types/catalog.types';
 import { BULK_PRODUCT_ACTIONS } from '@/validation/catalogSchemas';
+// And for the subscription layer's status vocabulary (the gate's "why").
+import { SUBSCRIPTION_STATUSES } from '@/models/types/subscription.types';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -115,6 +117,11 @@ export const AnalyticsEvent = {
   // helping or just in the way.
   CATALOG_PUBLISH_REQUESTED: 'catalog_publish_requested',
   CATALOG_UNPUBLISH_REQUESTED: 'catalog_unpublish_requested',
+  // A publish ATTEMPT refused by one of the two subscription gates. Off until
+  // Stage 5 flips `subscriptionGatesEnabled`; emitted by the gate wiring in
+  // catalogPublishService, once per subscription gate, only on an attempt
+  // (never on the status poll, which runs the same gates).
+  PUBLISH_BLOCKED_BY_SUBSCRIPTION: 'publish_blocked_by_subscription',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
   // ── Pre-printed standee inventory ─────────────────────────────────────────
   // The MINT, not the code. A code value is a public identifier for a specific
@@ -894,6 +901,23 @@ const catalogUnpublishRequestedProps = z
   })
   .strict();
 
+const publishBlockedBySubscriptionProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    /**
+     * Which gate. Named `gate`, not `gate_code`: the emitter strips any
+     * property whose NAME contains "code" (utils/analytics.ts), so the
+     * obvious name would arrive as nothing at all.
+     */
+    gate: z.enum(['SUBSCRIPTION_REQUIRED', 'SUBSCRIPTION_CAPACITY_EXCEEDED']),
+    /** The row's status, or NONE when the catalog has no row yet. */
+    subscription_status: z.enum([...SUBSCRIPTION_STATUSES, 'NONE']),
+    three_d_dish_count: z.number().int().nonnegative(),
+    /** The cap in force; -1 is "uncapped" and also what a missing row reports. */
+    three_d_dish_cap: z.number().int().min(-1),
+  })
+  .strict();
+
 /** A QR render. No URL, no business name — the format and the size, nothing else. */
 const catalogQrRenderedProps = z
   .object({
@@ -1069,6 +1093,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_PUBLISH_TARGET_FAILED]: catalogPublishTargetFailedProps,
   [AnalyticsEvent.CATALOG_PUBLISH_REQUESTED]: catalogPublishRequestedProps,
   [AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED]: catalogUnpublishRequestedProps,
+  [AnalyticsEvent.PUBLISH_BLOCKED_BY_SUBSCRIPTION]: publishBlockedBySubscriptionProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
   [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,

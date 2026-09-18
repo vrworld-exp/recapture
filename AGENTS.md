@@ -929,6 +929,23 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   publish is a ReCapture-side fact, so `POST /catalog/publish` returns EVERY
   failing gate in one 422 (the client shows a checklist) and an empty catalog is
   never provisioned.
+- **The two SUBSCRIPTION gates are built and SWITCHED OFF** (Stage 1 of
+  `RECAPTURE_SUBSCRIPTION_PLAN.md`). `SUBSCRIPTION_REQUIRED` and
+  `SUBSCRIPTION_CAPACITY_EXCEEDED` (`services/subscription/subscriptionGate.ts`,
+  pure) run LAST in `evaluatePublishGates`, only when the `client_configs`
+  document carries `subscriptionGatesEnabled: true`, which no environment does
+  until Stage 5. That switch FAILS OPEN — a store error means "off", the
+  opposite of the model-generation flags, because an outage must not invent a
+  paywall. The 3D count (`threeDDishCount.ts`) is READY-and-only-READY through
+  `effectiveModelStatus`, over the same `publishableProducts()` list the run
+  sends; the worker records the snapshot's count on `CatalogPublishRun.
+  threeDDishCount` for audit and never branches on it. The plan catalog is
+  DATA (`config/subscriptionPlans.ts`, overridable under
+  `client_configs.subscriptionPlans`, reject-to-defaults) — not env, and not on
+  the `/remote-config` wire until Stage 2. `CatalogSubscription` (one per
+  catalog) and `PaymentRecord` (append-only ledger) are their own documents;
+  nothing was added to `Catalog`. `scripts/grandfather-catalogs-comped.ts` is
+  the launch-day comp and must not run before Stage 5.
 - **Analytics are a PROXY, not a redirect.** Mirage's three report endpoints are
   admin-scoped and its own in-code note forbids opening them to client scope.
   ReCapture reads them with its admin credential and FORCES `restaurant` from the
