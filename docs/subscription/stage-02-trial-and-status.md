@@ -1,3 +1,4 @@
+✅✅✅✅✅
 # NEW FEATURE: Subscription service, trial activation, and status screens (owner + rep)
 # Product: Mirage Menu (ReCapture backend + Flutter client)
 # Scope: New Feature

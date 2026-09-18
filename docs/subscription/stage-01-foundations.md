@@ -1,3 +1,4 @@
+✅✅✅✅✅
 # NEW FEATURE: Subscription foundations — models, plan catalog, 3D-dish count, publish gates (switched off)
 # Product: Mirage Menu (ReCapture backend + 2 client enum values)
 # Scope: New Feature
