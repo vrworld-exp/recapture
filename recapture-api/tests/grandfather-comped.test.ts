@@ -59,6 +59,7 @@ describe('grandfatherCatalogsComped', () => {
     const withRow = await catalog();
     await CatalogSubscription.create({
       catalogId: withRow,
+      userId: new Types.ObjectId(),
       status: 'TRIAL',
       source: 'TRIAL',
       periodStart: NOW,
@@ -87,6 +88,8 @@ describe('grandfatherCatalogsComped', () => {
         source: 'COMP',
         threeDDishCap: UNCAPPED_THREE_D,
       });
+      // The owner rides along so the row still means something after a delete.
+      expect(row?.userId).toBeInstanceOf(Types.ObjectId);
       expect(row?.periodStart.getTime()).toBe(NOW.getTime());
       expect(row!.periodEnd.getTime() - row!.periodStart.getTime()).toBe(
         DEFAULT_PLAN_CATALOG.grandfatherDays * DAY_MS
@@ -100,6 +103,7 @@ describe('grandfatherCatalogsComped', () => {
     const paused = await catalog();
     await CatalogSubscription.create({
       catalogId: paused,
+      userId: new Types.ObjectId(),
       status: 'PAUSED',
       source: 'ONLINE',
       periodStart: new Date(NOW.getTime() - 60 * DAY_MS),
@@ -141,6 +145,7 @@ describe('grandfatherCatalogsComped', () => {
     const id = await catalog();
     await CatalogSubscription.create({
       catalogId: id,
+      userId: new Types.ObjectId(),
       status: 'COMPED',
       source: 'COMP',
       periodStart: NOW,

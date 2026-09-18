@@ -1,5 +1,6 @@
 // src/services/remoteConfigService.ts
 import { ClientConfig } from '@/models/ClientConfig';
+import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import {
   remoteConfigSchema,
   DEFAULT_REMOTE_CONFIG,
@@ -64,6 +65,10 @@ export async function getRemoteConfig(): Promise<RemoteConfigResult> {
       thresholds: doc.thresholds,
       segmentCounts: doc.segmentCounts,
       guided_capture_variant_segments: doc.guided_capture_variant_segments,
+      // Read through its own reader rather than picked raw off the document:
+      // a malformed `subscriptionPlans` override then costs only the plans
+      // (served from defaults, with its own warning), never the whole config.
+      subscriptionPlans: await getPlanCatalog(),
     };
 
     const parsed = remoteConfigSchema.safeParse(candidate);

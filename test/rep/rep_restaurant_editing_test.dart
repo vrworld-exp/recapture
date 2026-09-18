@@ -45,6 +45,7 @@ import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/domain/entities/catalog_product.dart';
+import 'package:recapture/domain/entities/catalog_subscription.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
 import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/product_type.dart';
@@ -156,6 +157,15 @@ class FakeRepRepository implements RepRepository {
     catalogCalls++;
     return Catalog.fromMap({...golden.catalogGolden(), 'id': catalogId});
   }
+
+  @override
+  Future<CatalogSubscription> subscription(String catalogId) =>
+      throw UnimplementedError(
+          'the subscription is not exercised by this test');
+
+  @override
+  Future<CatalogSubscription> startTrial(String catalogId) =>
+      throw UnimplementedError('the trial is not exercised by this test');
 
   @override
   Future<PublishStatus> publishStatus(String catalogId) =>

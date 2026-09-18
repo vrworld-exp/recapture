@@ -115,12 +115,10 @@ extension PublishGateCodeX on PublishGateCode {
         // is one screen and one action away — the label says the action.
         PublishGateCode.catalogNoCategories => 'Create a category',
         PublishGateCode.productUncategorized => 'Pick a category',
-        // The subscription rows have a label but, in this stage, no screen:
-        // both publish screens answer `canFix: false` for them, so the button
-        // never renders. Stage 2 wires the trial / plan screens and turns
-        // these into the action ("Start trial", "Upgrade plan").
-        PublishGateCode.subscriptionRequired => 'Subscription needed',
-        PublishGateCode.subscriptionCapacityExceeded => 'Plan limit reached',
+        // Both open the subscription surface: the owner's screen, or the
+        // rep's restaurant card with Start free trial on it.
+        PublishGateCode.subscriptionRequired => 'See plans',
+        PublishGateCode.subscriptionCapacityExceeded => 'See plans',
         PublishGateCode.productThumbnailMissing => null,
         PublishGateCode.productModelNotReady => null,
         PublishGateCode.publishingUnavailable => null,

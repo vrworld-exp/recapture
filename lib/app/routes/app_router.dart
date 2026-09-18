@@ -51,6 +51,7 @@ import '../../presentation/screens/catalog/catalog_qr_screen.dart';
 import '../../presentation/screens/catalog/change_product_model_screen.dart';
 import '../../presentation/screens/catalog/product_editor_screen.dart';
 import '../../presentation/screens/catalog/publish_screen.dart';
+import '../../presentation/screens/catalog/subscription_screen.dart';
 import '../../presentation/widgets/catalog/publish_body.dart'
     show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
@@ -153,6 +154,9 @@ abstract final class AppRoutes {
 
   /// Customer-facing analytics for the published catalog (feature 66).
   static const catalogAnalytics = '/catalog/analytics';
+
+  /// The owner's subscription: status, 3D usage, the plans. No checkout yet.
+  static const catalogSubscription = '/catalog/subscription';
 
   // ── Rep (the field surface, /rep) ─────────────────────────────────────────
   // Gated on isSalesRep in the router's redirect below, not inside the screens:
@@ -298,6 +302,7 @@ abstract final class AppRouteNames {
   static const productModel = 'productModel';
   static const businessProfile = 'businessProfile';
   static const catalogAnalytics = 'catalogAnalytics';
+  static const catalogSubscription = 'catalogSubscription';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repStandees = 'repStandees';
@@ -541,6 +546,14 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogAnalytics,
         builder: (_, __) =>
             const FlowBackScope(child: CatalogAnalyticsScreen()),
+      ),
+      // The subscription screen. STATIC, declared before the product routes
+      // like the analytics one; reachable before any publish, because "no
+      // subscription yet" is a sentence worth landing on.
+      GoRoute(
+        path: AppRoutes.catalogSubscription,
+        name: AppRouteNames.catalogSubscription,
+        builder: (_, __) => const FlowBackScope(child: SubscriptionScreen()),
       ),
       // The category manager. STATIC, and declared before the product routes
       // for the same reason `products/new` is: a literal segment must never be

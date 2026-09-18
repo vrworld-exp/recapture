@@ -122,6 +122,11 @@ export const AnalyticsEvent = {
   // catalogPublishService, once per subscription gate, only on an attempt
   // (never on the status poll, which runs the same gates).
   PUBLISH_BLOCKED_BY_SUBSCRIPTION: 'publish_blocked_by_subscription',
+  // ── Subscription trial (Door 1) ───────────────────────────────────────────
+  // Emitted by subscriptionService.startTrial, whichever route called it; the
+  // `door` says which. Hashed actor only, never the owner's contact.
+  SUBSCRIPTION_TRIAL_STARTED: 'subscription_trial_started',
+  SUBSCRIPTION_TRIAL_REFUSED: 'subscription_trial_refused',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
   // ── Pre-printed standee inventory ─────────────────────────────────────────
   // The MINT, not the code. A code value is a public identifier for a specific
@@ -901,6 +906,25 @@ const catalogUnpublishRequestedProps = z
   })
   .strict();
 
+const subscriptionTrialStartedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    actor_role: z.enum(USER_ROLES),
+    actor_id_hash: z.string().min(1),
+    /** Which route: the rep's delegated one or the admin's. */
+    door: z.enum(['REP', 'ADMIN']),
+  })
+  .strict();
+
+const subscriptionTrialRefusedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    actor_role: z.enum(USER_ROLES),
+    /** ALREADY_USED (one trial ever), ACTIVE (a live row), NOT_ELIGIBLE (has paid before). */
+    reason: z.enum(['ALREADY_USED', 'ACTIVE', 'NOT_ELIGIBLE']),
+  })
+  .strict();
+
 const publishBlockedBySubscriptionProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1094,6 +1118,8 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.CATALOG_PUBLISH_REQUESTED]: catalogPublishRequestedProps,
   [AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED]: catalogUnpublishRequestedProps,
   [AnalyticsEvent.PUBLISH_BLOCKED_BY_SUBSCRIPTION]: publishBlockedBySubscriptionProps,
+  [AnalyticsEvent.SUBSCRIPTION_TRIAL_STARTED]: subscriptionTrialStartedProps,
+  [AnalyticsEvent.SUBSCRIPTION_TRIAL_REFUSED]: subscriptionTrialRefusedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
   [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,

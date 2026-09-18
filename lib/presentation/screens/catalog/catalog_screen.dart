@@ -12,9 +12,11 @@ import '../../../application/catalog/catalog_categories_notifier.dart';
 import '../../../application/catalog/catalog_notifier.dart';
 import '../../../application/catalog/catalog_products_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
+import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog.dart';
 import '../../../domain/entities/catalog_product.dart';
 import '../../../domain/entities/catalog_status.dart';
+import '../../../domain/entities/catalog_subscription.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
@@ -195,6 +197,17 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   /// the link and the code alive and a business may still need to reprint one.
   void _openQr() => context.pushNamed(AppRouteNames.catalogQr);
 
+  /// Opens the subscription screen — status, 3D usage, the plans.
+  ///
+  /// Refreshes the catalog on return: the header chip reads the compact
+  /// summary off the catalog DTO, and a rep may have started a trial while the
+  /// owner was reading the plans.
+  Future<void> _openSubscription() async {
+    await context.pushNamed(AppRouteNames.catalogSubscription);
+    if (!mounted) return;
+    await ref.read(catalogProvider.notifier).refresh();
+  }
+
   /// Opens the analytics dashboard (feature 66).
   ///
   /// Offered UNCONDITIONALLY, unlike the QR above. The two differ in what is
@@ -279,6 +292,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                   onOpenPublish: _openPublish,
                   onOpenQr: _openQr,
                   onOpenAnalytics: _openAnalytics,
+                  onOpenSubscription: _openSubscription,
                   onSelect: () =>
                       ref.read(bulkSelectionProvider.notifier).enter(),
                 ),
@@ -323,6 +337,7 @@ class _CatalogBody extends ConsumerWidget {
     required this.onOpenPublish,
     required this.onOpenQr,
     required this.onOpenAnalytics,
+    required this.onOpenSubscription,
     required this.onSelect,
   });
 
@@ -336,6 +351,7 @@ class _CatalogBody extends ConsumerWidget {
   final VoidCallback onOpenPublish;
   final VoidCallback onOpenQr;
   final VoidCallback onOpenAnalytics;
+  final VoidCallback onOpenSubscription;
 
   /// Enters selection mode. Always offered, not only on web: a button is the
   /// discoverable half of a feature whose other entry point is a long-press
@@ -379,6 +395,7 @@ class _CatalogBody extends ConsumerWidget {
                       onOpenPublish: onOpenPublish,
                       onOpenQr: onOpenQr,
                       onOpenAnalytics: onOpenAnalytics,
+                      onOpenSubscription: onOpenSubscription,
                     ),
                   ),
                   const SliverToBoxAdapter(
@@ -455,6 +472,7 @@ class _CatalogHeaderCard extends StatelessWidget {
     required this.onOpenPublish,
     required this.onOpenQr,
     required this.onOpenAnalytics,
+    required this.onOpenSubscription,
   });
 
   final Catalog catalog;
@@ -464,6 +482,7 @@ class _CatalogHeaderCard extends StatelessWidget {
   final VoidCallback onOpenPublish;
   final VoidCallback onOpenQr;
   final VoidCallback onOpenAnalytics;
+  final VoidCallback onOpenSubscription;
 
   @override
   Widget build(BuildContext context) {
@@ -563,6 +582,26 @@ class _CatalogHeaderCard extends StatelessWidget {
                 ),
               if (catalog.isPublishing)
                 const _Chip(label: 'Publishing…', color: AppColors.royalGold),
+              // The subscription, in chip form, and the door to the screen.
+              // Rendered from the compact summary the catalog DTO carries
+              // (server-built; "No plan" when there is no row), so the header
+              // pays no second request for it.
+              InkWell(
+                key: const ValueKey('catalog_subscription_chip'),
+                borderRadius: BorderRadius.circular(AppRadius.xs),
+                onTap: onOpenSubscription,
+                child: _Chip(
+                  label: repStatusChip(catalog.subscription),
+                  color: switch (subscriptionTone(
+                    catalog.subscription?.status ?? SubscriptionStatus.none,
+                  )) {
+                    SubscriptionTone.good => AppColors.success,
+                    SubscriptionTone.warning => AppColors.warning,
+                    SubscriptionTone.danger => AppColors.error,
+                    SubscriptionTone.neutral => AppColors.textMuted,
+                  },
+                ),
+              ),
             ],
           ),
           const SizedBox(height: AppSpacing.md),

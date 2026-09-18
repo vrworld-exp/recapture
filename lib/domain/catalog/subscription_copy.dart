@@ -1,0 +1,146 @@
+// lib/domain/catalog/subscription_copy.dart
+//
+// The ONE source of subscription status copy — the owner's status line and
+// the rep's chip — so the two surfaces can never describe one restaurant in
+// two vocabularies. The table:
+//
+//   | status    | owner line                                          | rep chip     |
+//   | NONE      | No subscription yet                                 | No plan      |
+//   | TRIAL     | Free trial — N days left, up to 10 3D dishes        | Trial Nd     |
+//   | ACTIVE    | Active until <d MMM yyyy> · <Plan>                  | Active       |
+//   | GRACE     | Payment overdue — 3D menu pauses in N days  (red)   | Overdue Nd   |
+//   | PAUSED    | 3D menu paused — your photo menu is still live      | 3D paused    |
+//   | CANCELLED | Cancelled — resubscribe anytime                     | Cancelled    |
+//   | COMPED    | Complimentary until <date>                          | Comped       |
+//
+// Every N is the SERVER's `daysLeft` (D6) — nothing here looks at a clock.
+import '../entities/catalog_subscription.dart';
+
+/// How urgent a status line is — the colour the screen picks, decided here so
+/// the owner screen and the rep card agree.
+enum SubscriptionTone { neutral, good, warning, danger }
+
+/// The owner's status line for [subscription].
+String ownerStatusLine(
+  CatalogSubscription subscription, {
+  required int trialThreeDCap,
+}) =>
+    _ownerLine(
+      status: subscription.status,
+      daysLeft: subscription.daysLeft,
+      periodEnd: subscription.periodEnd,
+      planName: subscription.planName,
+      trialThreeDCap: subscription.threeDDishCap ?? trialThreeDCap,
+    );
+
+String _ownerLine({
+  required SubscriptionStatus status,
+  required int? daysLeft,
+  required DateTime? periodEnd,
+  required String? planName,
+  required int trialThreeDCap,
+}) {
+  final days = daysLeft ?? 0;
+  return switch (status) {
+    SubscriptionStatus.none => 'No subscription yet',
+    SubscriptionStatus.trial => 'Free trial — ${_days(days)} left, '
+        'up to $trialThreeDCap 3D dishes',
+    SubscriptionStatus.active => periodEnd == null
+        ? 'Active${planName == null ? '' : ' · $planName'}'
+        : 'Active until ${formatSubscriptionDate(periodEnd)}'
+            '${planName == null ? '' : ' · $planName'}',
+    SubscriptionStatus.grace =>
+      'Payment overdue — 3D menu pauses in ${_days(days)}',
+    SubscriptionStatus.paused =>
+      '3D menu paused — your photo menu is still live',
+    SubscriptionStatus.cancelled => 'Cancelled — resubscribe anytime',
+    SubscriptionStatus.comped => periodEnd == null
+        ? 'Complimentary'
+        : 'Complimentary until ${formatSubscriptionDate(periodEnd)}',
+    SubscriptionStatus.unknown => 'Subscription status unavailable',
+  };
+}
+
+/// The rep's chip for a list row.
+String repStatusChip(SubscriptionSummary? summary) {
+  if (summary == null) return 'No plan';
+  final days = summary.daysLeft ?? 0;
+  return switch (summary.status) {
+    SubscriptionStatus.none => 'No plan',
+    SubscriptionStatus.trial => 'Trial ${days}d',
+    SubscriptionStatus.active => 'Active',
+    SubscriptionStatus.grace => 'Overdue ${days}d',
+    SubscriptionStatus.paused => '3D paused',
+    SubscriptionStatus.cancelled => 'Cancelled',
+    SubscriptionStatus.comped => 'Comped',
+    SubscriptionStatus.unknown => 'Unknown',
+  };
+}
+
+/// The tone a status renders in, on either surface.
+SubscriptionTone subscriptionTone(SubscriptionStatus status) =>
+    switch (status) {
+      SubscriptionStatus.active ||
+      SubscriptionStatus.comped =>
+        SubscriptionTone.good,
+      SubscriptionStatus.trial => SubscriptionTone.warning,
+      SubscriptionStatus.grace => SubscriptionTone.danger,
+      SubscriptionStatus.paused ||
+      SubscriptionStatus.cancelled ||
+      SubscriptionStatus.none ||
+      SubscriptionStatus.unknown =>
+        SubscriptionTone.neutral,
+    };
+
+/// The usage line: "12 / 15 (Signature plan)", "12 / 10 (trial)", or
+/// "12 (unlimited)" for a comp. The cap is the SERVER's, the label the row's.
+String threeDUsageLine(CatalogSubscription subscription) {
+  final cap = subscription.threeDDishCap;
+  if (cap == null) return '${subscription.threeDDishCount} (unlimited)';
+  final label = switch (subscription.status) {
+    SubscriptionStatus.trial => 'trial',
+    _ => subscription.planName ?? 'plan',
+  };
+  return '${subscription.threeDDishCount} / $cap ($label)';
+}
+
+String _days(int n) => n == 1 ? '1 day' : '$n days';
+
+const List<String> _months = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/// `18 Oct 2026` — local time, resolved in Dart like every other date in the
+/// app (no l10n framework here).
+String formatSubscriptionDate(DateTime utc) {
+  final local = utc.toLocal();
+  return '${local.day} ${_months[local.month - 1]} ${local.year}';
+}
+
+/// Paise → whole rupees for DISPLAY, Indian grouping: 1007160 → "₹10,072",
+/// 123456700 → "₹12,34,567". Rounds to the nearest rupee; the paise figure
+/// stays the truth on the wire.
+String formatRupees(int paise) {
+  final digits = (paise / 100).round().toString();
+  if (digits.length <= 3) return '₹$digits';
+  final tail = digits.substring(digits.length - 3);
+  var head = digits.substring(0, digits.length - 3);
+  final groups = <String>[];
+  while (head.length > 2) {
+    groups.insert(0, head.substring(head.length - 2));
+    head = head.substring(0, head.length - 2);
+  }
+  if (head.isNotEmpty) groups.insert(0, head);
+  return '₹${groups.join(',')},$tail';
+}

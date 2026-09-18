@@ -31,6 +31,14 @@ import {
 export interface ICatalogSubscription extends Document {
   /** The catalog. UNIQUE — one subscription per catalog is the product rule. */
   catalogId: Types.ObjectId;
+  /**
+   * The catalog's OWNER at the time the row was written. `DELETE /catalog` is
+   * a HARD delete (see catalogService.deleteCatalog), so this row outlives the
+   * catalog it names; what it must not outlive is the "one trial ever" rule
+   * (D2). A re-created catalog gets a new id and no row, and this is the
+   * field that lets startTrial see the trial the owner already had.
+   */
+  userId: Types.ObjectId;
   status: SubscriptionStatus;
   /** Which plan tier. Absent on TRIAL and COMPED, which are not plans. */
   planId?: PlanId;
@@ -127,6 +135,7 @@ const StandeeAllocationSchema = new Schema<{ included: number; issued: number }>
 const CatalogSubscriptionSchema = new Schema<ICatalogSubscription>(
   {
     catalogId: { type: Schema.Types.ObjectId, ref: 'Catalog', required: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: SUBSCRIPTION_STATUSES, required: true },
     planId: { type: String, enum: PLAN_IDS },
     planSnapshot: { type: PlanSnapshotSchema },
@@ -168,6 +177,10 @@ CatalogSubscriptionSchema.index({ catalogId: 1 }, { unique: true });
 // range on one date, so each gets its own compound index.
 CatalogSubscriptionSchema.index({ status: 1, periodEnd: 1 });
 CatalogSubscriptionSchema.index({ status: 1, graceEndsAt: 1 });
+
+// Trial eligibility is judged per OWNER, across every catalog they have had
+// (the deleted ones included) — "did this person already use a trial".
+CatalogSubscriptionSchema.index({ userId: 1, trialUsedAt: 1 });
 
 export const CatalogSubscription = model<ICatalogSubscription>(
   'CatalogSubscription',

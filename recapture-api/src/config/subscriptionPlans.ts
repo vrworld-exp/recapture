@@ -65,7 +65,7 @@ const planDefinitionSchema = z
     yearlyDiscountPct: z.number().int().min(0).max(90),
     threeDDishCap: z.number().int().positive(),
     includedStandeeCount: z.number().int().positive(),
-    features: z.array(z.enum(PLAN_FEATURES)),
+    features: z.array(z.enum(PLAN_FEATURES)).readonly(),
   })
   .strict();
 

@@ -2,6 +2,7 @@
 import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 import 'catalog_status.dart';
+import 'catalog_subscription.dart';
 
 /// What a rep is asking for when they activate a standee.
 ///
@@ -90,12 +91,16 @@ class RepCatalogSummary {
     this.publicUrl,
     this.isProvisioned = false,
     this.grantedAt,
+    this.subscription,
   });
 
   final String id;
   final String name;
   final String? businessName;
   final CatalogStatus status;
+
+  /// The restaurant's subscription in chip form, or null for "No plan".
+  final SubscriptionSummary? subscription;
 
   /// The standee URL, once activation has frozen one.
   final String? publicUrl;
@@ -129,5 +134,6 @@ class RepCatalogSummary {
         publicUrl: catalogText(map['publicUrl']),
         isProvisioned: map['isProvisioned'] == true,
         grantedAt: catalogDate(map['grantedAt']),
+        subscription: SubscriptionSummary.fromMapOrNull(map['subscription']),
       );
 }

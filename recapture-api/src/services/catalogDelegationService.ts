@@ -14,6 +14,10 @@ import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogDelegation } from '@/models/CatalogDelegation';
 import { isDuplicateKeyError } from '@/services/catalogService';
 import { customerUrl } from '@/services/customerUrl';
+import {
+  getSubscriptionSummaries,
+  type SubscriptionSummaryDto,
+} from '@/services/subscription/subscriptionService';
 import type { CatalogStatus } from '@/models/types/catalog.types';
 
 /**
@@ -32,6 +36,8 @@ export interface CatalogSummaryDto {
   publicUrl: string | null;
   isProvisioned: boolean;
   grantedAt: string;
+  /** The same compact summary `GET /catalog` carries; null = no row ("No plan"). */
+  subscription: SubscriptionSummaryDto | null;
 }
 
 /**
@@ -107,6 +113,11 @@ export async function listDelegatedCatalogs(
 
   const byId = new Map(catalogs.map((c) => [String(c._id), c]));
 
+  // ONE subscription query for the whole list, never one per row.
+  const subscriptions = await getSubscriptionSummaries(
+    catalogs.map((c) => ({ catalogId: c._id as Types.ObjectId, ownerUserId: c.userId }))
+  );
+
   // Driven by the GRANTS, not the catalogs, so the sort order is the grant
   // order the rep expects. A grant whose catalog was deleted underneath it
   // drops out rather than rendering as a broken row.
@@ -123,6 +134,7 @@ export async function listDelegatedCatalogs(
         publicUrl: customerUrl(catalog),
         isProvisioned: Boolean(catalog.mirageRestaurantId),
         grantedAt: grant.grantedAt.toISOString(),
+        subscription: subscriptions.get(String(catalog._id)) ?? null,
       },
     ];
   });

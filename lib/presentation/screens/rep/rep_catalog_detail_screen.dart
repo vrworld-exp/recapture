@@ -65,6 +65,7 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/food_type_field.dart';
 import '../../widgets/catalog/publish_body.dart' show kPublishStartQuery;
+import '../../widgets/rep/rep_subscription_card.dart';
 import '../catalog/category_manager_screen.dart' show kCategoryTouchWidth;
 
 class RepCatalogDetailScreen extends ConsumerWidget {
@@ -153,9 +154,40 @@ class RepCatalogDetailScreen extends ConsumerWidget {
             // not a row of the list, and it must not scroll away under the
             // pull-to-refresh spinner or with the dishes.
             _PublishStateHeader(catalogId: catalogId),
+            // The Subscription card: the owner's status line and, when the
+            // restaurant may have one, Start free trial (Door 1). Under the
+            // publish state for the same reason that strip is there — what a
+            // rep must know before adding dishes, not after.
+            _SubscriptionSection(catalogId: catalogId),
             Expanded(child: _DishList(catalogId: catalogId)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The Subscription card, named after the restaurant the header knows.
+class _SubscriptionSection extends ConsumerWidget {
+  const _SubscriptionSection({required this.catalogId});
+
+  final String catalogId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final catalog =
+        ref.watch(repCatalogDocumentProvider(catalogId)).valueOrNull;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.lg,
+        AppSpacing.sm,
+        AppSpacing.lg,
+        0,
+      ),
+      child: RepSubscriptionCard(
+        catalogId: catalogId,
+        restaurantName:
+            catalog?.businessName ?? catalog?.displayName ?? 'this restaurant',
       ),
     );
   }

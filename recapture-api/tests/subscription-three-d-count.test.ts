@@ -198,6 +198,7 @@ describe('the request-time count and the run audit count (C1)', () => {
     await ClientConfig.create({ subscriptionGatesEnabled: true });
     await CatalogSubscription.create({
       catalogId,
+      userId: USER_ID,
       status: 'TRIAL',
       source: 'TRIAL',
       periodStart: new Date(),

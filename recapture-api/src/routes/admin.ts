@@ -116,6 +116,10 @@ import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { loadStandeeActivation } from '@/services/standeeActivationService';
 import { catalogQrQuerySchema } from '@/validation/catalogSchemas';
+import { Catalog } from '@/models/Catalog';
+import { startTrialSchema } from '@/validation/subscriptionSchemas';
+import { startTrial } from '@/services/subscription/subscriptionService';
+import { respondToStartTrial } from '@/routes/rep';
 
 const router = Router();
 
@@ -2539,6 +2543,41 @@ router.delete(
       return;
     }
     res.status(200).json({ status: 'success' });
+  })
+);
+
+/**
+ * POST /admin/catalogs/:id/subscription/trial — the admin's door to the same
+ * trial (README C3): no delegation needed, ADMIN only, the identical result
+ * mapping as the rep's route so the two can never answer differently.
+ *
+ * A malformed id and an unknown / soft-deleted catalog get the same 404 —
+ * there is nothing to enumerate here for an admin, but one shape is one shape.
+ */
+router.post(
+  '/catalogs/:id/subscription/trial',
+  requireRole('ADMIN'),
+  validateBody(startTrialSchema),
+  asyncHandler(async (req, res) => {
+    const catalog = Types.ObjectId.isValid(req.params.id)
+      ? await Catalog.findOne({ _id: new Types.ObjectId(req.params.id), deletedAt: null }).exec()
+      : null;
+    if (!catalog) {
+      res.status(404).json({
+        status: 'error',
+        code: 'CATALOG_NOT_FOUND',
+        message: 'That catalog was not found.',
+      });
+      return;
+    }
+
+    const result = await startTrial(
+      catalog._id as Types.ObjectId,
+      catalog.userId,
+      { userId: new Types.ObjectId(req.user!.userId), role: req.user!.role ?? 'ADMIN' },
+      'ADMIN'
+    );
+    return respondToStartTrial(res, result);
   })
 );
 

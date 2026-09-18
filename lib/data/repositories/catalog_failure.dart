@@ -29,6 +29,13 @@ abstract final class CatalogErrorCodes {
 
   static const invalidRequest = 'INVALID_REQUEST';
 
+  /// The three 409s a trial start can answer. The server's sentence is the
+  /// one to show; these exist so a screen can tell "already used" (nothing
+  /// to do) from "active" (nothing to do either, but the chip should refresh).
+  static const trialAlreadyUsed = 'TRIAL_ALREADY_USED';
+  static const subscriptionActive = 'SUBSCRIPTION_ACTIVE';
+  static const trialNotEligible = 'TRIAL_NOT_ELIGIBLE';
+
   /// Mirage could not be reached for a report. A DEGRADATION, not a failure:
   /// nothing the user did is wrong, nothing has been lost, and only the report
   /// is missing — the dashboard branches on this to render a soft empty state
@@ -68,6 +75,13 @@ class CatalogFailure implements Exception {
       code == CatalogErrorCodes.analyticsUnavailable;
   bool get isNotFound => code == CatalogErrorCodes.notFound;
   bool get isDuplicateName => code == CatalogErrorCodes.duplicateName;
+
+  /// A trial refusal of any of the three kinds — a 409 with a sentence worth
+  /// showing, not an error worth retrying.
+  bool get isTrialRefused =>
+      code == CatalogErrorCodes.trialAlreadyUsed ||
+      code == CatalogErrorCodes.subscriptionActive ||
+      code == CatalogErrorCodes.trialNotEligible;
 
   @override
   String toString() => 'CatalogFailure($code): $message';

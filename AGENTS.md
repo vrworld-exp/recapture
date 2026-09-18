@@ -946,6 +946,28 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   catalog) and `PaymentRecord` (append-only ledger) are their own documents;
   nothing was added to `Catalog`. `scripts/grandfather-catalogs-comped.ts` is
   the launch-day comp and must not run before Stage 5.
+- **The subscription is READABLE and a trial is STARTABLE (Stage 2); no money
+  moves.** `services/subscription/subscriptionService.ts` builds the DTO
+  (`GET /catalog/subscription` ≡ `GET /rep/catalogs/:id/subscription`,
+  payload-equal) and the compact summary every catalog DTO and rep list row
+  carries (`subscription: … | null`, ONE query for a list). `daysLeft` is
+  SERVER-computed (D6) and rendered verbatim; the 3D count is over
+  `publishableProducts()` (lifted into `services/catalog/publishableProducts.ts`
+  to break a require cycle) — the same list the gate counts. Trial doors:
+  `POST /rep/catalogs/:id/subscription/trial` (delegated, rate-limited, NO
+  body) and `POST /admin/catalogs/:id/subscription/trial` (ADMIN), one
+  responder for both. **Trial eligibility is judged per OWNER**:
+  `CatalogSubscription.userId` / `PaymentRecord.userId` outlive the catalog's
+  HARD delete, so a deleted-and-re-created catalog cannot get a second trial
+  (D2) and a paid owner gets none (E41 → `TRIAL_NOT_ELIGIBLE`). `DELETE
+  /catalog` moves the row to CANCELLED after Mirage lets go, never before.
+  `/remote-config` serves `subscriptionPlans` (version 6) through
+  `getPlanCatalog()`, so a bad override costs the plans, not the config.
+  Client: `domain/entities/catalog_subscription.dart`, copy in
+  `domain/catalog/subscription_copy.dart` (one table for the owner line and the
+  rep chip), the owner Subscription screen (`_CheckoutSlot` is Stage 3's
+  place), the rep card with Start free trial — NEVER through the offline queue
+  (E40) — and both publish screens' Fix for the two subscription gates.
 - **Analytics are a PROXY, not a redirect.** Mirage's three report endpoints are
   admin-scoped and its own in-code note forbids opening them to client scope.
   ReCapture reads them with its admin credential and FORCES `restaurant` from the

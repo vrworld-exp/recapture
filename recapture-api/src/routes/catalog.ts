@@ -9,6 +9,7 @@
 // `:id` swallows the literal string "reorder" and the request 400s on an
 // invalid ObjectId — a bug that looks like a validation problem.
 import { Router, raw } from 'express';
+import { Types } from 'mongoose';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { requireAuth } from '@/middleware/auth';
 import { decodePositionCursor, type PositionCursor } from '@/utils/cursor';
@@ -62,6 +63,7 @@ import {
   createBrandingImageSlot,
   createCatalog,
   deleteCatalog,
+  findOwnedCatalog,
   getBusinessProfile,
   getCatalog,
   storeBrandingImageBytes,
@@ -95,6 +97,7 @@ import {
 } from '@/utils/productImageKeys';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
+import { getSubscriptionStatus } from '@/services/subscription/subscriptionService';
 import type { Response } from 'express';
 import type { ZodError } from 'zod';
 
@@ -1258,6 +1261,29 @@ router.post(
 
     const result = await requestRetry(userId);
     return respondToPublishRequest(res, userId, 'RETRY_FAILED', result);
+  })
+);
+
+/**
+ * GET /catalog/subscription — the owner's subscription screen in one read:
+ * status, the countdown (server-computed, D6), 3D usage against the cap, and
+ * the plan catalog for the comparison cards.
+ *
+ * STATIC, and declared before `/products/:id` for the usual reason. The rep's
+ * `GET /rep/catalogs/:id/subscription` answers the identical body for the same
+ * catalog (pinned by tests/subscription-status.test.ts).
+ */
+router.get(
+  '/subscription',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+
+    const subscription = await getSubscriptionStatus(
+      catalog._id as Types.ObjectId,
+      catalog.userId
+    );
+    res.status(200).json({ status: 'success', subscription });
   })
 );
 

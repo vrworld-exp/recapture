@@ -16,6 +16,7 @@ import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
+import 'package:recapture/domain/entities/catalog_subscription.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
 
 import 'catalog_entities_test.dart' as golden;
@@ -169,6 +170,17 @@ class FakePublishRepository
   Future<UnpublishResult> unpublish() async {
     unpublishCalls++;
     return unpublishResult;
+  }
+
+  /// What `/catalog/subscription` answers; an empty body (an older server)
+  /// unless a test sets one.
+  Map<String, dynamic> subscriptionPayload = const {};
+  int subscriptionCalls = 0;
+
+  @override
+  Future<CatalogSubscription> subscription() async {
+    subscriptionCalls++;
+    return CatalogSubscription.fromMap(subscriptionPayload);
   }
 
   @override

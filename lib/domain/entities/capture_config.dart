@@ -6,6 +6,7 @@
 
 import '../capture/capture_flow_variant.dart';
 import '../capture/capture_mode.dart';
+import 'catalog_subscription.dart';
 
 /// One pitch band (a vertical slice of the capture sphere) and how many capture
 /// positions to take around it.
@@ -472,6 +473,7 @@ class CaptureConfig {
     this.uploadMinShots = UploadMinShots.bundledDefault,
     this.variantSegments = VariantSegments.bundledDefault,
     this.meshySegments = VariantSegments.meshyBundledDefault,
+    this.subscriptionPlans = PlanCatalog.bundledDefault,
   });
 
   final int version;
@@ -494,6 +496,11 @@ class CaptureConfig {
   /// because the server serves it under a separate wire key — re-keying the existing block would strand already
   /// shipped clients on bundled defaults with no error anywhere.
   final VariantSegments meshySegments;
+
+  /// The subscription plan catalog (`subscriptionPlans`, served since config
+  /// version 6). [PlanCatalog.bundledDefault] when absent — an older server,
+  /// or a cached pre-v6 payload — which mirrors the server's own defaults.
+  final PlanCatalog subscriptionPlans;
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
@@ -605,6 +612,7 @@ class CaptureConfig {
         m['meshy_capture_variant_segments'],
         defaults: VariantSegments.meshyDefaults,
       ),
+      subscriptionPlans: PlanCatalog.fromMapOrDefault(m['subscriptionPlans']),
     );
   }
 
@@ -616,6 +624,7 @@ class CaptureConfig {
         'guided_capture_min_accepted_shots': uploadMinShots.toMap(),
         'guided_capture_variant_segments': variantSegments.toMap(),
         'meshy_capture_variant_segments': meshySegments.toMap(),
+        'subscriptionPlans': subscriptionPlans.toMap(),
       };
 
   CaptureConfig copyWith({
@@ -626,6 +635,7 @@ class CaptureConfig {
     UploadMinShots? uploadMinShots,
     VariantSegments? variantSegments,
     VariantSegments? meshySegments,
+    PlanCatalog? subscriptionPlans,
   }) =>
       CaptureConfig(
         version: version ?? this.version,
@@ -635,5 +645,6 @@ class CaptureConfig {
         uploadMinShots: uploadMinShots ?? this.uploadMinShots,
         variantSegments: variantSegments ?? this.variantSegments,
         meshySegments: meshySegments ?? this.meshySegments,
+        subscriptionPlans: subscriptionPlans ?? this.subscriptionPlans,
       );
 }

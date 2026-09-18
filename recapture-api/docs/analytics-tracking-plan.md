@@ -277,6 +277,18 @@ there.
   `failure_reason` is not `code` above — the emitter strips property names
   containing `code`.
 
+### `subscription_trial_started`
+- **When:** `startTrial` wrote a TRIAL row — from `POST /rep/catalogs/:id/subscription/trial`
+  or `POST /admin/catalogs/:id/subscription/trial`.
+- **Props:** `catalog_id` (string), `actor_role` (`USER`|`SALES_REP`|`MODEL_ARTIST`|`ADMIN`),
+  `actor_id_hash` (string), `door` (`REP`|`ADMIN`)
+
+### `subscription_trial_refused`
+- **When:** a trial start was refused with a 409.
+- **Props:** `catalog_id`, `actor_role`,
+  `reason` (`ALREADY_USED` — one trial ever, across the owner's deleted catalogs too;
+  `ACTIVE` — a live row is in the way; `NOT_ELIGIBLE` — the owner has paid before)
+
 ## Pre-printed standee inventory
 
 ### `qr_batch_minted`

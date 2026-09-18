@@ -205,7 +205,7 @@ void main() {
     });
 
     testWidgets('renders the subscription gates with the server\'s sentence '
-        'and, in this stage, nothing to press', (tester) async {
+        'and a Fix that opens the plans', (tester) async {
       final repo = FakePublishRepository(
         status: statusPayload(
           gates: [
@@ -231,13 +231,10 @@ void main() {
       expect(find.textContaining('start a free trial'), findsOneWidget);
       expect(find.textContaining('your Signature plan covers 15'),
           findsOneWidget);
-      // Blockers, not waits — and no destination exists yet (Stage 2), so
-      // the labels stay off the screen rather than opening nothing.
+      // Blockers, not waits — and both rows' Fix opens the subscription
+      // screen (routing is pinned by publish_fix_routing_test.dart).
       expect(find.byIcon(Icons.hourglass_empty), findsNothing);
-      expect(find.widgetWithText(TextButton, 'Subscription needed'),
-          findsNothing);
-      expect(find.widgetWithText(TextButton, 'Plan limit reached'),
-          findsNothing);
+      expect(find.widgetWithText(TextButton, 'See plans'), findsNWidgets(2));
       expect(_ctaOf(tester).onPressed, isNull);
       expect(repo.publishCalls, 0);
     });

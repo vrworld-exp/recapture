@@ -7,6 +7,7 @@ import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_category.dart';
 import '../../domain/entities/catalog_product.dart';
+import '../../domain/entities/catalog_subscription.dart';
 import '../../domain/entities/product_availability.dart';
 import '../../domain/entities/product_food_type.dart';
 import '../../domain/entities/product_type.dart';
@@ -234,6 +235,19 @@ abstract interface class RepRepository {
   /// status) sized for a list, this is what the preview and the details screens
   /// need. Both exist so neither has to carry the other's weight.
   Future<Catalog> catalog(String catalogId);
+
+  /// The restaurant's subscription — the OWNER's own body, byte for byte,
+  /// so a rep and an owner on the phone read the same numbers.
+  Future<CatalogSubscription> subscription(String catalogId);
+
+  /// Starts the restaurant's one free trial. No body: the plan and the length
+  /// are server config. A refusal is a [CatalogFailure] whose
+  /// [CatalogFailure.isTrialRefused] is true and whose message is the
+  /// server's sentence.
+  ///
+  /// NEVER queued offline (E40): a trial start replayed after a reconnect
+  /// could fire twice, or for a restaurant the rep has since left.
+  Future<CatalogSubscription> startTrial(String catalogId);
 
   /// The restaurant's sections, in their set order.
   ///
@@ -553,6 +567,28 @@ class RemoteRepRepository implements RepRepository {
         final catalog = res.data?['catalog'];
         if (catalog is! Map<String, dynamic>) throw _malformed;
         return Catalog.fromMap(catalog);
+      });
+
+  @override
+  Future<CatalogSubscription> subscription(String catalogId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/subscription',
+        );
+        final body = res.data?['subscription'];
+        if (body is! Map<String, dynamic>) throw _malformed;
+        return CatalogSubscription.fromMap(body);
+      });
+
+  @override
+  Future<CatalogSubscription> startTrial(String catalogId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/subscription/trial',
+        );
+        final body = res.data?['subscription'];
+        if (body is! Map<String, dynamic>) throw _malformed;
+        return CatalogSubscription.fromMap(body);
       });
 
   @override

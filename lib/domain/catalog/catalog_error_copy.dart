@@ -178,6 +178,23 @@ const Map<String, CatalogErrorCopy> _copy = {
     'Try again shortly.',
   ),
 
+  // ── Subscription (the rep's trial door) ───────────────────────────────────
+  // The three 409s POST /rep/catalogs/:id/subscription/trial can answer. Each
+  // is a fact about the restaurant, not a failure to retry, so the action
+  // says what happens instead.
+  'TRIAL_ALREADY_USED': CatalogErrorCopy(
+    'This restaurant has already used its free trial.',
+    'The owner can activate a plan instead.',
+  ),
+  'SUBSCRIPTION_ACTIVE': CatalogErrorCopy(
+    'This restaurant already has an active subscription.',
+    'Nothing to start — the menu is covered.',
+  ),
+  'TRIAL_NOT_ELIGIBLE': CatalogErrorCopy(
+    'This restaurant has paid before, so a free trial is not available.',
+    'The owner can renew a plan instead.',
+  ),
+
   // ── Request-level ─────────────────────────────────────────────────────────
   'INVALID_REQUEST': CatalogErrorCopy(
     'Some of these details cannot be saved as they are.',

@@ -38,6 +38,8 @@ export interface PaymentQuote {
 
 export interface IPaymentRecord extends Document {
   catalogId: Types.ObjectId;
+  /** The catalog's owner at the time — survives the catalog's hard delete, as on CatalogSubscription. */
+  userId: Types.ObjectId;
   subscriptionId: Types.ObjectId;
   kind: PaymentKind;
   /** Integer paise, never negative — a refund is its own row, not a minus. */
@@ -88,6 +90,7 @@ const PaymentQuoteSchema = new Schema<PaymentQuote>(
 const PaymentRecordSchema = new Schema<IPaymentRecord>(
   {
     catalogId: { type: Schema.Types.ObjectId, ref: 'Catalog', required: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     subscriptionId: { type: Schema.Types.ObjectId, ref: 'CatalogSubscription', required: true },
     kind: { type: String, enum: PAYMENT_KINDS, required: true },
     amountPaise: { type: Number, required: true, min: 0, validate: Number.isInteger },
@@ -135,5 +138,8 @@ PaymentRecordSchema.index(
 // catalog and within one.
 PaymentRecordSchema.index({ kind: 1, verificationStatus: 1 });
 PaymentRecordSchema.index({ catalogId: 1, kind: 1, verificationStatus: 1 });
+
+// "Has this owner ever paid" — the trial-eligibility read (E41).
+PaymentRecordSchema.index({ userId: 1, kind: 1, verificationStatus: 1 });
 
 export const PaymentRecord = model<IPaymentRecord>('PaymentRecord', PaymentRecordSchema);

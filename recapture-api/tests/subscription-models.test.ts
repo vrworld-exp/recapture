@@ -40,6 +40,7 @@ const NOW = new Date('2026-09-18T00:00:00.000Z');
 function trialRow(catalogId = new Types.ObjectId()) {
   return {
     catalogId,
+    userId: new Types.ObjectId(),
     status: 'TRIAL' as const,
     source: 'TRIAL' as const,
     periodStart: NOW,
@@ -51,6 +52,7 @@ function trialRow(catalogId = new Types.ObjectId()) {
 function ledgerRow(overrides: Record<string, unknown> = {}) {
   return {
     catalogId: new Types.ObjectId(),
+    userId: new Types.ObjectId(),
     subscriptionId: new Types.ObjectId(),
     kind: 'PAID' as const,
     amountPaise: 119_900,

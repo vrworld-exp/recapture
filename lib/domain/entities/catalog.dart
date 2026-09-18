@@ -3,6 +3,7 @@ import '../catalog/catalog_names.dart';
 import 'business_profile.dart';
 import 'catalog_json.dart';
 import 'catalog_status.dart';
+import 'catalog_subscription.dart';
 
 /// Headline counts shown on the catalog screen.
 class CatalogCounts {
@@ -66,6 +67,7 @@ class Catalog {
     this.publicUrl,
     this.lastPublishedAt,
     this.counts = const CatalogCounts(),
+    this.subscription,
     this.updatedAt,
     this.createdAt,
   });
@@ -124,6 +126,11 @@ class Catalog {
 
   final DateTime? lastPublishedAt;
   final CatalogCounts counts;
+
+  /// The compact subscription state, or null for a catalog with no
+  /// subscription row yet ("No plan"). Server-built; the full picture is
+  /// `CatalogRepository.subscription()`.
+  final SubscriptionSummary? subscription;
   final DateTime? updatedAt;
   final DateTime? createdAt;
 
@@ -162,6 +169,7 @@ class Catalog {
       counts: rawCounts is Map<String, dynamic>
           ? CatalogCounts.fromMap(rawCounts)
           : const CatalogCounts(),
+      subscription: SubscriptionSummary.fromMapOrNull(map['subscription']),
       updatedAt: catalogDate(map['updatedAt']),
       createdAt: catalogDate(map['createdAt']),
     );
@@ -183,6 +191,7 @@ class Catalog {
         'hasChangesSincePublishStarted': hasChangesSincePublishStarted,
         'lastPublishedAt': lastPublishedAt?.toIso8601String(),
         'counts': counts.toMap(),
+        'subscription': subscription?.toMap(),
         'updatedAt': updatedAt?.toIso8601String(),
         'createdAt': createdAt?.toIso8601String(),
       };
@@ -209,12 +218,14 @@ class Catalog {
         // former never moving (feature 32).
         publicUrl: publicUrl,
         isProvisioned: isProvisioned,
-        hasUnpublishedChanges: hasUnpublishedChanges ?? this.hasUnpublishedChanges,
+        hasUnpublishedChanges:
+            hasUnpublishedChanges ?? this.hasUnpublishedChanges,
         isPublishing: isPublishing ?? this.isPublishing,
         hasChangesSincePublishStarted:
             hasChangesSincePublishStarted ?? this.hasChangesSincePublishStarted,
         lastPublishedAt: lastPublishedAt,
         counts: counts ?? this.counts,
+        subscription: subscription,
         updatedAt: updatedAt ?? this.updatedAt,
         createdAt: createdAt,
       );

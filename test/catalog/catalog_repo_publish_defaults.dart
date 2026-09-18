@@ -16,6 +16,7 @@
 import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
+import 'package:recapture/domain/entities/catalog_subscription.dart';
 
 mixin CatalogRepoPublishDefaults implements CatalogRepository {
   @override
@@ -33,6 +34,10 @@ mixin CatalogRepoPublishDefaults implements CatalogRepository {
   @override
   Future<UnpublishResult> unpublish() =>
       throw UnimplementedError('unpublish is not exercised by this test');
+
+  @override
+  Future<CatalogSubscription> subscription() => throw UnimplementedError(
+      'the subscription is not exercised by this test');
 
   @override
   Future<CatalogQrImage> fetchQr({

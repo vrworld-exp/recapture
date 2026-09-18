@@ -104,6 +104,13 @@ import {
 } from '@/services/catalogPublishService';
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
+import { validateBody } from '@/middleware/validate';
+import { startTrialSchema } from '@/validation/subscriptionSchemas';
+import {
+  getSubscriptionStatus,
+  startTrial,
+  type StartTrialResult,
+} from '@/services/subscription/subscriptionService';
 
 const router = Router();
 
@@ -132,6 +139,40 @@ function notDelegated(res: Response): void {
 
 function invalidCode(res: Response): void {
   fail(res, 400, 'INVALID_REQUEST', 'Invalid QR code.');
+}
+
+/**
+ * The ONE mapping from a trial-start result to a response, shared by the rep
+ * and admin doors so the two can never disagree about a 409's code or
+ * sentence. The sentences are the client's copy for the refusal dialogs.
+ */
+export function respondToStartTrial(res: Response, result: StartTrialResult): void {
+  switch (result.outcome) {
+    case 'STARTED':
+      res.status(201).json({ status: 'success', subscription: result.dto });
+      return;
+    case 'TRIAL_ALREADY_USED':
+      res.status(409).json({
+        status: 'error',
+        code: 'TRIAL_ALREADY_USED',
+        message: 'This restaurant has already used its free trial.',
+      });
+      return;
+    case 'SUBSCRIPTION_ACTIVE':
+      res.status(409).json({
+        status: 'error',
+        code: 'SUBSCRIPTION_ACTIVE',
+        message: 'This restaurant already has an active subscription.',
+      });
+      return;
+    case 'TRIAL_NOT_ELIGIBLE':
+      res.status(409).json({
+        status: 'error',
+        code: 'TRIAL_NOT_ELIGIBLE',
+        message: 'This restaurant has paid before, so a free trial is not available.',
+      });
+      return;
+  }
 }
 
 /**
@@ -1568,6 +1609,62 @@ function respondToRepPublishRequest(
       return;
   }
 }
+
+// ── The restaurant's subscription, on their behalf (Door 1) ──────────────
+
+/**
+ * GET /rep/catalogs/:id/subscription — the same body the owner reads at
+ * `GET /catalog/subscription`, so a rep on the phone with an owner is looking
+ * at the same numbers.
+ */
+router.get(
+  '/catalogs/:id/subscription',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const subscription = await getSubscriptionStatus(
+      catalog._id as Types.ObjectId,
+      catalog.userId
+    );
+    res.status(200).json({ status: 'success', subscription });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/subscription/trial — the rep starts the restaurant's
+ * one free trial, on the spot.
+ *
+ * NO BODY. The plan and the length are config (startTrialSchema refuses any
+ * key), and the delegation is the whole authority — the same "only the rep who
+ * activated" bound every other write here has. Rate-limited per catalog so a
+ * stuck retry loop cannot hammer the row; the unique index and the guarded
+ * update inside startTrial are what make a double-tap one trial.
+ */
+router.post(
+  '/catalogs/:id/subscription/trial',
+  validateBody(startTrialSchema),
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const catalogId = catalog._id as Types.ObjectId;
+    const rate = await consumeRateWindow(`rep-trial:${catalogId.toHexString()}`, 5, 3600);
+    if (rate.limited) {
+      return fail(res, 429, 'RATE_LIMITED', 'Too many requests. Please try again shortly.');
+    }
+
+    const result = await startTrial(
+      catalogId,
+      catalog.userId,
+      { userId: repUserId, role: req.user!.role ?? 'SALES_REP' },
+      'REP'
+    );
+    return respondToStartTrial(res, result);
+  })
+);
 
 /**
  * GET /rep/catalogs/:id/publish/status — how the last publish went.

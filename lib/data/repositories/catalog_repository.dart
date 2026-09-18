@@ -10,6 +10,7 @@ import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_analytics.dart';
 import '../../domain/entities/catalog_category.dart';
+import '../../domain/entities/catalog_subscription.dart';
 import '../remote/api_client.dart';
 import 'bytes_response.dart';
 import 'catalog_failure.dart';
@@ -164,6 +165,11 @@ abstract interface class CatalogRepository {
   /// deliberately: republishing restores the same page at the same link, which
   /// is why the confirmation copy can promise a printed sticker keeps working.
   Future<UnpublishResult> unpublish();
+
+  /// The owner's subscription — status, the server's countdown, 3D usage
+  /// against the cap, and the plan catalog for the comparison cards. ONE
+  /// read; the screen never needs a second call.
+  Future<CatalogSubscription> subscription();
 
   /// The catalog's QR code as bytes (features 31-35).
   ///
@@ -510,6 +516,20 @@ class RemoteCatalogRepository implements CatalogRepository {
       getPublishStatus(_dio, '/catalog/publish/status');
 
   @override
+  Future<CatalogSubscription> subscription() => mapCatalogErrors(() async {
+        final res =
+            await _dio.get<Map<String, dynamic>>('/catalog/subscription');
+        final body = res.data?['subscription'];
+        if (body is! Map<String, dynamic>) {
+          throw const CatalogFailure(
+            code: 'MALFORMED_RESPONSE',
+            message: 'Something went wrong. Please try again.',
+          );
+        }
+        return CatalogSubscription.fromMap(body);
+      });
+
+  @override
   Future<UnpublishResult> unpublish() async {
     try {
       final res = await _dio.post<Map<String, dynamic>>('/catalog/unpublish');
@@ -634,7 +654,6 @@ class RemoteCatalogRepository implements CatalogRepository {
         if (from != null && from.isNotEmpty) 'from': from,
         if (to != null && to.isNotEmpty) 'to': to,
       };
-
 
   /// Unwraps `{status:"success", catalog:{...}}`. A 2xx without the payload is a
   /// broken contract, not an empty result — fail loudly rather than rendering a

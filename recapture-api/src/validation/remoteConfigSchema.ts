@@ -1,5 +1,6 @@
 // src/validation/remoteConfigSchema.ts
 import { z } from 'zod';
+import { DEFAULT_PLAN_CATALOG, planCatalogSchema } from '@/config/subscriptionPlans';
 import {
   SEGMENT_COUNT_BY_SIZE,
   MIN_PHOTOS_PER_RING_BY_SIZE,
@@ -79,6 +80,11 @@ export const remoteConfigSchema = z
       })
       .strict()
       .optional(),
+    // The subscription plan catalog (RECAPTURE_SUBSCRIPTION_PLAN.md §3c). The
+    // service fills this from getPlanCatalog(), which has ALREADY validated or
+    // defaulted it, so it can never be what fails this strict parse. Optional
+    // so a stored document (or a test fixture) predating it still validates.
+    subscriptionPlans: planCatalogSchema.optional(),
   })
   .strict();
 
@@ -130,13 +136,15 @@ function variantSegmentsBlock(
  * defaults can never silently diverge from the server's own capture rules.
  */
 export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
+  // Version 6: adds subscriptionPlans (the three plans and the trial / grace /
+  // grandfather constants). Same cache-rollover reasoning as v5.
   // Version 5: adds meshy_capture_variant_segments (Meshy capture mode). The
   // bump is what rolls client ETag/304 caches over to the new payload — a
   // client still serving a cached v4 simply never sees the Meshy block and
   // falls back to its bundled defaults, which is the correct degradation.
   // Version 4 retuned the tilt bands to 0–40 / 40–110 / 110–180; version 3 was
   // the 16×3 / 24×2 per-ring counts; version 2 was the 0–180° band scale.
-  version: 5,
+  version: 6,
   // LOW/EYE/TOP guided-capture rings as camera-tilt bands tiling [0, 180]:
   // BOTTOM ring `low` (tilt up) [0,40) / EYE ring `mid` (hold straight)
   // [40,110) / TOP ring `high` (tilt down) [110,180). Deliberately UNEQUAL
@@ -162,4 +170,5 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     with_bottom: variantSegmentsBlock('with_bottom', 'meshy'),
     without_bottom: variantSegmentsBlock('without_bottom', 'meshy'),
   },
+  subscriptionPlans: DEFAULT_PLAN_CATALOG,
 };

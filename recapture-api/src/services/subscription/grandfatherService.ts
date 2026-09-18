@@ -18,6 +18,7 @@ const DAY_MS = 86_400_000;
 
 export interface GrandfatherCandidate {
   catalogId: Types.ObjectId;
+  userId: Types.ObjectId;
   /** Catalog content — for the terminal, never for analytics. */
   name: string;
 }
@@ -44,11 +45,15 @@ async function provisionedCatalogs(): Promise<GrandfatherCandidate[]> {
     deletedAt: null,
     mirageRestaurantId: { $type: 'string' },
   })
-    .select({ _id: 1, name: 1 })
+    .select({ _id: 1, userId: 1, name: 1 })
     .sort({ _id: 1 })
     .lean()
     .exec();
-  return rows.map((row) => ({ catalogId: row._id as Types.ObjectId, name: row.name }));
+  return rows.map((row) => ({
+    catalogId: row._id as Types.ObjectId,
+    userId: row.userId,
+    name: row.name,
+  }));
 }
 
 function isDuplicateKey(err: unknown): boolean {
@@ -99,6 +104,7 @@ export async function grandfatherCatalogsComped(options: {
       // its own row, and the schema's validation and defaults still apply.
       await CatalogSubscription.create({
         catalogId: candidate.catalogId,
+        userId: candidate.userId,
         status: 'COMPED',
         source: 'COMP',
         periodStart: now,

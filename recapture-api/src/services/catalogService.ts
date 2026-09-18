@@ -23,6 +23,11 @@ import { customerUrl } from '@/services/customerUrl';
 import { presignObjectPutUrl, putObjectBytes } from '@/services/s3ObjectStore';
 import { checkCatalogImageKey, sweepSupersededImages } from '@/services/catalogImages';
 import {
+  cancelOnCatalogDelete,
+  getSubscriptionSummary,
+  type SubscriptionSummaryDto,
+} from '@/services/subscription/subscriptionService';
+import {
   buildBrandingImageKey,
   productImageExtensionFor,
   type BrandingSlot,
@@ -89,6 +94,12 @@ export interface CatalogDto {
    */
   hasChangesSincePublishStarted: boolean;
   counts: CatalogCountsDto;
+  /**
+   * The compact subscription state, or null when the catalog has no
+   * subscription row yet — the header chip and the rep list read this so
+   * neither pays a second request. The full picture is GET /catalog/subscription.
+   */
+  subscription: SubscriptionSummaryDto | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -145,7 +156,8 @@ async function countsFor(catalogId: Types.ObjectId): Promise<CatalogCountsDto> {
 export function toCatalogDto(
   c: ICatalog,
   counts: CatalogCountsDto,
-  publishSnapshotRevision: number | null = null
+  publishSnapshotRevision: number | null = null,
+  subscription: SubscriptionSummaryDto | null = null
 ): CatalogDto {
   return {
     id: c.id as string,
@@ -163,9 +175,15 @@ export function toCatalogDto(
       publishSnapshotRevision !== null &&
       c.draftRevision > publishSnapshotRevision,
     counts,
+    subscription,
     updatedAt: c.updatedAt.toISOString(),
     createdAt: c.createdAt.toISOString(),
   };
+}
+
+/** The summary every catalog DTO carries — one read, keyed by the catalog and its owner. */
+function subscriptionSummaryOf(c: ICatalog): Promise<SubscriptionSummaryDto | null> {
+  return getSubscriptionSummary(c._id as Types.ObjectId, c.userId);
 }
 
 /**
@@ -179,7 +197,7 @@ export async function getCatalog(userId: string): Promise<CatalogDto | null> {
   const catalog = await findOwnedCatalog(userId);
   if (!catalog) return null;
 
-  const [counts, activeRun] = await Promise.all([
+  const [counts, activeRun, subscription] = await Promise.all([
     countsFor(catalog._id as Types.ObjectId),
     catalog.activePublishRunId
       ? CatalogPublishRun.findById(catalog.activePublishRunId)
@@ -187,9 +205,10 @@ export async function getCatalog(userId: string): Promise<CatalogDto | null> {
           .lean()
           .exec()
       : Promise.resolve(null),
+    subscriptionSummaryOf(catalog),
   ]);
 
-  return toCatalogDto(catalog, counts, activeRun?.snapshotRevision ?? null);
+  return toCatalogDto(catalog, counts, activeRun?.snapshotRevision ?? null, subscription);
 }
 
 /**
@@ -243,7 +262,12 @@ export async function createCatalog(
 
     return {
       outcome: 'ALREADY_EXISTS',
-      catalog: toCatalogDto(existing, await countsFor(existing._id as Types.ObjectId)),
+      catalog: toCatalogDto(
+        existing,
+        await countsFor(existing._id as Types.ObjectId),
+        null,
+        await subscriptionSummaryOf(existing)
+      ),
     };
   }
 }
@@ -300,7 +324,12 @@ export async function updateCatalog(
 
   return {
     outcome: 'UPDATED',
-    catalog: toCatalogDto(updated, await countsFor(updated._id as Types.ObjectId)),
+    catalog: toCatalogDto(
+      updated,
+      await countsFor(updated._id as Types.ObjectId),
+      null,
+      await subscriptionSummaryOf(updated)
+    ),
   };
 }
 
@@ -578,6 +607,8 @@ export type DeleteCatalogResult =
       deletedCategories: number;
       /** True when a live Mirage restaurant was torn down with it. */
       wasPublished: boolean;
+      /** True when a subscription row was moved to CANCELLED with it (C9). */
+      subscriptionCancelled: boolean;
     };
 
 /**
@@ -648,6 +679,12 @@ export async function deleteCatalog(userId: string): Promise<DeleteCatalogResult
     }
   }
 
+  // The subscription is CANCELLED, not deleted, and only once Mirage has let
+  // go: a refusal above aborts with everything intact, this row included. It
+  // outlives the catalog on purpose — `trialUsedAt` is the owner's history
+  // (D2), and the row's `userId` is how a re-created catalog inherits it.
+  const subscriptionCancelled = await cancelOnCatalogDelete(catalogId);
+
   // Children first: a crash between these leaves orphan rows whose catalog is
   // gone, and orphan children are invisible (every read is scoped by catalogId)
   // where an orphan CATALOG would still be served as the user's own.
@@ -668,6 +705,7 @@ export async function deleteCatalog(userId: string): Promise<DeleteCatalogResult
     deletedProducts: products.deletedCount ?? 0,
     deletedCategories: categories.deletedCount ?? 0,
     wasPublished: Boolean(restaurantId),
+    subscriptionCancelled,
   };
 }
 

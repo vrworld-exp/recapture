@@ -263,6 +263,7 @@ async function subscription(
 ): Promise<void> {
   await CatalogSubscription.create({
     catalogId,
+    userId: new Types.ObjectId(),
     status,
     source: status === 'TRIAL' ? 'TRIAL' : status === 'COMPED' ? 'COMP' : 'ONLINE',
     periodStart: new Date(),

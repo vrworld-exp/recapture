@@ -641,6 +641,45 @@ class _IdentityBlock extends ConsumerWidget {
           ),
         ),
 
+        // -- Subscription -----------------------------------------------------
+        // The second door to the owner's subscription screen (the first is the
+        // chip on the catalog header). Unconditional: a user with no catalog
+        // lands on a sentence saying so, which beats hunting for a screen.
+        const SizedBox(height: AppSpacing.md),
+        AppCard(
+          key: const ValueKey('profile_subscription'),
+          onTap: () => context.push(AppRoutes.catalogSubscription),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.workspace_premium_outlined,
+                size: 20,
+                color: AppColors.textSecondary,
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Subscription',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: AppColors.textPrimary),
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    Text(
+                      'Your plan, 3D dish usage and prices',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: AppColors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: AppColors.textMuted),
+            ],
+          ),
+        ),
+
         // -- Rep tools ---------------------------------------------------------
         // The ONLY in-app way into the /rep subtree. Every other entry to it is
         // a DEEP LINK: stage 3's 'not live yet' page hands the rep

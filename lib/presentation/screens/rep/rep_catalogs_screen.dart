@@ -15,7 +15,9 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../app/theme/app_typography.dart';
 import '../../../application/rep/rep_catalogs_notifier.dart';
+import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_status.dart';
+import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/rep_activation.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
@@ -97,15 +99,20 @@ class _CatalogTile extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 2),
+                    // The subscription, in chip form — "Trial 12d", "No plan"
+                    // — from the compact summary the list row carries, so the
+                    // picker pays no request for it. The one number on a row
+                    // besides "live", because a rep decides at a glance which
+                    // restaurant needs a trial started or a nudge.
+                    _SubscriptionChip(summary: summary.subscription),
+                    const SizedBox(height: 2),
                     Text(
                       // "Menu live" is what a rep actually needs to know, and
                       // it is NOT the same as "activated": a catalog is
                       // activated the moment the standee is claimed and goes
                       // live on its first publish. Saying so plainly stops a
                       // rep leaving before the menu is up.
-                      summary.status.isLive
-                          ? 'Menu live'
-                          : 'Not published yet',
+                      summary.status.isLive ? 'Menu live' : 'Not published yet',
                       style: TextStyle(
                         fontSize: AppTypography.sizeLabel,
                         color: summary.status.isLive
@@ -141,6 +148,37 @@ class _CatalogTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _SubscriptionChip extends StatelessWidget {
+  const _SubscriptionChip({required this.summary});
+
+  final SubscriptionSummary? summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        switch (subscriptionTone(summary?.status ?? SubscriptionStatus.none)) {
+      SubscriptionTone.good => AppColors.success,
+      SubscriptionTone.warning => AppColors.warning,
+      SubscriptionTone.danger => AppColors.error,
+      SubscriptionTone.neutral => AppColors.textMuted,
+    };
+    return Container(
+      key: const ValueKey('rep_subscription_chip'),
+      padding:
+          const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        repStatusChip(summary),
+        style: TextStyle(fontSize: AppTypography.sizeLabel, color: color),
       ),
     );
   }
