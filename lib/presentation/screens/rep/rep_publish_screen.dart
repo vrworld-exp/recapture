@@ -25,6 +25,7 @@ import '../../../app/theme/app_colors.dart';
 import '../../../application/catalog/publish_flow.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
 import '../../../application/rep/rep_publish_notifier.dart';
+import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/publish_gate.dart';
 import '../../widgets/app_loading_indicator.dart';
@@ -213,6 +214,13 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
             status: status,
             isOnline: isOnline,
             voice: PublishVoice.rep,
+            // The grace banner, in the rep's voice: the restaurant's detail
+            // screen carries the Subscription card with "Notify owner to pay".
+            subscription: ref
+                .watch(repCatalogDocumentProvider(widget.catalogId))
+                .valueOrNull
+                ?.subscription,
+            onOpenSubscription: () => context.push(_base),
             onPublish: () => ref.read(provider.notifier).publish(),
             onRetryFailed: () => ref.read(provider.notifier).retryFailed(),
             // No onUnpublish: see the file header.

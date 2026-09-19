@@ -126,6 +126,12 @@ abstract interface class PaymentsRepository {
     required String note,
   });
 
+  /// Re-tell Mirage this restaurant's CURRENT 3D entitlement (Stage 5,
+  /// E18). The write happens on the worker; the answer is the job id, and
+  /// the panel's sync stamp moves when it lands. 409 `NO_SUBSCRIPTION` when
+  /// the catalog has no row.
+  Future<String> resyncArEntitlement(String catalogId);
+
   /// Refund ONE PAID row in full. Needs the row flagged as a suspected
   /// duplicate, or [override] with a note of at least thirty characters.
   Future<PaymentRecordSummary> refund(
@@ -349,6 +355,15 @@ class RemotePaymentsRepository implements PaymentsRepository {
           data: {'days': days, 'note': note},
         );
         return CatalogSubscription.fromMap(_object(res.data?['subscription']));
+      });
+
+  @override
+  Future<String> resyncArEntitlement(String catalogId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/catalogs/$catalogId/subscription/resync-ar',
+        );
+        return (res.data?['jobId'] ?? '').toString();
       });
 
   @override

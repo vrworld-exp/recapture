@@ -15,6 +15,7 @@ import {
   MESHY_MODEL_GENERATION_JOB_TYPE,
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
+  SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
   type ExecutableStage,
   type JobState,
   type StageProgress,
@@ -31,6 +32,7 @@ export {
   MESHY_MODEL_GENERATION_JOB_TYPE,
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
+  SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
 };
 
 /** Fallback for job documents created before the worker fields existed. */

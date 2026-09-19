@@ -51,6 +51,26 @@ export const PHOTO_UPLOAD_JOB_TYPE = 'PHOTO_UPLOAD';
  * what the publish screen reads.
  */
 export const MIRAGE_CATALOG_PUBLISH_JOB_TYPE = 'MIRAGE_CATALOG_PUBLISH';
+/**
+ * Telling Mirage whether one restaurant's 3D/AR is switched on (Stage 5 of
+ * RECAPTURE_SUBSCRIPTION_PLAN.md). Carries
+ * `payload.{catalogId, enabled, reason}` — no upload, no project, no run. It
+ * writes exactly one field on the Mirage restaurant (`arEnabled`) and NEVER
+ * unpublishes or deletes anything: a paused restaurant's photo menu stays
+ * live at the same URL, only the 3D viewer goes.
+ */
+export const SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE = 'SUBSCRIPTION_AR_ENTITLEMENT';
+
+/**
+ * Claim priority for the jobs a PERSON is standing and waiting on — a catalog
+ * publish (a rep at a restaurant table) and a 3D resume (an owner who just
+ * paid). Every other job type enqueues at the schema default (0), so these
+ * are always the next thing a free worker slot takes; the worker's reserved
+ * lane (WORKER_PUBLISH_LANE_SLOTS) covers the case where no general slot
+ * frees up at all. Declared here, beside the type names, so the two enqueue
+ * sites can share it without importing each other.
+ */
+export const PUBLISH_JOB_PRIORITY = 10;
 
 /**
  * Job processing lifecycle states.

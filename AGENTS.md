@@ -965,9 +965,14 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   `getPlanCatalog()`, so a bad override costs the plans, not the config.
   Client: `domain/entities/catalog_subscription.dart`, copy in
   `domain/catalog/subscription_copy.dart` (one table for the owner line and the
-  rep chip), the owner Subscription screen (`_CheckoutSlot` is Stage 3's
-  place), the rep card with Start free trial — NEVER through the offline queue
-  (E40) — and both publish screens' Fix for the two subscription gates.
+  rep chip, plus Stage 5's paused card / grace banner strings), the owner
+  Subscription screen (`_CheckoutSlot` is Stage 3's place), the rep card with
+  Start free trial — NEVER through the offline queue (E40) — and both publish
+  screens' Fix for the two subscription gates. Stage 5 adds the A9 paused
+  card FIRST on the catalog screen, the red GRACE banner on the catalog and
+  both publish screens (`PublishBody.subscription`, voice-aware:
+  `PublishVoice.isRep`), and `graceFrom` on the summary and the DTO for
+  Prompt B's copy (`test/catalog/subscription_banners_test.dart`).
 - **Money moves through ONE activation primitive and ONE automated door
   (Stage 3, backend only — the client half is not built).**
   `subscriptionService.applyPaidPeriod` is the only thing that writes an
@@ -1049,6 +1054,51 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   COMPED, CANCELLED, then fewest days left, stable). Guardrails:
   `test/rep/rep_nudge_button_test.dart`, `rep_activation_copy_test.dart`,
   `rep_catalogs_ordering_test.dart`.
+- **Enforcement is a SWEEP, a JOB, and one Mirage field — never an unpublish
+  (Stage 5, `docs/subscription/stage-05-enforcement.md`; runbook
+  `docs/subscription/rollout.md`).** `services/subscription/lifecycleSweep.ts
+  → runSubscriptionSweep(now)` runs as a worker `periodicTask` every
+  `SUBSCRIPTION_SWEEP_INTERVAL_MS` (10 min): `TRIAL|ACTIVE|COMPED → GRACE` at
+  `periodEnd` (a pipeline `updateMany`, `graceEndsAt` derived from EACH row's
+  own `periodEnd`, `graceFrom` remembering where it came from — E16), then
+  `GRACE → PAUSED` at `graceEndsAt` (a conditional `findOneAndUpdate` per row
+  — the D4 guard; only a row THIS sweep moved enqueues a job), then the four
+  in-app reminders (−7 d, −1 d, on GRACE, grace midpoint) deduped through the
+  `ReminderLog` unique index and carrying `expiresAt` (E14, E44). Every
+  comparison is `$lte: now` — the sweep is only ever LATE (D3), and it runs
+  only while the instance is awake (E17; the runbook keeps it awake). It
+  never reads `activePublishRunId` and never writes `Catalog` (D5).
+  - **The job.** `SUBSCRIPTION_AR_ENTITLEMENT` (`payload { catalogId, enabled,
+    reason }`, no `projectId`, publish priority, in the worker's reserved
+    lane) is enqueued ONLY through `arEntitlementJobs.ts → enqueueArEntitlementJob`
+    — by the sweep (pause), `applyPaidPeriod` / `applyComp` (resume out of
+    PAUSED/CANCELLED), first-time provisioning of a non-entitled row (E15),
+    and the admin's `POST /admin/catalogs/:id/subscription/resync-ar` (202 +
+    job id). The idempotency key is `ar-entitlement:<catalog>:<enabled>:<row
+    updatedAt>`, so a replayed webhook or a concurrent sweep lands on the
+    same job. Its processor (`worker/processors/subscriptionArEntitlementProcessor.ts`)
+    re-reads the row (D4: a payload that no longer matches is a SUCCESS with
+    `skipped`), then calls `updateRestaurant(id, { arEnabled })` with EXACTLY
+    that body — never `name` (E36: `customerUrl` resolves by name and a rename
+    breaks every printed QR), never `isPublished`, never a delete — and
+    stamps `arEntitlementSyncedAt` (shown on the admin panel, E18). A
+    terminal or exhausted failure `alertAdmins('ENTITLEMENT_FAILED')`; the
+    customer page keeps its previous state (late is the safe direction).
+    `tests/subscription-ar-entitlement-processor.test.ts` is the deliberate
+    opposite of `tests/catalog-unpublish.test.ts`.
+  - **Mirage side.** `arEnabled` on the restaurant (default `true`, parsed
+    like `isPublished`, written only by the admin update route) is served on
+    every public read with `Cache-Control: no-store` (E47); the page renders
+    the photo (or a neutral placeholder) in place of every `<model-viewer>`
+    and hides AR, from the FRESH response only — never the IndexedDB cache.
+    `isPublished === false` still 404s; a pause never does.
+  - **E35.** A promotion whose publish a SUBSCRIPTION gate refuses tells the
+    owner once per dish (`Notification.key = promo-blocked:<productId>`).
+    `requestRetry` deliberately runs NO gates (E45).
+  - **The flag.** `subscriptionGatesEnabled: true` on `client_configs` is an
+    ops action after Mirage Part B is deployed and the grandfather script has
+    run — the order in `rollout.md` is load-bearing. Rollback is the same
+    flag set `false`; nothing is deleted or unpublished by any of the above.
 - **Analytics are a PROXY, not a redirect.** Mirage's three report endpoints are
   admin-scoped and its own in-code note forbids opening them to client scope.
   ReCapture reads them with its admin credential and FORCES `restaurant` from the

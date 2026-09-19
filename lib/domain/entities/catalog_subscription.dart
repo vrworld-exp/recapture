@@ -279,6 +279,7 @@ class SubscriptionSummary {
     required this.planId,
     required this.isEntitledTo3D,
     required this.trialAvailable,
+    this.graceFrom,
   });
 
   final SubscriptionStatus status;
@@ -289,6 +290,12 @@ class SubscriptionSummary {
   final bool isEntitledTo3D;
   final bool trialAvailable;
 
+  /// In [SubscriptionStatus.grace]: which state the row lapsed from (trial,
+  /// active or comped), so a banner can say "trial ended" to a restaurant
+  /// that never paid (E16). Null outside grace and on an older server —
+  /// both read as the "payment overdue" wording.
+  final SubscriptionStatus? graceFrom;
+
   factory SubscriptionSummary.fromMap(Map<String, dynamic> map) =>
       SubscriptionSummary(
         status:
@@ -298,6 +305,7 @@ class SubscriptionSummary {
         planId: PlanIdX.fromApiValueOrNull(map['planId']),
         isEntitledTo3D: map['isEntitledTo3D'] == true,
         trialAvailable: map['trialAvailable'] == true,
+        graceFrom: _graceFromOrNull(map['graceFrom']),
       );
 
   /// Null in, null out — the catalog DTO carries `subscription: null` for a
@@ -309,9 +317,17 @@ class SubscriptionSummary {
         'status': status.apiValue,
         'daysLeft': daysLeft,
         'planId': planId?.apiValue,
+        'graceFrom': graceFrom?.apiValue,
         'isEntitledTo3D': isEntitledTo3D,
         'trialAvailable': trialAvailable,
       };
+}
+
+/// `graceFrom` off the wire: a known status, or null for absent / unknown.
+SubscriptionStatus? _graceFromOrNull(dynamic raw) {
+  if (raw is! String || raw.isEmpty) return null;
+  final status = SubscriptionStatusX.fromApiValue(raw);
+  return status == SubscriptionStatus.unknown ? null : status;
 }
 
 /// The whole subscription screen — `SubscriptionStatusDto`.
@@ -334,11 +350,15 @@ class CatalogSubscription {
     required this.plans,
     this.planSnapshot,
     this.nudgeNextAllowedAt,
+    this.graceFrom,
   });
 
   final SubscriptionStatus status;
   final PlanId? planId;
   final String? planName;
+
+  /// See [SubscriptionSummary.graceFrom].
+  final SubscriptionStatus? graceFrom;
 
   /// REP SURFACE ONLY. When the next "Notify owner to pay" nudge on this
   /// restaurant is allowed (`nudge.nextAllowedAt` beside the DTO on
@@ -419,6 +439,7 @@ class CatalogSubscription {
         plans: plans,
         planSnapshot: planSnapshot,
         nudgeNextAllowedAt: at,
+        graceFrom: graceFrom,
       );
 
   /// The compact view of the same row, for a chip that has only this.
@@ -429,6 +450,7 @@ class CatalogSubscription {
           planId: planId,
           isEntitledTo3D: isEntitledTo3D,
           trialAvailable: trialAvailable,
+          graceFrom: graceFrom,
         )
       : null;
 
@@ -471,6 +493,7 @@ class CatalogSubscription {
               (map['planSnapshot'] as Map).cast<String, dynamic>())
           : null,
       nudgeNextAllowedAt: nudgeNextAllowedAt,
+      graceFrom: _graceFromOrNull(map['graceFrom']),
     );
   }
 }

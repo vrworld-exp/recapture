@@ -60,6 +60,14 @@ export interface ICatalogSubscription extends Document {
    */
   graceEndsAt?: Date;
   /**
+   * Which status the sweep moved into GRACE from — TRIAL, ACTIVE or COMPED —
+   * so the client can say "your trial ended" rather than "payment overdue"
+   * to a restaurant that never paid (E16). Written by the sweep only; a
+   * dispute-grace leaves it unset (it came from ACTIVE, and the copy is
+   * "overdue"). Cleared with `graceEndsAt` whenever a new period is applied.
+   */
+  graceFrom?: SubscriptionStatus;
+  /**
    * Set when a CHARGEBACK moved the row ACTIVE → GRACE (B9), so a dispute
    * that is later WON can be told apart from a grace the sweep started: only
    * a dispute-grace is restored to ACTIVE on `won`. Cleared whenever a new
@@ -150,6 +158,7 @@ const CatalogSubscriptionSchema = new Schema<ICatalogSubscription>(
     periodStart: { type: Date, required: true },
     periodEnd: { type: Date, required: true },
     graceEndsAt: { type: Date },
+    graceFrom: { type: String, enum: SUBSCRIPTION_STATUSES },
     disputeGraceAt: { type: Date },
     trialUsedAt: { type: Date },
     trialActivatedBy: { type: ActorSchema },

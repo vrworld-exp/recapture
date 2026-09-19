@@ -9,10 +9,15 @@ import { Types } from 'mongoose';
 
 import { env } from '@/config/env';
 import { Catalog } from '@/models/Catalog';
-import { CatalogSubscription, type ICatalogSubscription } from '@/models/CatalogSubscription';
+import {
+  CatalogSubscription,
+  isEntitledTo3D,
+  type ICatalogSubscription,
+} from '@/models/CatalogSubscription';
 import { PaymentRecord, type IPaymentRecord } from '@/models/PaymentRecord';
 import type { Actor, PlanId, SubscriptionStatus } from '@/models/types/subscription.types';
 import { getRazorpayClient, isRazorpayConfigured } from '@/providers/razorpay';
+import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
 import { daysLeftFor } from '@/services/subscription/subscriptionService';
 import type { AdminSubscriptionState } from '@/validation/subscriptionSchemas';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -204,6 +209,46 @@ export async function refundPayment(
   return { outcome: 'REFUNDED', record };
 }
 
+// ── Resync the Mirage entitlement ───────────────────────────────────────────
+
+export type ResyncArResult =
+  | { outcome: 'ENQUEUED'; jobId: Types.ObjectId; enabled: boolean }
+  /** No subscription row — there is no desired state to sync. */
+  | { outcome: 'NO_SUBSCRIPTION' };
+
+/**
+ * E18. Enqueues a SUBSCRIPTION_AR_ENTITLEMENT job carrying the row's CURRENT
+ * desired state — the button an admin presses when `arEntitlementSyncedAt`
+ * is stale or an ENTITLEMENT_FAILED alert arrived. Keyed on "now" rather
+ * than the row's `updatedAt`, so pressing it again after a failed attempt
+ * queues a fresh job instead of landing on the failed one.
+ */
+export async function resyncArEntitlement(
+  catalogId: Types.ObjectId,
+  admin: Actor,
+  now: Date = new Date()
+): Promise<ResyncArResult> {
+  const row = await CatalogSubscription.findOne({ catalogId })
+    .select({ status: 1, userId: 1 })
+    .lean<{ status: SubscriptionStatus; userId: Types.ObjectId }>()
+    .exec();
+  if (!row) return { outcome: 'NO_SUBSCRIPTION' };
+
+  const enabled = isEntitledTo3D(row.status);
+  const { jobId } = await enqueueArEntitlementJob({
+    catalogId,
+    ownerUserId: row.userId,
+    enabled,
+    reason: 'ADMIN',
+    dedupeAt: now,
+  });
+  console.log(
+    `[subscription] admin ${hashIdentifier(admin.userId.toHexString())} resync-ar ` +
+      `catalog=${catalogId.toHexString()} enabled=${enabled} job=${jobId.toHexString()}`
+  );
+  return { outcome: 'ENQUEUED', jobId, enabled };
+}
+
 // ── The collections list ────────────────────────────────────────────────────
 
 export interface AdminSubscriptionListItem {
@@ -231,6 +276,7 @@ type ListRow = Pick<
   | 'billingInterval'
   | 'periodEnd'
   | 'graceEndsAt'
+  | 'graceFrom'
   | 'trialUsedAt'
   | 'threeDDishCap'
   | 'standeeAllocation'

@@ -185,6 +185,10 @@ class AdminSubscriptionDetailNotifier
   }) =>
       _act(() => _repo.extendGrace(arg, days: days, note: note));
 
+  /// Re-tells Mirage the current 3D entitlement (E18). Answers the job id.
+  Future<String> resyncArEntitlement() =>
+      _act(() => _repo.resyncArEntitlement(arg));
+
   /// The standees-delivered counter (README C8). An absolute number.
   Future<CatalogSubscription> setStandeesIssued({
     required int issued,

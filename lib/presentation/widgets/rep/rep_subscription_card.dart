@@ -209,6 +209,18 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
           style: textTheme.bodyMedium
               ?.copyWith(color: color, fontWeight: FontWeight.w600),
         ),
+        // Stage 5: a worried owner's first question is "is my menu down?".
+        // It is not, and the rep should be able to read the answer off the
+        // card without looking anything up.
+        if (subscription.status == SubscriptionStatus.paused) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            kPausedPhotoMenuLine,
+            key: const ValueKey('rep_paused_photo_menu_line'),
+            style:
+                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+        ],
         const SizedBox(height: AppSpacing.xs),
         Text(
           subscription.hasRow

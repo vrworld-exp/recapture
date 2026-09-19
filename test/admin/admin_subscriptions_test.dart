@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
+import 'package:recapture/app/theme/app_colors.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/payments_repository.dart';
 import 'package:recapture/domain/catalog/subscription_copy.dart';
@@ -30,11 +31,13 @@ AdminSubscriptionDetail _detail({
   String status = 'ACTIVE',
   List<PaymentRecordSummary> payments = const [],
   bool deleted = false,
+  DateTime? arEntitlementSyncedAt,
 }) =>
     AdminSubscriptionDetail(
       catalogId: 'c1',
       catalogName: 'blue cafe',
       catalogDeleted: deleted,
+      arEntitlementSyncedAt: arEntitlementSyncedAt,
       subscription: deleted
           ? null
           : CatalogSubscription.fromMap(subscriptionPayload(
@@ -412,6 +415,65 @@ void main() {
       expect(find.byKey(const ValueKey('admin_comp')), findsNothing);
       // The orphan can still be refunded (E5).
       expect(find.textContaining('Refund…'), findsOneWidget);
+    });
+  });
+
+  group('the 3D entitlement sync (Stage 5, E18)', () {
+    testWidgets('a PAUSED row never synced is flagged, and Resync 3D queues a job',
+        (tester) async {
+      await _tall(tester);
+      final repo = FakePaymentsRepository()..detail = _detail(status: 'PAUSED');
+      await tester.pumpWidget(
+          _harness(repo, initial: '${AppRoutes.adminSubscriptions}/c1'));
+      await tester.pumpAndSettle();
+
+      final line = find.byKey(const ValueKey('admin_ar_sync_line'));
+      expect(line, findsOneWidget);
+      expect(find.textContaining('never synced — Mirage still shows 3D'),
+          findsOneWidget);
+      expect(
+        tester.widget<Text>(line).style?.color,
+        AppColors.warning,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('admin_resync_ar')));
+      await tester.pump();
+      await tester.pump();
+
+      expect(repo.calls, contains('resyncAr'));
+      expect(find.textContaining('3D sync queued'), findsOneWidget);
+      // Re-read after the action, like every other one.
+      expect(repo.calls.where((c) => c == 'detail:c1').length, 2);
+    });
+
+    testWidgets('a synced row shows the stamp in muted text', (tester) async {
+      await _tall(tester);
+      final repo = FakePaymentsRepository()
+        ..detail = _detail(
+          status: 'ACTIVE',
+          arEntitlementSyncedAt: DateTime.utc(2026, 9, 19, 8, 32),
+        );
+      await tester.pumpWidget(
+          _harness(repo, initial: '${AppRoutes.adminSubscriptions}/c1'));
+      await tester.pumpAndSettle();
+
+      final line = find.byKey(const ValueKey('admin_ar_sync_line'));
+      expect(find.textContaining('3D on Mirage: synced 19 Sep 2026'),
+          findsOneWidget);
+      expect(tester.widget<Text>(line).style?.color, AppColors.textMuted);
+      expect(find.byKey(const ValueKey('admin_resync_ar')), findsOneWidget);
+    });
+
+    testWidgets('a deleted catalog has no row and no Resync button',
+        (tester) async {
+      await _tall(tester);
+      final repo = FakePaymentsRepository()..detail = _detail(deleted: true);
+      await tester.pumpWidget(
+          _harness(repo, initial: '${AppRoutes.adminSubscriptions}/c1'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('admin_ar_sync_line')), findsNothing);
+      expect(find.byKey(const ValueKey('admin_resync_ar')), findsNothing);
     });
   });
 

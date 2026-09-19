@@ -15,6 +15,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
+import '../../../application/catalog/catalog_notifier.dart';
 import '../../../application/catalog/publish_notifier.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
 import '../../../data/repositories/catalog_failure.dart';
@@ -234,6 +235,11 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
             status: status,
             isOnline: isOnline,
             voice: PublishVoice.owner,
+            // The grace banner reads the server's summary off the catalog
+            // the owner already holds; no second request for it.
+            subscription: ref.watch(catalogProvider).valueOrNull?.subscription,
+            onOpenSubscription: () =>
+                context.pushNamed(AppRouteNames.catalogSubscription),
             onPublish: () => ref.read(publishProvider.notifier).publish(),
             onRetryFailed: () =>
                 ref.read(publishProvider.notifier).retryFailed(),

@@ -67,6 +67,7 @@ interface FakeRestaurant {
   phone?: string;
   icon?: string;
   isPublished?: boolean;
+  arEnabled?: boolean;
   categoryIds: string[];
 }
 
@@ -189,6 +190,7 @@ export class FakeMirage implements MirageClient {
     if (input.location !== undefined) found.location = input.location;
     if (input.phoneNo !== undefined) found.phone = `+91${input.phoneNo}`;
     if (input.isPublished !== undefined) found.isPublished = input.isPublished;
+    if (input.arEnabled !== undefined) found.arEnabled = input.arEnabled;
     return this.toRestaurant(found);
   }
 
@@ -415,6 +417,7 @@ export class FakeMirage implements MirageClient {
       ...(r.phone ? { phone: r.phone } : {}),
       ...(r.icon ? { icon: r.icon } : {}),
       ...(r.isPublished !== undefined ? { isPublished: r.isPublished } : {}),
+      ...(r.arEnabled !== undefined ? { arEnabled: r.arEnabled } : {}),
       categoryIds: [...r.categoryIds],
     };
   }

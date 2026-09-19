@@ -12,6 +12,7 @@ import {
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
   PHOTO_UPLOAD_JOB_TYPE,
+  SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
   JobState,
   StageProgress,
   StageTimestamps,
@@ -309,9 +310,13 @@ const JobSchema = new Schema<IJob>(
       type: Schema.Types.ObjectId,
       ref: 'Project',
       // Required for every job type whose unit of work IS a project. A catalog
-      // publish has none, and a required-always field would force a fake id.
+      // publish has none, nor does a subscription entitlement sync, and a
+      // required-always field would force a fake id.
       required(this: IJob) {
-        return this.jobType !== MIRAGE_CATALOG_PUBLISH_JOB_TYPE;
+        return (
+          this.jobType !== MIRAGE_CATALOG_PUBLISH_JOB_TYPE &&
+          this.jobType !== SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE
+        );
       },
     },
     userId: {

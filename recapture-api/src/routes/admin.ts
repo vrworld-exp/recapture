@@ -117,6 +117,7 @@ import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { loadStandeeActivation } from '@/services/standeeActivationService';
 import { catalogQrQuerySchema } from '@/validation/catalogSchemas';
 import { Catalog } from '@/models/Catalog';
+import { CatalogSubscription } from '@/models/CatalogSubscription';
 import {
   adminManualPaymentSchema,
   adminManualPaymentsQuerySchema,
@@ -147,6 +148,7 @@ import {
   extendGrace,
   listSubscriptionsByState,
   refundPayment,
+  resyncArEntitlement,
   setStandeesIssued,
 } from '@/services/subscription/adminSubscriptionService';
 import {
@@ -2810,9 +2812,13 @@ router.get(
       .select({ userId: 1, name: 1, deletedAt: 1 })
       .exec();
     const live = catalog && !catalog.deletedAt;
-    const [subscription, payments] = await Promise.all([
+    const [subscription, payments, row] = await Promise.all([
       live ? getSubscriptionStatus(catalogId, catalog.userId) : Promise.resolve(null),
       listPaymentsForAdmin(catalogId),
+      CatalogSubscription.findOne({ catalogId })
+        .select({ arEntitlementSyncedAt: 1 })
+        .lean<{ arEntitlementSyncedAt?: Date }>()
+        .exec(),
     ]);
     if (!live && payments.length === 0) {
       return subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
@@ -2825,6 +2831,11 @@ router.get(
         deleted: !live,
       },
       subscription,
+      // BESIDE the owner's DTO, not inside it, so that DTO stays byte-equal
+      // across its three routes. When Mirage was last told this row's 3D
+      // entitlement (E18); null = never, which for a restaurant that has
+      // never paused is the normal state (Mirage's default is entitled).
+      arEntitlementSyncedAt: row?.arEntitlementSyncedAt?.toISOString() ?? null,
       payments,
     });
   })
@@ -2853,6 +2864,35 @@ router.post(
     res.status(200).json({
       status: 'success',
       subscription: await getSubscriptionStatus(catalogId, catalog.userId),
+    });
+  })
+);
+
+/**
+ * POST /admin/catalogs/:id/subscription/resync-ar — re-tell Mirage this
+ * restaurant's CURRENT 3D entitlement (E18). Answers 202 with the job id:
+ * the write happens on the worker, and the admin panel's
+ * `arEntitlementSyncedAt` moves when it lands.
+ */
+router.post(
+  '/catalogs/:id/subscription/resync-ar',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const catalog = await liveCatalogOr404(res, req.params.id);
+    if (!catalog) return;
+    const result = await resyncArEntitlement(catalog._id as Types.ObjectId, adminActor(req));
+    if (result.outcome === 'NO_SUBSCRIPTION') {
+      return subscriptionFail(
+        res,
+        409,
+        'NO_SUBSCRIPTION',
+        'This catalog has no subscription yet, so there is no entitlement to sync.'
+      );
+    }
+    res.status(202).json({
+      status: 'success',
+      jobId: result.jobId.toHexString(),
+      enabled: result.enabled,
     });
   })
 );

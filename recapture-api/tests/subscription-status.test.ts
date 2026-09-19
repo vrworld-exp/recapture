@@ -150,6 +150,7 @@ describe('getSubscriptionStatus — the DTO', () => {
       billingInterval: null,
       periodEnd: null,
       graceEndsAt: null,
+      graceFrom: null,
       daysLeft: null,
       threeDDishCount: 1,
       threeDDishCap: null,
@@ -277,7 +278,7 @@ describe('getSubscriptionStatus — the DTO', () => {
 });
 
 describe('the compact summary', () => {
-  it('is null for a catalog with no row, and carries the five fields otherwise', async () => {
+  it('is null for a catalog with no row, and carries the six fields otherwise', async () => {
     const owner = await makeUser();
     const catalogId = await seedCatalog(owner.id);
     expect(await getSubscriptionSummary(catalogId, owner.id, NOW)).toBeNull();
@@ -292,6 +293,7 @@ describe('the compact summary', () => {
       status: 'TRIAL',
       daysLeft: 12,
       planId: null,
+      graceFrom: null,
       isEntitledTo3D: true,
       trialAvailable: false,
     });

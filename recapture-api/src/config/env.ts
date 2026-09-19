@@ -632,7 +632,7 @@ const envSchema = z.object({
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
   /**
    * Extra slots, beyond WORKER_CONCURRENCY, reserved for MIRAGE_CATALOG_PUBLISH
-   * jobs. A Meshy generation holds a general slot for up to MESHY_TASK_TIMEOUT_MS,
+   * and SUBSCRIPTION_AR_ENTITLEMENT jobs. A Meshy generation holds a general slot for up to MESHY_TASK_TIMEOUT_MS,
    * and with the default concurrency of 2 a publish — which a rep stands at a
    * table waiting on — used to queue behind two of them for exactly that long.
    * 0 disables the lane (publish jobs then share the general budget as before).
@@ -663,6 +663,15 @@ const envSchema = z.object({
    * delay an activation by; five minutes is the plan's B1 bound.
    */
   SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+  /**
+   * How often the worker runs the subscription lifecycle sweep (ms) —
+   * TRIAL/ACTIVE/COMPED → GRACE at `periodEnd`, GRACE → PAUSED at
+   * `graceEndsAt`, and the in-app reminders (docs/subscription/stage-05-
+   * enforcement.md). A FLOOR, not a promise: the loop only runs while the
+   * instance is awake (E17), and every comparison is `<= now`, so a sweep can
+   * only ever be late. Ten minutes.
+   */
+  SUBSCRIPTION_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(600_000),
   /**
    * Per-ADMIN refund window (E43): a leaked admin token cannot drain the
    * Razorpay balance in a loop, and a real admin never needs six refunds an

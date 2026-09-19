@@ -19,18 +19,21 @@ import { categoryExecutor } from '@/services/catalog/categorySync';
 import { setPublishExecutors } from '@/services/catalog/publishExecutors';
 import { productExecutor } from '@/services/catalog/productSync';
 import { restaurantExecutor } from '@/services/catalogPublishService';
+import { runSubscriptionSweep } from '@/services/subscription/lifecycleSweep';
 import { reconcileOpenOrders } from '@/services/subscription/reconcileService';
 import { registerProcessor } from '@/worker/processorRegistry';
 import { captureProcessingProcessor } from '@/worker/processors/captureProcessingProcessor';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
 import { mirageCatalogPublishProcessor } from '@/worker/processors/mirageCatalogPublishProcessor';
 import { modelOptimizationProcessor } from '@/worker/processors/modelOptimizationProcessor';
+import { subscriptionArEntitlementProcessor } from '@/worker/processors/subscriptionArEntitlementProcessor';
 import { startWorker } from '@/worker/worker';
 import {
   DEFAULT_JOB_TYPE,
   MESHY_MODEL_GENERATION_JOB_TYPE,
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
+  SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
 } from '@/worker/workerTypes';
 
 /**
@@ -55,6 +58,11 @@ export function registerAllProcessors(): void {
   // assert, and an unconfigured Mirage fails at the first call with a
   // classified error rather than at startup.
   registerProcessor(MIRAGE_CATALOG_PUBLISH_JOB_TYPE, mirageCatalogPublishProcessor);
+  // Switching one restaurant's 3D on or off at Mirage when its subscription
+  // pauses or resumes (docs/subscription/stage-05-enforcement.md). ONE
+  // partial write — `{ arEnabled }` — through the same injected client the
+  // publish executors use; it never unpublishes and never deletes.
+  registerProcessor(SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE, subscriptionArEntitlementProcessor);
   registerPublishExecutors();
 }
 
@@ -112,8 +120,10 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
     heartbeatEveryNPolls: env.WORKER_HEARTBEAT_EVERY_N_POLLS,
     // A publish must not wait behind two ten-minute Meshy generations for a
     // general slot to free up — see WORKER_PUBLISH_LANE_SLOTS in config/env.ts.
+    // A 3D resume rides the same lane: an owner who just paid is waiting on
+    // it exactly as a rep waits on a publish.
     reservedLane: {
-      jobTypes: [MIRAGE_CATALOG_PUBLISH_JOB_TYPE],
+      jobTypes: [MIRAGE_CATALOG_PUBLISH_JOB_TYPE, SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE],
       slots: env.WORKER_PUBLISH_LANE_SLOTS,
     },
     // The safety net under the Razorpay webhook (docs/subscription/stage-03-
@@ -124,6 +134,15 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
         name: 'subscription-reconcile',
         intervalMs: env.SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS,
         run: reconcileOpenOrders,
+      },
+      // The lifecycle sweep (Stage 5): lapse → GRACE → PAUSED, plus the in-app
+      // reminders. Guarded by the periodic-task wrapper's try/catch, so a
+      // sweep that throws is a log line, never a dead loop. Runs only while
+      // this instance is awake (E17) — the runbook keeps it awake.
+      {
+        name: 'subscription-sweep',
+        intervalMs: env.SUBSCRIPTION_SWEEP_INTERVAL_MS,
+        run: runSubscriptionSweep,
       },
     ],
   });

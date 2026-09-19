@@ -110,6 +110,15 @@ class _AdminSubscriptionDetailScreenState
     );
   }
 
+  /// Re-tells Mirage the current 3D entitlement (E18). No dialog: it is a
+  /// re-send of what is already true, and the worst a second press does is
+  /// queue a second harmless job.
+  Future<void> _resyncAr() => _run(
+        () => _notifier.resyncArEntitlement(),
+        done: '3D sync queued — the stamp below updates when it lands.',
+        subject: 'The 3D sync could not be queued',
+      );
+
   Future<void> _setStandees(CatalogSubscription subscription) async {
     final result = await showDialog<_StandeesInput>(
       context: context,
@@ -232,6 +241,16 @@ class _AdminSubscriptionDetailScreenState
                   isFullWidth: false,
                   onPressed: _acting ? null : _extendGrace,
                 ),
+              // Stage 5: the button the ENTITLEMENT_FAILED alert points at.
+              // Only with a row — without one there is no desired state.
+              if (subscription != null && subscription.hasRow)
+                AppButton.secondary(
+                  key: const ValueKey('admin_resync_ar'),
+                  label: 'Resync 3D',
+                  icon: Icons.sync,
+                  isFullWidth: false,
+                  onPressed: _acting ? null : _resyncAr,
+                ),
               // Only a plan that includes standees has a count to keep.
               if (subscription != null &&
                   (subscription.standeeIncluded ?? 0) > 0)
@@ -345,11 +364,53 @@ class _StatusCard extends StatelessWidget {
               style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
             ),
           ],
+          // Stage 5 (E18): when Mirage last heard about this row's 3D
+          // entitlement, next to the status it should match. A PAUSED row
+          // with an old stamp — or none — is the thing this line exists to
+          // make visible; "Resync 3D" below is the fix.
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            arEntitlementSyncLine(
+              subscription.status,
+              detail.arEntitlementSyncedAt,
+            ),
+            key: const ValueKey('admin_ar_sync_line'),
+            style: textTheme.bodySmall?.copyWith(
+              color: arEntitlementSyncStale(
+                subscription.status,
+                detail.arEntitlementSyncedAt,
+              )
+                  ? AppColors.warning
+                  : AppColors.textMuted,
+            ),
+          ),
         ],
       ),
     );
   }
 }
+
+/// "3D on Mirage: synced 18 Oct 2026 14:02" / "never synced (Mirage default:
+/// 3D on)". The stamp is the server's; nothing here computes a state.
+String arEntitlementSyncLine(SubscriptionStatus status, DateTime? syncedAt) {
+  if (syncedAt == null) {
+    return status == SubscriptionStatus.paused ||
+            status == SubscriptionStatus.cancelled
+        ? '3D on Mirage: never synced — Mirage still shows 3D'
+        : '3D on Mirage: never synced (Mirage default: 3D on)';
+  }
+  final local = syncedAt.toLocal();
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '3D on Mirage: synced ${formatSubscriptionDate(syncedAt)} $hh:$mm';
+}
+
+/// A row that is NOT entitled and has never been synced is the one case
+/// where the customer page may disagree with the plan — draw it in warning.
+bool arEntitlementSyncStale(SubscriptionStatus status, DateTime? syncedAt) =>
+    syncedAt == null &&
+    (status == SubscriptionStatus.paused ||
+        status == SubscriptionStatus.cancelled);
 
 class _PendingCard extends StatelessWidget {
   const _PendingCard({

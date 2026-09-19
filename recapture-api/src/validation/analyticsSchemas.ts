@@ -167,6 +167,14 @@ export const AnalyticsEvent = {
   // Any status transition not made by a payment: today a dispute, in Stage 5
   // the sweeps and the admin. `by` names the author.
   SUBSCRIPTION_STATE_CHANGED: 'subscription_state_changed',
+  // ── Subscription enforcement (Stage 5) ────────────────────────────────────
+  // The worker told Mirage (or decided not to) whether one restaurant's 3D
+  // is on. `skipped` is the D4 last-write check: the owner paid between the
+  // enqueue and the run, so the payload no longer matched the row.
+  SUBSCRIPTION_AR_ENTITLEMENT_SYNCED: 'subscription_ar_entitlement_synced',
+  // One per lifecycle sweep, zeros included — the heartbeat the runbook
+  // watches for. A worker that stops emitting this has stopped sweeping.
+  SUBSCRIPTION_SWEEP_RAN: 'subscription_sweep_ran',
   // An admin set how many complimentary standees have been handed over — a
   // human counter, never derived from QR assignments (README C8).
   SUBSCRIPTION_STANDEES_ISSUED: 'subscription_standees_issued',
@@ -1118,6 +1126,23 @@ const subscriptionStateChangedProps = z
   })
   .strict();
 
+const subscriptionArEntitlementSyncedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    enabled: z.boolean(),
+    reason: z.enum(['GRACE_EXPIRED', 'PAYMENT', 'COMP', 'ADMIN']),
+    skipped: z.boolean(),
+  })
+  .strict();
+
+const subscriptionSweepRanProps = z
+  .object({
+    to_grace: z.number().int().nonnegative(),
+    to_paused: z.number().int().nonnegative(),
+    duration_ms: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const subscriptionStandeesIssuedProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1345,6 +1370,8 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_DISPUTE_RECEIVED]: subscriptionDisputeReceivedProps,
   [AnalyticsEvent.SUBSCRIPTION_DISPUTE_CLOSED]: subscriptionDisputeClosedProps,
   [AnalyticsEvent.SUBSCRIPTION_STATE_CHANGED]: subscriptionStateChangedProps,
+  [AnalyticsEvent.SUBSCRIPTION_AR_ENTITLEMENT_SYNCED]: subscriptionArEntitlementSyncedProps,
+  [AnalyticsEvent.SUBSCRIPTION_SWEEP_RAN]: subscriptionSweepRanProps,
   [AnalyticsEvent.SUBSCRIPTION_STANDEES_ISSUED]: subscriptionStandeesIssuedProps,
   [AnalyticsEvent.SUBSCRIPTION_RECEIPT_DOWNLOADED]: subscriptionReceiptDownloadedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,

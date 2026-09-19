@@ -174,6 +174,8 @@ export interface MirageRestaurant {
    * read paths treat only an explicit `false` as unpublished.
    */
   isPublished?: boolean;
+  /** The 3D entitlement, read back. Absent = entitled (see UpdateRestaurantInput). */
+  arEnabled?: boolean;
   clientType?: string;
   categoryIds: string[];
 }
@@ -266,6 +268,15 @@ export interface UpdateRestaurantInput {
   socialLinks?: MirageSocialLinks;
   address?: MirageAddress;
   isPublished?: boolean;
+  /**
+   * ReCapture-owned 3D entitlement (RECAPTURE_SUBSCRIPTION_PLAN.md §6). `false`
+   * makes Mirage's public page render photos in place of every `<model-viewer>`
+   * and hide the AR control; items and models stay exactly where they are.
+   * Absent on Mirage = `true`, so a restaurant that was never written is
+   * entitled. Written by the SUBSCRIPTION_AR_ENTITLEMENT processor and by
+   * nothing else — and that processor sends THIS FIELD ALONE (E36).
+   */
+  arEnabled?: boolean;
   image?: MirageFileUpload;
 }
 

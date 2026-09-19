@@ -26,10 +26,11 @@ import { Types } from 'mongoose';
 
 import { Catalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
+import { Notification } from '@/models/Notification';
 import { ProjectModel } from '@/models/ProjectModel';
 import type { ProductAssets } from '@/models/types/catalog.types';
-import { bumpDraftRevision } from '@/services/catalogService';
-import { requestPublish } from '@/services/catalogPublishService';
+import { bumpDraftRevision, isDuplicateKeyError } from '@/services/catalogService';
+import { requestPublish, type PublishGate } from '@/services/catalogPublishService';
 
 export interface PromotionResult {
   /** Products whose assets were written by THIS call. */
@@ -103,7 +104,8 @@ export async function promoteModelToProducts(modelId: Types.ObjectId): Promise<P
   // ── 5) The enqueue — the OPTIMIZATION, never the obligation ───────────────
   let publishesRequested = 0;
   for (const id of catalogIds) {
-    if (await tryPublish(new Types.ObjectId(id))) publishesRequested++;
+    const productIds = waiting.filter((p) => String(p.catalogId) === id).map((p) => p._id);
+    if (await tryPublish(new Types.ObjectId(id), productIds)) publishesRequested++;
   }
 
   return { promoted, publishesRequested };
@@ -126,7 +128,10 @@ export async function promoteModelToProducts(modelId: Types.ObjectId): Promise<P
  * BLOCKED is equally normal: an unprovisioned or gated catalog is not ready to
  * publish for reasons that have nothing to do with this model.
  */
-async function tryPublish(catalogId: Types.ObjectId): Promise<boolean> {
+async function tryPublish(
+  catalogId: Types.ObjectId,
+  promotedProductIds: readonly Types.ObjectId[] = []
+): Promise<boolean> {
   try {
     const catalog = await Catalog.findOne({ _id: catalogId, deletedAt: null })
       .select('userId')
@@ -141,6 +146,9 @@ async function tryPublish(catalogId: Types.ObjectId): Promise<boolean> {
       `[promotion] publish not enqueued for ${catalogId.toHexString()} (${result.outcome}) — ` +
         'rows stay PENDING for the next run'
     );
+    if (result.outcome === 'BLOCKED') {
+      await notifyOwnerOfSubscriptionBlock(catalog.userId, promotedProductIds, result.gates);
+    }
     return false;
   } catch (err) {
     // The rows are already correct. A publish that could not even be requested
@@ -148,6 +156,60 @@ async function tryPublish(catalogId: Types.ObjectId): Promise<boolean> {
     // resolves it.
     console.warn('[promotion] publish request threw; rows are unaffected', err);
     return false;
+  }
+}
+
+/**
+ * E35. A model finished, the dish is ready, and the publish it asked for was
+ * refused by a SUBSCRIPTION gate — PAUSED, or over the plan's cap. Without
+ * this the promotion service only logs it: nobody is told the model is done,
+ * and the rep thinks generation failed. So the owner gets one in-app
+ * notification per promoted dish, deduped through `Notification.key`, that
+ * says what the model needs. Every other gate (no category, no products…)
+ * keeps today's log-only behaviour: those are the owner's own to fix and they
+ * see them on the publish screen.
+ *
+ * Never throws — the rows are already correct, this is a courtesy.
+ */
+async function notifyOwnerOfSubscriptionBlock(
+  ownerUserId: Types.ObjectId,
+  productIds: readonly Types.ObjectId[],
+  gates: readonly PublishGate[]
+): Promise<void> {
+  const gate = gates.find(
+    (g) => g.code === 'SUBSCRIPTION_REQUIRED' || g.code === 'SUBSCRIPTION_CAPACITY_EXCEEDED'
+  );
+  if (!gate || productIds.length === 0) return;
+
+  try {
+    const dishes = await CatalogProduct.find({ _id: { $in: productIds } })
+      .select({ _id: 1, name: 1 })
+      .lean<{ _id: Types.ObjectId; name: string }[]>()
+      .exec();
+    for (const dish of dishes) {
+      const key = `promo-blocked:${dish._id.toHexString()}`;
+      const message =
+        gate.code === 'SUBSCRIPTION_REQUIRED'
+          ? `The 3D model for ${dish.name} is ready. Publishing it needs an active plan.`
+          : `The 3D model for ${dish.name} is ready, but your plan is full — upgrade to publish it.`;
+      try {
+        await Notification.create({
+          key,
+          kind: 'PAYMENT_DUE',
+          title: '3D model ready — plan needed to publish',
+          message,
+          action: { label: 'View plans', url: '/catalog/subscription' },
+          audienceType: 'USERS',
+          audienceUserIds: [ownerUserId],
+          deletedAt: null,
+        });
+      } catch (err) {
+        // The unique `key` index: this dish was already announced. Fine.
+        if (!isDuplicateKeyError(err)) throw err;
+      }
+    }
+  } catch (err) {
+    console.warn('[promotion] could not notify the owner of a blocked publish', err);
   }
 }
 
@@ -183,16 +245,22 @@ export async function sweepPromotedProducts(
     // Narrow to the case this sweep exists for. An ordinary edit made during the
     // run is the owner's to publish when they choose; a promotion is something
     // the system did on its own, so the system owes it a run.
-    const stranded = await CatalogProduct.exists({
+    const stranded = await CatalogProduct.find({
       catalogId,
       deletedAt: null,
       archivedAt: null,
       syncStatus: 'PENDING',
       modelStatus: 'READY',
-    }).exec();
-    if (!stranded) return false;
+    })
+      .select({ _id: 1 })
+      .lean<{ _id: Types.ObjectId }[]>()
+      .exec();
+    if (stranded.length === 0) return false;
 
-    return await tryPublish(catalogId);
+    return await tryPublish(
+      catalogId,
+      stranded.map((p) => p._id)
+    );
   } catch (err) {
     console.warn('[promotion] follow-up sweep failed; rows stay PENDING', err);
     return false;

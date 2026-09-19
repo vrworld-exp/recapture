@@ -1,3 +1,4 @@
+✅✅✅✅
 # Stage 5 — Enforcement (launch)
 
 Two prompts, two repos. **Part B (Mirage)** must be deployed **before** Part A's flag is flipped,
@@ -425,3 +426,69 @@ No new events required. Item-view/scan events must continue to fire while `arEna
 
 - Assumed the AR-menu website embed (MasterChef feature) is the same public page in an iframe,
   so this flag covers it. If it is a separate endpoint, add the same `arEnabled` check there.
+
+
+
+
+
+
+
+---------------- Res ----------------------------------------------------------------
+
+res 1  ----------------------------------------------------------->>>>>>>>>>
+
+
+
+
+Stage 5 is built in full — both parts, all four repos — and every suite is green. Nothing is committed (you asked for nothing to be), and the flag is not flipped anywhere.
+
+Verification
+Check	Result
+recapture-api: tsc --noEmit, npm run lint	clean
+recapture-api: vitest run	1850 passed (113 files) — 3 new suites, 33 tests; +3 in the promotion suite
+Flutter: flutter analyze	1 pre-existing info in a test file, nothing new
+Flutter: flutter test	3248 passed — new test/catalog/subscription_banners_test.dart (9)
+mirage-be: node scripts/verify-ar-entitlement.js logic	17/17
+mirage-fe: npm run build, tsc -b, npm test	build ok, 7/7 component tests; lint clean on touched files
+Part A — ReCapture
+Sweep lifecycleSweep.ts: pipeline updateMany → GRACE (graceEndsAt from each row's own periodEnd, graceFrom stored), conditional per-row findOneAndUpdate → PAUSED with the D4 guard, four in-app reminders deduped by a new ReminderLog unique index with expiresAt. Worker periodicTask every SUBSCRIPTION_SWEEP_INTERVAL_MS (10 min).
+Job SUBSCRIPTION_AR_ENTITLEMENT: one enqueue path (arEntitlementJobs.ts, key on the row's updatedAt), processor writes exactly { arEnabled }, re-reads the row first (skips as success on mismatch), stamps arEntitlementSyncedAt, alerts admins on terminal failure. Registered in the reserved lane beside publish. Wired into applyPaidPeriod/applyComp (resume), provisioning (E15), and POST /admin/catalogs/:id/subscription/resync-ar.
+E35 notification on a subscription-blocked promotion; graceFrom on both DTOs and the Dart entity (for Prompt B); admin panel shows the sync stamp + Resync 3D.
+Client: PAUSED card first on the catalog screen, red GRACE banner on the catalog and both publish screens (voice-aware), rep card's "Photo menu is still live at the same QR".
+Runbook: docs/subscription/rollout.md; AGENTS.md updated.
+Part B — Mirage
+arEnabled on the restaurant schema, parsed in update-restaurant like isPublished, served on every public read with Cache-Control: no-store; getSingleProductData now populates the restaurant for the flag.
+Frontend: resolveCardMedia decides model / photo / placeholder; ArUnavailableCard (724-byte SVG); <model-viewer> is never instantiated when paused; AR controls hidden; the fetch hook pins arEnabled: true while painting from cache and lets the fresh response win; deep-link AR page obeys it; arHiddenByEntitlement on product_detail_opened.
+Things to know
+I added a test toolchain to mirage-fe (vitest, jsdom, testing-library as devDeps, npm test, a separate vitest.config.ts) because there was none and the spec asked for component tests. Easy to drop if you'd rather not carry it.
+Two pre-existing failures got fixed along the way: the promotion suite's "finalize sweep" test needed a category (the catalog gate had been added since), and PUBLISH_JOB_PRIORITY moved to job.types.ts (re-exported from catalogPublishService) to avoid a require cycle.
+The Experience in AR footer in the detail sheet is hidden only when the entitlement hid a model; image-only dishes render exactly as before.
+Not done by design: the staging rehearsal and live Mirage probe (need a running host — verify-ar-entitlement.js live is ready for it), and Prompt B's three graceFrom copy variants (its own prompt).
+
+
+
+
+
+
+
+res 2 -------------------->>>>
+
+
+
+Re-check done. I walked every checklist line of both parts against the code, not my summary. Result: both parts were already complete; the audit turned up two small additions, which are now in and green.
+
+What the audit added
+mirage-be — GET /restaurants/:slug/items (the paged category read MenuScreen fetches on tab change) now carries arEnabled at the top level and Cache-Control: no-store, like the other five public reads. Rendering already used the page-level flag, so this is the data contract being complete rather than a behaviour fix.
+Admin panel widget tests (test/admin/admin_subscriptions_test.dart, +3): a PAUSED row that was never synced shows the warning-coloured "never synced — Mirage still shows 3D" line; Resync 3D calls the repository and re-reads; a synced row shows the muted stamp; a deleted catalog shows neither. flutter analyze clean, suite 13/13.
+What I verified and deliberately left as is
+Every 3D render site in mirage-fe obeys the flag. MenuItemCard is the only list card; the detail sheet and the /…/model deep-link page go through resolveCardMedia. The two other NewModelViewer users are PreviewPage (a dev-only local-GLB previewer, not restaurant-bound) and api/menu.ts/hooks.ts (useMenuItems has no callers — dead code). Search results render through the same card with the page's flag.
+No non-admin route can write arEnabled. The only restaurant writes outside update-restaurant are $addToSet: categories back-references; the ...req.body spread is on item creation.
+Reminders use Notification.create rather than createNotification — that helper requires a human actor and emits notification_sent with the actor's hash; the sweep has no actor, so it writes the row directly exactly as adminAlerts and the over-cap nudge do.
+subscription_state_changed is not emitted for the payment resume (PAUSED → ACTIVE). Stage 3 defined that event as "any transition not made by a payment"; payments already emit subscription_payment_recorded { previous_status }, so the resume is fully traceable. The stage-05 enum lists 'PAYMENT' and the schema accepts it if you'd rather have both.
+Everything else on the checklist — sweep semantics, D3/D4 tests, E36 argument-keys pin, the unpublish spy, E15/E35/E44/E47, the runbook's six steps + rollback, the placeholder card, cache freshness, Cache-Control — was confirmed present. Still needing a running Mirage host: the live probe and the staging rehearsal.
+
+
+
+
+
+

@@ -24,7 +24,10 @@ import { Types } from 'mongoose';
 import { env } from '@/config/env';
 import { BUCKET_ARTIFACTS } from '@/config/s3';
 import { Catalog, type ICatalog } from '@/models/Catalog';
+import { CatalogSubscription, isEntitledTo3D } from '@/models/CatalogSubscription';
 import type { PublicUrlScheme } from '@/models/types/catalog.types';
+import type { SubscriptionStatus } from '@/models/types/subscription.types';
+import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
 import { mintPublicUrl } from '@/services/customerUrl';
 import { getObjectBytes } from '@/services/s3ObjectStore';
 import {
@@ -402,12 +405,12 @@ async function persistMapping(
  * callers wanted a mapping and both got the same one. It does NOT emit, because
  * the winner already did.
  */
-function finish(
+async function finish(
   catalog: ICatalog,
   persisted: PersistResult,
   existing: readonly MirageRestaurant[],
   opts: { adoptedExisting: boolean }
-): ProvisionCatalogResult {
+): Promise<ProvisionCatalogResult> {
   switch (persisted.outcome) {
     case 'PERSISTED':
       track(AnalyticsEvent.CATALOG_CLIENT_PROVISIONED, {
@@ -415,6 +418,7 @@ function finish(
         catalog_id: (catalog._id as Types.ObjectId).toHexString(),
         adopted_existing: opts.adoptedExisting,
       });
+      await syncEntitlementIfNotEntitled(catalog);
       return {
         outcome: opts.adoptedExisting ? 'ADOPTED' : 'CREATED',
         mapping: persisted.mapping,
@@ -425,6 +429,39 @@ function finish(
       return nameTaken(catalog, existing);
     case 'CATALOG_GONE':
       return { outcome: 'CATALOG_GONE' };
+  }
+}
+
+/**
+ * E15. A catalog can be provisioned for the first time while its subscription
+ * is PAUSED or CANCELLED — a photo-only publish is allowed then — and Mirage's
+ * `arEnabled` defaults to `true`, so the new restaurant would be entitled on
+ * the public page while unpaid. When a row exists and is NOT entitled, the
+ * entitlement job is enqueued with the current desired state; an entitled
+ * row, or no row at all, needs nothing (the default is right). Never throws:
+ * the mapping is already written and a provisioning must not fail over a
+ * queue hiccup — the admin resync covers it.
+ */
+async function syncEntitlementIfNotEntitled(catalog: ICatalog): Promise<void> {
+  const catalogId = catalog._id as Types.ObjectId;
+  try {
+    const row = await CatalogSubscription.findOne({ catalogId })
+      .select({ status: 1, userId: 1, updatedAt: 1 })
+      .lean<{ status: SubscriptionStatus; userId: Types.ObjectId; updatedAt: Date }>()
+      .exec();
+    if (!row || isEntitledTo3D(row.status)) return;
+    await enqueueArEntitlementJob({
+      catalogId,
+      ownerUserId: row.userId,
+      enabled: false,
+      reason: 'GRACE_EXPIRED',
+      dedupeAt: row.updatedAt,
+    });
+  } catch (err) {
+    console.error(
+      `[provisioning] entitlement sync for ${catalogId.toHexString()} could not be enqueued`,
+      err
+    );
   }
 }
 

@@ -386,6 +386,30 @@ class _CatalogBody extends ConsumerWidget {
               ),
               sliver: SliverMainAxisGroup(
                 slivers: [
+                  // Stage 5: the subscription's state, BEFORE the header (A9).
+                  // A paused restaurant's owner must read "your 3D is off,
+                  // your photo menu is up, pay to restore" before anything
+                  // else on this screen; a grace one gets the red line.
+                  // The status is the SERVER's summary off the catalog DTO —
+                  // nothing here decides a state or counts a day.
+                  if (catalog.subscription?.status == SubscriptionStatus.paused)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: _PausedCard(onOpenSubscription: onOpenSubscription),
+                      ),
+                    )
+                  else if (catalog.subscription?.status ==
+                      SubscriptionStatus.grace)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: _GraceBanner(
+                          daysLeft: catalog.subscription?.daysLeft,
+                          onOpenSubscription: onOpenSubscription,
+                        ),
+                      ),
+                    ),
                   SliverToBoxAdapter(
                     child: _CatalogHeaderCard(
                       catalog: catalog,
@@ -457,6 +481,112 @@ class _CatalogBody extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The A9 card: 3D is paused, the photo menu is still live, pay to restore.
+/// Rendered FIRST on the screen while the subscription is PAUSED.
+class _PausedCard extends StatelessWidget {
+  const _PausedCard({required this.onOpenSubscription});
+
+  final VoidCallback onOpenSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      key: const ValueKey('subscription_paused_card'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.surface1,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.pause_circle_outline,
+                  size: 20, color: AppColors.warning),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  kPausedCardTitle,
+                  style: textTheme.titleMedium?.copyWith(
+                    color: AppColors.warning,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            kPausedCardBody,
+            style: textTheme.bodyMedium?.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          AppButton(
+            key: const ValueKey('subscription_paused_cta'),
+            label: 'Restore 3D',
+            icon: Icons.view_in_ar_outlined,
+            isFullWidth: false,
+            onPressed: onOpenSubscription,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The GRACE line: red, one sentence, the server's countdown, and the door
+/// to the plans. Publishing still works in grace — this is a warning, not a
+/// blocker, which is why it is a banner and not a card.
+class _GraceBanner extends StatelessWidget {
+  const _GraceBanner({
+    required this.daysLeft,
+    required this.onOpenSubscription,
+  });
+
+  final int? daysLeft;
+  final VoidCallback onOpenSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      key: const ValueKey('subscription_grace_banner'),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, size: 16, color: AppColors.error),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              graceBannerLine(daysLeft),
+              style: textTheme.bodyMedium?.copyWith(color: AppColors.error),
+            ),
+          ),
+          TextButton(
+            key: const ValueKey('subscription_grace_cta'),
+            onPressed: onOpenSubscription,
+            child: const Text('Pay now'),
+          ),
+        ],
       ),
     );
   }

@@ -33,7 +33,7 @@ import { CatalogSubscription } from '@/models/CatalogSubscription';
 import { Job } from '@/models/Job';
 import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
-import { MIRAGE_CATALOG_PUBLISH_JOB_TYPE } from '@/models/types/job.types';
+import { MIRAGE_CATALOG_PUBLISH_JOB_TYPE, PUBLISH_JOB_PRIORITY } from '@/models/types/job.types';
 import type { PublishMode, PublishRunState, SyncStatus } from '@/models/types/catalog.types';
 import {
   CATALOG_NAME_TAKEN,
@@ -567,14 +567,11 @@ export const restaurantExecutor: PublishStepExecutor = async (step, context) => 
 // ── Requesting a publish ────────────────────────────────────────────────────
 
 /**
- * Claim priority for the publish job. Every other job type enqueues at the
- * schema default (0), so a publish is always the next thing a free worker slot
- * takes — a rep is standing at a table for it, while a Meshy generation or a
- * model optimisation is background work nobody is watching. The worker's
- * reserved lane (WORKER_PUBLISH_LANE_SLOTS) covers the case where no general
- * slot frees up at all; this covers the case where one does.
+ * Claim priority for the publish job — see the declaration beside the job
+ * type names. Re-exported here because this file is where the publish job is
+ * enqueued and where readers have always found it.
  */
-export const PUBLISH_JOB_PRIORITY = 10;
+export { PUBLISH_JOB_PRIORITY };
 
 export interface PublishRunDto {
   runId: string;

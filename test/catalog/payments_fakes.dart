@@ -250,6 +250,12 @@ class FakePaymentsRepository implements PaymentsRepository {
   }
 
   @override
+  Future<String> resyncArEntitlement(String catalogId) async {
+    calls.add('resyncAr');
+    return 'job-resync-1';
+  }
+
+  @override
   Future<PaymentRecordSummary> refund(
     String catalogId, {
     required String refundsPaymentId,

@@ -35,7 +35,9 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/publish_flow.dart';
 import '../../../domain/catalog/publish_gate.dart';
 import '../../../domain/catalog/publish_status.dart';
+import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_status.dart';
+import '../../../domain/entities/catalog_subscription.dart';
 import '../app_button.dart';
 import '../app_status_pill.dart';
 import 'publish_link_actions.dart';
@@ -100,6 +102,11 @@ class PublishVoice {
   final String itemNounPlural;
 
   String items(int count) => count == 1 ? itemNoun : itemNounPlural;
+
+  /// Whether this is the rep's voice — the one sentence that differs in the
+  /// grace banner ("pay" vs "notify the owner") is decided from this, not
+  /// from a second flag that could disagree with the voice.
+  bool get isRep => identical(this, rep);
 }
 
 /// The query flag a Publish BUTTON adds to the publish route: `?start=1`.
@@ -142,12 +149,24 @@ class PublishBody extends StatelessWidget {
     required this.onOpenQr,
     this.onUnpublish,
     this.canFix,
+    this.subscription,
+    this.onOpenSubscription,
   });
 
   final PublishScreenState state;
   final PublishStatus status;
   final bool isOnline;
   final PublishVoice voice;
+
+  /// The catalog's subscription summary, for the GRACE banner above the
+  /// checklist (Stage 5). Null — no row, or a screen that has not loaded the
+  /// catalog yet — draws nothing. PAUSED needs no banner here: the gate row
+  /// already says it, and saying it twice is nagging.
+  final SubscriptionSummary? subscription;
+
+  /// Where the GRACE banner's button goes: the owner's plans screen, or the
+  /// rep's card. Null hides the button and leaves the sentence.
+  final VoidCallback? onOpenSubscription;
   final VoidCallback onPublish;
   final VoidCallback onRetryFailed;
   final ValueChanged<PublishGate> onFixGate;
@@ -199,6 +218,14 @@ class PublishBody extends StatelessWidget {
                     title: "You're offline",
                     body: 'Publishing needs a connection. Reconnect and this '
                         'page will pick up where it left off.',
+                  ),
+                ],
+                if (subscription?.status == SubscriptionStatus.grace) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _GraceBanner(
+                    daysLeft: subscription?.daysLeft,
+                    voice: voice,
+                    onOpenSubscription: onOpenSubscription,
                   ),
                 ],
                 if (state.suggestedName case final suggested?) ...[
@@ -831,6 +858,73 @@ class _ProductList extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// The GRACE banner (Stage 5): the server's countdown, and the next action
+/// in the voice of whoever is standing here — an owner pays, a rep tells the
+/// owner. Red because the clock is running; a banner, not a gate, because
+/// publishing still works in grace.
+class _GraceBanner extends StatelessWidget {
+  const _GraceBanner({
+    required this.daysLeft,
+    required this.voice,
+    required this.onOpenSubscription,
+  });
+
+  final int? daysLeft;
+  final PublishVoice voice;
+  final VoidCallback? onOpenSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final isRep = voice.isRep;
+    return Container(
+      key: const ValueKey('publish_grace_banner'),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_outline, size: 16, color: AppColors.error),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  graceBannerLine(daysLeft),
+                  style:
+                      textTheme.bodyMedium?.copyWith(color: AppColors.error),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  graceBannerAction(isRep: isRep),
+                  style: textTheme.bodySmall
+                      ?.copyWith(color: AppColors.textSecondary, height: 1.4),
+                ),
+                if (onOpenSubscription != null) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      key: const ValueKey('publish_grace_cta'),
+                      onPressed: onOpenSubscription,
+                      child: Text(isRep ? 'Notify owner' : 'Pay now'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

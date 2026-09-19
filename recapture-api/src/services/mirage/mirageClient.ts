@@ -703,6 +703,7 @@ function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
     // only an EXPLICIT false as unpublished — so absence must stay absence here
     // rather than collapsing to a default we would then read back as truth.
     ...(typeof raw.isPublished === 'boolean' ? { isPublished: raw.isPublished } : {}),
+    ...(typeof raw.arEnabled === 'boolean' ? { arEnabled: raw.arEnabled } : {}),
     ...(str(raw.clientType) ? { clientType: str(raw.clientType) } : {}),
     categoryIds: idList(raw.categories),
   };
@@ -822,6 +823,7 @@ export const mirageClient: MirageClient = {
         socialLinks: input.socialLinks,
         address: input.address,
         isPublished: input.isPublished,
+        arEnabled: input.arEnabled,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });

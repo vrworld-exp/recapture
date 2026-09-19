@@ -33,6 +33,7 @@ import {
   type SubscriptionStatus,
 } from '@/models/types/subscription.types';
 import { publishableProducts } from '@/services/catalog/publishableProducts';
+import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { countThreeDDishes, countsAsThreeD } from '@/services/subscription/threeDDishCount';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -45,6 +46,13 @@ export interface SubscriptionSummaryDto {
   status: SubscriptionStatus;
   daysLeft: number | null;
   planId: PlanId | null;
+  /**
+   * In GRACE: which state it lapsed from (TRIAL / ACTIVE / COMPED), so the
+   * banner can say "trial ended" to a restaurant that never paid (E16).
+   * Null outside GRACE, on a dispute-grace, and on rows written before the
+   * sweep existed — all of which read as "payment overdue".
+   */
+  graceFrom: SubscriptionStatus | null;
   isEntitledTo3D: boolean;
   /** Whether Start trial would succeed right now — see {@link startTrial}. */
   trialAvailable: boolean;
@@ -65,6 +73,8 @@ export interface SubscriptionStatusDto {
   /** ISO. */
   periodEnd: string | null;
   graceEndsAt: string | null;
+  /** See SubscriptionSummaryDto.graceFrom. */
+  graceFrom: SubscriptionStatus | null;
   /**
    * SERVER-computed (D6): whole days until the period ends, never below 0; in
    * GRACE, until grace ends. Null when nothing is counting down (no row,
@@ -92,6 +102,7 @@ export type SubscriptionRow = Pick<
   | 'billingInterval'
   | 'periodEnd'
   | 'graceEndsAt'
+  | 'graceFrom'
   | 'trialUsedAt'
   | 'threeDDishCap'
   | 'standeeAllocation'
@@ -213,9 +224,15 @@ function toSummary(
     status: row.status,
     daysLeft: daysLeftFor(row, now),
     planId: row.planId ?? null,
+    graceFrom: graceFromOf(row),
     isEntitledTo3D: isEntitledTo3D(row.status),
     trialAvailable,
   };
+}
+
+/** Only meaningful while the row IS in grace; anything else reads as null. */
+function graceFromOf(row: Pick<SubscriptionRow, 'status' | 'graceFrom'>): SubscriptionStatus | null {
+  return row.status === 'GRACE' ? (row.graceFrom ?? null) : null;
 }
 
 /**
@@ -302,6 +319,7 @@ export async function getSubscriptionStatus(
       billingInterval: null,
       periodEnd: null,
       graceEndsAt: null,
+      graceFrom: null,
       daysLeft: null,
       threeDDishCount,
       threeDDishCap: null,
@@ -321,6 +339,7 @@ export async function getSubscriptionStatus(
     billingInterval: row.billingInterval ?? null,
     periodEnd: row.periodEnd.toISOString(),
     graceEndsAt: row.graceEndsAt?.toISOString() ?? null,
+    graceFrom: graceFromOf(row),
     daysLeft: daysLeftFor(row, now),
     threeDDishCount,
     threeDDishCap: isUncapped(row.threeDDishCap) ? null : row.threeDDishCap,
@@ -435,6 +454,7 @@ export async function startTrial(
           planSnapshot: 1,
           billingInterval: 1,
           graceEndsAt: 1,
+          graceFrom: 1,
           disputeGraceAt: 1,
         },
       },
@@ -496,6 +516,7 @@ export interface ApplyPeriodResult {
 /** Every field the previous period may have set that a fresh one must clear. */
 const CLEARED_ON_NEW_PERIOD = {
   graceEndsAt: null,
+  graceFrom: null,
   disputeGraceAt: null,
   pausedAt: null,
   cancelledAt: null,
@@ -630,10 +651,10 @@ export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<Appl
 
   const needsArResume = needsArResumeFrom(previousStatus);
   if (needsArResume) {
-    // Stage 5 turns this into an enqueue; today the log is the trace.
-    console.log(
-      `[subscription] ${catalogId.toHexString()} resumed from ${previousStatus} — AR resume needed`
-    );
+    // Mirage was told to hide this restaurant's 3D when it paused; the job
+    // tells it to show it again. Keyed on the row's `updatedAt` — the write
+    // above — so a replayed webhook lands on the same job.
+    await enqueueArResume(subscription, 'PAYMENT', previousStatus);
   }
 
   track(AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED, {
@@ -702,7 +723,43 @@ export async function applyComp(input: ApplyCompInput): Promise<ApplyPeriodResul
     via: 'ADMIN',
   });
 
-  return { previousStatus, subscription, needsArResume: needsArResumeFrom(previousStatus) };
+  const needsArResume = needsArResumeFrom(previousStatus);
+  if (needsArResume) await enqueueArResume(subscription, 'COMP', previousStatus);
+
+  return { previousStatus, subscription, needsArResume };
+}
+
+/**
+ * The resume half of Stage 5: a paid period (or a comp) applied over a
+ * PAUSED / CANCELLED row means Mirage is currently hiding this restaurant's
+ * 3D and must be told to show it again. Never throws — the period IS applied
+ * and the ledger IS written; a job that could not be queued is an admin
+ * resync away, and is logged loudly here.
+ */
+async function enqueueArResume(
+  subscription: ICatalogSubscription,
+  reason: 'PAYMENT' | 'COMP',
+  previousStatus: SubscriptionStatus | 'NONE'
+): Promise<void> {
+  const catalogId = subscription.catalogId;
+  try {
+    await enqueueArEntitlementJob({
+      catalogId,
+      ownerUserId: subscription.userId,
+      enabled: true,
+      reason,
+      dedupeAt: subscription.updatedAt,
+    });
+    console.log(
+      `[subscription] ${catalogId.toHexString()} resumed from ${previousStatus} — AR resume enqueued`
+    );
+  } catch (err) {
+    console.error(
+      `[subscription] ${catalogId.toHexString()} resumed from ${previousStatus} but the AR resume ` +
+        'job could not be enqueued — admin resync needed',
+      err
+    );
+  }
 }
 
 /**

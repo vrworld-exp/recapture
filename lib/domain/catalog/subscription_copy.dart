@@ -106,6 +106,36 @@ String threeDUsageLine(CatalogSubscription subscription) {
 
 String _days(int n) => n == 1 ? '1 day' : '$n days';
 
+// ── Stage 5: the paused card and the grace banners ──────────────────────────
+//
+// The A9 sentence the owner sees first on the catalog screen while PAUSED,
+// and the one-line banner while in GRACE. Both surfaces — the catalog screen
+// and the publish screen — read from here, so a restaurant is described the
+// same way on both. N is the SERVER's daysLeft (D6), never a client clock.
+
+/// The PAUSED card's title (A9). One string, every surface.
+const String kPausedCardTitle = 'Your 3D menu is paused';
+
+/// The PAUSED card's body (A9): what is still live, and what brings 3D back.
+const String kPausedCardBody =
+    'Your photo menu is still live at the same QR — pay to restore 3D.';
+
+/// The rep's secondary line under "3D paused": the customer page is not
+/// dark, and the rep should say so to a worried owner.
+const String kPausedPhotoMenuLine = 'Photo menu is still live at the same QR';
+
+/// The GRACE banner on the owner's catalog screen: what happens, and when.
+/// Prompt B swaps the first clause on [SubscriptionSummary.graceFrom]; until
+/// then every grace reads as overdue.
+String graceBannerLine(int? daysLeft) =>
+    'Payment overdue — 3D menu pauses in ${_days(daysLeft ?? 0)}';
+
+/// The GRACE banner's second line on the PUBLISH screen, in the voice of
+/// whoever is standing there: the owner can pay; the rep can only tell them.
+String graceBannerAction({required bool isRep}) => isRep
+    ? 'Publishing still works. Notify the owner to pay to keep 3D live.'
+    : 'Publishing still works. Pay now to keep your 3D menu live.';
+
 const List<String> _months = [
   'Jan',
   'Feb',

@@ -23,9 +23,16 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { env } from '@/config/env';
 import { s3Client } from '@/config/s3';
 import { Catalog } from '@/models/Catalog';
+import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun } from '@/models/CatalogPublishRun';
+import { CatalogSubscription } from '@/models/CatalogSubscription';
+import { ClientConfig } from '@/models/ClientConfig';
 import { Job } from '@/models/Job';
+import { Notification } from '@/models/Notification';
+import { resetMirageClient, setMirageClient } from '@/services/mirage';
+import { SUBSCRIPTION_GATES_FLAG_KEY } from '@/services/subscription/subscriptionGate';
+import { FakeMirage } from './fixtures/mirageFake';
 import { Project } from '@/models/Project';
 import { ProjectModel, type IProjectModel } from '@/models/ProjectModel';
 import { User } from '@/models/User';
@@ -78,8 +85,12 @@ afterEach(async () => {
     Project.deleteMany({}),
     ProjectModel.deleteMany({}),
     Catalog.deleteMany({}),
+    CatalogCategory.deleteMany({}),
     CatalogProduct.deleteMany({}),
     CatalogPublishRun.deleteMany({}),
+    CatalogSubscription.deleteMany({}),
+    ClientConfig.deleteMany({}),
+    Notification.deleteMany({}),
     User.deleteMany({}),
   ]);
 });
@@ -400,6 +411,13 @@ describe('publish lock contention', () => {
     });
 
     const seeded = await seed({ status: 'PROCESSING' });
+    // The category gate would otherwise refuse the follow-up publish.
+    await CatalogCategory.create({
+      catalogId: seeded.catalogId,
+      userId: seeded.userId,
+      name: 'menu',
+      position: 0,
+    });
     const product = await linkDish(seeded.userId, seeded.record.id as string);
     await Catalog.updateOne(
       { _id: seeded.catalogId },
@@ -524,5 +542,112 @@ describe('failures', () => {
 
     expect(seen).toBe('PROCESSING');
     expect((await CatalogProduct.findById(product.id).exec())!.modelStatus).toBe('READY');
+  });
+});
+
+// ── A blocked automatic publish is not silent (E35) ─────────────────────────
+
+describe('a promotion whose publish a SUBSCRIPTION gate refuses', () => {
+  // Publishing must be AVAILABLE for the gates to run at all; the fake client
+  // guarantees no network, and every case below is refused before any call.
+  beforeEach(() => {
+    setMirageClient(new FakeMirage());
+    Object.assign(env, {
+      MIRAGE_BASE_URL: 'https://mirage.test',
+      MIRAGE_API_KEY: 'test-api-key',
+      MIRAGE_ADMIN_TOKEN: 'test-admin-token',
+      MIRAGE_PUBLIC_BASE_URL: 'https://menu.test',
+    });
+  });
+  afterEach(() => resetMirageClient());
+
+  /** A finished model with artifacts, ready for promoteModelToProducts. */
+  async function finished(seeded: Awaited<ReturnType<typeof seed>>): Promise<void> {
+    await ProjectModel.updateOne(
+      { _id: seeded.record._id },
+      {
+        $set: {
+          status: 'SUCCEEDED',
+          artifacts: {
+            glbKey: 'k/model.glb',
+            cdnUrls: {
+              glb: 'https://test.cloudfront.net/k/model.glb',
+              preview: 'https://test.cloudfront.net/k/preview.jpg',
+            },
+          },
+        },
+      }
+    ).exec();
+  }
+
+  it('tells the owner once per dish, deduped, with the plans route as the action', async () => {
+    const seeded = await seed({ status: 'PROCESSING' });
+    const product = await linkDish(seeded.userId, seeded.record.id as string, 'Paneer Tikka');
+    await ClientConfig.create({ [SUBSCRIPTION_GATES_FLAG_KEY]: true });
+    await CatalogSubscription.create({
+      catalogId: seeded.catalogId,
+      userId: seeded.userId,
+      status: 'PAUSED',
+      source: 'ONLINE',
+      periodStart: new Date(Date.now() - 60 * 86_400_000),
+      periodEnd: new Date(Date.now() - 30 * 86_400_000),
+      pausedAt: new Date(),
+      threeDDishCap: 10,
+    });
+    await finished(seeded);
+
+    const first = await promoteModelToProducts(seeded.record._id as Types.ObjectId);
+    expect(first).toMatchObject({ promoted: 1, publishesRequested: 0 });
+
+    const rows = await Notification.find({ audienceUserIds: seeded.userId }).lean().exec();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      key: `promo-blocked:${product.id}`,
+      kind: 'PAYMENT_DUE',
+      audienceType: 'USERS',
+      action: { url: '/catalog/subscription' },
+    });
+    expect(rows[0]?.message).toContain('Paneer Tikka');
+    expect(rows[0]?.message).toMatch(/active plan/);
+
+    // The model was already promoted; a re-run promotes nothing, and even a
+    // second block on the same dish would land on the same key.
+    await CatalogProduct.updateOne({ _id: product.id }, { $set: { modelStatus: 'PROCESSING' } }).exec();
+    await promoteModelToProducts(seeded.record._id as Types.ObjectId);
+    expect(await Notification.countDocuments({ audienceUserIds: seeded.userId })).toBe(1);
+  });
+
+  it('says "upgrade" when the block is the plan cap', async () => {
+    const seeded = await seed({ status: 'PROCESSING' });
+    await linkDish(seeded.userId, seeded.record.id as string, 'Biryani');
+    await ClientConfig.create({ [SUBSCRIPTION_GATES_FLAG_KEY]: true });
+    await CatalogSubscription.create({
+      catalogId: seeded.catalogId,
+      userId: seeded.userId,
+      status: 'ACTIVE',
+      source: 'ONLINE',
+      periodStart: new Date(),
+      periodEnd: new Date(Date.now() + 30 * 86_400_000),
+      threeDDishCap: 0,
+    });
+    await finished(seeded);
+
+    await promoteModelToProducts(seeded.record._id as Types.ObjectId);
+
+    const rows = await Notification.find({ audienceUserIds: seeded.userId }).lean().exec();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.message).toMatch(/plan is full — upgrade/);
+  });
+
+  it('stays silent for every other gate, as before', async () => {
+    const seeded = await seed({ status: 'PROCESSING' });
+    await linkDish(seeded.userId, seeded.record.id as string);
+    // Gates OFF: whatever refuses this publish is not a subscription gate.
+    await finished(seeded);
+
+    const result = await promoteModelToProducts(seeded.record._id as Types.ObjectId);
+
+    expect(result).toMatchObject({ promoted: 1, publishesRequested: 0 });
+    expect(await Notification.countDocuments({})).toBe(0);
   });
 });

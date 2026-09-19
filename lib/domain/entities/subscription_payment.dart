@@ -490,6 +490,7 @@ class AdminSubscriptionDetail {
     required this.catalogDeleted,
     required this.subscription,
     required this.payments,
+    this.arEntitlementSyncedAt,
   });
 
   final String catalogId;
@@ -499,6 +500,12 @@ class AdminSubscriptionDetail {
   /// Null when the catalog is gone — its ledger is still worth reading.
   final CatalogSubscription? subscription;
   final List<PaymentRecordSummary> payments;
+
+  /// When Mirage was last told this restaurant's 3D entitlement (Stage 5,
+  /// E18). Null = never, which for a restaurant that has never paused is the
+  /// normal state — Mirage's default is entitled. Beside the DTO on the
+  /// wire, not inside it, so the owner's DTO stays byte-equal everywhere.
+  final DateTime? arEntitlementSyncedAt;
 
   factory AdminSubscriptionDetail.fromMap(Map<String, dynamic> map) {
     final catalog = map['catalog'] is Map
@@ -513,6 +520,7 @@ class AdminSubscriptionDetail {
               (map['subscription'] as Map).cast<String, dynamic>())
           : null,
       payments: PaymentRecordSummary.listFrom(map['payments']),
+      arEntitlementSyncedAt: catalogDate(map['arEntitlementSyncedAt']),
     );
   }
 }
