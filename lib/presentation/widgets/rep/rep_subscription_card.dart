@@ -198,6 +198,15 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
                 : AppColors.textSecondary,
           ),
         ),
+        if (standeeDeliveryLine(subscription) case final standees?) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            standees,
+            key: const ValueKey('rep_standee_line'),
+            style:
+                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+        ],
         const SizedBox(height: AppSpacing.sm),
         if (subscription.trialAvailable) ...[
           AppButton.secondary(

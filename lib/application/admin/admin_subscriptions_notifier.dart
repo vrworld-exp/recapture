@@ -1,8 +1,9 @@
 // lib/application/admin/admin_subscriptions_notifier.dart
 //
 // The admin's subscription surface: the collections list by state, the cash
-// approval queue, and one catalog's panel with its five actions (verify /
-// reject a cash request, comp, extend grace, refund a duplicate).
+// approval queue, and one catalog's panel with its six actions (verify /
+// reject a cash request, comp, extend grace, refund a duplicate, record the
+// standees delivered).
 //
 // EVERY ACTION RE-READS. The server is the only author of the ledger and the
 // status; after a decision the panel is reloaded rather than patched, and the
@@ -139,7 +140,8 @@ class AdminSubscriptionDetailNotifier
       if (failure.code == PaymentErrorCodes.alreadyDecided ||
           failure.code == PaymentErrorCodes.alreadyRefunded ||
           failure.code == PaymentErrorCodes.catalogDeleted ||
-          failure.code == PaymentErrorCodes.notInGrace) {
+          failure.code == PaymentErrorCodes.notInGrace ||
+          failure.code == PaymentErrorCodes.exceedsIncluded) {
         unawaited(refresh());
         _invalidateSiblings();
       }
@@ -182,6 +184,13 @@ class AdminSubscriptionDetailNotifier
     required String note,
   }) =>
       _act(() => _repo.extendGrace(arg, days: days, note: note));
+
+  /// The standees-delivered counter (README C8). An absolute number.
+  Future<CatalogSubscription> setStandeesIssued({
+    required int issued,
+    String? note,
+  }) =>
+      _act(() => _repo.setStandeesIssued(arg, issued: issued, note: note));
 
   Future<PaymentRecordSummary> refund({
     required String refundsPaymentId,

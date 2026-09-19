@@ -34,6 +34,7 @@ import {
 } from '@/models/types/subscription.types';
 import { alertAdmins } from '@/services/subscription/adminAlerts';
 import { quoteFor } from '@/services/subscription/checkoutService';
+import { onDisputeClosed, onDisputeCreated } from '@/services/subscription/disputeService';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { applyPaidPeriod, type ApplyVia } from '@/services/subscription/subscriptionService';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -453,6 +454,7 @@ export async function handleRazorpayEvent(
   const payment = obj(obj(payload?.payment)?.entity);
   const order = obj(obj(payload?.order)?.entity);
   const refund = obj(obj(payload?.refund)?.entity);
+  const dispute = obj(obj(payload?.dispute)?.entity);
 
   switch (name) {
     case 'payment.captured':
@@ -512,6 +514,42 @@ export async function handleRazorpayEvent(
         id,
         reason: (str(refund?.error_reason) ?? str(refund?.status) ?? 'unknown').slice(0, 120),
       });
+      return { ignored: false };
+    }
+
+    // B9 — a chargeback. ACTIVE → GRACE and an admin alert; never PAUSED,
+    // never a refund (disputeService.ts).
+    case 'payment.dispute.created': {
+      const id = str(dispute?.id);
+      if (!id) return { ignored: true };
+      await onDisputeCreated(
+        {
+          disputeId: id,
+          paymentId: str(dispute?.payment_id),
+          amountPaise: int(dispute?.amount),
+          reasonCode: str(dispute?.reason_code),
+        },
+        now
+      );
+      return { ignored: false };
+    }
+
+    case 'payment.dispute.closed':
+    case 'payment.dispute.won':
+    case 'payment.dispute.lost': {
+      const id = str(dispute?.id);
+      if (!id) return { ignored: true };
+      // Three names for one fact. `won` / `lost` say it in the name;
+      // `closed` carries it in the entity's status. Anything that is not
+      // plainly `won` is treated as lost — the direction that never restores
+      // access by mistake.
+      const status =
+        name === 'payment.dispute.won'
+          ? 'won'
+          : name === 'payment.dispute.lost'
+            ? 'lost'
+            : (str(dispute?.status) ?? 'closed');
+      await onDisputeClosed({ disputeId: id, paymentId: str(dispute?.payment_id), status }, now);
       return { ignored: false };
     }
 

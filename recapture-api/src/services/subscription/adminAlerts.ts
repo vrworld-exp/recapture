@@ -2,8 +2,9 @@
 //
 // "Something about money needs a human": one in-app notification to every
 // ADMIN user, plus a console line so it also lands in the logs. Used by the
-// webhook (amount mismatch, unknown order, orphan payment, external refund),
-// the reconciler (webhooks silent) and, later, the entitlement job (Stage 5).
+// webhook (amount mismatch, unknown order, orphan payment, external refund,
+// chargeback), the reconciler (webhooks silent) and, later, the entitlement
+// job (Stage 5).
 //
 // NEVER THROWS. Every caller is on a path that must still answer 200 to
 // Razorpay or finish a sweep — an alert that failed to send is logged, not
@@ -23,6 +24,7 @@ export type AdminAlertKind =
   | 'REFUND_FAILED'
   | 'EXTERNAL_REFUND'
   | 'WEBHOOKS_SILENT'
+  | 'DISPUTE'
   | 'ENTITLEMENT_FAILED';
 
 export interface AdminAlertInput {

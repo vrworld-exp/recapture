@@ -110,6 +110,25 @@ class _AdminSubscriptionDetailScreenState
     );
   }
 
+  Future<void> _setStandees(CatalogSubscription subscription) async {
+    final result = await showDialog<_StandeesInput>(
+      context: context,
+      builder: (_) => _StandeesDialog(
+        included: subscription.standeeIncluded ?? 0,
+        issued: subscription.standeeIssued ?? 0,
+      ),
+    );
+    if (result == null || !mounted) return;
+    await _run(
+      () => _notifier.setStandeesIssued(
+        issued: result.issued,
+        note: result.note,
+      ),
+      done: 'Standees delivered: ${result.issued}.',
+      subject: 'The standee count could not be saved',
+    );
+  }
+
   Future<void> _refund(PaymentRecordSummary row) async {
     final result = await showDialog<_RefundInput>(
       context: context,
@@ -213,6 +232,16 @@ class _AdminSubscriptionDetailScreenState
                   isFullWidth: false,
                   onPressed: _acting ? null : _extendGrace,
                 ),
+              // Only a plan that includes standees has a count to keep.
+              if (subscription != null &&
+                  (subscription.standeeIncluded ?? 0) > 0)
+                AppButton.secondary(
+                  key: const ValueKey('admin_set_standees'),
+                  label: 'Standees delivered…',
+                  icon: Icons.qr_code_2_outlined,
+                  isFullWidth: false,
+                  onPressed: _acting ? null : () => _setStandees(subscription),
+                ),
             ],
           ),
         const SizedBox(height: AppSpacing.xxl),
@@ -295,13 +324,20 @@ class _StatusCard extends StatelessWidget {
           const SizedBox(height: AppSpacing.xs),
           Text(
             subscription.hasRow
-                ? '3D/AR dishes ${threeDUsageLine(subscription)} · '
-                    'standees ${subscription.standeeIssued ?? 0} of '
-                    '${subscription.standeeIncluded ?? 0} issued'
+                ? '3D/AR dishes ${threeDUsageLine(subscription)}'
                 : '${subscription.threeDDishCount} 3D/AR dishes on the menu',
             style:
                 textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
           ),
+          if (standeeDeliveryLine(subscription) case final standees?) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              standees,
+              key: const ValueKey('admin_standee_line'),
+              style: textTheme.bodySmall
+                  ?.copyWith(color: AppColors.textSecondary),
+            ),
+          ],
           if (subscription.graceEndsAt != null) ...[
             const SizedBox(height: AppSpacing.xs),
             Text(
@@ -720,6 +756,107 @@ class _ExtendGraceDialogState extends State<_ExtendGraceDialog> {
               : () => Navigator.of(context)
                   .pop(_GraceInput(_days, _note.text.trim())),
           child: const Text('Extend'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StandeesInput {
+  const _StandeesInput(this.issued, this.note);
+  final int issued;
+  final String? note;
+}
+
+/// "How many have gone out" — a number the admin types, bounded by what the
+/// plan includes. An absolute count, not "+1": the truth is what is on the
+/// restaurant's tables, and that is what gets typed in.
+class _StandeesDialog extends StatefulWidget {
+  const _StandeesDialog({required this.included, required this.issued});
+
+  final int included;
+  final int issued;
+
+  @override
+  State<_StandeesDialog> createState() => _StandeesDialogState();
+}
+
+class _StandeesDialogState extends State<_StandeesDialog> {
+  late final TextEditingController _count =
+      TextEditingController(text: '${widget.issued}');
+  final _note = TextEditingController();
+
+  @override
+  void dispose() {
+    _count.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  int? get _parsed {
+    final value = int.tryParse(_count.text.trim());
+    if (value == null || value < 0 || value > widget.included) return null;
+    return value;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final parsed = _parsed;
+    return AlertDialog(
+      backgroundColor: AppColors.surface1,
+      title: const Text('Standees delivered'),
+      content: Column(
+        key: const ValueKey('admin_standees_dialog'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'The plan includes ${widget.included}. Enter how many have been '
+            'handed over in total.',
+            style:
+                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          TextField(
+            key: const ValueKey('admin_standees_count'),
+            controller: _count,
+            keyboardType: TextInputType.number,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: 'Delivered so far',
+              suffixText: 'of ${widget.included}',
+              errorText: _count.text.trim().isNotEmpty && parsed == null
+                  ? 'Between 0 and ${widget.included}'
+                  : null,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          TextField(
+            key: const ValueKey('admin_standees_note'),
+            controller: _note,
+            maxLength: 1000,
+            decoration: const InputDecoration(
+              labelText: 'Note (optional)',
+              counterText: '',
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const ValueKey('admin_standees_confirm'),
+          onPressed: parsed == null
+              ? null
+              : () => Navigator.of(context).pop(_StandeesInput(
+                    parsed,
+                    _note.text.trim().isEmpty ? null : _note.text.trim(),
+                  )),
+          child: const Text('Save'),
         ),
       ],
     );

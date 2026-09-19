@@ -146,6 +146,7 @@ describe('getSubscriptionStatus — the DTO', () => {
       status: 'NONE',
       planId: null,
       planName: null,
+      planSnapshot: null,
       billingInterval: null,
       periodEnd: null,
       graceEndsAt: null,

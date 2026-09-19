@@ -3,8 +3,10 @@
 // Scripted stand-ins for the Stage 3 seams: the payments repository and the
 // checkout adapter. Shared by the checkout, cash-form and admin suites.
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:recapture/application/catalog/checkout_adapter.dart';
+import 'package:recapture/application/catalog/qr_download_file.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/payments_repository.dart';
 import 'package:recapture/domain/entities/catalog_subscription.dart';
@@ -117,6 +119,10 @@ class FakePaymentsRepository implements PaymentsRepository {
   List<Map<String, Object?>> decisions = [];
   List<Map<String, Object?>> refunds = [];
   CatalogFailure? refundFailure;
+  List<String> receiptsFetched = [];
+  CatalogFailure? receiptFailure;
+  List<Map<String, Object?>> standeesSet = [];
+  CatalogFailure? standeesFailure;
 
   @override
   Future<CheckoutOrder> createOrder({
@@ -133,6 +139,19 @@ class FakePaymentsRepository implements PaymentsRepository {
   Future<List<PaymentRecordSummary>> ownerPayments() async {
     calls.add('ownerPayments');
     return ownerLedger;
+  }
+
+  @override
+  Future<QrDownloadFile> receipt(String paymentId) async {
+    calls.add('receipt:$paymentId');
+    receiptsFetched.add(paymentId);
+    final failure = receiptFailure;
+    if (failure != null) throw failure;
+    return QrDownloadFile(
+      bytes: Uint8List.fromList('%PDF-1.4 fake'.codeUnits),
+      fileName: 'receipt-RC-TEST.pdf',
+      mimeType: 'application/pdf',
+    );
   }
 
   @override
@@ -244,6 +263,19 @@ class FakePaymentsRepository implements PaymentsRepository {
     return PaymentRecordSummary.fromMap(
       paymentRowPayload(id: '66f0000000000000000000ff', kind: 'REFUNDED'),
     );
+  }
+
+  @override
+  Future<CatalogSubscription> setStandeesIssued(
+    String catalogId, {
+    required int issued,
+    String? note,
+  }) async {
+    calls.add('standees:$issued');
+    standeesSet.add({'catalogId': catalogId, 'issued': issued, 'note': note});
+    final failure = standeesFailure;
+    if (failure != null) throw failure;
+    return detail!.subscription!;
   }
 }
 

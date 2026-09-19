@@ -59,6 +59,13 @@ export interface ICatalogSubscription extends Document {
    * calendar days in UTC — plain millisecond arithmetic, no timezone math.
    */
   graceEndsAt?: Date;
+  /**
+   * Set when a CHARGEBACK moved the row ACTIVE → GRACE (B9), so a dispute
+   * that is later WON can be told apart from a grace the sweep started: only
+   * a dispute-grace is restored to ACTIVE on `won`. Cleared whenever a new
+   * period is applied (paid or comp), like `graceEndsAt`.
+   */
+  disputeGraceAt?: Date;
   /** Set once, never cleared — the "one trial ever" flag (§8 A/D). */
   trialUsedAt?: Date;
   /** Which rep or admin activated the trial. Trials are never automatic. */
@@ -143,6 +150,7 @@ const CatalogSubscriptionSchema = new Schema<ICatalogSubscription>(
     periodStart: { type: Date, required: true },
     periodEnd: { type: Date, required: true },
     graceEndsAt: { type: Date },
+    disputeGraceAt: { type: Date },
     trialUsedAt: { type: Date },
     trialActivatedBy: { type: ActorSchema },
     source: { type: String, enum: SUBSCRIPTION_SOURCES, required: true },

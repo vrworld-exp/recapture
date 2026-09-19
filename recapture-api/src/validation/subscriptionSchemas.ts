@@ -134,6 +134,21 @@ export const refundSchema = z
   .strict();
 export type RefundInput = z.infer<typeof refundSchema>;
 
+/**
+ * PATCH /admin/catalogs/:id/subscription/standees — how many of the plan's
+ * complimentary standees have been handed over. An absolute count set by a
+ * human, not an increment: two admins updating at once end with the larger
+ * of two truths, not the sum of two guesses. The upper bound (`included`) is
+ * on the row, so the service enforces it (422 EXCEEDS_INCLUDED).
+ */
+export const standeesIssuedSchema = z
+  .object({
+    issued: z.number().int().min(0).max(10_000),
+    note: z.string().trim().max(1000).optional(),
+  })
+  .strict();
+export type StandeesIssuedInput = z.infer<typeof standeesIssuedSchema>;
+
 /** The collections list's filter vocabulary. */
 export const ADMIN_SUBSCRIPTION_STATES = ['EXPIRING_7D', 'GRACE', 'PAUSED', 'TRIAL'] as const;
 export type AdminSubscriptionState = (typeof ADMIN_SUBSCRIPTION_STATES)[number];

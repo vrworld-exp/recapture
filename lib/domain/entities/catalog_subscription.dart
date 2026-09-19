@@ -84,6 +84,16 @@ extension PlanIdX on PlanId {
 
   static PlanId? fromApiValueOrNull(dynamic raw) =>
       raw is String && raw.isNotEmpty ? fromApiValue(raw) : null;
+
+  /// The tier's name when only the id is at hand (a summary, not the DTO).
+  /// Mirrors the bundled catalog's display names; a screen that HAS the
+  /// server's `planName` should prefer it.
+  String? get displayName => switch (this) {
+        PlanId.taste => 'Taste plan',
+        PlanId.signature => 'Signature plan',
+        PlanId.masterchef => 'MasterChef plan',
+        PlanId.unknown => null,
+      };
 }
 
 enum BillingInterval { monthly, yearly, unknown }
@@ -322,11 +332,17 @@ class CatalogSubscription {
     required this.standeeIncluded,
     required this.standeeIssued,
     required this.plans,
+    this.planSnapshot,
   });
 
   final SubscriptionStatus status;
   final PlanId? planId;
   final String? planName;
+
+  /// The plan AS BOUGHT — the server's frozen copy the running period is
+  /// under. Null on a trial, a comp, no row, or an older server. Compared to
+  /// [plans] by [lockedPriceNotice]; never a source for the plan cards.
+  final PlanDefinition? planSnapshot;
   final BillingInterval? billingInterval;
   final DateTime? periodEnd;
   final DateTime? graceEndsAt;
@@ -350,6 +366,22 @@ class CatalogSubscription {
   /// Over the cap right now — the state the publish gate would refuse.
   bool get isOverCap =>
       threeDDishCap != null && threeDDishCount > threeDDishCap!;
+
+  /// The plan's CURRENT price when it differs from the one this period was
+  /// bought at (B6) — the pair the renewal notice is built from, or null when
+  /// there is nothing to say: no snapshot, an unknown plan, or the same price.
+  ({int lockedPaise, int currentPaise})? get priceChange {
+    final snapshot = planSnapshot;
+    final id = planId;
+    if (snapshot == null || id == null) return null;
+    final current = plans.byId(id);
+    if (current == null) return null;
+    if (current.priceMonthlyPaise == snapshot.priceMonthlyPaise) return null;
+    return (
+      lockedPaise: snapshot.priceMonthlyPaise,
+      currentPaise: current.priceMonthlyPaise,
+    );
+  }
 
   /// The compact view of the same row, for a chip that has only this.
   SubscriptionSummary? get summary => hasRow
@@ -390,6 +422,10 @@ class CatalogSubscription {
       standeeIssued:
           allocation is Map ? catalogCount(allocation['issued']) : null,
       plans: PlanCatalog.fromMapOrDefault(map['plans']),
+      planSnapshot: map['planSnapshot'] is Map
+          ? PlanDefinition.fromMap(
+              (map['planSnapshot'] as Map).cast<String, dynamic>())
+          : null,
     );
   }
 }

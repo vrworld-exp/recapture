@@ -153,6 +153,19 @@ export const AnalyticsEvent = {
   RAZORPAY_WEBHOOK_REJECTED: 'razorpay_webhook_rejected',
   // An in-app alert fanned out to every ADMIN user (services/subscription/adminAlerts.ts).
   ADMIN_ALERT_SENT: 'admin_alert_sent',
+  // ── Subscription gaps (docs/subscription/gaps-addendum.md, Prompt A) ──────
+  // A chargeback (B9): the row went ACTIVE → GRACE, never PAUSED, and no
+  // refund was issued. `previous_status` says whether a state change happened.
+  SUBSCRIPTION_DISPUTE_RECEIVED: 'subscription_dispute_received',
+  SUBSCRIPTION_DISPUTE_CLOSED: 'subscription_dispute_closed',
+  // Any status transition not made by a payment: today a dispute, in Stage 5
+  // the sweeps and the admin. `by` names the author.
+  SUBSCRIPTION_STATE_CHANGED: 'subscription_state_changed',
+  // An admin set how many complimentary standees have been handed over — a
+  // human counter, never derived from QR assignments (README C8).
+  SUBSCRIPTION_STANDEES_ISSUED: 'subscription_standees_issued',
+  // The owner downloaded a receipt PDF. The kind of row, never its amount.
+  SUBSCRIPTION_RECEIPT_DOWNLOADED: 'subscription_receipt_downloaded',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
   // ── Pre-printed standee inventory ─────────────────────────────────────────
   // The MINT, not the code. A code value is a public identifier for a specific
@@ -1052,6 +1065,46 @@ const adminAlertSentProps = z
   })
   .strict();
 
+const subscriptionDisputeReceivedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    amount_paise: z.number().int().nonnegative(),
+    previous_status: z.enum([...SUBSCRIPTION_STATUSES, 'NONE']),
+  })
+  .strict();
+
+const subscriptionDisputeClosedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    result: z.enum(['won', 'lost']),
+  })
+  .strict();
+
+const subscriptionStateChangedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    from: z.enum(SUBSCRIPTION_STATUSES),
+    to: z.enum(SUBSCRIPTION_STATUSES),
+    by: z.enum(['SWEEP', 'PAYMENT', 'ADMIN', 'DISPUTE']),
+  })
+  .strict();
+
+const subscriptionStandeesIssuedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    admin_id_hash: z.string().min(1),
+    issued: z.number().int().nonnegative(),
+    included: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const subscriptionReceiptDownloadedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    kind: z.enum(['PAID', 'MANUAL', 'COMP']),
+  })
+  .strict();
+
 const publishBlockedBySubscriptionProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1258,6 +1311,11 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_OVER_CAP_ON_ACTIVATE]: subscriptionOverCapOnActivateProps,
   [AnalyticsEvent.RAZORPAY_WEBHOOK_REJECTED]: razorpayWebhookRejectedProps,
   [AnalyticsEvent.ADMIN_ALERT_SENT]: adminAlertSentProps,
+  [AnalyticsEvent.SUBSCRIPTION_DISPUTE_RECEIVED]: subscriptionDisputeReceivedProps,
+  [AnalyticsEvent.SUBSCRIPTION_DISPUTE_CLOSED]: subscriptionDisputeClosedProps,
+  [AnalyticsEvent.SUBSCRIPTION_STATE_CHANGED]: subscriptionStateChangedProps,
+  [AnalyticsEvent.SUBSCRIPTION_STANDEES_ISSUED]: subscriptionStandeesIssuedProps,
+  [AnalyticsEvent.SUBSCRIPTION_RECEIPT_DOWNLOADED]: subscriptionReceiptDownloadedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
   [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,

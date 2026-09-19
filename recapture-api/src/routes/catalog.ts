@@ -99,7 +99,13 @@ import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { getSubscriptionStatus } from '@/services/subscription/subscriptionService';
 import { createOrReturnOrder } from '@/services/subscription/checkoutService';
-import { listPaymentsForOwner } from '@/services/subscription/paymentLedgerService';
+import { listPaymentsForOwner, receiptNoFor } from '@/services/subscription/paymentLedgerService';
+import {
+  isReceiptEligible,
+  receiptFileName,
+  renderReceipt,
+} from '@/services/subscription/receiptPdf';
+import { PaymentRecord } from '@/models/PaymentRecord';
 import { createOrderSchema } from '@/validation/subscriptionSchemas';
 import { validateBody } from '@/middleware/validate';
 import type { Response } from 'express';
@@ -1346,6 +1352,47 @@ router.get(
     if (!catalog) return noCatalog(res);
     const payments = await listPaymentsForOwner(catalog._id as Types.ObjectId);
     res.status(200).json({ status: 'success', payments });
+  })
+);
+
+/**
+ * GET /catalog/subscription/payments/:paymentId/receipt — one row as a PDF
+ * receipt (§7 rule 7: a receipt, not a GST invoice). Only rows that took
+ * money or granted access have one: PAID (flagged or not — the money was
+ * taken), MANUAL once VERIFIED, and COMP. Everything else — an open order, a
+ * pending cash request, a refund, a dispute, another owner's row — is the
+ * SAME 404, so the endpoint cannot be used to probe which ids exist.
+ */
+router.get(
+  '/subscription/payments/:paymentId/receipt',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    const notFound = (): void =>
+      fail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+
+    const raw = req.params.paymentId;
+    if (!Types.ObjectId.isValid(raw)) return notFound();
+    const record = await PaymentRecord.findOne({
+      _id: new Types.ObjectId(raw),
+      catalogId: catalog._id as Types.ObjectId,
+    })
+      .lean()
+      .exec();
+    if (!record || !isReceiptEligible(record)) return notFound();
+
+    const pdf = renderReceipt({ record, catalogName: catalog.name });
+    track(AnalyticsEvent.SUBSCRIPTION_RECEIPT_DOWNLOADED, {
+      catalog_id: (catalog._id as Types.ObjectId).toHexString(),
+      kind: record.kind as 'PAID' | 'MANUAL' | 'COMP',
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${receiptFileName(receiptNoFor(String(record._id)))}"`
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(pdf);
   })
 );
 

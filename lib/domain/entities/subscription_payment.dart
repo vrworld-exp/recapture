@@ -250,6 +250,15 @@ class PaymentRecordSummary {
   /// override.
   bool get isSuspectedDuplicate => note == 'DUPLICATE_SUSPECTED';
 
+  /// Whether the owner can download a receipt for this row — the server's
+  /// eligibility, mirrored so the icon is only drawn where a tap would work:
+  /// money taken (PAID, cash once VERIFIED) or access granted (COMP).
+  bool get hasReceipt =>
+      kind == PaymentKind.paid ||
+      kind == PaymentKind.comp ||
+      (kind == PaymentKind.manual &&
+          verificationStatus == VerificationStatus.verified);
+
   /// "Cash" / "Online" / "Comp" / "Refund" — the method column.
   String get methodLabel => switch (kind) {
         PaymentKind.manual => method?.label ?? 'Manual',

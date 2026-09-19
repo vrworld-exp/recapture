@@ -55,6 +55,12 @@ export interface SubscriptionStatusDto {
   status: SubscriptionStatus | 'NONE';
   planId: PlanId | null;
   planName: string | null;
+  /**
+   * The plan AS BOUGHT — the frozen copy the period runs under. The screen
+   * compares its `priceMonthlyPaise` to `plans[planId]` to say "your price
+   * was locked; renewals are X" (B6). Null on TRIAL, COMPED and no row.
+   */
+  planSnapshot: PlanDefinition | null;
   billingInterval: BillingInterval | null;
   /** ISO. */
   periodEnd: string | null;
@@ -94,6 +100,19 @@ export type SubscriptionRow = Pick<
 /** The catalog's row, or null when it has none. */
 export async function getOrNull(catalogId: Types.ObjectId): Promise<SubscriptionRow | null> {
   return CatalogSubscription.findOne({ catalogId }).lean<SubscriptionRow>().exec();
+}
+
+/** The frozen snapshot, field by field — never the lean subdocument spread onto the wire. */
+function toPlanDefinition(plan: PlanDefinition): PlanDefinition {
+  return {
+    planId: plan.planId,
+    displayName: plan.displayName,
+    priceMonthlyPaise: plan.priceMonthlyPaise,
+    yearlyDiscountPct: plan.yearlyDiscountPct,
+    threeDDishCap: plan.threeDDishCap,
+    includedStandeeCount: plan.includedStandeeCount,
+    features: [...plan.features],
+  };
 }
 
 /** `Math.max(0, ceil(ms / day))` — the one formula, in one place. */
@@ -279,6 +298,7 @@ export async function getSubscriptionStatus(
       status: 'NONE',
       planId: null,
       planName: null,
+      planSnapshot: null,
       billingInterval: null,
       periodEnd: null,
       graceEndsAt: null,
@@ -297,6 +317,7 @@ export async function getSubscriptionStatus(
     status: row.status,
     planId: row.planId ?? null,
     planName: row.planSnapshot?.displayName ?? null,
+    planSnapshot: row.planSnapshot ? toPlanDefinition(row.planSnapshot) : null,
     billingInterval: row.billingInterval ?? null,
     periodEnd: row.periodEnd.toISOString(),
     graceEndsAt: row.graceEndsAt?.toISOString() ?? null,
@@ -409,7 +430,13 @@ export async function startTrial(
       { catalogId, trialUsedAt: null, status: { $in: ['CANCELLED', 'PAUSED'] } },
       {
         $set: trialFields,
-        $unset: { planId: 1, planSnapshot: 1, billingInterval: 1, graceEndsAt: 1 },
+        $unset: {
+          planId: 1,
+          planSnapshot: 1,
+          billingInterval: 1,
+          graceEndsAt: 1,
+          disputeGraceAt: 1,
+        },
       },
       { new: true }
     ).exec();
@@ -467,7 +494,12 @@ export interface ApplyPeriodResult {
 }
 
 /** Every field the previous period may have set that a fresh one must clear. */
-const CLEARED_ON_NEW_PERIOD = { graceEndsAt: null, pausedAt: null, cancelledAt: null } as const;
+const CLEARED_ON_NEW_PERIOD = {
+  graceEndsAt: null,
+  disputeGraceAt: null,
+  pausedAt: null,
+  cancelledAt: null,
+} as const;
 
 /**
  * The row-level write both primitives share: an upsert keyed on the unique

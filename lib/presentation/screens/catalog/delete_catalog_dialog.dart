@@ -8,7 +8,9 @@ import '../../../application/catalog/catalog_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_repository.dart';
 import '../../../domain/catalog/catalog_names.dart';
+import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog.dart';
+import '../../../domain/entities/catalog_subscription.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
@@ -164,6 +166,13 @@ class _DeleteCatalogDialogState extends ConsumerState<DeleteCatalogDialog> {
                   if (catalog.isProvisioned)
                     'Your public page and its QR code — printed codes will stop '
                         'working',
+                  // C9: the subscription is cancelled with the catalog and
+                  // nothing is refunded. Said only when something is running.
+                  if (deleteSubscriptionConsequence(
+                    catalog.subscription?.status,
+                    planName: catalog.subscription?.planId?.displayName,
+                  ) case final consequence?)
+                    consequence,
                 ],
               ),
               if (catalog.isProvisioned) ...[

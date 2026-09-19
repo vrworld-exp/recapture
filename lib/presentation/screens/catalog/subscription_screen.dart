@@ -19,11 +19,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/catalog/catalog_qr_service.dart';
 import '../../../application/catalog/checkout_adapter.dart';
 import '../../../application/catalog/checkout_notifier.dart';
 import '../../../application/catalog/payment_history_notifier.dart';
 import '../../../application/catalog/subscription_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
+import '../../../data/repositories/payments_repository.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/subscription_payment.dart';
@@ -145,6 +147,7 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
     final subscription = widget.subscription;
     final textTheme = Theme.of(context).textTheme;
     final selected = _effectivePlan;
+    final priceNotice = lockedPriceNotice(subscription);
 
     return ListView(
       key: const ValueKey('subscription_body'),
@@ -187,6 +190,22 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
             isSelected: plan.planId == selected,
             onTap: () => setState(() => _selectedPlan = plan.planId),
           ),
+          // B6: the price moved since this period was bought. Said once,
+          // under the plan it is about, and only on the day it is true.
+          if (priceNotice != null && subscription.planId == plan.planId)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: AppSpacing.sm,
+                right: AppSpacing.sm,
+                top: AppSpacing.xs,
+              ),
+              child: Text(
+                priceNotice,
+                key: const ValueKey('subscription_price_change_notice'),
+                style:
+                    textTheme.bodySmall?.copyWith(color: AppColors.warning),
+              ),
+            ),
           const SizedBox(height: AppSpacing.sm),
         ],
         const SizedBox(height: AppSpacing.md),
@@ -300,6 +319,15 @@ class _UsageCard extends StatelessWidget {
             value: '${subscription.imageDishCount} · Unlimited',
             color: AppColors.textPrimary,
           ),
+          if (standeeDeliveryLine(subscription) case final standees?) ...[
+            const SizedBox(height: AppSpacing.xs),
+            _UsageRow(
+              key: const ValueKey('subscription_standee_line'),
+              label: 'QR standees',
+              value: standees.replaceFirst('QR standees: ', ''),
+              color: AppColors.textPrimary,
+            ),
+          ],
           if (over) ...[
             const SizedBox(height: AppSpacing.sm),
             Text(
@@ -759,11 +787,44 @@ class _PreCheckoutSheet extends StatelessWidget {
 /// The owner's ledger: `date · ₹amount · method · receipt no`, newest first.
 /// A refund is a row like any other, in a muted style — the history is
 /// honest, and there is no refund ACTION here (AC-5.1).
-class PaymentHistorySection extends ConsumerWidget {
+class PaymentHistorySection extends ConsumerStatefulWidget {
   const PaymentHistorySection({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PaymentHistorySection> createState() =>
+      _PaymentHistorySectionState();
+}
+
+class _PaymentHistorySectionState extends ConsumerState<PaymentHistorySection> {
+  /// The row whose receipt is being fetched, so its icon spins and a second
+  /// tap on it does nothing.
+  String? _downloading;
+
+  /// Fetches the PDF and hands it to the same seam the QR download uses —
+  /// a share sheet on mobile, a blob download in the browser. No new
+  /// file-saving path; the receipt is one more file through the one door.
+  Future<void> _downloadReceipt(PaymentRecordSummary record) async {
+    if (_downloading != null) return;
+    final messenger = CatalogFeedback.of(context);
+    setState(() => _downloading = record.id);
+    try {
+      final file =
+          await ref.read(paymentsRepositoryProvider).receipt(record.id);
+      await ref.read(qrDelivererProvider).deliver(file);
+      Analytics.logEvent('receipt_downloaded', {'kind': record.kind.name});
+    } on CatalogFailure catch (failure) {
+      CatalogFeedback.failure(
+        messenger,
+        failure,
+        subject: "Couldn't download the receipt",
+      );
+    } finally {
+      if (mounted) setState(() => _downloading = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final history = ref.watch(paymentHistoryProvider);
     final textTheme = Theme.of(context).textTheme;
 
@@ -814,7 +875,13 @@ class PaymentHistorySection extends ConsumerWidget {
                             height: AppSpacing.md,
                             color: AppColors.disabled.withValues(alpha: 0.3),
                           ),
-                        PaymentHistoryRow(record: rows[i]),
+                        PaymentHistoryRow(
+                          record: rows[i],
+                          onDownloadReceipt: rows[i].hasReceipt
+                              ? () => _downloadReceipt(rows[i])
+                              : null,
+                          isDownloading: _downloading == rows[i].id,
+                        ),
                       ],
                     ],
                   ),
@@ -827,9 +894,20 @@ class PaymentHistorySection extends ConsumerWidget {
 
 /// One ledger line. Public so the widget test can render the refund style.
 class PaymentHistoryRow extends StatelessWidget {
-  const PaymentHistoryRow({super.key, required this.record});
+  const PaymentHistoryRow({
+    super.key,
+    required this.record,
+    this.onDownloadReceipt,
+    this.isDownloading = false,
+  });
 
   final PaymentRecordSummary record;
+
+  /// Shows the receipt icon when set. The OWNER's section passes it for the
+  /// rows that have one; the admin's ledger passes nothing — the receipt is
+  /// the owner's document, fetched under the owner's token.
+  final VoidCallback? onDownloadReceipt;
+  final bool isDownloading;
 
   @override
   Widget build(BuildContext context) {
@@ -878,6 +956,26 @@ class PaymentHistoryRow extends StatelessWidget {
               fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
             ),
           ),
+          if (onDownloadReceipt != null) ...[
+            const SizedBox(width: AppSpacing.xs),
+            isDownloading
+                ? const Padding(
+                    padding: EdgeInsets.all(AppSpacing.sm),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                : IconButton(
+                    key: ValueKey('payment_receipt_${record.id}'),
+                    tooltip: 'Download receipt',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.download_outlined, size: 20),
+                    color: AppColors.textSecondary,
+                    onPressed: onDownloadReceipt,
+                  ),
+          ],
         ],
       ),
     );

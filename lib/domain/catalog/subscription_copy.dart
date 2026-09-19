@@ -190,3 +190,47 @@ String? paymentForfeitWarning(CatalogSubscription subscription) {
     _ => null,
   };
 }
+
+/// "QR standees: 6 of 15 delivered" — the same sentence on the owner screen,
+/// the rep card and the admin panel. Null when the plan includes none (a
+/// trial, a comp, no row): a line that says "0 of 0" is noise.
+///
+/// The numbers are the ADMIN's counter (README C8) — what was physically
+/// handed over — not a count of activated codes, and nothing here derives one
+/// from the other.
+String? standeeDeliveryLine(CatalogSubscription subscription) {
+  final included = subscription.standeeIncluded ?? 0;
+  if (included <= 0) return null;
+  final issued = subscription.standeeIssued ?? 0;
+  return 'QR standees: $issued of $included delivered';
+}
+
+/// The B6 sentence — "your price was locked; renewals are the new price" —
+/// only when the frozen snapshot's price differs from the plan's current
+/// price. Null otherwise, so the card says nothing on the common day.
+/// Numbers from the server, rounded to rupees here for display only.
+String? lockedPriceNotice(CatalogSubscription subscription) {
+  final change = subscription.priceChange;
+  final periodEnd = subscription.periodEnd;
+  if (change == null || periodEnd == null) return null;
+  return 'Your current price ${formatRupees(change.lockedPaise)}/month was '
+      'locked until ${formatSubscriptionDate(periodEnd)}. '
+      'Renewals are ${formatRupees(change.currentPaise)}/month.';
+}
+
+/// What deleting the catalog does to its subscription — the C9 bullet in the
+/// delete dialog. Null when there is nothing running (no row, PAUSED,
+/// CANCELLED, COMPED): the money sentence would be a scare with nothing
+/// behind it. `planName` is the plan's display name when one is known.
+String? deleteSubscriptionConsequence(
+  SubscriptionStatus? status, {
+  String? planName,
+}) =>
+    switch (status) {
+      SubscriptionStatus.active || SubscriptionStatus.grace =>
+        'Your ${planName ?? 'paid'} subscription ends now. Payments are '
+            'non-refundable — the unused days are not credited.',
+      SubscriptionStatus.trial =>
+        'Your free trial ends and cannot be restarted.',
+      _ => null,
+    };

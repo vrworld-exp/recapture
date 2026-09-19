@@ -12,11 +12,14 @@
 // Mirrors the house error boundary exactly: every method throws
 // [CatalogFailure], never a [DioException], and screens branch on `code`.
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../application/catalog/qr_download_file.dart';
 import '../../domain/entities/catalog_subscription.dart';
 import '../../domain/entities/subscription_payment.dart';
 import '../remote/api_client.dart';
+import 'bytes_response.dart';
 import 'catalog_failure.dart';
 
 /// Error codes the payment endpoints return that a screen branches on.
@@ -42,6 +45,12 @@ abstract final class PaymentErrorCodes {
   /// Extend-grace on a row that is not in GRACE.
   static const notInGrace = 'NOT_IN_GRACE';
 
+  /// Standees-delivered count above what the plan includes (or no plan).
+  static const exceedsIncluded = 'EXCEEDS_INCLUDED';
+
+  /// A receipt asked for on a row that has none, or that is not this owner's.
+  static const paymentNotFound = 'PAYMENT_NOT_FOUND';
+
   static const rateLimited = 'RATE_LIMITED';
 }
 
@@ -61,6 +70,13 @@ abstract interface class PaymentsRepository {
 
   /// `GET /catalog/subscription/payments` — the owner's last fifty rows.
   Future<List<PaymentRecordSummary>> ownerPayments();
+
+  /// `GET /catalog/subscription/payments/:id/receipt` — one row as a PDF
+  /// receipt (a receipt, not a GST invoice). BYTES, on the same seam as the
+  /// QR download: the endpoint needs the Bearer token, so there is no link a
+  /// browser could open. Only PAID, verified cash and comp rows have one;
+  /// anything else is [PaymentErrorCodes.paymentNotFound].
+  Future<QrDownloadFile> receipt(String paymentId);
 
   // ── Rep ──────────────────────────────────────────────────────────────────
 
@@ -118,6 +134,16 @@ abstract interface class PaymentsRepository {
     required String note,
     bool override = false,
   });
+
+  /// `PATCH /admin/catalogs/:id/subscription/standees` — how many of the
+  /// plan's complimentary standees have been handed over. An ABSOLUTE count
+  /// a human sets, capped at what the plan includes
+  /// ([PaymentErrorCodes.exceedsIncluded]).
+  Future<CatalogSubscription> setStandeesIssued(
+    String catalogId, {
+    required int issued,
+    String? note,
+  });
 }
 
 class RemotePaymentsRepository implements PaymentsRepository {
@@ -159,6 +185,30 @@ class RemotePaymentsRepository implements PaymentsRepository {
             .get<Map<String, dynamic>>('/catalog/subscription/payments');
         return PaymentRecordSummary.listFrom(res.data?['payments']);
       });
+
+  @override
+  Future<QrDownloadFile> receipt(String paymentId) async {
+    try {
+      final res = await _dio.get<List<int>>(
+        '/catalog/subscription/payments/$paymentId/receipt',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final data = res.data;
+      if (data == null || data.isEmpty) throw _malformed;
+      return QrDownloadFile(
+        bytes: Uint8List.fromList(data),
+        fileName:
+            fileNameFromDisposition(res.headers.value('content-disposition')) ??
+                'receipt.pdf',
+        mimeType:
+            res.headers.value(Headers.contentTypeHeader) ?? 'application/pdf',
+      );
+    } on DioException catch (error) {
+      // A bytes request gets a bytes-shaped 404 too; decode it so the code
+      // survives (see CatalogRepository.fetchQr).
+      throw CatalogFailure.fromDio(withDecodedBody(error));
+    }
+  }
 
   @override
   Future<ManualPaymentRecord?> pendingManualPayment(String catalogId) =>
@@ -319,6 +369,23 @@ class RemotePaymentsRepository implements PaymentsRepository {
         );
         return PaymentRecordSummary.fromMap(
             _object(res.data?['paymentRecord']));
+      });
+
+  @override
+  Future<CatalogSubscription> setStandeesIssued(
+    String catalogId, {
+    required int issued,
+    String? note,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/admin/catalogs/$catalogId/subscription/standees',
+          data: {
+            'issued': issued,
+            if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+          },
+        );
+        return CatalogSubscription.fromMap(_object(res.data?['subscription']));
       });
 }
 

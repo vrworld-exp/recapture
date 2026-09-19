@@ -65,6 +65,53 @@ export async function extendGrace(
   return { outcome: 'EXTENDED', graceEndsAt };
 }
 
+// ── Standees issued ─────────────────────────────────────────────────────────
+
+export type SetStandeesIssuedResult =
+  | { outcome: 'SET'; included: number; issued: number }
+  /** No row, or `issued` above what the plan includes (a row with no plan includes 0). */
+  | { outcome: 'EXCEEDS_INCLUDED'; included: number };
+
+/**
+ * `standeeAllocation.issued = n`, guarded on `included >= n` in the same
+ * write so a plan change between the read and the write cannot let the
+ * count run past the allowance. A HUMAN COUNTER (README C8): what was
+ * physically handed over, never derived from QR assignments or activations.
+ */
+export async function setStandeesIssued(
+  catalogId: Types.ObjectId,
+  admin: Actor,
+  input: { issued: number; note?: string }
+): Promise<SetStandeesIssuedResult> {
+  const updated = await CatalogSubscription.findOneAndUpdate(
+    { catalogId, 'standeeAllocation.included': { $gte: input.issued } },
+    { $set: { 'standeeAllocation.issued': input.issued } },
+    { new: true }
+  )
+    .select({ standeeAllocation: 1 })
+    .lean<Pick<ICatalogSubscription, 'standeeAllocation'>>()
+    .exec();
+  if (!updated) {
+    const row = await CatalogSubscription.findOne({ catalogId })
+      .select({ standeeAllocation: 1 })
+      .lean<Pick<ICatalogSubscription, 'standeeAllocation'>>()
+      .exec();
+    return { outcome: 'EXCEEDS_INCLUDED', included: row?.standeeAllocation?.included ?? 0 };
+  }
+
+  track(AnalyticsEvent.SUBSCRIPTION_STANDEES_ISSUED, {
+    catalog_id: catalogId.toHexString(),
+    admin_id_hash: hashIdentifier(admin.userId.toHexString()),
+    issued: updated.standeeAllocation.issued,
+    included: updated.standeeAllocation.included,
+  });
+  return {
+    outcome: 'SET',
+    included: updated.standeeAllocation.included,
+    issued: updated.standeeAllocation.issued,
+  };
+}
+
 // ── Refund ──────────────────────────────────────────────────────────────────
 
 export type RefundResult =

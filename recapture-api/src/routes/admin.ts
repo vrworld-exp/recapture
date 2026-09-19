@@ -124,11 +124,13 @@ import {
   compSchema,
   extendGraceSchema,
   refundSchema,
+  standeesIssuedSchema,
   startTrialSchema,
   type AdminManualPaymentInput,
   type CompInput,
   type ExtendGraceInput,
   type RefundInput,
+  type StandeesIssuedInput,
 } from '@/validation/subscriptionSchemas';
 import {
   applyComp,
@@ -145,6 +147,7 @@ import {
   extendGrace,
   listSubscriptionsByState,
   refundPayment,
+  setStandeesIssued,
 } from '@/services/subscription/adminSubscriptionService';
 import {
   listPaymentsForAdmin,
@@ -2874,6 +2877,42 @@ router.post(
         'NOT_IN_GRACE',
         'Grace can only be extended while the subscription is in its grace period.'
       );
+    }
+    res.status(200).json({
+      status: 'success',
+      subscription: await getSubscriptionStatus(catalogId, catalog.userId),
+    });
+  })
+);
+
+/**
+ * PATCH /admin/catalogs/:id/subscription/standees — how many of the plan's
+ * complimentary QR standees have been handed over. An absolute count, capped
+ * at what the plan includes (422 EXCEEDS_INCLUDED, which is also the answer
+ * for a catalog with no plan — it includes none). A human's counter, never
+ * derived from QR assignments (README C8).
+ */
+router.patch(
+  '/catalogs/:id/subscription/standees',
+  requireRole('ADMIN'),
+  validateBody(standeesIssuedSchema),
+  asyncHandler(async (req, res) => {
+    const catalog = await liveCatalogOr404(res, req.params.id);
+    if (!catalog) return;
+    const catalogId = catalog._id as Types.ObjectId;
+    const body = req.body as StandeesIssuedInput;
+    const result = await setStandeesIssued(catalogId, adminActor(req), body);
+    if (result.outcome === 'EXCEEDS_INCLUDED') {
+      res.status(422).json({
+        status: 'error',
+        code: 'EXCEEDS_INCLUDED',
+        message:
+          result.included === 0
+            ? 'This restaurant has no plan that includes standees yet.'
+            : `This plan includes ${result.included} standees; the count cannot exceed that.`,
+        included: result.included,
+      });
+      return;
     }
     res.status(200).json({
       status: 'success',

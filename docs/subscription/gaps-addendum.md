@@ -1,3 +1,5 @@
+✅✅✅✅✅✅✅✅✅✅✅
+
 # Gaps — what the plan asks for that stages 1–5 do not build
 
 Cross-check of `RECAPTURE_SUBSCRIPTION_PLAN.md` (§3–§11, §8 edge cases, §15 AC) against
@@ -232,3 +234,42 @@ consistent with §7 rule 9 (no credits) and AC-3.5, and it is the simplest thing
 wrong — but §13 item 7 still lists it as open. Either confirm it (then close §13 item 7 and add
 one sentence to the Upgrade sheet: "Your new plan starts today; the remaining days on <old plan>
 are not credited") or specify a proration rule before Stage 3 Part B ships its Upgrade button.
+
+
+
+
+
+
+
+
+
+res -------------------------------------->>>>>>>>>
+
+
+
+1 -------------------->
+
+The full backend suite (vitest run, ~100 files) is still running in the background; I'll post the result when it lands. Everything else is done and verified.
+
+What was built (Prompt A)
+Backend (recapture-api)
+
+G1 Disputes — new disputeService.ts, wired into the webhook switch in webhookService.ts. payment.dispute.created → DISPUTED row keyed dispute:<id>, ACTIVE → GRACE only (with new disputeGraceAt on CatalogSubscription), admin alert, no refund. closed/won/lost → CLOSED_* row; won restores ACTIVE only when the grace was dispute-started and periodEnd > now. applyPaidPeriod/applyComp/trial-restart all clear disputeGraceAt.
+G2 Standees — PATCH /admin/catalogs/:id/subscription/standees (admin.ts), conditional write on included >= issued → 422 EXCEEDS_INCLUDED, audited.
+G3 Receipts — receiptPdf.ts via pdfPrimitives + GET /catalog/subscription/payments/:paymentId/receipt (owner-only, PAID / MANUAL-VERIFIED / COMP, same 404 body for everything else, no-store).
+G4 — alertAdmins already existed from Stage 3; I only added the DISPUTE kind and pinned it with tests/admin-alerts.test.ts.
+DTO gains planSnapshot (for G6); 5 new analytics events incl. subscription_state_changed in the Stage 5 shape.
+Flutter
+
+Standee line ("QR standees: 6 of 15 delivered") on owner usage card, rep card, admin panel; admin "Standees delivered…" dialog + repo/notifier method.
+G6 locked-price notice under the current plan card; G5 delete-dialog bullets (ACTIVE/GRACE non-refund, TRIAL) — all copy in subscription_copy.dart.
+Receipt download icon on eligible history rows, routed through the existing qrDelivererProvider seam (no new file path).
+Verification: tsc --noEmit and npm run lint clean; flutter analyze clean (one pre-existing info); flutter test test/catalog test/admin test/rep → all pass; the four new backend suites + subscription-status/subscription-webhook → 75/75 pass.
+
+Two things to flag
+"₹" on the PDF is printed as "Rs." — the base-14 fonts pdfPrimitives ships have no rupee glyph and the prompt forbids embedding fonts. Tell me if you'd rather embed one.
+G7 / G8 / G9 are still yours to decide — I did not add an owner-cancel route, touch the marketing site, or change proration; the Upgrade sheet still needs the one-sentence "remaining days not credited" copy once G9 is confirmed.
+
+
+
+
