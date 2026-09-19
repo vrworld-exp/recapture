@@ -117,8 +117,41 @@ import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
 import { loadStandeeActivation } from '@/services/standeeActivationService';
 import { catalogQrQuerySchema } from '@/validation/catalogSchemas';
 import { Catalog } from '@/models/Catalog';
-import { startTrialSchema } from '@/validation/subscriptionSchemas';
-import { startTrial } from '@/services/subscription/subscriptionService';
+import {
+  adminManualPaymentSchema,
+  adminManualPaymentsQuerySchema,
+  adminSubscriptionsQuerySchema,
+  compSchema,
+  extendGraceSchema,
+  refundSchema,
+  startTrialSchema,
+  type AdminManualPaymentInput,
+  type CompInput,
+  type ExtendGraceInput,
+  type RefundInput,
+} from '@/validation/subscriptionSchemas';
+import {
+  applyComp,
+  getSubscriptionStatus,
+  startTrial,
+} from '@/services/subscription/subscriptionService';
+import {
+  createAndVerifyManualPayment,
+  decideManualPayment,
+  listManualPayments,
+  type DecideManualPaymentResult,
+} from '@/services/subscription/manualPaymentService';
+import {
+  extendGrace,
+  listSubscriptionsByState,
+  refundPayment,
+} from '@/services/subscription/adminSubscriptionService';
+import {
+  listPaymentsForAdmin,
+  toOwnerPaymentDto,
+} from '@/services/subscription/paymentLedgerService';
+import type { Actor } from '@/models/types/subscription.types';
+import { toDisplayName } from '@/utils/catalogNames';
 import { respondToStartTrial } from '@/routes/rep';
 
 const router = Router();
@@ -2578,6 +2611,334 @@ router.post(
       'ADMIN'
     );
     return respondToStartTrial(res, result);
+  })
+);
+
+// ── Subscription money actions (Stage 3) ──────────────────────────────────
+//
+// EVERY route below carries requireRole('ADMIN'), the reads included (E39).
+// The router's default gate is MODEL_ARTIST — a 3D-artist role — and the
+// revenue list, the cash queue and the refund button are not theirs to see.
+
+function subscriptionFail(res: Response, status: number, code: string, message: string): void {
+  res.status(status).json({ status: 'error', code, message });
+}
+
+/** The admin as an Actor, role from requireRole's fresh read. */
+function adminActor(req: { user?: { userId: string; role?: Actor['role'] } }): Actor {
+  return { userId: new Types.ObjectId(req.user!.userId), role: req.user!.role ?? 'ADMIN' };
+}
+
+/** Malformed → null. Not-found is decided per route (some act on a deleted catalog's rows). */
+function catalogIdParam(raw: string): Types.ObjectId | null {
+  return Types.ObjectId.isValid(raw) ? new Types.ObjectId(raw) : null;
+}
+
+/** A live catalog, or a 404 — for the routes that need an owner to write against. */
+async function liveCatalogOr404(res: Response, raw: string) {
+  const id = catalogIdParam(raw);
+  const catalog = id ? await Catalog.findOne({ _id: id, deletedAt: null }).exec() : null;
+  if (!catalog) {
+    subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
+    return null;
+  }
+  return catalog;
+}
+
+/** The ONE mapping from a manual-payment decision to a response. */
+async function respondToDecision(
+  res: Response,
+  catalogId: Types.ObjectId,
+  ownerUserId: Types.ObjectId | null,
+  result: DecideManualPaymentResult
+): Promise<void> {
+  switch (result.outcome) {
+    case 'VERIFIED':
+      res.status(200).json({
+        status: 'success',
+        paymentRecord: result.record,
+        subscription: ownerUserId ? await getSubscriptionStatus(catalogId, ownerUserId) : null,
+      });
+      return;
+    case 'REJECTED':
+      res.status(200).json({ status: 'success', paymentRecord: result.record });
+      return;
+    case 'NOT_FOUND':
+      return subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment request was not found.');
+    case 'ALREADY_DECIDED':
+      return subscriptionFail(
+        res,
+        409,
+        'ALREADY_DECIDED',
+        'This payment request has already been verified or rejected.'
+      );
+    case 'CATALOG_DELETED':
+      return subscriptionFail(
+        res,
+        409,
+        'CATALOG_DELETED',
+        'That catalog has been deleted; the request was rejected.'
+      );
+    case 'AMOUNT_MISMATCH':
+      res.status(422).json({
+        status: 'error',
+        code: 'AMOUNT_MISMATCH',
+        message:
+          'The amount collected does not match the plan price. To verify it anyway, ' +
+          'send override: true with a note of at least 20 characters.',
+        quotedPaise: result.quotedPaise,
+        amountPaise: result.amountPaise,
+      });
+      return;
+    case 'COLLECTOR_NOT_FOUND':
+      return subscriptionFail(res, 422, 'COLLECTOR_NOT_FOUND', 'That collector account was not found.');
+  }
+}
+
+/**
+ * POST /admin/catalogs/:id/subscription/manual-payment — Door 3, the admin's
+ * half. VERIFY / REJECT a rep's pending request, or CREATE_AND_VERIFY when
+ * the admin collected the money themselves (both actors stored, AC-6.4).
+ * Only a VERIFY transition applies a period (AC-6.3), and it applies once:
+ * the second VERIFY on the same row is a 409. A soft-deleted or missing
+ * catalog auto-rejects the request (E37); an amount that differs from the
+ * quote needs an explicit override (E12).
+ */
+router.post(
+  '/catalogs/:id/subscription/manual-payment',
+  requireRole('ADMIN'),
+  validateBody(adminManualPaymentSchema),
+  asyncHandler(async (req, res) => {
+    const catalogId = catalogIdParam(req.params.id);
+    if (!catalogId) {
+      return subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
+    }
+    const body = req.body as AdminManualPaymentInput;
+    const admin = adminActor(req);
+    // Deleted catalogs are looked up WITHOUT the deletedAt filter here: a
+    // VERIFY/REJECT on a gone catalog must still reach the service, which is
+    // what rejects the row and answers CATALOG_DELETED.
+    const catalog = await Catalog.findOne({ _id: catalogId }).select({ userId: 1, deletedAt: 1 }).exec();
+    const ownerUserId = catalog && !catalog.deletedAt ? catalog.userId : null;
+
+    if (body.action === 'CREATE_AND_VERIFY') {
+      if (!ownerUserId) {
+        return subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
+      }
+      const { action: _action, ...input } = body;
+      const result = await createAndVerifyManualPayment(catalogId, ownerUserId, admin, input);
+      return respondToDecision(res, catalogId, ownerUserId, result);
+    }
+
+    const result = await decideManualPayment(catalogId, admin, body);
+    return respondToDecision(res, catalogId, ownerUserId, result);
+  })
+);
+
+/**
+ * GET /admin/subscriptions/manual-payments?status= — the approval queue,
+ * newest first. Opaque catalog ids plus a display name; no owner contact.
+ * STATIC, declared before nothing parameterised — but kept above
+ * GET /subscriptions for readability.
+ */
+router.get(
+  '/subscriptions/manual-payments',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const query = adminManualPaymentsQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      return subscriptionFail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        query.error.issues[0]?.message ?? 'Invalid query'
+      );
+    }
+    const items = await listManualPayments(query.data.status, query.data.limit);
+    res.status(200).json({ status: 'success', items });
+  })
+);
+
+/**
+ * GET /admin/subscriptions?state=EXPIRING_7D|GRACE|PAUSED|TRIAL — the
+ * collections list: who needs chasing, soonest first, cursor-paginated.
+ */
+router.get(
+  '/subscriptions',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const query = adminSubscriptionsQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      return subscriptionFail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        query.error.issues[0]?.message ?? 'Invalid query'
+      );
+    }
+    const result = await listSubscriptionsByState(
+      query.data.state,
+      query.data.cursor,
+      query.data.limit
+    );
+    if (result.outcome === 'INVALID_CURSOR') {
+      return subscriptionFail(res, 400, 'INVALID_CURSOR', 'That cursor is not valid.');
+    }
+    res.status(200).json({ status: 'success', items: result.items, nextCursor: result.nextCursor });
+  })
+);
+
+/**
+ * GET /admin/catalogs/:id/subscription — the per-catalog panel: the owner's
+ * status DTO plus the ledger with the admin's extra columns (outcome note,
+ * actors, refundability). Answers for a catalog that is gone too, with
+ * `subscription: null` — an orphan payment's catalog is by definition gone,
+ * and its ledger is exactly what the admin came to see.
+ */
+router.get(
+  '/catalogs/:id/subscription',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const catalogId = catalogIdParam(req.params.id);
+    if (!catalogId) {
+      return subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
+    }
+    const catalog = await Catalog.findOne({ _id: catalogId })
+      .select({ userId: 1, name: 1, deletedAt: 1 })
+      .exec();
+    const live = catalog && !catalog.deletedAt;
+    const [subscription, payments] = await Promise.all([
+      live ? getSubscriptionStatus(catalogId, catalog.userId) : Promise.resolve(null),
+      listPaymentsForAdmin(catalogId),
+    ]);
+    if (!live && payments.length === 0) {
+      return subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
+    }
+    res.status(200).json({
+      status: 'success',
+      catalog: {
+        id: catalogId.toHexString(),
+        name: catalog ? toDisplayName(catalog.name) : '',
+        deleted: !live,
+      },
+      subscription,
+      payments,
+    });
+  })
+);
+
+/**
+ * POST /admin/catalogs/:id/subscription/comp — Door 4. COMPED until a date,
+ * uncapped, with a zero-amount COMP row naming the admin.
+ */
+router.post(
+  '/catalogs/:id/subscription/comp',
+  requireRole('ADMIN'),
+  validateBody(compSchema),
+  asyncHandler(async (req, res) => {
+    const catalog = await liveCatalogOr404(res, req.params.id);
+    if (!catalog) return;
+    const body = req.body as CompInput;
+    const catalogId = catalog._id as Types.ObjectId;
+    await applyComp({
+      catalogId,
+      ownerUserId: catalog.userId,
+      until: body.until,
+      actor: adminActor(req),
+      note: body.note,
+    });
+    res.status(200).json({
+      status: 'success',
+      subscription: await getSubscriptionStatus(catalogId, catalog.userId),
+    });
+  })
+);
+
+/**
+ * POST /admin/catalogs/:id/subscription/extend-grace — more days to pay,
+ * only while the row is GRACE. Anything else is a 409.
+ */
+router.post(
+  '/catalogs/:id/subscription/extend-grace',
+  requireRole('ADMIN'),
+  validateBody(extendGraceSchema),
+  asyncHandler(async (req, res) => {
+    const catalog = await liveCatalogOr404(res, req.params.id);
+    if (!catalog) return;
+    const catalogId = catalog._id as Types.ObjectId;
+    const result = await extendGrace(catalogId, adminActor(req), req.body as ExtendGraceInput);
+    if (result.outcome === 'NOT_IN_GRACE') {
+      return subscriptionFail(
+        res,
+        409,
+        'NOT_IN_GRACE',
+        'Grace can only be extended while the subscription is in its grace period.'
+      );
+    }
+    res.status(200).json({
+      status: 'success',
+      subscription: await getSubscriptionStatus(catalogId, catalog.userId),
+    });
+  })
+);
+
+/**
+ * POST /admin/catalogs/:id/subscription/refund — the B3 exception: refund ONE
+ * PAID row, in full, at Razorpay. The row must be flagged DUPLICATE_SUSPECTED,
+ * or the admin overrides with a note of at least 30 characters (the E5
+ * orphan-payment case). Never touches the period (AC-5.4); metered per admin
+ * (E43). Looked up WITHOUT the deletedAt filter — an orphan payment's catalog
+ * is, by definition, gone.
+ */
+router.post(
+  '/catalogs/:id/subscription/refund',
+  requireRole('ADMIN'),
+  validateBody(refundSchema),
+  asyncHandler(async (req, res) => {
+    const catalogId = catalogIdParam(req.params.id);
+    if (!catalogId) {
+      return subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+    }
+    const result = await refundPayment(catalogId, adminActor(req), req.body as RefundInput);
+    switch (result.outcome) {
+      case 'REFUNDED':
+        res.status(201).json({ status: 'success', paymentRecord: toOwnerPaymentDto(result.record) });
+        return;
+      case 'NOT_FOUND':
+        return subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+      case 'NOT_REFUNDABLE':
+        return subscriptionFail(
+          res,
+          422,
+          'NOT_REFUNDABLE',
+          'Only an online payment can be refunded here. Cash and comp entries have no provider payment.'
+        );
+      case 'OVERRIDE_REQUIRED':
+        return subscriptionFail(
+          res,
+          422,
+          'OVERRIDE_REQUIRED',
+          'This payment is not flagged as a duplicate. To refund it anyway, send override: true ' +
+            'with a note of at least 30 characters.'
+        );
+      case 'ALREADY_REFUNDED':
+        return subscriptionFail(res, 409, 'ALREADY_REFUNDED', 'This payment has already been refunded.');
+      case 'RATE_LIMITED':
+        res.status(429).json({
+          status: 'error',
+          code: 'RATE_LIMITED',
+          message: 'Refund limit reached for this hour.',
+          retryAfter: result.retryAfter,
+        });
+        return;
+      case 'PROVIDER_UNAVAILABLE':
+        return subscriptionFail(
+          res,
+          503,
+          'PAYMENTS_UNAVAILABLE',
+          "Couldn't reach the payment service. Try again in a minute."
+        );
+    }
   })
 );
 

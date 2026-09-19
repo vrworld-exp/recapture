@@ -195,6 +195,48 @@ const Map<String, CatalogErrorCopy> _copy = {
     'The owner can renew a plan instead.',
   ),
 
+  // ── Payments (Stage 3) — the admin's decisions and the owner's checkout ──
+  'PAYMENTS_UNAVAILABLE': CatalogErrorCopy(
+    "Couldn't reach the payment service.",
+    'Try again in a minute.',
+  ),
+  'ALREADY_DECIDED': CatalogErrorCopy(
+    'This payment request has already been verified or rejected.',
+    'The list will refresh with the decision.',
+  ),
+  'AMOUNT_MISMATCH': CatalogErrorCopy(
+    'The amount collected does not match the plan price.',
+    'To verify it anyway, tick the override and explain why (20+ characters).',
+  ),
+  'CATALOG_DELETED': CatalogErrorCopy(
+    'That catalog has been deleted, so the request was rejected.',
+    null,
+  ),
+  'OVERRIDE_REQUIRED': CatalogErrorCopy(
+    'This payment is not flagged as a duplicate.',
+    'To refund it anyway, tick the override and explain why (30+ characters).',
+  ),
+  'NOT_REFUNDABLE': CatalogErrorCopy(
+    'Only an online payment can be refunded here.',
+    'Cash and complimentary entries have no provider payment to reverse.',
+  ),
+  'ALREADY_REFUNDED': CatalogErrorCopy(
+    'This payment has already been refunded.',
+    null,
+  ),
+  'NOT_IN_GRACE': CatalogErrorCopy(
+    'Grace can only be extended while the subscription is in its grace period.',
+    null,
+  ),
+  'PAYMENT_NOT_FOUND': CatalogErrorCopy(
+    'That payment was not found.',
+    'Refresh to see what changed.',
+  ),
+  'COLLECTOR_NOT_FOUND': CatalogErrorCopy(
+    'That collector account was not found.',
+    null,
+  ),
+
   // ── Request-level ─────────────────────────────────────────────────────────
   'INVALID_REQUEST': CatalogErrorCopy(
     'Some of these details cannot be saved as they are.',

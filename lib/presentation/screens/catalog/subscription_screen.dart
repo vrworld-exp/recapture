@@ -8,22 +8,30 @@
 //   • Count days. `daysLeft` is the server's (D6) and is printed verbatim.
 //   • Count dishes. `threeDDishCount` is the server's, over the same list the
 //     publish gate counts (C1), so the usage row and the gate agree.
-//   • Take money. There is no Pay / Renew / Upgrade button in this stage —
-//     [_CheckoutSlot] is the named place Stage 3 fills, and until then the
-//     line says who to talk to.
+//   • Decide that a payment happened. The Pay / Renew / Upgrade button opens
+//     Razorpay INSIDE the app and then [CheckoutNotifier] polls the server
+//     until it says ACTIVE (§7 rule 1). The SDK's "success" is never shown as
+//     "paid"; the server's status is. On web there is no SDK (README C7), so
+//     the button gives way to "Pay from the ReCapture app on your phone".
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/catalog/checkout_adapter.dart';
+import '../../../application/catalog/checkout_notifier.dart';
+import '../../../application/catalog/payment_history_notifier.dart';
 import '../../../application/catalog/subscription_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_subscription.dart';
+import '../../../domain/entities/subscription_payment.dart';
 import '../../../utils/analytics.dart';
+import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 
 class SubscriptionScreen extends ConsumerStatefulWidget {
@@ -43,6 +51,19 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
   @override
   Widget build(BuildContext context) {
     final subscription = ref.watch(subscriptionProvider);
+
+    // The moment the server says ACTIVE, the ledger has a new row: refresh it
+    // here, once, rather than making the history section watch the checkout.
+    ref.listen<CheckoutState>(checkoutProvider, (previous, next) {
+      if (next.phase == CheckoutPhase.done &&
+          previous?.phase != CheckoutPhase.done) {
+        ref.invalidate(paymentHistoryProvider);
+        CatalogFeedback.confirm(
+          CatalogFeedback.of(context),
+          'Payment received — your plan is active.',
+        );
+      }
+    });
 
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
@@ -92,23 +113,38 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
 }
 
 /// The screen's content, over a loaded subscription. Public so the widget
-/// test can render every status line without a provider.
-class SubscriptionBody extends StatefulWidget {
+/// test can render every status line with only the payment providers faked.
+class SubscriptionBody extends ConsumerStatefulWidget {
   const SubscriptionBody({super.key, required this.subscription});
 
   final CatalogSubscription subscription;
 
   @override
-  State<SubscriptionBody> createState() => _SubscriptionBodyState();
+  ConsumerState<SubscriptionBody> createState() => _SubscriptionBodyState();
 }
 
-class _SubscriptionBodyState extends State<SubscriptionBody> {
+class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
   BillingInterval _interval = BillingInterval.monthly;
+
+  /// The plan the button pays for. Starts on the plan that is running (a
+  /// renewal is the common case) and otherwise on the first tier; tapping a
+  /// card moves it.
+  PlanId? _selectedPlan;
+
+  PlanId get _effectivePlan {
+    final chosen = _selectedPlan;
+    if (chosen != null) return chosen;
+    final current = widget.subscription.planId;
+    if (current != null && current != PlanId.unknown) return current;
+    final first = widget.subscription.plans.plans.firstOrNull?.planId;
+    return first ?? PlanId.taste;
+  }
 
   @override
   Widget build(BuildContext context) {
     final subscription = widget.subscription;
     final textTheme = Theme.of(context).textTheme;
+    final selected = _effectivePlan;
 
     return ListView(
       key: const ValueKey('subscription_body'),
@@ -148,11 +184,19 @@ class _SubscriptionBodyState extends State<SubscriptionBody> {
             interval: _interval,
             isCurrent: subscription.planId == plan.planId &&
                 subscription.status.isEntitled,
+            isSelected: plan.planId == selected,
+            onTap: () => setState(() => _selectedPlan = plan.planId),
           ),
           const SizedBox(height: AppSpacing.sm),
         ],
         const SizedBox(height: AppSpacing.md),
-        const _CheckoutSlot(),
+        CheckoutSection(
+          subscription: subscription,
+          planId: selected,
+          interval: _interval,
+        ),
+        const SizedBox(height: AppSpacing.xxl),
+        const PaymentHistorySection(),
         const SizedBox(height: AppSpacing.huge),
       ],
     );
@@ -307,11 +351,17 @@ class _PlanCard extends StatelessWidget {
     required this.plan,
     required this.interval,
     required this.isCurrent,
+    required this.isSelected,
+    required this.onTap,
   });
 
   final PlanDefinition plan;
   final BillingInterval interval;
   final bool isCurrent;
+
+  /// The plan the Pay button is for. A tap moves it here.
+  final bool isSelected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -323,14 +373,25 @@ class _PlanCard extends StatelessWidget {
 
     return AppCard(
       key: ValueKey('subscription_plan_${plan.planId.apiValue}'),
-      border: isCurrent
-          ? BorderSide(color: AppColors.royalGold.withValues(alpha: 0.6))
-          : null,
+      onTap: onTap,
+      border: isSelected
+          ? const BorderSide(color: AppColors.royalGold, width: 1.5)
+          : isCurrent
+              ? BorderSide(color: AppColors.royalGold.withValues(alpha: 0.6))
+              : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              Icon(
+                isSelected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                size: 18,
+                color: isSelected ? AppColors.royalGold : AppColors.textMuted,
+              ),
+              const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(plan.displayName, style: textTheme.titleMedium),
               ),
@@ -417,23 +478,408 @@ class _Feature extends StatelessWidget {
       );
 }
 
-/// Where the Pay / Renew / Upgrade control lands in Stage 3. Until then a
-/// sentence, deliberately: a button that opens nothing is worse than none.
-class _CheckoutSlot extends StatelessWidget {
-  const _CheckoutSlot();
+/// Pay / Renew / Upgrade — ONE button (§9) over the selected plan and
+/// interval, the consent line above it (AC-5.2), and the checkout's progress
+/// under it. On a target without the SDK it is the "pay from your phone" card.
+class CheckoutSection extends ConsumerStatefulWidget {
+  const CheckoutSection({
+    super.key,
+    required this.subscription,
+    required this.planId,
+    required this.interval,
+  });
+
+  final CatalogSubscription subscription;
+  final PlanId planId;
+  final BillingInterval interval;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        key: const ValueKey('subscription_checkout_slot'),
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
-        child: Text(
-          'Talk to your sales rep to activate or change a plan. '
-          'In-app payment is coming soon.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: AppColors.textMuted),
+  ConsumerState<CheckoutSection> createState() => _CheckoutSectionState();
+}
+
+class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
+  @override
+  void initState() {
+    super.initState();
+    if (!ref.read(checkoutAdapterProvider).isSupported) {
+      Analytics.logEvent('checkout_result', {'result': 'unsupported'});
+    }
+  }
+
+  PlanDefinition? get _plan => widget.subscription.plans.byId(widget.planId);
+
+  int get _amountPaise {
+    final plan = _plan;
+    if (plan == null) return 0;
+    return widget.interval == BillingInterval.yearly
+        ? plan.yearlyPricePaise
+        : plan.priceMonthlyPaise;
+  }
+
+  Future<void> _confirmAndPay() async {
+    final plan = _plan;
+    if (plan == null) return;
+    final label = checkoutButtonLabel(widget.subscription, widget.planId);
+    final forfeit = paymentForfeitWarning(widget.subscription);
+    final agreed = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: AppColors.surface1,
+      isScrollControlled: true,
+      builder: (ctx) => _PreCheckoutSheet(
+        planName: plan.displayName,
+        interval: widget.interval,
+        amountPaise: _amountPaise,
+        forfeitWarning: forfeit,
+        buttonLabel: label,
+      ),
+    );
+    if (agreed != true || !mounted) return;
+    await ref.read(checkoutProvider.notifier).pay(
+          planId: widget.planId,
+          interval: widget.interval,
+        );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final adapter = ref.watch(checkoutAdapterProvider);
+    final textTheme = Theme.of(context).textTheme;
+
+    if (!adapter.isSupported) {
+      return AppCard(
+        key: const ValueKey('subscription_pay_from_phone'),
+        child: Row(
+          children: [
+            const Icon(Icons.phone_iphone, color: AppColors.textSecondary),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Pay from the ReCapture app on your phone.',
+                      style: textTheme.bodyMedium),
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    'In-app payment is available on Android and iOS. '
+                    'Your plan and history show here on every device.',
+                    style: textTheme.bodySmall
+                        ?.copyWith(color: AppColors.textMuted),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       );
+    }
+
+    final checkout = ref.watch(checkoutProvider);
+    final subscription = widget.subscription;
+    final label = checkoutButtonLabel(subscription, widget.planId);
+    final forfeit = paymentForfeitWarning(subscription);
+    final plan = _plan;
+
+    return Column(
+      key: const ValueKey('subscription_checkout_slot'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (forfeit != null && checkout.phase != CheckoutPhase.done) ...[
+          Text(
+            forfeit,
+            key: const ValueKey('subscription_forfeit_warning'),
+            style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
+        Text(
+          kPaymentConsentLine,
+          key: const ValueKey('subscription_consent_line'),
+          textAlign: TextAlign.center,
+          style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        _CheckoutProgress(checkout: checkout),
+        if (checkout.phase != CheckoutPhase.activating)
+          AppButton(
+            key: const ValueKey('subscription_pay_button'),
+            label: plan == null
+                ? label
+                : '$label · ${formatPaise(_amountPaise)}'
+                    '${widget.interval == BillingInterval.yearly ? ' / year' : ' / month'}',
+            icon: Icons.lock_outline,
+            isLoading: checkout.isBusy,
+            onPressed: plan == null || checkout.isBusy ? null : _confirmAndPay,
+          ),
+      ],
+    );
+  }
+}
+
+/// What the checkout is doing, in one line under (or instead of) the button.
+class _CheckoutProgress extends StatelessWidget {
+  const _CheckoutProgress({required this.checkout});
+
+  final CheckoutState checkout;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final (String? text, Color color, bool spinner) = switch (checkout.phase) {
+      CheckoutPhase.idle ||
+      CheckoutPhase.quoting ||
+      CheckoutPhase.showingSdk =>
+        (null, AppColors.textMuted, false),
+      CheckoutPhase.activating => (
+          'Payment received, activating…',
+          AppColors.textSecondary,
+          true
+        ),
+      CheckoutPhase.done => ('Your plan is active.', AppColors.success, false),
+      CheckoutPhase.confirming => (
+          "Payment is being confirmed. You'll see it here shortly.",
+          AppColors.textSecondary,
+          false
+        ),
+      CheckoutPhase.unavailable => (
+          "Couldn't reach the payment service, try again in a minute.",
+          AppColors.warning,
+          false
+        ),
+      CheckoutPhase.failed => (
+          checkout.failureCode == 'UNSUPPORTED'
+              ? 'In-app payment is not available on this device.'
+              : 'The payment did not go through. Nothing was charged — '
+                  'you can try again.',
+          AppColors.error,
+          false
+        ),
+    };
+    if (text == null) return const SizedBox.shrink();
+    return Padding(
+      key: ValueKey('subscription_checkout_${checkout.phase.name}'),
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: Row(
+        children: [
+          if (spinner) ...[
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+          ],
+          Expanded(
+            child:
+                Text(text, style: textTheme.bodySmall?.copyWith(color: color)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The terms sheet in front of the SDK: what is being bought, for how much,
+/// the consent sentence again (AC-5.2), and the E9 warning when it applies.
+class _PreCheckoutSheet extends StatelessWidget {
+  const _PreCheckoutSheet({
+    required this.planName,
+    required this.interval,
+    required this.amountPaise,
+    required this.forfeitWarning,
+    required this.buttonLabel,
+  });
+
+  final String planName;
+  final BillingInterval interval;
+  final int amountPaise;
+  final String? forfeitWarning;
+  final String buttonLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final yearly = interval == BillingInterval.yearly;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.lg,
+          AppSpacing.lg,
+          AppSpacing.xxl,
+        ),
+        child: Column(
+          key: const ValueKey('subscription_precheckout_sheet'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Confirm your plan', style: textTheme.titleMedium),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              '$planName · ${yearly ? 'yearly' : 'monthly'}',
+              style: textTheme.bodyLarge,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              '${formatPaise(amountPaise)} ${yearly ? 'per year' : 'per month'}, '
+              'billed now for ${yearly ? '365' : '30'} days.',
+              style: textTheme.bodyMedium
+                  ?.copyWith(color: AppColors.textSecondary),
+            ),
+            if (forfeitWarning != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              Text(
+                forfeitWarning!,
+                style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
+              ),
+            ],
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              kPaymentConsentLine,
+              style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            AppButton(
+              key: const ValueKey('subscription_precheckout_continue'),
+              label: 'Continue to $buttonLabel',
+              icon: Icons.lock_outline,
+              onPressed: () => Navigator.of(context).pop(true),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Not now'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The owner's ledger: `date · ₹amount · method · receipt no`, newest first.
+/// A refund is a row like any other, in a muted style — the history is
+/// honest, and there is no refund ACTION here (AC-5.1).
+class PaymentHistorySection extends ConsumerWidget {
+  const PaymentHistorySection({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final history = ref.watch(paymentHistoryProvider);
+    final textTheme = Theme.of(context).textTheme;
+
+    return Column(
+      key: const ValueKey('subscription_payment_history'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Payment history', style: textTheme.titleMedium),
+        const SizedBox(height: AppSpacing.md),
+        history.when(
+          loading: () => const Padding(
+            padding: EdgeInsets.all(AppSpacing.md),
+            child: Center(child: AppLoadingIndicator()),
+          ),
+          error: (_, __) => Row(
+            children: [
+              Expanded(
+                child: Text(
+                  "Couldn't load your payments.",
+                  style:
+                      textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+                ),
+              ),
+              TextButton(
+                onPressed: () =>
+                    ref.read(paymentHistoryProvider.notifier).refresh(),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+          data: (rows) => rows.isEmpty
+              ? Text(
+                  'No payments yet.',
+                  key: const ValueKey('subscription_payment_history_empty'),
+                  style:
+                      textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+                )
+              : AppCard(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.sm,
+                  ),
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < rows.length; i++) ...[
+                        if (i > 0)
+                          Divider(
+                            height: AppSpacing.md,
+                            color: AppColors.disabled.withValues(alpha: 0.3),
+                          ),
+                        PaymentHistoryRow(record: rows[i]),
+                      ],
+                    ],
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One ledger line. Public so the widget test can render the refund style.
+class PaymentHistoryRow extends StatelessWidget {
+  const PaymentHistoryRow({super.key, required this.record});
+
+  final PaymentRecordSummary record;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final refund = record.kind == PaymentKind.refunded;
+    final pendingCash = record.kind == PaymentKind.manual &&
+        record.verificationStatus == VerificationStatus.pending;
+    final muted = refund || record.kind == PaymentKind.checkoutCreated;
+    final color = muted ? AppColors.textMuted : AppColors.textPrimary;
+    final date = record.createdAt == null
+        ? '—'
+        : formatSubscriptionDate(record.createdAt!);
+    final title = switch (record.kind) {
+      PaymentKind.refunded => 'Refund',
+      PaymentKind.checkoutCreated => 'Order started',
+      PaymentKind.manual when pendingCash => 'Awaiting verification',
+      _ => record.kind.label,
+    };
+
+    return Padding(
+      key: ValueKey('payment_row_${record.id}'),
+      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$date · ${record.methodLabel}',
+                  style: textTheme.bodyMedium?.copyWith(color: color),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$title · ${record.receiptNo}',
+                  style:
+                      textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            '${refund ? '−' : ''}${formatPaise(record.amountPaise)}',
+            style: textTheme.bodyMedium?.copyWith(
+              color: color,
+              fontWeight: muted ? FontWeight.w400 : FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

@@ -32,7 +32,12 @@ import {
 } from '@/models/types/catalog.types';
 import { BULK_PRODUCT_ACTIONS } from '@/validation/catalogSchemas';
 // And for the subscription layer's status vocabulary (the gate's "why").
-import { SUBSCRIPTION_STATUSES } from '@/models/types/subscription.types';
+import {
+  BILLING_INTERVALS,
+  MANUAL_METHODS,
+  PLAN_IDS,
+  SUBSCRIPTION_STATUSES,
+} from '@/models/types/subscription.types';
 
 /**
  * Canonical event names. Every emit references a member of this const; passing
@@ -127,6 +132,27 @@ export const AnalyticsEvent = {
   // `door` says which. Hashed actor only, never the owner's contact.
   SUBSCRIPTION_TRIAL_STARTED: 'subscription_trial_started',
   SUBSCRIPTION_TRIAL_REFUSED: 'subscription_trial_refused',
+  // ── Subscription payments (Doors 2–4, Stage 3) ────────────────────────────
+  // Money events carry the opaque catalog id, plan/interval enums, integer
+  // paise and hashed actor ids — never a Razorpay contact field, never a card
+  // or UPI detail, never the raw webhook body.
+  SUBSCRIPTION_ORDER_CREATED: 'subscription_order_created',
+  SUBSCRIPTION_PAYMENT_RECORDED: 'subscription_payment_recorded',
+  SUBSCRIPTION_PAYMENT_FAILED: 'subscription_payment_failed',
+  SUBSCRIPTION_DUPLICATE_PAYMENT_FLAGGED: 'subscription_duplicate_payment_flagged',
+  SUBSCRIPTION_MANUAL_PAYMENT_SUBMITTED: 'subscription_manual_payment_submitted',
+  SUBSCRIPTION_MANUAL_PAYMENT_DECIDED: 'subscription_manual_payment_decided',
+  SUBSCRIPTION_REFUND_ISSUED: 'subscription_refund_issued',
+  SUBSCRIPTION_GRACE_EXTENDED: 'subscription_grace_extended',
+  // A paid period applied onto a menu that already carries more 3D dishes
+  // than the plan covers (E11). Activation is never blocked; this is the
+  // admin-side record of the nudge the owner received.
+  SUBSCRIPTION_OVER_CAP_ON_ACTIVATE: 'subscription_over_cap_on_activate',
+  // The webhook refused or could not place a delivery. `reason` is the whole
+  // diagnosis — the body is never logged.
+  RAZORPAY_WEBHOOK_REJECTED: 'razorpay_webhook_rejected',
+  // An in-app alert fanned out to every ADMIN user (services/subscription/adminAlerts.ts).
+  ADMIN_ALERT_SENT: 'admin_alert_sent',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
   // ── Pre-printed standee inventory ─────────────────────────────────────────
   // The MINT, not the code. A code value is a public identifier for a specific
@@ -925,6 +951,107 @@ const subscriptionTrialRefusedProps = z
   })
   .strict();
 
+const subscriptionOrderCreatedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    plan_id: z.enum(PLAN_IDS),
+    interval: z.enum(BILLING_INTERVALS),
+    amount_paise: z.number().int().nonnegative(),
+    /** True when the open order was handed back instead of a new one minted. */
+    reused: z.boolean(),
+  })
+  .strict();
+
+const subscriptionPaymentRecordedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    source: z.enum(['ONLINE', 'MANUAL', 'COMP']),
+    /** Null for a comp, which is not a plan. */
+    plan_id: z.enum(PLAN_IDS).nullable(),
+    amount_paise: z.number().int().nonnegative(),
+    previous_status: z.enum([...SUBSCRIPTION_STATUSES, 'NONE']),
+    /** Which path applied it: the webhook, the reconciler, or an admin route. */
+    via: z.enum(['WEBHOOK', 'RECONCILE', 'ADMIN']),
+  })
+  .strict();
+
+const subscriptionPaymentFailedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    /**
+     * Razorpay's error code, under a name the emitter will not strip — any
+     * property whose NAME contains "code" is dropped (utils/analytics.ts).
+     */
+    failure_reason: z.string().min(1).max(64),
+  })
+  .strict();
+
+const subscriptionDuplicatePaymentFlaggedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    payment_id_hash: z.string().min(1),
+  })
+  .strict();
+
+const subscriptionManualPaymentSubmittedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    actor_id_hash: z.string().min(1),
+    method: z.enum(MANUAL_METHODS),
+    amount_paise: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const subscriptionManualPaymentDecidedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    decision: z.enum(['VERIFIED', 'REJECTED']),
+    admin_id_hash: z.string().min(1),
+    /** Whether the verifier is the same person who submitted it (AC-6.4). */
+    same_actor: z.boolean(),
+  })
+  .strict();
+
+const subscriptionRefundIssuedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    admin_id_hash: z.string().min(1),
+    amount_paise: z.number().int().nonnegative(),
+    /** True when the row was not flagged DUPLICATE_SUSPECTED and the admin overrode. */
+    override: z.boolean(),
+  })
+  .strict();
+
+const subscriptionGraceExtendedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    admin_id_hash: z.string().min(1),
+    days: z.number().int().positive(),
+  })
+  .strict();
+
+const subscriptionOverCapOnActivateProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    plan_id: z.enum(PLAN_IDS),
+    three_d_dish_count: z.number().int().nonnegative(),
+    three_d_dish_cap: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const razorpayWebhookRejectedProps = z
+  .object({
+    reason: z.enum(['SIGNATURE', 'UNKNOWN_ORDER', 'AMOUNT_MISMATCH', 'MALFORMED']),
+  })
+  .strict();
+
+const adminAlertSentProps = z
+  .object({
+    kind: z.string().min(1).max(40),
+    recipients: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const publishBlockedBySubscriptionProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1120,6 +1247,17 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PUBLISH_BLOCKED_BY_SUBSCRIPTION]: publishBlockedBySubscriptionProps,
   [AnalyticsEvent.SUBSCRIPTION_TRIAL_STARTED]: subscriptionTrialStartedProps,
   [AnalyticsEvent.SUBSCRIPTION_TRIAL_REFUSED]: subscriptionTrialRefusedProps,
+  [AnalyticsEvent.SUBSCRIPTION_ORDER_CREATED]: subscriptionOrderCreatedProps,
+  [AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED]: subscriptionPaymentRecordedProps,
+  [AnalyticsEvent.SUBSCRIPTION_PAYMENT_FAILED]: subscriptionPaymentFailedProps,
+  [AnalyticsEvent.SUBSCRIPTION_DUPLICATE_PAYMENT_FLAGGED]: subscriptionDuplicatePaymentFlaggedProps,
+  [AnalyticsEvent.SUBSCRIPTION_MANUAL_PAYMENT_SUBMITTED]: subscriptionManualPaymentSubmittedProps,
+  [AnalyticsEvent.SUBSCRIPTION_MANUAL_PAYMENT_DECIDED]: subscriptionManualPaymentDecidedProps,
+  [AnalyticsEvent.SUBSCRIPTION_REFUND_ISSUED]: subscriptionRefundIssuedProps,
+  [AnalyticsEvent.SUBSCRIPTION_GRACE_EXTENDED]: subscriptionGraceExtendedProps,
+  [AnalyticsEvent.SUBSCRIPTION_OVER_CAP_ON_ACTIVATE]: subscriptionOverCapOnActivateProps,
+  [AnalyticsEvent.RAZORPAY_WEBHOOK_REJECTED]: razorpayWebhookRejectedProps,
+  [AnalyticsEvent.ADMIN_ALERT_SENT]: adminAlertSentProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
   [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,

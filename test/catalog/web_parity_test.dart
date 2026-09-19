@@ -92,19 +92,17 @@ List<File> _catalogSources() => [
 /// is the right tool there and `model_picker_field.dart` explains why it is not
 /// — and a naive `contains` would fail on every one of them.
 String _stripComments(String source) {
-  final withoutBlocks = source.replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '');
-  return withoutBlocks
-      .split('\n')
-      .map((line) {
-        final marker = line.indexOf('//');
-        if (marker == -1) return line;
-        // Not a comment if the `//` is inside a string — the only case in this
-        // tree is a URL, and cutting there would leave an unbalanced quote that
-        // no assertion below cares about. Keeping it simple is safe here
-        // because every guard searches for identifiers, not punctuation.
-        return line.substring(0, marker);
-      })
-      .join('\n');
+  final withoutBlocks =
+      source.replaceAll(RegExp(r'/\*.*?\*/', dotAll: true), '');
+  return withoutBlocks.split('\n').map((line) {
+    final marker = line.indexOf('//');
+    if (marker == -1) return line;
+    // Not a comment if the `//` is inside a string — the only case in this
+    // tree is a URL, and cutting there would leave an unbalanced quote that
+    // no assertion below cares about. Keeping it simple is safe here
+    // because every guard searches for identifiers, not punctuation.
+    return line.substring(0, marker);
+  }).join('\n');
 }
 
 void main() {
@@ -168,6 +166,7 @@ void main() {
       const seams = [
         'lib/application/catalog/qr_delivery',
         'lib/application/catalog/catalog_link_delivery',
+        'lib/application/catalog/checkout_adapter',
         'lib/application/rep/rep_capabilities',
       ];
 
@@ -198,6 +197,7 @@ void main() {
           'kCanScanQrCode',
           'kCanCaptureDish',
         ],
+        'lib/application/catalog/checkout_adapter': ['kCanCheckoutInApp'],
       };
 
       for (final entry in seamFlags.entries) {

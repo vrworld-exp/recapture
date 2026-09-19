@@ -82,6 +82,35 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   );
   const laneSlots = laneTypes.length > 0 ? (config.reservedLane?.slots ?? 0) : 0;
 
+  // Periodic housekeeping, paced by the loop itself. `nextRunAt` starts at
+  // "now" so the first pass runs on the first poll; `inFlight` stops a slow
+  // run from being started again underneath itself.
+  const periodic = (config.periodicTasks ?? []).map((task) => ({
+    task,
+    nextRunAt: 0,
+    inFlight: false,
+  }));
+  const runPeriodicTasks = (): void => {
+    const nowMs = Date.now();
+    for (const entry of periodic) {
+      if (entry.inFlight || nowMs < entry.nextRunAt) continue;
+      entry.inFlight = true;
+      entry.nextRunAt = nowMs + entry.task.intervalMs;
+      void entry.task
+        .run(new Date(nowMs))
+        .catch((err: unknown) =>
+          log('error', 'Periodic task failed', {
+            task: entry.task.name,
+            workerId,
+            error: toError(err).message,
+          })
+        )
+        .finally(() => {
+          entry.inFlight = false;
+        });
+    }
+  };
+
   const stop = (signal: string): void => {
     if (!running) return;
     running = false;
@@ -110,6 +139,7 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
 
   while (running) {
     pollCount++;
+    runPeriodicTasks();
 
     if (pollCount % heartbeatEveryNPolls === 0) {
       const depth = await getQueueDepth().catch((err: unknown) => {

@@ -23,6 +23,8 @@ import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/admin/admin_batch_detail_screen.dart';
 import '../../presentation/screens/admin/admin_standee_qr_screen.dart';
 import '../../presentation/screens/admin/admin_standees_screen.dart';
+import '../../presentation/screens/admin/admin_subscription_detail_screen.dart';
+import '../../presentation/screens/admin/admin_subscriptions_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_published_screen.dart';
 import '../../presentation/screens/rep/rep_publish_screen.dart';
@@ -244,6 +246,16 @@ abstract final class AppRoutes {
   /// path can never be mistaken for a `:batchId`.
   static const adminStandeeQr = '/admin/standees/:batchId/codes/:code/qr';
 
+  // ── Admin (subscriptions, /admin/subscriptions) ──────────────────────────
+  // Same ADMIN gate as the standee subtree: the backend answers every one of
+  // these routes with requireRole('ADMIN'), reads included (E39).
+
+  /// Collections list and the cash approval queue.
+  static const adminSubscriptions = '/admin/subscriptions';
+
+  /// One restaurant's subscription panel. `:catalogId` = the catalog id.
+  static const adminSubscriptionDetail = '/admin/subscriptions/:catalogId';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -318,6 +330,8 @@ abstract final class AppRouteNames {
   static const adminStandees = 'adminStandees';
   static const adminBatchDetail = 'adminBatchDetail';
   static const adminStandeeQr = 'adminStandeeQr';
+  static const adminSubscriptions = 'adminSubscriptions';
+  static const adminSubscriptionDetail = 'adminSubscriptionDetail';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const submitModel = 'submitModel';
@@ -729,6 +743,19 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.adminStandeeQr,
         builder: (context, state) => AdminStandeeQrScreen(
           code: state.pathParameters['code'] ?? '',
+        ),
+      ),
+      // Static before parameterised, as with the standees pair above.
+      GoRoute(
+        path: AppRoutes.adminSubscriptions,
+        name: AppRouteNames.adminSubscriptions,
+        builder: (_, __) => const AdminSubscriptionsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminSubscriptionDetail,
+        name: AppRouteNames.adminSubscriptionDetail,
+        builder: (context, state) => AdminSubscriptionDetailScreen(
+          catalogId: state.pathParameters['catalogId'] ?? '',
         ),
       ),
       GoRoute(
@@ -1146,10 +1173,18 @@ String? repRedirectFor(
   return AppRoutes.projects;
 }
 
-/// THE `/admin/standees` GATE, as a pure function — same shape and same
-/// reasoning as [repRedirectFor].
+/// The ADMIN-only subtrees: standee inventory and, since Stage 3, the
+/// subscription money screens. Each is gated by PREFIX.
+const List<String> _adminOnlyPrefixes = [
+  AppRoutes.adminStandees,
+  AppRoutes.adminSubscriptions,
+];
+
+/// THE ADMIN-ONLY GATE, as a pure function — same shape and same reasoning
+/// as [repRedirectFor]. Named for the subtree it was written for; it now
+/// covers `/admin/subscriptions` too.
 ///
-/// Scoped to the standee subtree by PREFIX, deliberately not to `/admin`. The
+/// Scoped to those subtrees by PREFIX, deliberately not to `/admin`. The
 /// staff project routes (`/admin/projects/...`) are MODEL_ARTIST surfaces that
 /// predate this one; gating them on ADMIN here would silently revoke a staff
 /// role's own screens.
@@ -1159,9 +1194,10 @@ String? adminStandeesRedirectFor(
   String location, {
   required bool canUseStandees,
 }) {
-  final isStandees = location == AppRoutes.adminStandees ||
-      location.startsWith('${AppRoutes.adminStandees}/');
-  if (!isStandees || canUseStandees) return null;
+  final isAdminOnly = _adminOnlyPrefixes.any(
+    (prefix) => location == prefix || location.startsWith('$prefix/'),
+  );
+  if (!isAdminOnly || canUseStandees) return null;
   // Their own hub, not an error page — a surface you do not have should be
   // invisible rather than broken.
   return AppRoutes.projects;

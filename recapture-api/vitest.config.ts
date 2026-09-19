@@ -28,6 +28,12 @@ export default defineConfig({
       S3_BUCKET_RAW: 'recapture-test-raw',
       S3_BUCKET_ARTIFACTS: 'recapture-test-artifacts',
       CLOUDFRONT_BASE_URL: 'https://test.cloudfront.net',
+      // Razorpay TEST keys so checkout/webhook suites run the configured path
+      // (the provider itself is always faked via setRazorpayClient). The
+      // unconfigured path is exercised through setRazorpayConfiguredForTests.
+      RAZORPAY_KEY_ID: 'rzp_test_vitest0000000',
+      RAZORPAY_KEY_SECRET: 'test-razorpay-key-secret',
+      RAZORPAY_WEBHOOK_SECRET: 'test-razorpay-webhook-secret',
     },
   },
 });

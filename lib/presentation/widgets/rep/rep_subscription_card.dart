@@ -1,7 +1,10 @@
 // lib/presentation/widgets/rep/rep_subscription_card.dart
 //
 // The Subscription card on a delegated restaurant's detail screen, and the
-// one action a rep has on it: Start free trial (Door 1).
+// two actions a rep has on it: Start free trial (Door 1) and Record cash
+// payment (Door 3 — a REQUEST an admin verifies; the card says "Awaiting admin
+// verification" while it is pending). There is no Pay, no refund and no
+// "mark paid" here, and there must never be (AC-5.1, AC-6.5).
 //
 // WHAT THE CARD SAYS is the owner's status line, word for word — a rep on the
 // phone with an owner must be reading the same sentence. WHAT THE BUTTON DOES
@@ -16,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
+import '../../../application/rep/rep_manual_payment_notifier.dart';
 import '../../../application/rep/rep_subscription_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/subscription_copy.dart';
@@ -23,6 +27,7 @@ import '../../../domain/entities/catalog_subscription.dart';
 import '../../../utils/analytics.dart';
 import '../app_button.dart';
 import '../catalog/catalog_feedback.dart';
+import 'rep_cash_payment_sheet.dart';
 
 class RepSubscriptionCard extends ConsumerStatefulWidget {
   const RepSubscriptionCard({
@@ -106,6 +111,8 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
   @override
   Widget build(BuildContext context) {
     final subscription = ref.watch(repSubscriptionProvider(widget.catalogId));
+    final pendingCash =
+        ref.watch(repManualPaymentProvider(widget.catalogId)).valueOrNull;
     final isOnline = ref.watch(isOnlineProvider);
     final textTheme = Theme.of(context).textTheme;
 
@@ -139,7 +146,12 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
             ),
           ],
         ),
-        data: (data) => _body(context, data, isOnline: isOnline),
+        data: (data) => _body(
+          context,
+          data,
+          isOnline: isOnline,
+          pendingCash: pendingCash != null && pendingCash.isPending,
+        ),
       ),
     );
   }
@@ -148,6 +160,7 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
     BuildContext context,
     CatalogSubscription subscription, {
     required bool isOnline,
+    required bool pendingCash,
   }) {
     final textTheme = Theme.of(context).textTheme;
     final tone = subscriptionTone(subscription.status);
@@ -186,7 +199,7 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
           ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        if (subscription.trialAvailable)
+        if (subscription.trialAvailable) ...[
           AppButton.secondary(
             key: const ValueKey('rep_start_trial'),
             label: isOnline ? 'Start free trial' : 'Needs a connection',
@@ -195,14 +208,57 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
             isLoading: _starting,
             // Offline: disabled with a reason, never queued (E40).
             onPressed: isOnline ? () => _startTrial(subscription) : null,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+        ],
+        if (pendingCash)
+          Row(
+            key: const ValueKey('rep_cash_pending_line'),
+            children: [
+              const Icon(Icons.hourglass_top,
+                  size: 16, color: AppColors.warning),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  'Cash payment recorded — awaiting admin verification.',
+                  style:
+                      textTheme.bodySmall?.copyWith(color: AppColors.warning),
+                ),
+              ),
+              TextButton(
+                onPressed: () => _openCashSheet(subscription),
+                child: const Text('View'),
+              ),
+            ],
           )
         else
-          Text(
-            'Owner pays in the app (coming soon)',
-            key: const ValueKey('rep_trial_unavailable'),
-            style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          AppButton.secondary(
+            key: const ValueKey('rep_record_cash'),
+            label: 'Record cash payment',
+            icon: Icons.receipt_long_outlined,
+            isFullWidth: false,
+            onPressed: () => _openCashSheet(subscription),
           ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'The owner pays online in their app. Cash needs an admin to verify.',
+          key: const ValueKey('rep_payment_hint'),
+          style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+        ),
       ],
     );
+  }
+
+  Future<void> _openCashSheet(CatalogSubscription subscription) async {
+    await showRepCashPaymentSheet(
+      context,
+      catalogId: widget.catalogId,
+      restaurantName: widget.restaurantName,
+      plans: subscription.plans,
+      currentPlan: subscription.planId,
+    );
+    if (!mounted) return;
+    // The sheet may have filed a request; the line under the button reads
+    // the same provider it wrote, so nothing more is needed here.
   }
 }

@@ -871,6 +871,44 @@ class _IdentityBlock extends ConsumerWidget {
               ],
             ),
           ),
+
+          // -- Subscriptions (Stage 3) -------------------------------------
+          // The cash approval queue and the collections list. Same ADMIN
+          // gate as the inventory above; the router enforces it too.
+          const SizedBox(height: AppSpacing.md),
+          AppCard(
+            key: const ValueKey('profile_admin_subscriptions'),
+            onTap: () => context.push(AppRoutes.adminSubscriptions),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.payments_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Subscriptions',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.textPrimary),
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Verify cash payments, comps and who is expiring',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: AppColors.textMuted),
+              ],
+            ),
+          ),
         ],
       ],
     );

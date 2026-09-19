@@ -105,7 +105,14 @@ import {
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { validateBody } from '@/middleware/validate';
-import { startTrialSchema } from '@/validation/subscriptionSchemas';
+import {
+  manualPaymentRequestSchema,
+  startTrialSchema,
+} from '@/validation/subscriptionSchemas';
+import {
+  getPendingManualPayment,
+  submitManualPaymentRequest,
+} from '@/services/subscription/manualPaymentService';
 import {
   getSubscriptionStatus,
   startTrial,
@@ -1663,6 +1670,66 @@ router.post(
       'REP'
     );
     return respondToStartTrial(res, result);
+  })
+);
+
+/**
+ * GET /rep/catalogs/:id/subscription/manual-payment-request — the request
+ * still awaiting an admin, or null. The card reads this to say "Awaiting
+ * admin verification" instead of offering the form a second time.
+ */
+router.get(
+  '/catalogs/:id/subscription/manual-payment-request',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+    const paymentRecord = await getPendingManualPayment(catalog._id as Types.ObjectId);
+    res.status(200).json({ status: 'success', paymentRecord });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/subscription/manual-payment-request — Door 3, the
+ * rep's half. The rep took cash / a cheque / a transfer and says so. What this
+ * writes is a MANUAL ledger row in PENDING_VERIFICATION and NOTHING on the
+ * subscription (AC-6.1): a rep cannot activate a restaurant by typing, an
+ * admin verifies. One pending request per catalog — a second submit returns
+ * the first with `existing: true`.
+ *
+ * This is the ONLY payment route on /rep. There is no Pay, no refund, no
+ * "mark paid" (AC-5.1, AC-6.5).
+ */
+router.post(
+  '/catalogs/:id/subscription/manual-payment-request',
+  validateBody(manualPaymentRequestSchema),
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const catalogId = catalog._id as Types.ObjectId;
+    const rate = await consumeRateWindow(`manual-request:${catalogId.toHexString()}`, 5, 3600);
+    if (rate.limited) {
+      return fail(res, 429, 'RATE_LIMITED', 'Too many requests. Please try again shortly.');
+    }
+
+    const result = await submitManualPaymentRequest(
+      catalogId,
+      catalog.userId,
+      { userId: repUserId, role: req.user!.role ?? 'SALES_REP' },
+      req.body
+    );
+    switch (result.outcome) {
+      case 'CREATED':
+        res.status(201).json({ status: 'success', paymentRecord: result.record });
+        return;
+      case 'EXISTING':
+        res.status(200).json({ status: 'success', paymentRecord: result.record, existing: true });
+        return;
+      case 'COLLECTOR_NOT_FOUND':
+        return fail(res, 422, 'COLLECTOR_NOT_FOUND', 'That collector account was not found.');
+    }
   })
 );
 

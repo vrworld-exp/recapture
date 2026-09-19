@@ -968,6 +968,57 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   rep chip), the owner Subscription screen (`_CheckoutSlot` is Stage 3's
   place), the rep card with Start free trial — NEVER through the offline queue
   (E40) — and both publish screens' Fix for the two subscription gates.
+- **Money moves through ONE activation primitive and ONE automated door
+  (Stage 3, backend only — the client half is not built).**
+  `subscriptionService.applyPaidPeriod` is the only thing that writes an
+  ACTIVE paid period, and it is imported by exactly two files: the webhook
+  service and the manual-payment service (a comp has its own variant,
+  `applyComp`; `tests/subscription-admin-actions.test.ts` greps `src/` to keep
+  it that way). `periodStart = paidAt`, ALWAYS — out of GRACE, PAUSED, TRIAL,
+  COMPED or a running ACTIVE period (an early renewal forfeits the unused days;
+  the order response says how many as `daysForfeited`). Over-cap on activation
+  is a notification to the owner, never a block (E11).
+  - **Razorpay lives behind `providers/razorpay.ts`** (the Meshy seam pattern:
+    `setRazorpayClient` for tests, CI never calls the live API). `RAZORPAY_KEY_ID`
+    / `_KEY_SECRET` / `_WEBHOOK_SECRET` are present-or-absent TOGETHER and the
+    key's `rzp_live_`/`rzp_test_` prefix must match `NODE_ENV` or boot refuses
+    (B8). Absent → `POST /catalog/subscription/order` answers 503
+    `PAYMENTS_UNAVAILABLE` and nothing else changes. Order `notes` carry
+    `{catalogId, planId, interval}` and NOTHING else — no phone, no name.
+  - **`POST /webhooks/razorpay` is mounted with `express.raw` ABOVE
+    `express.json` in `app.ts`** — the HMAC is over the exact bytes. It is the
+    one unauthenticated POST in the API; the signature IS the auth. A bad
+    signature is 401; a good one is ALWAYS 200, whatever happened next
+    (Razorpay disables a webhook after repeated non-2xx, E4). Never move
+    `express.json`, and never let a business outcome become an HTTP failure
+    there. Two phases, each idempotent: the PAID row keyed on
+    `payment:<paymentId>`, then ONE conditional write on `appliedAt: null`.
+    `reconcileService.reconcileOpenOrders` (worker `periodicTasks`, every
+    `SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS`) is the safety net — it re-runs
+    half-applied rows and asks Razorpay about open/late orders, converging on
+    the same keys.
+  - **The ledger is append-only.** Post-insert writes on a `PaymentRecord` are
+    exactly: a MANUAL row's verification fields (once, conditional), a PAID
+    row's `appliedAt` (once, conditional), a CHECKOUT_CREATED row's `expiresAt`
+    (closing it), and a REFUNDED row's `note` when Razorpay reports the refund's
+    fate. There is no generic update helper; do not add one. The unique index
+    on `providerOrderId` is scoped by `kind` so a checkout row and its PAID row
+    may share an order id. `subscriptionId` is optional — an owner may pay
+    before any subscription row exists.
+  - **Roles.** A rep has ONE payment route, `POST /rep/catalogs/:id/subscription/
+    manual-payment-request`, which writes a PENDING row and nothing on the
+    subscription; there is no Pay, no refund and no "mark paid" on `/rep`. Every
+    admin money route AND read (`manual-payment` decide, comp, extend-grace,
+    refund, `GET /admin/subscriptions`, the manual-payment queue) carries its own
+    `requireRole('ADMIN')` — the router default is MODEL_ARTIST (E39). Refunds
+    are the B3 exception only: a `DUPLICATE_SUSPECTED` row, or `override: true`
+    with a ≥30-char note (the E5 orphan case), full amount, metered per admin
+    (`ADMIN_REFUND_*`), and the period is never touched.
+  - **Alerts.** `services/subscription/adminAlerts.ts → alertAdmins()` is one
+    in-app notification to every `role: 'ADMIN'` user (a `USERS` audience,
+    never `ALL`) plus a `console.error`; it never throws. Used for amount
+    mismatch, unknown order, orphan payment, duplicate, external refund, failed
+    refund and silent webhooks.
 - **Analytics are a PROXY, not a redirect.** Mirage's three report endpoints are
   admin-scoped and its own in-code note forbids opening them to client scope.
   ReCapture reads them with its admin credential and FORCES `restaurant` from the

@@ -99,6 +99,7 @@ dependencies:
   # `withData` is set per-platform at the call site (see model_file_picker.dart):
   # a 100 MiB model must not be read into RAM on a phone just to be uploaded.
   file_picker: ^12.2.0
+  razorpay_flutter: ^1.4.6
 
 dependency_overrides:
   # permission_handler_android 14.0.0 requires AGP 9 / Kotlin 2.3. Its

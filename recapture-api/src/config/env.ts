@@ -640,9 +640,95 @@ const envSchema = z.object({
   WORKER_PUBLISH_LANE_SLOTS: z.coerce.number().int().nonnegative().default(1),
   /** Heartbeat log (with queue-depth breakdown) every N polls. */
   WORKER_HEARTBEAT_EVERY_N_POLLS: z.coerce.number().int().positive().default(20),
+
+  // ── Razorpay (subscription payments — docs/subscription/stage-03-payments.md) ─
+  /**
+   * The Razorpay key pair and the webhook signing secret. ALL THREE optional
+   * in the schema, for the MESHY_API_KEY reason: a deployment (or a dev shell,
+   * or CI) without them must still boot — checkout then answers 503
+   * PAYMENTS_UNAVAILABLE and the webhook 401s everything. The superRefine
+   * below is what stops a HALF-configured deployment: the three are
+   * present-or-absent together, and the key's prefix must match NODE_ENV
+   * (B8 — a live key in dev, or a test key in production, refuses to boot).
+   *
+   * KEY_ID is the one value the client receives (it is public by design —
+   * the SDK needs it); KEY_SECRET and WEBHOOK_SECRET never leave the process.
+   */
+  RAZORPAY_KEY_ID: z.string().min(1).optional(),
+  RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
+  RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+  /**
+   * How often the worker reconciles open checkout orders against Razorpay and
+   * re-applies half-recorded payments (ms). The floor a missed webhook can
+   * delay an activation by; five minutes is the plan's B1 bound.
+   */
+  SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+  /**
+   * Per-ADMIN refund window (E43): a leaked admin token cannot drain the
+   * Razorpay balance in a loop, and a real admin never needs six refunds an
+   * hour. Same generic consumeRateWindow as the other admin meters.
+   */
+  ADMIN_REFUND_MAX_PER_WINDOW: z.coerce.number().int().positive().default(5),
+  ADMIN_REFUND_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
 });
 
-const parsed = envSchema.safeParse(process.env);
+/** Razorpay issues `rzp_live_…` and `rzp_test_…` key ids; the prefix is the mode. */
+const RAZORPAY_LIVE_PREFIX = 'rzp_live_';
+
+/**
+ * The cross-field rules Zod's per-key schema cannot express — a `superRefine`
+ * on the whole object, so the failure lands in `fieldErrors` next to the
+ * variable that caused it and boot refuses exactly like a missing required var.
+ */
+const refinedEnvSchema = envSchema.superRefine((cfg, ctx) => {
+  const razorpayKeys = [
+    ['RAZORPAY_KEY_ID', cfg.RAZORPAY_KEY_ID],
+    ['RAZORPAY_KEY_SECRET', cfg.RAZORPAY_KEY_SECRET],
+    ['RAZORPAY_WEBHOOK_SECRET', cfg.RAZORPAY_WEBHOOK_SECRET],
+  ] as const;
+  const present = razorpayKeys.filter(([, value]) => value !== undefined);
+  if (present.length > 0 && present.length < razorpayKeys.length) {
+    const missing = razorpayKeys.filter(([, value]) => value === undefined).map(([name]) => name);
+    for (const name of missing) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message:
+          `${name} is required when any RAZORPAY_* variable is set ` +
+          `(missing: ${missing.join(', ')}). Set all three or none.`,
+      });
+    }
+  }
+
+  if (cfg.RAZORPAY_KEY_ID !== undefined) {
+    const isLive = cfg.RAZORPAY_KEY_ID.startsWith(RAZORPAY_LIVE_PREFIX);
+    if (cfg.NODE_ENV === 'production' && !isLive) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['RAZORPAY_KEY_ID'],
+        message: `RAZORPAY_KEY_ID must be a live key (${RAZORPAY_LIVE_PREFIX}…) when NODE_ENV=production.`,
+      });
+    }
+    if (cfg.NODE_ENV !== 'production' && isLive) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['RAZORPAY_KEY_ID'],
+        message:
+          `RAZORPAY_KEY_ID is a LIVE key but NODE_ENV=${cfg.NODE_ENV} — ` +
+          'use an rzp_test_ key outside production.',
+      });
+    }
+  }
+});
+
+/**
+ * The complete schema, rules included — exported so a test can exercise the
+ * cross-field refinements against a hand-built object without re-importing
+ * this module (which parses the REAL process.env and exits on failure).
+ */
+export const ENV_SCHEMA = refinedEnvSchema;
+
+const parsed = refinedEnvSchema.safeParse(process.env);
 
 if (!parsed.success) {
   console.error('❌ Invalid environment variables:');

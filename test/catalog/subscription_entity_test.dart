@@ -5,14 +5,19 @@
 // the seven status lines / chips read exactly as the table says — from the
 // SERVER's daysLeft, never from a clock.
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/application/catalog/checkout_adapter.dart';
+import 'package:recapture/data/repositories/payments_repository.dart';
 import 'package:recapture/domain/catalog/subscription_copy.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_subscription.dart';
+import 'package:recapture/domain/entities/subscription_payment.dart';
 import 'package:recapture/domain/entities/rep_activation.dart';
 import 'package:recapture/presentation/screens/catalog/subscription_screen.dart';
 
 import 'catalog_entities_test.dart' as golden;
+import 'payments_fakes.dart';
 
 /// A `SubscriptionStatusDto`, in the shape the server emits it.
 Map<String, dynamic> subscriptionPayload({
@@ -251,52 +256,144 @@ void main() {
   });
 
   group('the owner screen body', () {
-    Future<void> pump(WidgetTester tester, Map<String, dynamic> payload) {
-      // Tall enough that the whole list — three plan cards and the checkout
-      // slot under them — is built; a ListView builds nothing off-screen.
+    Future<void> pump(
+      WidgetTester tester,
+      Map<String, dynamic> payload, {
+      bool checkoutSupported = true,
+    }) {
+      // Tall enough that the whole list — three plan cards, the checkout and
+      // the history under them — is built; a ListView builds nothing off-screen.
       tester.view.physicalSize = const Size(1080, 4000);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.reset);
-      return tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SubscriptionBody(
-            subscription: CatalogSubscription.fromMap(payload),
+      return tester.pumpWidget(ProviderScope(
+        overrides: [
+          paymentsRepositoryProvider
+              .overrideWithValue(FakePaymentsRepository()),
+          checkoutAdapterProvider.overrideWithValue(
+              FakeCheckoutAdapter(supported: checkoutSupported)),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: SubscriptionBody(
+              subscription: CatalogSubscription.fromMap(payload),
+            ),
           ),
         ),
       ));
     }
 
-    testWidgets('renders every status line and never a Pay button',
+    testWidgets('renders every status line, with ONE button labelled by status',
         (tester) async {
-      final cases = <Map<String, dynamic>, String>{
-        subscriptionPayload(status: 'NONE', daysLeft: null):
-            'No subscription yet',
-        subscriptionPayload(status: 'TRIAL', daysLeft: 12):
-            'Free trial — 12 days left',
-        subscriptionPayload(status: 'ACTIVE', planName: 'Taste plan'):
-            'Active until',
-        subscriptionPayload(status: 'GRACE', daysLeft: 2): 'Payment overdue',
-        subscriptionPayload(status: 'PAUSED', daysLeft: null): '3D menu paused',
-        subscriptionPayload(status: 'CANCELLED', daysLeft: null):
-            'Cancelled — resubscribe anytime',
-        subscriptionPayload(status: 'COMPED'): 'Complimentary until',
+      final cases = <Map<String, dynamic>, (String, String)>{
+        subscriptionPayload(status: 'NONE', daysLeft: null): (
+          'No subscription yet',
+          'Pay'
+        ),
+        subscriptionPayload(status: 'TRIAL', daysLeft: 12): (
+          'Free trial — 12 days left',
+          'Pay'
+        ),
+        subscriptionPayload(
+          status: 'ACTIVE',
+          planId: 'TASTE',
+          planName: 'Taste plan',
+        ): ('Active until', 'Renew'),
+        subscriptionPayload(status: 'GRACE', planId: 'TASTE', daysLeft: 2): (
+          'Payment overdue',
+          'Renew'
+        ),
+        subscriptionPayload(status: 'PAUSED', daysLeft: null): (
+          '3D menu paused',
+          'Pay'
+        ),
+        subscriptionPayload(status: 'CANCELLED', daysLeft: null): (
+          'Cancelled — resubscribe anytime',
+          'Pay'
+        ),
+        subscriptionPayload(status: 'COMPED'): ('Complimentary until', 'Pay'),
       };
       for (final entry in cases.entries) {
+        await tester.pumpWidget(const SizedBox());
         await pump(tester, entry.key);
-        expect(find.textContaining(entry.value), findsOneWidget,
+        await tester.pump();
+        expect(find.textContaining(entry.value.$1), findsOneWidget,
             reason: 'status ${entry.key['status']}');
-        for (final word in const ['Pay', 'Renew', 'Upgrade now', 'Checkout']) {
-          expect(find.widgetWithText(ElevatedButton, word), findsNothing);
-          expect(find.widgetWithText(OutlinedButton, word), findsNothing);
-        }
+        final button = find.byKey(const ValueKey('subscription_pay_button'));
+        expect(button, findsOneWidget, reason: 'status ${entry.key['status']}');
+        expect(
+          find.descendant(
+            of: button,
+            matching: find.textContaining('${entry.value.$2} · ₹'),
+          ),
+          findsOneWidget,
+          reason: 'status ${entry.key['status']}',
+        );
+        // The consent line sits above the button on every status (AC-5.2).
+        expect(find.byKey(const ValueKey('subscription_consent_line')),
+            findsOneWidget);
         expect(find.byKey(const ValueKey('subscription_checkout_slot')),
             findsOneWidget);
       }
     });
 
+    testWidgets('selecting a higher tier than the running plan says Upgrade',
+        (tester) async {
+      await pump(
+        tester,
+        subscriptionPayload(
+          status: 'ACTIVE',
+          planId: 'TASTE',
+          planName: 'Taste plan',
+        ),
+      );
+      await tester.pump();
+      expect(find.textContaining('Renew · ₹1,199 / month'), findsOneWidget);
+
+      await tester
+          .tap(find.byKey(const ValueKey('subscription_plan_MASTERCHEF')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Upgrade · ₹2,499 / month'), findsOneWidget);
+
+      // The E9 warning: days left on a running period are forfeited.
+      expect(find.byKey(const ValueKey('subscription_forfeit_warning')),
+          findsOneWidget);
+      expect(find.textContaining('12 days left on your current period'),
+          findsOneWidget);
+    });
+
+    testWidgets('the pre-checkout sheet carries the consent line (AC-5.2)',
+        (tester) async {
+      await pump(tester, subscriptionPayload(status: 'NONE', daysLeft: null));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('subscription_pay_button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('subscription_precheckout_sheet')),
+          findsOneWidget);
+      expect(find.text(kPaymentConsentLine), findsNWidgets(2));
+      expect(find.textContaining('Continue to Pay'), findsOneWidget);
+    });
+
+    testWidgets('on web there is no Pay button — the phone card instead',
+        (tester) async {
+      await pump(
+        tester,
+        subscriptionPayload(status: 'NONE', daysLeft: null),
+        checkoutSupported: false,
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('subscription_pay_from_phone')),
+          findsOneWidget);
+      expect(
+          find.byKey(const ValueKey('subscription_pay_button')), findsNothing);
+      expect(find.textContaining('Pay from the ReCapture app on your phone'),
+          findsOneWidget);
+    });
+
     testWidgets('the toggle switches the three cards to yearly prices',
         (tester) async {
       await pump(tester, subscriptionPayload(status: 'TRIAL'));
+      await tester.pump();
       expect(find.text('₹1,199 / month'), findsOneWidget);
       expect(find.text('₹10,072 / year'), findsNothing);
 
@@ -307,6 +404,8 @@ void main() {
       expect(find.text('₹15,112 / year'), findsOneWidget);
       expect(find.text('₹20,992 / year'), findsOneWidget);
       expect(find.textContaining('save 30%'), findsNWidgets(3));
+      // And the button follows the toggle.
+      expect(find.textContaining('Pay · ₹10,071.60 / year'), findsOneWidget);
     });
 
     testWidgets('the usage row is the server count against the server cap',
@@ -320,9 +419,65 @@ void main() {
           threeDDishCap: 15,
         ),
       );
+      await tester.pump();
       expect(find.text('17 / 15 (Signature plan)'), findsOneWidget);
       expect(find.textContaining('More 3D dishes than your plan covers'),
           findsOneWidget);
+    });
+
+    testWidgets('the payment history lists rows newest first, refund muted',
+        (tester) async {
+      final repo = FakePaymentsRepository()
+        ..ownerLedger = [
+          PaymentRecordSummary.fromMap(paymentRowPayload(
+            id: '66f0000000000000000000ff',
+            kind: 'REFUNDED',
+            createdAt: '2026-09-19T10:00:00.000Z',
+          )),
+          PaymentRecordSummary.fromMap(paymentRowPayload(
+            id: '66f0000000000000000000a1',
+            kind: 'PAID',
+            amountPaise: 119950,
+          )),
+          PaymentRecordSummary.fromMap(paymentRowPayload(
+            id: '66f0000000000000000000b2',
+            kind: 'MANUAL',
+            method: 'CASH',
+            verificationStatus: 'PENDING_VERIFICATION',
+            createdAt: '2026-09-17T10:00:00.000Z',
+          )),
+        ];
+      tester.view.physicalSize = const Size(1080, 4000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          paymentsRepositoryProvider.overrideWithValue(repo),
+          checkoutAdapterProvider.overrideWithValue(FakeCheckoutAdapter()),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: SubscriptionBody(
+              subscription: CatalogSubscription.fromMap(
+                subscriptionPayload(status: 'ACTIVE', planName: 'Taste plan'),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('subscription_payment_history')),
+          findsOneWidget);
+      expect(find.textContaining('Refund · RC-000000FF'), findsOneWidget);
+      expect(find.text('−₹1,199'), findsOneWidget);
+      expect(find.text('₹1,199.50'), findsOneWidget);
+      expect(find.textContaining('Awaiting verification · RC-000000B2'),
+          findsOneWidget);
+      expect(find.textContaining('19 Sep 2026 · Refund'), findsOneWidget);
+      // No refund ACTION anywhere on the owner's screen (AC-5.1).
+      expect(find.textContaining('Refund duplicate'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Refund…'), findsNothing);
     });
   });
 }

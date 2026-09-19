@@ -177,4 +177,18 @@ export interface WorkerConfig {
    * this instance cannot process are ignored; `slots: 0` disables the lane.
    */
   reservedLane?: { jobTypes: readonly string[]; slots: number };
+  /**
+   * Housekeeping that rides on the poll loop rather than on a job: run at most
+   * once per `intervalMs`, never overlapping itself, and never blocking a
+   * claim (fire-and-forget with its own error log). The subscription
+   * reconciler is the first; anything "every N minutes" belongs here rather
+   * than in a setInterval that cannot drain on shutdown.
+   */
+  periodicTasks?: readonly PeriodicTask[];
+}
+
+export interface PeriodicTask {
+  name: string;
+  intervalMs: number;
+  run: (now: Date) => Promise<unknown>;
 }

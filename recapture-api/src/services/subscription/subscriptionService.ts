@@ -1,8 +1,9 @@
 // src/services/subscription/subscriptionService.ts
 //
-// The subscription as the screens read it, and the two writes this stage
-// allows: a trial start (Door 1, RECAPTURE_SUBSCRIPTION_PLAN.md §4) and the
-// cancel that rides on a catalog delete (§8 C9).
+// The subscription as the screens read it, and the writes on the row: a trial
+// start (Door 1, RECAPTURE_SUBSCRIPTION_PLAN.md §4), the cancel that rides on
+// a catalog delete (§8 C9), and — Stage 3 — the ONE activation primitive
+// (`applyPaidPeriod`) every paid door funnels through, plus its comp variant.
 //
 // No Express types. Every DTO is built field by field — the analytics-proxy
 // rule: nothing spreads a Mongoose document onto the wire.
@@ -18,19 +19,22 @@ import { Types } from 'mongoose';
 
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogSubscription, isEntitledTo3D } from '@/models/CatalogSubscription';
+import { Notification } from '@/models/Notification';
 import { PaymentRecord } from '@/models/PaymentRecord';
 import type { ICatalogSubscription } from '@/models/CatalogSubscription';
 import {
   isUncapped,
+  UNCAPPED_THREE_D,
   type Actor,
   type BillingInterval,
   type PlanCatalog,
+  type PlanDefinition,
   type PlanId,
   type SubscriptionStatus,
 } from '@/models/types/subscription.types';
 import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
-import { countsAsThreeD } from '@/services/subscription/threeDDishCount';
+import { countThreeDDishes, countsAsThreeD } from '@/services/subscription/threeDDishCount';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
 
@@ -74,7 +78,7 @@ export interface SubscriptionStatusDto {
   plans: PlanCatalog;
 }
 
-type SubscriptionRow = Pick<
+export type SubscriptionRow = Pick<
   ICatalogSubscription,
   | 'status'
   | 'planId'
@@ -98,11 +102,31 @@ function daysUntil(when: Date, now: Date): number {
 }
 
 /**
+ * Days a payment made NOW would throw away (E9): a fresh period always starts
+ * at `paidAt` (AC-3.5), so paying while ACTIVE / TRIAL / COMPED forfeits what
+ * was left. GRACE, PAUSED, CANCELLED and "no row" forfeit nothing.
+ */
+export function daysForfeitedFor(
+  row: Pick<ICatalogSubscription, 'status' | 'periodEnd'> | null,
+  now: Date
+): number {
+  if (!row) return 0;
+  switch (row.status) {
+    case 'ACTIVE':
+    case 'TRIAL':
+    case 'COMPED':
+      return daysUntil(row.periodEnd, now);
+    default:
+      return 0;
+  }
+}
+
+/**
  * Which date the status is counting down to, if any. GRACE counts to the end
  * of grace, not of the period that already ended; PAUSED and CANCELLED count
  * to nothing.
  */
-function daysLeftFor(row: SubscriptionRow, now: Date): number | null {
+export function daysLeftFor(row: SubscriptionRow, now: Date): number | null {
   switch (row.status) {
     case 'GRACE':
       return daysUntil(row.graceEndsAt ?? row.periodEnd, now);
@@ -408,6 +432,245 @@ export async function startTrial(
   });
 
   return { outcome: 'STARTED', dto: await getSubscriptionStatus(catalogId, ownerUserId, now) };
+}
+
+// ── The activation primitive (Stage 3) ──────────────────────────────────────
+
+/** Which path is applying the period — an analytics dimension, not an authority. */
+export type ApplyVia = 'WEBHOOK' | 'RECONCILE' | 'ADMIN';
+
+export interface ApplyPaidPeriodInput {
+  catalogId: Types.ObjectId;
+  /** The catalog's owner — written on the row when the payment CREATES it. */
+  ownerUserId: Types.ObjectId;
+  planId: PlanId;
+  interval: BillingInterval;
+  source: 'ONLINE' | 'MANUAL';
+  paidAt: Date;
+  /** The plan AS QUOTED — the frozen copy from the ledger row, never re-read. */
+  planSnapshot: PlanDefinition;
+  standeeIncluded: number;
+  /** For the `subscription_payment_recorded` event. */
+  amountPaise: number;
+  via: ApplyVia;
+}
+
+export interface ApplyPeriodResult {
+  previousStatus: SubscriptionStatus | 'NONE';
+  subscription: ICatalogSubscription;
+  /**
+   * True when the row came out of PAUSED or CANCELLED — Mirage was told to
+   * hide the 3D dishes and must be told to show them again. Stage 5 enqueues
+   * the resume job on this; until then it is returned and logged.
+   */
+  needsArResume: boolean;
+}
+
+/** Every field the previous period may have set that a fresh one must clear. */
+const CLEARED_ON_NEW_PERIOD = { graceEndsAt: null, pausedAt: null, cancelledAt: null } as const;
+
+/**
+ * The row-level write both primitives share: an upsert keyed on the unique
+ * `catalogId`, so a payment on a catalog with no row creates one (an owner may
+ * pay before any trial) and two racing appliers converge on one row. The
+ * loser of a concurrent first-insert gets E11000 from the unique index and
+ * simply runs the same update again — the values are identical by
+ * construction, which is what makes the whole thing idempotent.
+ */
+async function upsertSubscriptionRow(
+  catalogId: Types.ObjectId,
+  ownerUserId: Types.ObjectId,
+  update: Record<string, unknown>
+): Promise<ICatalogSubscription> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const { $setOnInsert: onInsert, ...rest } = update as { $setOnInsert?: object };
+      const doc = await CatalogSubscription.findOneAndUpdate(
+        { catalogId },
+        { ...rest, $setOnInsert: { userId: ownerUserId, ...(onInsert ?? {}) } },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ).exec();
+      if (doc) return doc;
+      throw new Error('subscription upsert returned no document');
+    } catch (err) {
+      if (attempt > 0 || !isDuplicateKey(err)) throw err;
+    }
+  }
+}
+
+async function previousStatusOf(catalogId: Types.ObjectId): Promise<SubscriptionStatus | 'NONE'> {
+  const row = await CatalogSubscription.findOne({ catalogId })
+    .select({ status: 1 })
+    .lean<{ status: SubscriptionStatus }>()
+    .exec();
+  return row?.status ?? 'NONE';
+}
+
+function needsArResumeFrom(previousStatus: SubscriptionStatus | 'NONE'): boolean {
+  return previousStatus === 'PAUSED' || previousStatus === 'CANCELLED';
+}
+
+/**
+ * The E11 nudge. The cap is enforced at PUBLISH only (§3a), so a paused
+ * restaurant with thirty published 3D dishes that buys the ten-dish plan
+ * keeps all thirty live until it next publishes. Nothing is hidden and the
+ * activation is never blocked; the owner is told, once, and the admin side
+ * sees the event. Counted over the PUBLISHED set (rows Mirage holds), not the
+ * draft — that is what the customer is looking at.
+ */
+async function nudgeIfOverCap(
+  catalogId: Types.ObjectId,
+  ownerUserId: Types.ObjectId,
+  plan: PlanDefinition
+): Promise<void> {
+  if (isUncapped(plan.threeDDishCap)) return;
+  const published = await CatalogProduct.find({
+    catalogId,
+    deletedAt: null,
+    archivedAt: null,
+    mirageItemId: { $type: 'string' },
+  })
+    .select({ modelStatus: 1, 'assets.glbUrl': 1 })
+    .lean()
+    .exec();
+  const count = countThreeDDishes(published);
+  if (count <= plan.threeDDishCap) return;
+
+  try {
+    await Notification.create({
+      kind: 'PAYMENT_ACTIVATE',
+      title: 'Your menu has more 3D dishes than your plan covers',
+      message:
+        `Your menu has ${count} 3D dishes; ${plan.displayName} covers ${plan.threeDDishCap}. ` +
+        'The next publish will ask you to upgrade.',
+      audienceType: 'USERS',
+      audienceUserIds: [ownerUserId],
+      deletedAt: null,
+    });
+  } catch (err) {
+    // A failed nudge must not fail an activation that has already happened.
+    console.warn('[subscription] over-cap notification failed', err);
+  }
+  track(AnalyticsEvent.SUBSCRIPTION_OVER_CAP_ON_ACTIVATE, {
+    catalog_id: catalogId.toHexString(),
+    plan_id: plan.planId,
+    three_d_dish_count: count,
+    three_d_dish_cap: plan.threeDDishCap,
+  });
+}
+
+/**
+ * THE activation. Called by exactly three paths — the webhook, the reconciler
+ * and the admin's manual VERIFY — and nothing else (a comp has its own variant
+ * below), so the rules live once:
+ *   • `periodStart = paidAt`, ALWAYS (AC-3.5). Never anchored on the old
+ *     `periodEnd`, not even when paying early: an early renewal forfeits the
+ *     unused days (Assumption A2), a payment in GRACE starts fresh from the
+ *     payment date, and paying out of TRIAL or COMPED simply ends that period
+ *     early (`trialUsedAt` stays — E10).
+ *   • `periodEnd = paidAt + 30 | 365` calendar days in UTC — millisecond
+ *     arithmetic, no timezone.
+ *   • Upsert: a catalog with no row gets one.
+ *   • Idempotent: the same input applied twice writes the same row.
+ */
+export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<ApplyPeriodResult> {
+  const { catalogId, ownerUserId, paidAt, planSnapshot } = input;
+  const previousStatus = await previousStatusOf(catalogId);
+  const periodEnd = new Date(paidAt.getTime() + (input.interval === 'YEARLY' ? 365 : 30) * DAY_MS);
+
+  const subscription = await upsertSubscriptionRow(catalogId, ownerUserId, {
+    $set: {
+      status: 'ACTIVE',
+      planId: input.planId,
+      planSnapshot,
+      billingInterval: input.interval,
+      source: input.source,
+      periodStart: paidAt,
+      periodEnd,
+      threeDDishCap: planSnapshot.threeDDishCap,
+      'standeeAllocation.included': input.standeeIncluded,
+      ...CLEARED_ON_NEW_PERIOD,
+    },
+    // A dotted $set on a subdocument skips the parent's default on insert, so
+    // a row CREATED by this payment would have no `issued` at all.
+    $setOnInsert: { 'standeeAllocation.issued': 0 },
+  });
+
+  const needsArResume = needsArResumeFrom(previousStatus);
+  if (needsArResume) {
+    // Stage 5 turns this into an enqueue; today the log is the trace.
+    console.log(
+      `[subscription] ${catalogId.toHexString()} resumed from ${previousStatus} — AR resume needed`
+    );
+  }
+
+  track(AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED, {
+    catalog_id: catalogId.toHexString(),
+    source: input.source,
+    plan_id: input.planId,
+    amount_paise: input.amountPaise,
+    previous_status: previousStatus,
+    via: input.via,
+  });
+
+  await nudgeIfOverCap(catalogId, ownerUserId, planSnapshot);
+
+  return { previousStatus, subscription, needsArResume };
+}
+
+export interface ApplyCompInput {
+  catalogId: Types.ObjectId;
+  ownerUserId: Types.ObjectId;
+  /** When the comp ends. The route has already checked it is in the future. */
+  until: Date;
+  actor: Actor;
+  note: string;
+  now?: Date;
+}
+
+/**
+ * Door 4. A comp is not a plan: uncapped, no snapshot, no interval, and a
+ * zero-amount COMP row on the ledger so "why is this restaurant live" has an
+ * answer with a name on it. Same upsert and the same clears as a paid period.
+ */
+export async function applyComp(input: ApplyCompInput): Promise<ApplyPeriodResult> {
+  const now = input.now ?? new Date();
+  const { catalogId, ownerUserId } = input;
+  const previousStatus = await previousStatusOf(catalogId);
+
+  const subscription = await upsertSubscriptionRow(catalogId, ownerUserId, {
+    $set: {
+      status: 'COMPED',
+      source: 'COMP',
+      periodStart: now,
+      periodEnd: input.until,
+      threeDDishCap: UNCAPPED_THREE_D,
+      ...CLEARED_ON_NEW_PERIOD,
+    },
+    $unset: { planId: 1, planSnapshot: 1, billingInterval: 1 },
+  });
+
+  await PaymentRecord.create({
+    catalogId,
+    userId: ownerUserId,
+    subscriptionId: subscription._id,
+    kind: 'COMP',
+    amountPaise: 0,
+    currency: 'INR',
+    initiatedBy: input.actor,
+    note: input.note,
+  });
+
+  track(AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED, {
+    catalog_id: catalogId.toHexString(),
+    source: 'COMP',
+    plan_id: null,
+    amount_paise: 0,
+    previous_status: previousStatus,
+    via: 'ADMIN',
+  });
+
+  return { previousStatus, subscription, needsArResume: needsArResumeFrom(previousStatus) };
 }
 
 /**

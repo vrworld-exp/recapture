@@ -144,3 +144,49 @@ String formatRupees(int paise) {
   if (head.isNotEmpty) groups.insert(0, head);
   return '₹${groups.join(',')},$tail';
 }
+
+// ── Stage 3: the checkout button ────────────────────────────────────────────
+
+/// The consent line shown above Pay and again in the pre-checkout sheet
+/// (AC-5.2). One string, two places, so they can never drift.
+const String kPaymentConsentLine =
+    'All payments are final, except an accidental duplicate payment, '
+    'which will be refunded on review.';
+
+int _planRank(PlanId id) => switch (id) {
+      PlanId.taste => 0,
+      PlanId.signature => 1,
+      PlanId.masterchef => 2,
+      PlanId.unknown => -1,
+    };
+
+/// ONE button, three labels (§9): `Renew` while a paid plan is running or
+/// overdue, `Upgrade` when the selected plan is a higher tier than the one
+/// running, `Pay` everywhere else (no plan, trial, paused, cancelled, comped).
+String checkoutButtonLabel(CatalogSubscription subscription, PlanId selected) {
+  final status = subscription.status;
+  final paidPlanRunning =
+      status == SubscriptionStatus.active || status == SubscriptionStatus.grace;
+  if (!paidPlanRunning) return 'Pay';
+  final current = subscription.planId;
+  if (current != null && _planRank(selected) > _planRank(current)) {
+    return 'Upgrade';
+  }
+  return 'Renew';
+}
+
+/// The E9 warning, or null when a payment now forfeits nothing. A fresh
+/// period always starts at the payment (AC-3.5), so days left on a running
+/// ACTIVE / TRIAL / COMPED period are lost; GRACE and PAUSED have none.
+String? paymentForfeitWarning(CatalogSubscription subscription) {
+  final days = subscription.daysLeft;
+  if (days == null || days <= 0) return null;
+  return switch (subscription.status) {
+    SubscriptionStatus.active ||
+    SubscriptionStatus.trial ||
+    SubscriptionStatus.comped =>
+      'Paying now starts a fresh period from today — the ${_days(days)} '
+          'left on your current period will not be carried over.',
+    _ => null,
+  };
+}

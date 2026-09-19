@@ -27,6 +27,7 @@ import {
   getSubscriptionSummary,
   type SubscriptionSummaryDto,
 } from '@/services/subscription/subscriptionService';
+import { rejectPendingOnCatalogDelete } from '@/services/subscription/manualPaymentService';
 import {
   buildBrandingImageKey,
   productImageExtensionFor,
@@ -684,6 +685,10 @@ export async function deleteCatalog(userId: string): Promise<DeleteCatalogResult
   // outlives the catalog on purpose — `trialUsedAt` is the owner's history
   // (D2), and the row's `userId` is how a re-created catalog inherits it.
   const subscriptionCancelled = await cancelOnCatalogDelete(catalogId);
+  // And every cash request still awaiting verification is rejected (E37):
+  // an admin working the queue a week from now must not be able to activate
+  // a catalog that is about to stop existing.
+  await rejectPendingOnCatalogDelete(catalogId);
 
   // Children first: a crash between these leaves orphan rows whose catalog is
   // gone, and orphan children are invisible (every read is scoped by catalogId)

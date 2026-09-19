@@ -146,7 +146,7 @@ describe('PaymentRecord', () => {
     expect(await PaymentRecord.countDocuments({})).toBe(3);
   });
 
-  it('rejects a duplicate providerOrderId, and allows many without one', async () => {
+  it('rejects a duplicate providerOrderId of the same kind, and allows many without one', async () => {
     await PaymentRecord.create(ledgerRow({ providerOrderId: 'rzp_1' }));
     await PaymentRecord.create(ledgerRow({}));
     await PaymentRecord.create(ledgerRow({}));
@@ -155,6 +155,14 @@ describe('PaymentRecord', () => {
       PaymentRecord.create(ledgerRow({ providerOrderId: 'rzp_1' }))
     ).rejects.toMatchObject({ code: 11000 });
     expect(await PaymentRecord.countDocuments({})).toBe(3);
+  });
+
+  it('lets the CHECKOUT_CREATED and PAID rows of one order share its providerOrderId', async () => {
+    await PaymentRecord.create(
+      ledgerRow({ kind: 'CHECKOUT_CREATED', providerOrderId: 'rzp_2', expiresAt: NOW })
+    );
+    await PaymentRecord.create(ledgerRow({ kind: 'PAID', providerOrderId: 'rzp_2' }));
+    expect(await PaymentRecord.countDocuments({ providerOrderId: 'rzp_2' })).toBe(2);
   });
 
   it('refuses a negative or fractional amount', async () => {

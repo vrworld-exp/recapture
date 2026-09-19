@@ -19,6 +19,7 @@ import { categoryExecutor } from '@/services/catalog/categorySync';
 import { setPublishExecutors } from '@/services/catalog/publishExecutors';
 import { productExecutor } from '@/services/catalog/productSync';
 import { restaurantExecutor } from '@/services/catalogPublishService';
+import { reconcileOpenOrders } from '@/services/subscription/reconcileService';
 import { registerProcessor } from '@/worker/processorRegistry';
 import { captureProcessingProcessor } from '@/worker/processors/captureProcessingProcessor';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
@@ -115,5 +116,15 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
       jobTypes: [MIRAGE_CATALOG_PUBLISH_JOB_TYPE],
       slots: env.WORKER_PUBLISH_LANE_SLOTS,
     },
+    // The safety net under the Razorpay webhook (docs/subscription/stage-03-
+    // payments.md Step 5). A no-op when RAZORPAY_* is absent — the reconciler
+    // checks for itself — so a deployment without payments pays nothing here.
+    periodicTasks: [
+      {
+        name: 'subscription-reconcile',
+        intervalMs: env.SUBSCRIPTION_ORDER_RECONCILE_INTERVAL_MS,
+        run: reconcileOpenOrders,
+      },
+    ],
   });
 }

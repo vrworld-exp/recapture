@@ -98,6 +98,10 @@ import {
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { getSubscriptionStatus } from '@/services/subscription/subscriptionService';
+import { createOrReturnOrder } from '@/services/subscription/checkoutService';
+import { listPaymentsForOwner } from '@/services/subscription/paymentLedgerService';
+import { createOrderSchema } from '@/validation/subscriptionSchemas';
+import { validateBody } from '@/middleware/validate';
 import type { Response } from 'express';
 import type { ZodError } from 'zod';
 
@@ -1284,6 +1288,64 @@ router.get(
       catalog.userId
     );
     res.status(200).json({ status: 'success', subscription });
+  })
+);
+
+/**
+ * POST /catalog/subscription/order — Door 2. The owner asks for something to
+ * pay; the server mints (or hands back) the ONE open Razorpay order for the
+ * catalog with the quote frozen on it. OWNER ONLY: there is deliberately no
+ * twin on /rep (AC-6.5) — a rep collects cash, a rep does not tap Pay on
+ * someone else's phone.
+ *
+ * 201 for a fresh order, 200 + `X-Order-Reused: 1` when the open one came
+ * back (a double-tap, a retried UPI attempt, a re-opened screen). The body
+ * carries ids and amounts for the in-app SDK and NO URL (AC-7.1). Nothing
+ * here activates anything — that is the webhook's job alone.
+ */
+router.post(
+  '/subscription/order',
+  validateBody(createOrderSchema),
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+
+    const result = await createOrReturnOrder(
+      catalog._id as Types.ObjectId,
+      catalog.userId,
+      { userId: new Types.ObjectId(req.user!.userId), role: req.user!.role ?? 'USER' },
+      req.body
+    );
+    switch (result.outcome) {
+      case 'OK':
+        if (result.reused) res.setHeader('X-Order-Reused', '1');
+        res.status(result.reused ? 200 : 201).json({ status: 'success', order: result.order });
+        return;
+      case 'RATE_LIMITED':
+        return rateLimited(res, result.retryAfter);
+      case 'UNAVAILABLE':
+        return fail(
+          res,
+          503,
+          'PAYMENTS_UNAVAILABLE',
+          "Couldn't reach the payment service. Try again in a minute."
+        );
+    }
+  })
+);
+
+/**
+ * GET /catalog/subscription/payments — the owner's ledger: last fifty rows,
+ * each with a simple receipt number. Refunds are listed so the history is
+ * honest; there is no refund ACTION on any owner route (AC-5.1).
+ */
+router.get(
+  '/subscription/payments',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    const payments = await listPaymentsForOwner(catalog._id as Types.ObjectId);
+    res.status(200).json({ status: 'success', payments });
   })
 );
 

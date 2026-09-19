@@ -24,6 +24,7 @@ import 'package:recapture/data/repositories/admin_standee_repository.dart'
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart'
     show ProductImageSlot;
+import 'package:recapture/data/repositories/payments_repository.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
@@ -39,6 +40,7 @@ import 'package:recapture/presentation/screens/rep/rep_catalogs_screen.dart';
 import 'package:recapture/presentation/widgets/rep/rep_subscription_card.dart';
 
 import '../catalog/catalog_entities_test.dart' as golden;
+import '../catalog/payments_fakes.dart';
 import '../catalog/subscription_entity_test.dart' show subscriptionPayload;
 import 'rep_repo_catalog_defaults.dart';
 
@@ -198,6 +200,7 @@ Widget _harness(_FakeRepo repo, {bool online = true}) {
     overrides: [
       authProvider.overrideWith(_StubAuth.new),
       repRepositoryProvider.overrideWithValue(repo),
+      paymentsRepositoryProvider.overrideWithValue(FakePaymentsRepository()),
       isOnlineProvider.overrideWithValue(online),
     ],
     child: MaterialApp.router(routerConfig: router),
@@ -237,7 +240,8 @@ void main() {
     expect(repo.trialCalls, 1);
     expect(find.textContaining('Free trial — 30 days left'), findsOneWidget);
     expect(find.byKey(const ValueKey('rep_start_trial')), findsNothing);
-    expect(find.byKey(const ValueKey('rep_trial_unavailable')), findsOneWidget);
+    // Door 3 stays: cash can be recorded whatever the trial did.
+    expect(find.byKey(const ValueKey('rep_record_cash')), findsOneWidget);
     expect(find.textContaining('Free trial started'), findsOneWidget);
 
     // The list sits under the card in the router's stack, so the invalidation

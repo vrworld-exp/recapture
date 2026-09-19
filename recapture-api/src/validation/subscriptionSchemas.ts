@@ -1,7 +1,18 @@
 // src/validation/subscriptionSchemas.ts
 //
-// Request shapes for the subscription routes.
+// Request shapes for the subscription routes — the owner's checkout, the rep's
+// cash request, and the admin's money actions. Every body is `.strict()`: a
+// key the schema does not name is a 400, never a silent drop.
 import { z } from 'zod';
+import {
+  BILLING_INTERVALS,
+  MANUAL_METHODS,
+  PLAN_IDS,
+  VERIFICATION_STATUSES,
+} from '@/models/types/subscription.types';
+
+const OBJECT_ID_RE = /^[a-fA-F0-9]{24}$/;
+const objectId = (what: string) => z.string().regex(OBJECT_ID_RE, `Invalid ${what}`);
 
 /**
  * The trial route takes NO body: the plan and the length are config, and a
@@ -10,3 +21,129 @@ import { z } from 'zod';
  * body at all (the body parser hands those through as `undefined` or `{}`).
  */
 export const startTrialSchema = z.object({}).strict().optional();
+
+// ── Door 2: in-app checkout ─────────────────────────────────────────────────
+
+/**
+ * POST /catalog/subscription/order. The plan and the interval are the ONLY
+ * inputs — the price comes from the server's plan catalog, never the body.
+ */
+export const createOrderSchema = z
+  .object({
+    planId: z.enum(PLAN_IDS),
+    interval: z.enum(BILLING_INTERVALS),
+  })
+  .strict();
+export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+
+// ── Door 3: manual payments ─────────────────────────────────────────────────
+
+const manualPaymentFields = {
+  planId: z.enum(PLAN_IDS),
+  interval: z.enum(BILLING_INTERVALS),
+  /** Integer paise, what was actually handed over — compared to the quote on VERIFY (E12). */
+  amountPaise: z.number().int().positive(),
+  method: z.enum(MANUAL_METHODS),
+  /** A UPI txn id, a cheque number, a receipt book number. Never a phone or a name. */
+  reference: z.string().trim().min(1).max(200),
+  note: z.string().trim().max(1000).optional(),
+  /** Who physically took the money, when not the caller. */
+  collectedByUserId: objectId('collectedByUserId').optional(),
+};
+
+/** POST /rep/catalogs/:id/subscription/manual-payment-request. */
+export const manualPaymentRequestSchema = z.object(manualPaymentFields).strict();
+export type ManualPaymentRequestInput = z.infer<typeof manualPaymentRequestSchema>;
+
+/**
+ * POST /admin/catalogs/:id/subscription/manual-payment — one route, three
+ * actions. A REJECT must say why (the rep reads it). An `override` is how an
+ * admin verifies an amount that does not match the quote, and it must come
+ * with a note of at least 20 characters — that rule needs the record, so the
+ * service enforces it (422 AMOUNT_MISMATCH).
+ */
+export const adminManualPaymentSchema = z.discriminatedUnion('action', [
+  z
+    .object({
+      action: z.literal('VERIFY'),
+      paymentRecordId: objectId('paymentRecordId'),
+      note: z.string().trim().max(1000).optional(),
+      override: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('REJECT'),
+      paymentRecordId: objectId('paymentRecordId'),
+      note: z.string().trim().min(1).max(1000),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal('CREATE_AND_VERIFY'),
+      ...manualPaymentFields,
+      override: z.boolean().optional(),
+    })
+    .strict(),
+]);
+export type AdminManualPaymentInput = z.infer<typeof adminManualPaymentSchema>;
+
+/** GET /admin/subscriptions/manual-payments query. */
+export const adminManualPaymentsQuerySchema = z
+  .object({
+    status: z.enum(VERIFICATION_STATUSES).default('PENDING_VERIFICATION'),
+    limit: z.coerce.number().int().min(1).max(200).default(100),
+  })
+  .strict();
+
+// ── Door 4 + admin actions ──────────────────────────────────────────────────
+
+/** POST /admin/catalogs/:id/subscription/comp. `until` must be in the future. */
+export const compSchema = z
+  .object({
+    until: z
+      .string()
+      .datetime({ offset: true })
+      .transform((v) => new Date(v))
+      .refine((d) => d.getTime() > Date.now(), { message: 'until must be in the future' }),
+    note: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+export type CompInput = z.infer<typeof compSchema>;
+
+/** POST /admin/catalogs/:id/subscription/extend-grace. */
+export const extendGraceSchema = z
+  .object({
+    days: z.number().int().min(1).max(30),
+    note: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+export type ExtendGraceInput = z.infer<typeof extendGraceSchema>;
+
+/**
+ * POST /admin/catalogs/:id/subscription/refund. The row must be flagged
+ * DUPLICATE_SUSPECTED, or the admin overrides with a note of at least 30
+ * characters — the longer floor is checked in the service, where the flag is.
+ */
+export const refundSchema = z
+  .object({
+    refundsPaymentId: objectId('refundsPaymentId'),
+    note: z.string().trim().min(10).max(1000),
+    override: z.boolean().optional(),
+  })
+  .strict();
+export type RefundInput = z.infer<typeof refundSchema>;
+
+/** The collections list's filter vocabulary. */
+export const ADMIN_SUBSCRIPTION_STATES = ['EXPIRING_7D', 'GRACE', 'PAUSED', 'TRIAL'] as const;
+export type AdminSubscriptionState = (typeof ADMIN_SUBSCRIPTION_STATES)[number];
+
+/** GET /admin/subscriptions query. */
+export const adminSubscriptionsQuerySchema = z
+  .object({
+    state: z.enum(ADMIN_SUBSCRIPTION_STATES),
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict();
+export type AdminSubscriptionsQuery = z.infer<typeof adminSubscriptionsQuerySchema>;
