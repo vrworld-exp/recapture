@@ -223,10 +223,13 @@ route, no screen and no rule for what "cancel" means on a prepaid period. Two co
 not in `mirage-fe`; it belongs to the marketing site. Assign to whoever owns that site; block
 the Stage 5 flag flip on it so the app and the website never disagree on what a plan includes.
 
-**E5 / E11 / E34 — from the edge-case pass** (see `edge-cases-hardening.md`): orphan-payment
-refund (recommend: allowed, admin override, becomes the second refund exception), over-cap on
-resume (recommend: accept for v1, notice only), and 30/365-day periods instead of calendar months
-(recommend: keep days). Answer alongside G7/G9.
+**E5 / E11 / E34 / E41 / E46 — from the edge-case pass** (see `edge-cases-hardening.md`,
+"Decisions surfaced by this pass"): orphan-payment refund (built: allowed via admin override, the
+second refund exception), over-cap on resume (built: accept, notice only), 30/365-day periods
+instead of calendar months (built: days), trial after a paid period (built: refused,
+`TRIAL_NOT_ELIGIBLE`), and 3D-only menus when paused (built: accept; the admin list flags the
+rare placeholder case). All five are live the recommended way; sign off — or file a change
+against the named file — alongside G7/G9.
 
 **G9 — upgrade proration.** Stage 3's `applyPaidPeriod` makes "Upgrade" = pay the higher plan's
 full price and start a fresh period from today (unused days on the old plan are lost). That is

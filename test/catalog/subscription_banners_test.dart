@@ -142,7 +142,7 @@ void main() {
     testWidgets('GRACE: the red banner with the server\'s countdown',
         (tester) async {
       final repo = FakePublishRepository(
-        catalog: catalogWith(summary('GRACE', daysLeft: 3, graceFrom: 'TRIAL')),
+        catalog: catalogWith(summary('GRACE', daysLeft: 3, graceFrom: 'ACTIVE')),
       );
 
       await tester.pumpWidget(catalogHarness(repo));
@@ -151,8 +151,8 @@ void main() {
       expect(find.byKey(const ValueKey('subscription_grace_banner')), findsOneWidget);
       expect(find.text('Payment overdue — 3D menu pauses in 3 days'), findsOneWidget);
       expect(find.byKey(const ValueKey('subscription_paused_card')), findsNothing);
-      // The entity parsed where the grace came from, for Prompt B's copy.
-      expect(repo.catalog!.subscription!.graceFrom, SubscriptionStatus.trial);
+      // The E16 variants live in subscription_grace_copy_test.dart.
+      expect(repo.catalog!.subscription!.graceFrom, SubscriptionStatus.active);
     });
 
     testWidgets('ACTIVE, or no row: neither', (tester) async {

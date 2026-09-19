@@ -118,7 +118,7 @@ class AdminSubscriptionDetailNotifier
     state = next;
   }
 
-  /// Every sibling that shows this catalog: the queue and the five lists.
+  /// Every sibling that shows this catalog: the queue and the state lists.
   void _invalidateSiblings() {
     ref.invalidate(adminManualQueueProvider);
     for (final filter in AdminSubscriptionFilter.values) {

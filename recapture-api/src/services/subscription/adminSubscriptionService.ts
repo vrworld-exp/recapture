@@ -9,14 +9,17 @@ import { Types } from 'mongoose';
 
 import { env } from '@/config/env';
 import { Catalog } from '@/models/Catalog';
+import { CatalogProduct } from '@/models/CatalogProduct';
 import {
   CatalogSubscription,
   isEntitledTo3D,
   type ICatalogSubscription,
 } from '@/models/CatalogSubscription';
 import { PaymentRecord, type IPaymentRecord } from '@/models/PaymentRecord';
+import type { ProductModelStatus } from '@/models/types/catalog.types';
 import type { Actor, PlanId, SubscriptionStatus } from '@/models/types/subscription.types';
 import { getRazorpayClient, isRazorpayConfigured } from '@/providers/razorpay';
+import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
 import { daysLeftFor } from '@/services/subscription/subscriptionService';
 import type { AdminSubscriptionState } from '@/validation/subscriptionSchemas';
@@ -128,7 +131,19 @@ export type RefundResult =
   | { outcome: 'OVERRIDE_REQUIRED' }
   | { outcome: 'ALREADY_REFUNDED' }
   | { outcome: 'RATE_LIMITED'; retryAfter: number }
-  | { outcome: 'PROVIDER_UNAVAILABLE' };
+  | { outcome: 'PROVIDER_UNAVAILABLE' }
+  /** `manual: true` against an online payment — that one Razorpay refunds. */
+  | { outcome: 'USE_PROVIDER_REFUND' };
+
+export interface RefundRequest {
+  refundsPaymentId: string;
+  note: string;
+  override?: boolean;
+  /** E13: record a cash refund already handed back; no provider call. */
+  manual?: boolean;
+  /** The receipt / UPI txn id of the cash returned. Required with `manual`. */
+  reference?: string;
+}
 
 /**
  * The B3 exception, and only that: a full refund of ONE PAID row, at
@@ -136,11 +151,19 @@ export type RefundResult =
  * never touched — a duplicate did not extend it, so there is nothing to take
  * back. Razorpay itself refuses to refund a payment twice in full, which is
  * the backstop under the ALREADY_REFUNDED check for two admins racing.
+ *
+ * `manual: true` is the E13 twin for a VERIFIED cash row: the admin handed
+ * the cash back by hand and this records it — a REFUNDED row with no
+ * provider ids, the `reference` of the money returned, and the same
+ * override discipline (a note of at least 30 characters), since cash is
+ * never flagged DUPLICATE_SUSPECTED by a machine. The backstop for two
+ * admins racing is the ledger's unique `idempotencyKey`, keyed on the row
+ * being refunded.
  */
 export async function refundPayment(
   catalogId: Types.ObjectId,
   admin: Actor,
-  input: { refundsPaymentId: string; note: string; override?: boolean },
+  input: RefundRequest,
   now: Date = new Date()
 ): Promise<RefundResult> {
   const rate = await consumeRateWindow(
@@ -156,6 +179,9 @@ export async function refundPayment(
     catalogId,
   }).exec();
   if (!paid) return { outcome: 'NOT_FOUND' };
+
+  if (input.manual === true) return refundManualRow(catalogId, admin, paid, input);
+
   if (paid.kind !== 'PAID' || !paid.providerPaymentId) return { outcome: 'NOT_REFUNDABLE' };
 
   const override = paid.note !== 'DUPLICATE_SUSPECTED';
@@ -205,6 +231,74 @@ export async function refundPayment(
     admin_id_hash: hashIdentifier(admin.userId.toHexString()),
     amount_paise: paid.amountPaise,
     override,
+    manual: false,
+  });
+  return { outcome: 'REFUNDED', record };
+}
+
+/** Mongo's duplicate-key error — the unique `idempotencyKey` index firing. */
+function isDuplicateKey(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
+}
+
+/**
+ * The manual half of `refundPayment` (E13). The row must be a VERIFIED cash
+ * entry — a PENDING one never took a period and a REJECTED one never took
+ * money, so there is nothing to give back; an online row is refused outright
+ * (USE_PROVIDER_REFUND) so cash bookkeeping can never shadow a Razorpay
+ * refund. Always an override: nothing flags a cash row automatically.
+ */
+async function refundManualRow(
+  catalogId: Types.ObjectId,
+  admin: Actor,
+  paid: IPaymentRecord,
+  input: RefundRequest
+): Promise<RefundResult> {
+  if (paid.kind === 'PAID') return { outcome: 'USE_PROVIDER_REFUND' };
+  if (paid.kind !== 'MANUAL' || paid.verificationStatus !== 'VERIFIED') {
+    return { outcome: 'NOT_REFUNDABLE' };
+  }
+  const explained =
+    input.override === true &&
+    input.note.length >= REFUND_OVERRIDE_NOTE_MIN_CHARS &&
+    typeof input.reference === 'string' &&
+    input.reference.length > 0;
+  if (!explained) return { outcome: 'OVERRIDE_REQUIRED' };
+
+  const already = await PaymentRecord.exists({
+    kind: 'REFUNDED',
+    refundsPaymentId: paid._id,
+  }).exec();
+  if (already) return { outcome: 'ALREADY_REFUNDED' };
+
+  let record: IPaymentRecord;
+  try {
+    record = await PaymentRecord.create({
+      catalogId,
+      userId: paid.userId,
+      ...(paid.subscriptionId ? { subscriptionId: paid.subscriptionId } : {}),
+      kind: 'REFUNDED',
+      amountPaise: paid.amountPaise,
+      currency: paid.currency,
+      // No provider ids: the money went back by hand. The key is the row
+      // being reversed, so a second admin's insert lands on the index.
+      idempotencyKey: `refund:manual:${String(paid._id)}`,
+      refundsPaymentId: paid._id,
+      initiatedBy: admin,
+      reference: input.reference,
+      note: input.note,
+    });
+  } catch (err) {
+    if (isDuplicateKey(err)) return { outcome: 'ALREADY_REFUNDED' };
+    throw err;
+  }
+
+  track(AnalyticsEvent.SUBSCRIPTION_REFUND_ISSUED, {
+    catalog_id: catalogId.toHexString(),
+    admin_id_hash: hashIdentifier(admin.userId.toHexString()),
+    amount_paise: paid.amountPaise,
+    override: true,
+    manual: true,
   });
   return { outcome: 'REFUNDED', record };
 }
@@ -260,6 +354,13 @@ export interface AdminSubscriptionListItem {
   graceEndsAt: string | null;
   daysLeft: number | null;
   planId: PlanId | null;
+  /**
+   * E46: the share (0–100, whole percent) of the catalog's live dishes that
+   * have a card image — a photo, or a 3D dish's generated thumbnail — and so
+   * still render something while 3D is off. Null when the menu has no live
+   * dish. Below 100 on a PAUSED row means some cards are placeholders now.
+   */
+  photoCoverage: number | null;
 }
 
 export type ListSubscriptionsResult =
@@ -280,7 +381,11 @@ type ListRow = Pick<
   | 'trialUsedAt'
   | 'threeDDishCap'
   | 'standeeAllocation'
+  | 'pausedAt'
 >;
+
+/** How long a PAUSED row has to sit before it is a `PAUSED_90D` follow-up. */
+export const PAUSED_FOLLOW_UP_DAYS = 90;
 
 function stateFilter(state: AdminSubscriptionState, now: Date): Record<string, unknown> {
   switch (state) {
@@ -290,6 +395,13 @@ function stateFilter(state: AdminSubscriptionState, now: Date): Record<string, u
         status: { $in: ['ACTIVE', 'TRIAL', 'COMPED'] },
         periodEnd: { $gt: now, $lte: new Date(now.getTime() + 7 * DAY_MS) },
       };
+    case 'PAUSED_90D':
+      // E23: the long-quiet, oldest pause first. `$lte` on the day boundary,
+      // so a row paused exactly 90 days ago is in and 89 days is out.
+      return {
+        status: 'PAUSED',
+        pausedAt: { $lte: new Date(now.getTime() - PAUSED_FOLLOW_UP_DAYS * DAY_MS) },
+      };
     case 'GRACE':
     case 'PAUSED':
     case 'TRIAL':
@@ -297,10 +409,17 @@ function stateFilter(state: AdminSubscriptionState, now: Date): Record<string, u
   }
 }
 
+/** The date each segment is ordered on: when the pause began, or the period's end. */
+function sortKeyFor(state: AdminSubscriptionState): 'pausedAt' | 'periodEnd' {
+  return state === 'PAUSED_90D' ? 'pausedAt' : 'periodEnd';
+}
+
 /**
  * Who needs chasing. Sorted by `periodEnd` ascending — soonest first — and
  * keyset-paginated on `(periodEnd, _id)` with the shared cursor codec (its
  * `updatedAt` slot carries `periodEnd` here; the client only echoes it).
+ * `PAUSED_90D` sorts and paginates on `pausedAt` instead — the oldest pause
+ * is the one most overdue for a call.
  */
 export async function listSubscriptionsByState(
   state: AdminSubscriptionState,
@@ -308,25 +427,29 @@ export async function listSubscriptionsByState(
   limit: number,
   now: Date = new Date()
 ): Promise<ListSubscriptionsResult> {
+  const sortKey = sortKeyFor(state);
   const filter: Record<string, unknown> = { ...stateFilter(state, now) };
   if (cursor) {
     const decoded = decodeCursor(cursor);
     if (!decoded) return { outcome: 'INVALID_CURSOR' };
     filter.$or = [
-      { periodEnd: { $gt: decoded.updatedAt } },
-      { periodEnd: decoded.updatedAt, _id: { $gt: new Types.ObjectId(decoded.id) } },
+      { [sortKey]: { $gt: decoded.updatedAt } },
+      { [sortKey]: decoded.updatedAt, _id: { $gt: new Types.ObjectId(decoded.id) } },
     ];
   }
 
   const rows = await CatalogSubscription.find(filter)
-    .sort({ periodEnd: 1, _id: 1 })
+    .sort({ [sortKey]: 1, _id: 1 })
     .limit(limit + 1)
     .lean<ListRow[]>()
     .exec();
   const page = rows.slice(0, limit);
   const last = page[page.length - 1];
+  const lastSortValue = last ? (last[sortKey] ?? last.periodEnd) : null;
   const nextCursor =
-    rows.length > limit && last ? encodeCursor(last.periodEnd, String(last._id)) : null;
+    rows.length > limit && last && lastSortValue
+      ? encodeCursor(lastSortValue, String(last._id))
+      : null;
 
   const catalogs =
     page.length > 0
@@ -336,6 +459,7 @@ export async function listSubscriptionsByState(
           .exec()
       : [];
   const names = new Map(catalogs.map((c) => [String(c._id), toDisplayName(c.name)]));
+  const coverage = await photoCoverageFor(page.map((r) => r.catalogId));
 
   return {
     outcome: 'OK',
@@ -347,7 +471,64 @@ export async function listSubscriptionsByState(
       graceEndsAt: row.graceEndsAt?.toISOString() ?? null,
       daysLeft: daysLeftFor(row, now),
       planId: row.planId ?? null,
+      photoCoverage: coverage.get(String(row.catalogId)) ?? null,
     })),
     nextCursor,
   };
+}
+
+type CoverageRow = {
+  catalogId: Types.ObjectId;
+  deletedAt?: Date | null;
+  archivedAt?: Date | null;
+  modelStatus?: ProductModelStatus;
+  assets?: { glbUrl?: string; thumbnailUrl?: string; imageKey?: string };
+};
+
+/**
+ * Per catalog: what percentage of its LIVE dishes (the same list a publish
+ * sends, via `publishableProducts`) carry a card image. A 3D dish's image is
+ * its generated thumbnail (productSync: the image slot), which the publish
+ * gate requires — so a menu that passed the gates reads 100 and the number
+ * only drops for legacy rows that were never re-published. Null for a menu
+ * with no live dish: 0 of 0 is not "no photos".
+ */
+async function photoCoverageFor(
+  catalogIds: readonly Types.ObjectId[]
+): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
+  if (catalogIds.length === 0) return out;
+  const rows = await CatalogProduct.find({
+    catalogId: { $in: catalogIds },
+    deletedAt: null,
+    archivedAt: null,
+  })
+    .select({
+      catalogId: 1,
+      deletedAt: 1,
+      archivedAt: 1,
+      modelStatus: 1,
+      'assets.glbUrl': 1,
+      'assets.thumbnailUrl': 1,
+      'assets.imageKey': 1,
+    })
+    .lean<CoverageRow[]>()
+    .exec();
+
+  const totals = new Map<string, { live: number; withImage: number }>();
+  for (const product of publishableProducts(rows)) {
+    const key = String(product.catalogId);
+    const tally = totals.get(key) ?? { live: 0, withImage: 0 };
+    tally.live += 1;
+    if (product.assets?.imageKey || product.assets?.thumbnailUrl) tally.withImage += 1;
+    totals.set(key, tally);
+  }
+  for (const id of catalogIds) {
+    const tally = totals.get(String(id));
+    out.set(
+      String(id),
+      tally && tally.live > 0 ? Math.floor((tally.withImage / tally.live) * 100) : null
+    );
+  }
+  return out;
 }

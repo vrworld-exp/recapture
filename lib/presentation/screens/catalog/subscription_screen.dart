@@ -544,11 +544,30 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
         : plan.priceMonthlyPaise;
   }
 
+  /// The E9 line: the ORDER's `daysForfeited` once the server has quoted
+  /// one (it stays in the checkout state through a cancelled SDK sheet), and
+  /// the status DTO's figure before that. Both are the server's; neither is
+  /// a clock. An older server that sends no `daysForfeited` reads as 0 and
+  /// shows nothing — Pay still works.
+  String? _forfeitLine() {
+    final order = ref.read(checkoutProvider).order;
+    if (order != null) {
+      return earlyRenewalLine(
+        daysForfeited: order.daysForfeited,
+        interval: widget.interval,
+      );
+    }
+    return paymentForfeitWarning(
+      widget.subscription,
+      interval: widget.interval,
+    );
+  }
+
   Future<void> _confirmAndPay() async {
     final plan = _plan;
     if (plan == null) return;
     final label = checkoutButtonLabel(widget.subscription, widget.planId);
-    final forfeit = paymentForfeitWarning(widget.subscription);
+    final forfeit = _forfeitLine();
     final agreed = await showModalBottomSheet<bool>(
       context: context,
       backgroundColor: AppColors.surface1,
@@ -604,7 +623,7 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
     final checkout = ref.watch(checkoutProvider);
     final subscription = widget.subscription;
     final label = checkoutButtonLabel(subscription, widget.planId);
-    final forfeit = paymentForfeitWarning(subscription);
+    final forfeit = _forfeitLine();
     final plan = _plan;
 
     return Column(
@@ -747,9 +766,13 @@ class _PreCheckoutSheet extends StatelessWidget {
               style: textTheme.bodyLarge,
             ),
             const SizedBox(height: AppSpacing.xs),
+            // E34: a period is "30 days" / "365 days", never a month or a
+            // year — the server counts days flat, and this is the one place
+            // the owner reads the length before paying.
             Text(
               '${formatPaise(amountPaise)} ${yearly ? 'per year' : 'per month'}, '
-              'billed now for ${yearly ? '365' : '30'} days.',
+              'billed now for ${periodLengthLabel(interval)}.',
+              key: const ValueKey('subscription_precheckout_period'),
               style: textTheme.bodyMedium
                   ?.copyWith(color: AppColors.textSecondary),
             ),
@@ -757,6 +780,7 @@ class _PreCheckoutSheet extends StatelessWidget {
               const SizedBox(height: AppSpacing.md),
               Text(
                 forfeitWarning!,
+                key: const ValueKey('subscription_precheckout_forfeit'),
                 style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
               ),
             ],

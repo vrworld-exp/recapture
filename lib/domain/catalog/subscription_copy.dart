@@ -9,11 +9,15 @@
 //   | TRIAL     | Free trial — N days left, up to 10 3D dishes        | Trial Nd     |
 //   | ACTIVE    | Active until <d MMM yyyy> · <Plan>                  | Active       |
 //   | GRACE     | Payment overdue — 3D menu pauses in N days  (red)   | Overdue Nd   |
+//   |           |   from TRIAL: Your free trial has ended — …          |              |
+//   |           |   from COMPED: Your complimentary period has ended — |              |
 //   | PAUSED    | 3D menu paused — your photo menu is still live      | 3D paused    |
 //   | CANCELLED | Cancelled — resubscribe anytime                     | Cancelled    |
 //   | COMPED    | Complimentary until <date>                          | Comped       |
 //
 // Every N is the SERVER's `daysLeft` (D6) — nothing here looks at a clock.
+// Period lengths are "30 days" / "365 days" (E34), never "a month" / "a year":
+// the server counts days flat, and the copy must not promise a calendar.
 import '../entities/catalog_subscription.dart';
 
 /// How urgent a status line is — the colour the screen picks, decided here so
@@ -30,6 +34,7 @@ String ownerStatusLine(
       daysLeft: subscription.daysLeft,
       periodEnd: subscription.periodEnd,
       planName: subscription.planName,
+      graceFrom: subscription.graceFrom,
       trialThreeDCap: subscription.threeDDishCap ?? trialThreeDCap,
     );
 
@@ -38,6 +43,7 @@ String _ownerLine({
   required int? daysLeft,
   required DateTime? periodEnd,
   required String? planName,
+  required SubscriptionStatus? graceFrom,
   required int trialThreeDCap,
 }) {
   final days = daysLeft ?? 0;
@@ -49,8 +55,7 @@ String _ownerLine({
         ? 'Active${planName == null ? '' : ' · $planName'}'
         : 'Active until ${formatSubscriptionDate(periodEnd)}'
             '${planName == null ? '' : ' · $planName'}',
-    SubscriptionStatus.grace =>
-      'Payment overdue — 3D menu pauses in ${_days(days)}',
+    SubscriptionStatus.grace => graceLine(graceFrom, days),
     SubscriptionStatus.paused =>
       '3D menu paused — your photo menu is still live',
     SubscriptionStatus.cancelled => 'Cancelled — resubscribe anytime',
@@ -124,11 +129,27 @@ const String kPausedCardBody =
 /// dark, and the rep should say so to a worried owner.
 const String kPausedPhotoMenuLine = 'Photo menu is still live at the same QR';
 
-/// The GRACE banner on the owner's catalog screen: what happens, and when.
-/// Prompt B swaps the first clause on [SubscriptionSummary.graceFrom]; until
-/// then every grace reads as overdue.
-String graceBannerLine(int? daysLeft) =>
-    'Payment overdue — 3D menu pauses in ${_days(daysLeft ?? 0)}';
+/// The GRACE sentence, in the words that fit how the row got there (E16):
+/// a trial that ran out was never "overdue", and neither was a comp.
+/// [graceFrom] is the server's `graceFrom`; null (a row written before it
+/// existed, or an older server) reads as the paid-period wording, which is
+/// the common case and the safe one.
+String graceLine(SubscriptionStatus? graceFrom, int? daysLeft) {
+  final days = _days(daysLeft ?? 0);
+  return switch (graceFrom) {
+    SubscriptionStatus.trial =>
+      'Your free trial has ended — choose a plan within $days to keep 3D live',
+    SubscriptionStatus.comped =>
+      'Your complimentary period has ended — choose a plan within $days',
+    _ => 'Payment overdue — 3D menu pauses in $days',
+  };
+}
+
+/// The GRACE banner on the owner's catalog screen and the publish screen —
+/// [graceLine] under its Stage 5 name, so both banners and the status line
+/// can never say three different things about one restaurant.
+String graceBannerLine(int? daysLeft, {SubscriptionStatus? graceFrom}) =>
+    graceLine(graceFrom, daysLeft);
 
 /// The GRACE banner's second line on the PUBLISH screen, in the voice of
 /// whoever is standing there: the owner can pay; the rep can only tell them.
@@ -205,21 +226,56 @@ String checkoutButtonLabel(CatalogSubscription subscription, PlanId selected) {
   return 'Renew';
 }
 
-/// The E9 warning, or null when a payment now forfeits nothing. A fresh
-/// period always starts at the payment (AC-3.5), so days left on a running
-/// ACTIVE / TRIAL / COMPED period are lost; GRACE and PAUSED have none.
-String? paymentForfeitWarning(CatalogSubscription subscription) {
+/// "30 days" / "365 days" — the length of a paid period, as the server
+/// counts it (E34). Used wherever a period is named; the price rate
+/// ("₹1,199 / month") is a different thing and keeps its own words.
+String periodLengthLabel(BillingInterval interval) =>
+    interval == BillingInterval.yearly ? '365 days' : '30 days';
+
+/// "30-day" / "365-day", for "a new 30-day period".
+String _periodAdjective(BillingInterval interval) =>
+    interval == BillingInterval.yearly ? '365-day' : '30-day';
+
+/// The E9 early-renewal line, or null when nothing is forfeited. A fresh
+/// period always starts at the payment (AC-3.5), so the days left on a
+/// running period are lost — this says so, in amber, above Pay. It is a
+/// warning, not a rule change. [daysForfeited] is the SERVER's figure: the
+/// order's `daysForfeited` once one exists, the status DTO's `daysLeft`
+/// before that (the same number, from the same row).
+String? earlyRenewalLine({
+  required int daysForfeited,
+  required BillingInterval interval,
+}) {
+  if (daysForfeited <= 0) return null;
+  return 'Your current period ends in ${_days(daysForfeited)}. '
+      'Paying now starts a new ${_periodAdjective(interval)} period today.';
+}
+
+/// Days a payment now would forfeit, read off the status DTO the way the
+/// server computes `daysForfeited` for an order: the days left on a running
+/// ACTIVE / TRIAL / COMPED period; GRACE and PAUSED have none to lose.
+int daysForfeitedFor(CatalogSubscription subscription) {
   final days = subscription.daysLeft;
-  if (days == null || days <= 0) return null;
+  if (days == null || days <= 0) return 0;
   return switch (subscription.status) {
     SubscriptionStatus.active ||
     SubscriptionStatus.trial ||
     SubscriptionStatus.comped =>
-      'Paying now starts a fresh period from today — the ${_days(days)} '
-          'left on your current period will not be carried over.',
-    _ => null,
+      days,
+    _ => 0,
   };
 }
+
+/// [earlyRenewalLine] for a checkout that has not minted its order yet — the
+/// pre-checkout sheet, which opens BEFORE `POST …/order`.
+String? paymentForfeitWarning(
+  CatalogSubscription subscription, {
+  required BillingInterval interval,
+}) =>
+    earlyRenewalLine(
+      daysForfeited: daysForfeitedFor(subscription),
+      interval: interval,
+    );
 
 /// "QR standees: 6 of 15 delivered" — the same sentence on the owner screen,
 /// the rep card and the admin panel. Null when the plan includes none (a

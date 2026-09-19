@@ -2765,8 +2765,9 @@ router.get(
 );
 
 /**
- * GET /admin/subscriptions?state=EXPIRING_7D|GRACE|PAUSED|TRIAL — the
- * collections list: who needs chasing, soonest first, cursor-paginated.
+ * GET /admin/subscriptions?state=EXPIRING_7D|GRACE|PAUSED|PAUSED_90D|TRIAL —
+ * the collections list: who needs chasing, soonest first, cursor-paginated.
+ * PAUSED_90D (E23) is the follow-up segment: paused 90+ days, oldest first.
  */
 router.get(
   '/subscriptions',
@@ -2968,6 +2969,11 @@ router.patch(
  * orphan-payment case). Never touches the period (AC-5.4); metered per admin
  * (E43). Looked up WITHOUT the deletedAt filter — an orphan payment's catalog
  * is, by definition, gone.
+ *
+ * With `manual: true` (E13) it records a CASH refund the admin already handed
+ * back against a VERIFIED MANUAL row: no Razorpay call, `reference` required,
+ * `override` + the long note required. An online row under `manual` is 422
+ * USE_PROVIDER_REFUND.
  */
 router.post(
   '/catalogs/:id/subscription/refund',
@@ -3002,6 +3008,13 @@ router.post(
         );
       case 'ALREADY_REFUNDED':
         return subscriptionFail(res, 409, 'ALREADY_REFUNDED', 'This payment has already been refunded.');
+      case 'USE_PROVIDER_REFUND':
+        return subscriptionFail(
+          res,
+          422,
+          'USE_PROVIDER_REFUND',
+          'This is an online payment. Refund it through Razorpay (omit manual), not as cash.'
+        );
       case 'RATE_LIMITED':
         res.status(429).json({
           status: 'error',

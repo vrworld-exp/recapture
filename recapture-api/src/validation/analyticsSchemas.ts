@@ -1069,6 +1069,8 @@ const subscriptionRefundIssuedProps = z
     amount_paise: z.number().int().nonnegative(),
     /** True when the row was not flagged DUPLICATE_SUSPECTED and the admin overrode. */
     override: z.boolean(),
+    /** True for a cash refund recorded by hand (E13) — no provider call was made. */
+    manual: z.boolean(),
   })
   .strict();
 

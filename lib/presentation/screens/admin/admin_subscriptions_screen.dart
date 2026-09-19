@@ -2,8 +2,9 @@
 //
 // Collections: who needs chasing, and the cash requests waiting for a Verify.
 //
-// Five segments over two server routes — Pending is the manual-payment queue,
-// the other four are `GET /admin/subscriptions?state=`. One screen because an
+// Six segments over two server routes — Pending is the manual-payment queue,
+// the other five are `GET /admin/subscriptions?state=` (Paused 90d+ is the
+// E23 follow-up list: nobody is purged, someone is called). One screen because an
 // admin working payments does both in one sitting: verify the cash that came
 // in, then look at who is about to lapse. Every row opens the same per-catalog
 // panel (`/admin/subscriptions/:catalogId`), where every action lives.
@@ -215,6 +216,8 @@ class _StateList extends ConsumerWidget {
                   AdminSubscriptionFilter.grace =>
                     'No restaurant is in its grace period.',
                   AdminSubscriptionFilter.paused => 'No 3D menu is paused.',
+                  AdminSubscriptionFilter.paused90d =>
+                    'No 3D menu has been paused for 90 days or more.',
                   AdminSubscriptionFilter.trial => 'No trial is running.',
                   AdminSubscriptionFilter.pending => '',
                 },
@@ -269,6 +272,12 @@ class _SubscriptionTile extends StatelessWidget {
       SubscriptionTone.neutral => AppColors.textSecondary,
     };
     final days = item.daysLeft;
+    // E46: a paused menu with cards that have nothing to show. Only worth a
+    // word when 3D is actually off and some dish has no picture.
+    final coverage = item.photoCoverage;
+    final placeholders = item.status == SubscriptionStatus.paused &&
+        coverage != null &&
+        coverage < 100;
     return AppCard(
       key: ValueKey('admin_subscription_${item.catalogId}'),
       onTap: onTap,
@@ -293,6 +302,14 @@ class _SubscriptionTile extends StatelessWidget {
                   style: textTheme.bodySmall
                       ?.copyWith(color: AppColors.textSecondary),
                 ),
+                if (placeholders) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    'Photos $coverage% — some cards are placeholders',
+                    key: ValueKey('admin_subscription_photos_${item.catalogId}'),
+                    style: textTheme.bodySmall?.copyWith(color: AppColors.error),
+                  ),
+                ],
               ],
             ),
           ),

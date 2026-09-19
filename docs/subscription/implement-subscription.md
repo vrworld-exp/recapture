@@ -120,6 +120,10 @@ These have lead times. Start them **before** any code, in parallel.
 - Hand out plan §14 (the one-page summary) the day the flag flips.
 - Rep field rule: never pay with your own UPI; cash → "Record cash payment" → an admin verifies.
 - Tell reps that every new restaurant now needs **Start trial** before its first publish.
+- **One phone = one restaurant = one subscription** (E48). A chain owner with three outlets needs
+  three login numbers — one catalog and one plan per outlet. There is no "second outlet" on one
+  account, and a rep cannot move dishes between outlets; set this expectation before the first
+  outlet is captured.
 
 ---
 

@@ -1,3 +1,4 @@
+✅✅✅✅✅✅
 # Edge cases — the complete matrix (plan A–D + hardening E)
 
 Every edge case the subscription layer must survive, with **where it is handled**. The plan's own
@@ -113,10 +114,10 @@ Mirage's partial update, refunds made outside our API).
 | E43 | A leaked admin JWT loops the refund route. | Per-admin rate window (5/hour default) on refunds. | **PATCHED** Stage 3 Step 7 |
 | E44 | Owner account was created by the rep and first opened months later → four stale "3 days left" reminders in the bell. | Reminder notifications carry `expiresAt`. | **PATCHED** Stage 5 Step 3 |
 | E45 | `requestRetry` (retry failed rows) goes straight to `openRun` **without** gates. A catalog paused after a PARTIAL run can retry its failed 3D rows. | Deliberate: a retry re-sends rows of a run that was allowed when it started (plan C7 "the retry uses the same subscription", D5). Documented, not changed. | Stage 5 Step 3a |
-| E46 | Mirage restaurant with `clientType: '3D_ONLY'` (no photos at all) gets paused → **every** card is a placeholder; the menu is technically "live" but useless. | Product decision: accept (D10 says placeholder) **or** admin comps such restaurants until they add photos. Flag in the admin PAUSED list: `photoCoverage: 0%`. | Decision below |
+| E46 | Mirage restaurant with `clientType: '3D_ONLY'` (no photos at all) gets paused → **every** card is a placeholder; the menu is technically "live" but useless. | **Smaller than it looks.** A published 3D dish always carries its generated thumbnail as its Mirage `image` (`productSync` image slot, required by the `PRODUCT_THUMBNAIL_MISSING` gate), and `resolveCardMedia` falls back to that image when 3D is off — so a paused 3D-only menu shows render thumbnails, not placeholders. A placeholder needs a 3D dish with **no** thumbnail, which only a never-republished legacy row can be. The admin list carries `photoCoverage` (% of live dishes with any card image); a PAUSED row under 100 shows "Photos N% — some cards are placeholders". | **BUILT** Prompt B follow-up; decision below |
 | E47 | An intermediary/CDN caches `get-data-for-new-ui` → `arEnabled: true` keeps serving after the pause. | Public reads answer `Cache-Control: no-store` (or `max-age ≤ 60`). | **PATCHED** Stage 5 Part B Step 1 |
-| E48 | A chain owner with 3 outlets: one phone = one user = one catalog = one subscription (`Catalog.userId` unique). | Product constraint, not a bug: each outlet needs its own login number. Say so in the rep field guide. | Runbook §3.8 |
-| E49 | Wrong owner phone fixed with `scripts/repoint-catalog-owner.ts` → catalog moves to a new `userId`. | Subscription is keyed by `catalogId` → survives; reminders/nudges read `catalog.userId` at send time → reach the new owner; an open order's `initiatedBy` points at the old user — harmless. Add one line to the script's header comment. | note only |
+| E48 | A chain owner with 3 outlets: one phone = one user = one catalog = one subscription (`Catalog.userId` unique). | Product constraint, not a bug: each outlet needs its own login number. Said in the rep field guide. | **DONE** `implement-subscription.md` §3.8 |
+| E49 | Wrong owner phone fixed with `scripts/repoint-catalog-owner.ts` → catalog moves to a new `userId`. | Subscription is keyed by `catalogId` → survives; reminders/nudges read `catalog.userId` at send time → reach the new owner; an open order's `initiatedBy` points at the old user — harmless. | **DONE** note in the script header |
 | E50 | Ops changes `graceDays` / `trialDays` in the override mid-period. | Stored `periodEnd` / `graceEndsAt` are unaffected; only future transitions use the new values. | by construction (Stage 1 model) |
 | E51 | Owner has the app on two phones; pays on one. | The other re-reads `subscriptionProvider` on resume; until then it shows the old status — never a wrong *gate*, because gates are server-side. | Stage 3 Part B (resume re-read) |
 | E52 | Dispute-grace and lapse-grace overlap (period ends during a dispute). | `disputeGraceAt` distinguishes; a lost dispute + expired period → PAUSED by the normal sweep; won + expired → GRACE stays until paid. | Gaps Prompt A Step 1 |
@@ -128,18 +129,28 @@ Mirage's partial update, refunds made outside our API).
 reminder delivery failures and DLT template rejections, per-dish "publish as image only", GST
 invoice numbering, proration on upgrade, and multi-currency.
 
-### Decisions surfaced by this pass (add to `gaps-addendum.md` § "Not buildable here")
+### Decisions surfaced by this pass — sign-off checklist
 
-- **E5 — orphan payment refund.** Recommend: allowed, admin `override` path, documented as the
-  second exception to "non-refundable". Update plan §7 rule 9 wording.
-- **E11 — over-cap on resume.** Recommend: accept for v1 (notice only). Revisit with the
-  per-dish "publish without 3D" toggle in Stage 6.
-- **E34 — 30/365-day periods vs calendar months.** Recommend: keep days; it is what the plan's
-  copy says ("30 days").
-- **E41 — trial after a paid period.** Recommend: refuse (`TRIAL_NOT_ELIGIBLE`); trials are for
-  never-paid restaurants.
-- **E46 — 3D-only restaurants when paused.** Recommend: accept the all-placeholder menu for v1 and
-  have the rep add photos; admin may comp a partner pilot. Revisit with the Stage 6 per-dish toggle.
+Every one of these is **already built the recommended way**; the code does not wait on the
+answer. Ticking a box means "keep it"; a different answer is a change request against the named
+file. Mirrored in `gaps-addendum.md` § "Not buildable here".
+
+- [ ] **E5 — orphan payment refund.** Built: allowed via the admin `override` path
+      (`adminSubscriptionService.refundPayment`), the second exception to "non-refundable".
+      If kept: update plan §7 rule 9 wording.
+- [ ] **E11 — over-cap on resume.** Built: activation never blocked; owner notice +
+      `subscription_over_cap_on_activate`. Revisit with the Stage 6 per-dish "publish without
+      3D" toggle.
+- [ ] **E34 — 30/365-day periods vs calendar months.** Built: flat days; the checkout sheet
+      says "30 days" / "365 days" (`periodLengthLabel`). A calendar-month rule would change
+      `applyPaidPeriod` and every copy string.
+- [ ] **E41 — trial after a paid period.** Built: refused (`TRIAL_NOT_ELIGIBLE` in
+      `startTrial`); trials are for never-paid restaurants. The alternative is one condition
+      removed and a rep who can hand out free months to lapsed payers.
+- [ ] **E46 — 3D-only restaurants when paused.** Built: accept for v1 — and, per the finding in
+      the row above, the menu shows render thumbnails rather than placeholders, so the harm is
+      near zero. The admin list flags the rare legacy case (`photoCoverage`); an admin may comp a
+      partner pilot. Revisit with the Stage 6 per-dish toggle.
 
 ---
 
@@ -147,6 +158,10 @@ invoice numbering, proration on upgrade, and multi-currency.
 # Product: Mirage Menu (ReCapture backend + Flutter client)
 # Scope: New Feature (small)
 # Priority: Medium — run after Gaps Prompt A and before the Stage 5 flag flip
+# Status: BUILT 2026-09-19 (uncommitted). Backend: `PAUSED_90D` segment,
+#         `manual: true` refund path. Client: `graceLine` (E16) on the status
+#         line, both banners and the rep chip's long-press; `earlyRenewalLine`
+#         (E9) from the order's `daysForfeited`; "30 days" / "365 days" (E34).
 
 ---
 
@@ -235,3 +250,64 @@ POST /admin/catalogs/:id/subscription/refund  body { refundsPaymentId, note, ove
 1. `tests/subscription-paused-90d.test.ts`, `tests/subscription-manual-refund.test.ts`.
 2. `test/catalog/subscription_grace_copy_test.dart`, `test/catalog/checkout_forfeit_warning_test.dart`.
 3. Run each suite once at the end.
+
+
+
+
+
+
+
+
+
+
+
+
+Res ------------------------------------->>>>>>>>>
+
+
+
+
+
+What changed
+Backend (recapture-api)
+
+PAUSED_90D added to ADMIN_SUBSCRIPTION_STATES → filter {status:'PAUSED', pausedAt ≤ now−90d}, sorted and cursor-paginated on pausedAt (the other segments keep periodEnd). Same DTO. adminSubscriptionService.ts
+Refund route accepts manual: true + reference. refundManualRow requires a VERIFIED MANUAL row, override: true, note ≥ 30 chars; writes one REFUNDED row with no provider ids, idempotencyKey: refund:manual:<rowId> (the unique index is the race backstop), no Razorpay call. PAID row → 422 USE_PROVIDER_REFUND; PENDING/REJECTED cash → 422 NOT_REFUNDABLE; missing reference → 400 at the schema. Audit event now carries manual: true|false.
+Client (Flutter)
+
+graceLine(graceFrom, daysLeft) — the three E16 sentences; ownerStatusLine, both grace banners and the rep chip (as a long-press Tooltip, only in GRACE) all read it. null/ACTIVE → the overdue wording. subscription_copy.dart
+earlyRenewalLine(daysForfeited, interval) — "Your current period ends in N days. Paying now starts a new 30-day|365-day period today." The checkout slot reads the order's daysForfeited once one exists (survives a cancelled SDK sheet); the pre-checkout sheet, which opens before any order, reads the DTO's daysLeft (the same server figure). Older server → 0 → no line, Pay unaffected.
+Sheet period wording goes through periodLengthLabel ("30 days"/"365 days").
+Admin list gains the Paused 90d+ segment.
+Tests — 2 new vitest files, 2 new Flutter files, 2 existing Flutter tests updated for the new copy. Results: backend 27/27 across the new + admin-actions suites, tsc --noEmit and npm run lint clean; Flutter 68/68 across the six touched suites, flutter analyze clean (one pre-existing info in an unrelated test).
+
+Two judgment calls to flag
+Where daysForfeited comes from. The flow is sheet → order → SDK, so the sheet can't have an order yet. I did not reorder the flow (that would mint orders on "Not now" and rewrite the notifier tests); the sheet uses the DTO figure and the slot switches to the order's figure as soon as it exists.
+No admin UI for the cash refund. Prompt B lists it as backend-only, so the admin detail screen's Refund button is unchanged and isRefundable still means "online, unrefunded". Say the word if you want a button.
+
+
+
+
+
+res 2 -------------------------------->>>
+
+
+What this round added
+E46 — photoCoverage (adminSubscriptionService.ts)
+
+Every list row now carries photoCoverage: whole-percent share of the catalog's live dishes (same publishableProducts list a publish sends) that have a card image — a photo imageKey or a 3D dish's thumbnailUrl. null for an empty menu.
+Admin tile shows a red "Photos 66% — some cards are placeholders" line, only on PAUSED rows under 100.
+The finding I mentioned is now in the E46 row of the matrix: because a published 3D dish always ships its render thumbnail and Mirage falls back to it, a paused 3D-only menu is not all placeholders. The flag catches the one real case — legacy rows never republished under the thumbnail gate.
+E48 / E49 — one bullet in implement-subscription.md §3.8 (one phone = one outlet = one plan), and a header paragraph in repoint-catalog-owner.ts saying why the script needs no subscription step.
+
+Correction to my earlier list: the "runbook §3.1/§3.2/§3.8" pointers were fine — they resolve to implement-subscription.md §3, which I hadn't looked in. Only the E48 bullet was missing.
+
+Decisions — rewritten in edge-cases-hardening.md as a five-box sign-off checklist (E5, E11, E34, E41, E46). Each says what is already built and which file a different answer would change; gaps-addendum.md mirrors it and no longer calls them open questions.
+
+What's left is yours, not code
+Tick the five boxes (or tell me which one you want changed).
+Rollout steps in rollout.md: staging rehearsal, the live Mirage probe, ≥48 h after the Play release, then the flag.
+Nothing is committed yet — this branch now holds Stage 5, Prompt A, Prompt B and today's follow-ups all uncommitted. Say the word and I'll split it into sensible commits.
+
+
+

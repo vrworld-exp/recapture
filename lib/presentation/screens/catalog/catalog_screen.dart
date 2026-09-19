@@ -406,6 +406,7 @@ class _CatalogBody extends ConsumerWidget {
                         padding: const EdgeInsets.only(bottom: AppSpacing.md),
                         child: _GraceBanner(
                           daysLeft: catalog.subscription?.daysLeft,
+                          graceFrom: catalog.subscription?.graceFrom,
                           onOpenSubscription: onOpenSubscription,
                         ),
                       ),
@@ -551,10 +552,14 @@ class _PausedCard extends StatelessWidget {
 class _GraceBanner extends StatelessWidget {
   const _GraceBanner({
     required this.daysLeft,
+    required this.graceFrom,
     required this.onOpenSubscription,
   });
 
   final int? daysLeft;
+
+  /// Which state the row lapsed from, for the E16 wording.
+  final SubscriptionStatus? graceFrom;
   final VoidCallback onOpenSubscription;
 
   @override
@@ -577,7 +582,7 @@ class _GraceBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              graceBannerLine(daysLeft),
+              graceBannerLine(daysLeft, graceFrom: graceFrom),
               style: textTheme.bodyMedium?.copyWith(color: AppColors.error),
             ),
           ),

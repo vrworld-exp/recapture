@@ -24,6 +24,12 @@
 //
 // Needs .env (MONGODB_URI etc. — same loader as the API). Never prints a raw
 // phone back; identifiers go through the standard mask (PII rule).
+//
+// SUBSCRIPTION (E49): nothing to do. CatalogSubscription and PaymentRecord are
+// keyed by catalogId and survive the move untouched; reminders and rep nudges
+// read `catalog.userId` at send time, so they reach the new owner from the next
+// sweep. An open order's `initiatedBy` keeps pointing at the orphan — harmless,
+// the order is matched by its Razorpay id, not by who asked for it.
 import mongoose, { Types } from 'mongoose';
 import { env } from '../src/config/env';
 import { User } from '../src/models/User';

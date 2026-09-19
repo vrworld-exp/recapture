@@ -358,7 +358,7 @@ void main() {
       // The E9 warning: days left on a running period are forfeited.
       expect(find.byKey(const ValueKey('subscription_forfeit_warning')),
           findsOneWidget);
-      expect(find.textContaining('12 days left on your current period'),
+      expect(find.textContaining('Your current period ends in 12 days'),
           findsOneWidget);
     });
 

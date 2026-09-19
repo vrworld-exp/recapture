@@ -174,7 +174,7 @@ class _SubscriptionChip extends StatelessWidget {
       SubscriptionTone.danger => AppColors.error,
       SubscriptionTone.neutral => AppColors.textMuted,
     };
-    return Container(
+    final chip = Container(
       key: const ValueKey('rep_subscription_chip'),
       padding:
           const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 1),
@@ -187,6 +187,16 @@ class _SubscriptionChip extends StatelessWidget {
         repStatusChip(summary),
         style: TextStyle(fontSize: AppTypography.sizeLabel, color: color),
       ),
+    );
+    // "Overdue 3d" is too short to say WHY (E16): a long-press on the chip
+    // gives the rep the owner's sentence — a trial that ran out is a
+    // different conversation from a payment that did not come.
+    final grace = summary;
+    if (grace == null || grace.status != SubscriptionStatus.grace) return chip;
+    return Tooltip(
+      key: const ValueKey('rep_subscription_chip_tooltip'),
+      message: graceLine(grace.graceFrom, grace.daysLeft),
+      child: chip,
     );
   }
 }

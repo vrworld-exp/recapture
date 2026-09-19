@@ -131,14 +131,31 @@ export type ExtendGraceInput = z.infer<typeof extendGraceSchema>;
  * POST /admin/catalogs/:id/subscription/refund. The row must be flagged
  * DUPLICATE_SUSPECTED, or the admin overrides with a note of at least 30
  * characters — the longer floor is checked in the service, where the flag is.
+ *
+ * `manual: true` records a CASH refund the admin already handed back (E13):
+ * no Razorpay call, and `reference` (the receipt or UPI txn id of the money
+ * returned) is then required — a ledger row for cash with nothing to point at
+ * is a row nobody can audit. Only for a VERIFIED MANUAL row; the service
+ * refuses it on an online payment (USE_PROVIDER_REFUND).
  */
 export const refundSchema = z
   .object({
     refundsPaymentId: objectId('refundsPaymentId'),
     note: z.string().trim().min(10).max(1000),
     override: z.boolean().optional(),
+    manual: z.boolean().optional(),
+    reference: z.string().trim().min(1).max(200).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((body, ctx) => {
+    if (body.manual === true && !body.reference) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reference'],
+        message: 'reference is required for a manual refund',
+      });
+    }
+  });
 export type RefundInput = z.infer<typeof refundSchema>;
 
 /**
@@ -156,8 +173,18 @@ export const standeesIssuedSchema = z
   .strict();
 export type StandeesIssuedInput = z.infer<typeof standeesIssuedSchema>;
 
-/** The collections list's filter vocabulary. */
-export const ADMIN_SUBSCRIPTION_STATES = ['EXPIRING_7D', 'GRACE', 'PAUSED', 'TRIAL'] as const;
+/**
+ * The collections list's filter vocabulary. `PAUSED_90D` is the follow-up
+ * segment (E23): PAUSED with `pausedAt` at least 90 days ago — an owner who
+ * has gone quiet, kept for a call, never purged.
+ */
+export const ADMIN_SUBSCRIPTION_STATES = [
+  'EXPIRING_7D',
+  'GRACE',
+  'PAUSED',
+  'PAUSED_90D',
+  'TRIAL',
+] as const;
 export type AdminSubscriptionState = (typeof ADMIN_SUBSCRIPTION_STATES)[number];
 
 /** GET /admin/subscriptions query. */

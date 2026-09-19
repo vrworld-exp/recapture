@@ -125,6 +125,57 @@ void main() {
       expect(find.textContaining('+91'), findsNothing);
     });
 
+    testWidgets('a PAUSED row with placeholder cards says so (E46); full coverage is silent',
+        (tester) async {
+      Map<String, dynamic> paused(String id, String name, int? coverage) => {
+            'catalogId': id,
+            'catalogName': name,
+            'status': 'PAUSED',
+            'periodEnd': '2026-06-01T00:00:00.000Z',
+            'graceEndsAt': null,
+            'daysLeft': null,
+            'planId': 'TASTE',
+            'photoCoverage': coverage,
+          };
+      final repo = FakePaymentsRepository()
+        ..pages = {
+          AdminSubscriptionFilter.paused: AdminSubscriptionPage(
+            items: [
+              AdminSubscriptionListItem.fromMap(paused('p1', 'half cafe', 66)),
+              AdminSubscriptionListItem.fromMap(paused('p2', 'full cafe', 100)),
+              AdminSubscriptionListItem.fromMap(paused('p3', 'old server', null)),
+            ],
+            nextCursor: null,
+          ),
+          // The same row in GRACE says nothing: 3D is still on.
+          AdminSubscriptionFilter.grace: AdminSubscriptionPage(
+            items: [
+              AdminSubscriptionListItem.fromMap(
+                  paused('g1', 'grace cafe', 40)..['status'] = 'GRACE'),
+            ],
+            nextCursor: null,
+          ),
+        };
+      await tester.pumpWidget(_harness(repo));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Paused'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_subscription_photos_p1')),
+          findsOneWidget);
+      expect(find.text('Photos 66% — some cards are placeholders'),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('admin_subscription_photos_p2')),
+          findsNothing);
+      expect(find.byKey(const ValueKey('admin_subscription_photos_p3')),
+          findsNothing);
+
+      await tester.tap(find.text('In grace'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_subscription_photos_g1')),
+          findsNothing);
+    });
+
     testWidgets('a queue row opens the per-catalog panel', (tester) async {
       final repo = FakePaymentsRepository()
         ..queue = [ManualPaymentRecord.fromMap(manualPaymentPayload())]

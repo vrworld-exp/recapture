@@ -418,8 +418,16 @@ class ManualPaymentSubmission {
 // ── Admin ───────────────────────────────────────────────────────────────────
 
 /// The collections list's filter — `ADMIN_SUBSCRIPTION_STATES` plus the
-/// manual-payment queue, which the screen shows as a fifth segment.
-enum AdminSubscriptionFilter { pending, expiring7d, grace, paused, trial }
+/// manual-payment queue, which the screen shows as its own segment.
+/// `paused90d` (E23) is the follow-up list: paused 90+ days, oldest first.
+enum AdminSubscriptionFilter {
+  pending,
+  expiring7d,
+  grace,
+  paused,
+  paused90d,
+  trial,
+}
 
 extension AdminSubscriptionFilterX on AdminSubscriptionFilter {
   /// The `?state=` value, or null for the queue (a different route).
@@ -428,6 +436,7 @@ extension AdminSubscriptionFilterX on AdminSubscriptionFilter {
         AdminSubscriptionFilter.expiring7d => 'EXPIRING_7D',
         AdminSubscriptionFilter.grace => 'GRACE',
         AdminSubscriptionFilter.paused => 'PAUSED',
+        AdminSubscriptionFilter.paused90d => 'PAUSED_90D',
         AdminSubscriptionFilter.trial => 'TRIAL',
       };
 
@@ -436,6 +445,7 @@ extension AdminSubscriptionFilterX on AdminSubscriptionFilter {
         AdminSubscriptionFilter.expiring7d => 'Expiring 7d',
         AdminSubscriptionFilter.grace => 'In grace',
         AdminSubscriptionFilter.paused => 'Paused',
+        AdminSubscriptionFilter.paused90d => 'Paused 90d+',
         AdminSubscriptionFilter.trial => 'Trial',
       };
 }
@@ -450,6 +460,7 @@ class AdminSubscriptionListItem {
     required this.graceEndsAt,
     required this.daysLeft,
     required this.planId,
+    this.photoCoverage,
   });
 
   final String catalogId;
@@ -459,6 +470,11 @@ class AdminSubscriptionListItem {
   final DateTime? graceEndsAt;
   final int? daysLeft;
   final PlanId? planId;
+
+  /// E46: whole percent of live dishes with a card image; null when the menu
+  /// has no live dish or the server predates the field. Under 100 on a
+  /// PAUSED row, some customer cards are placeholders right now.
+  final int? photoCoverage;
 
   factory AdminSubscriptionListItem.fromMap(Map<String, dynamic> map) =>
       AdminSubscriptionListItem(
@@ -471,6 +487,9 @@ class AdminSubscriptionListItem {
         daysLeft:
             map['daysLeft'] is num ? (map['daysLeft'] as num).toInt() : null,
         planId: PlanIdX.fromApiValueOrNull(map['planId']),
+        photoCoverage: map['photoCoverage'] is num
+            ? (map['photoCoverage'] as num).toInt()
+            : null,
       );
 }
 

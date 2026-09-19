@@ -224,6 +224,7 @@ class PublishBody extends StatelessWidget {
                   const SizedBox(height: AppSpacing.md),
                   _GraceBanner(
                     daysLeft: subscription?.daysLeft,
+                    graceFrom: subscription?.graceFrom,
                     voice: voice,
                     onOpenSubscription: onOpenSubscription,
                   ),
@@ -869,11 +870,15 @@ class _ProductList extends StatelessWidget {
 class _GraceBanner extends StatelessWidget {
   const _GraceBanner({
     required this.daysLeft,
+    required this.graceFrom,
     required this.voice,
     required this.onOpenSubscription,
   });
 
   final int? daysLeft;
+
+  /// Which state the row lapsed from, for the E16 wording.
+  final SubscriptionStatus? graceFrom;
   final PublishVoice voice;
   final VoidCallback? onOpenSubscription;
 
@@ -899,7 +904,7 @@ class _GraceBanner extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  graceBannerLine(daysLeft),
+                  graceBannerLine(daysLeft, graceFrom: graceFrom),
                   style:
                       textTheme.bodyMedium?.copyWith(color: AppColors.error),
                 ),
