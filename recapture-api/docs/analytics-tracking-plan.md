@@ -289,6 +289,21 @@ there.
   `reason` (`ALREADY_USED` — one trial ever, across the owner's deleted catalogs too;
   `ACTIVE` — a live row is in the way; `NOT_ELIGIBLE` — the owner has paid before)
 
+### `subscription_nudge_sent`
+- **When:** `POST /rep/catalogs/:id/subscription/notify-owner` reached the owner on at
+  least one channel (`services/subscription/nudgeService.ts`). Never changes a payment
+  or a subscription row (AC-7.3).
+- **Props:** `catalog_id` (string), `actor_id_hash` (string), `owner_id_hash` (string,
+  `hashIdentifier`), `subscription_status` (`TRIAL`|`ACTIVE`|`GRACE`|`PAUSED`|`CANCELLED`|
+  `COMPED`|`NONE`), `channels` (`('SMS'|'IN_APP')[]` — both, or `IN_APP` alone when the
+  SMS dispatch threw). No phone, no rendered text.
+
+### `subscription_nudge_refused`
+- **When:** the nudge was not sent.
+- **Props:** `catalog_id`, `reason` (`RATE_LIMITED` — the per-catalog window is spent;
+  `NO_PHONE` — the owner has no number on file; `NOT_NEEDED` — paid up, more than seven
+  days left or comped; `FAILED` — both channels threw)
+
 ## Pre-printed standee inventory
 
 ### `qr_batch_minted`

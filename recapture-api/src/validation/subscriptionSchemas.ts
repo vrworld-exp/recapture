@@ -22,6 +22,13 @@ const objectId = (what: string) => z.string().regex(OBJECT_ID_RE, `Invalid ${wha
  */
 export const startTrialSchema = z.object({}).strict().optional();
 
+/**
+ * POST /rep/catalogs/:id/subscription/notify-owner — same shape and the same
+ * reason: what the nudge says is chosen server-side from the subscription
+ * status, never typed by a rep. A message or a phone in the body is a 400.
+ */
+export const notifyOwnerSchema = z.object({}).strict().optional();
+
 // ── Door 2: in-app checkout ─────────────────────────────────────────────────
 
 /**

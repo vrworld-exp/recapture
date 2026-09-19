@@ -42,3 +42,27 @@ export async function consumeRateWindow(
 
   return { limited: false };
 }
+
+/**
+ * The same verdict {@link consumeRateWindow} would give right now, WITHOUT
+ * recording a hit — for a read that wants to show a cooldown before the
+ * caller taps (the rep's "Notify owner" button). `resetsAt` is the instant
+ * the window lapses and the next hit would be accepted.
+ */
+export async function peekRateWindow(
+  key: string,
+  max: number,
+  windowSeconds: number,
+  now: number = Date.now()
+): Promise<{ limited: true; retryAfter: number; resetsAt: Date } | { limited: false }> {
+  const existing = await RateWindow.findOne({ key }).lean().exec();
+  if (!existing) return { limited: false };
+  const startedAt = existing.windowStartedAt.getTime();
+  const windowAgeSeconds = (now - startedAt) / 1000;
+  if (windowAgeSeconds >= windowSeconds || existing.count < max) return { limited: false };
+  return {
+    limited: true,
+    retryAfter: Math.ceil(windowSeconds - windowAgeSeconds),
+    resetsAt: new Date(startedAt + windowSeconds * 1000),
+  };
+}

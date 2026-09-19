@@ -107,8 +107,10 @@ import { env } from '@/config/env';
 import { validateBody } from '@/middleware/validate';
 import {
   manualPaymentRequestSchema,
+  notifyOwnerSchema,
   startTrialSchema,
 } from '@/validation/subscriptionSchemas';
+import { notifyOwnerToPay, nudgeNextAllowedAt } from '@/services/subscription/nudgeService';
 import {
   getPendingManualPayment,
   submitManualPaymentRequest,
@@ -1623,6 +1625,11 @@ function respondToRepPublishRequest(
  * GET /rep/catalogs/:id/subscription — the same body the owner reads at
  * `GET /catalog/subscription`, so a rep on the phone with an owner is looking
  * at the same numbers.
+ *
+ * Plus `nudge.nextAllowedAt`, BESIDE the subscription rather than inside it:
+ * the owner's DTO stays byte-identical, and the rep's card learns whether
+ * "Notify owner to pay" is on cooldown before a tap (a read-only peek at the
+ * same window the POST consumes). Null = a nudge is allowed right now.
  */
 router.get(
   '/catalogs/:id/subscription',
@@ -1631,11 +1638,78 @@ router.get(
     const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
     if (!catalog) return notDelegated(res);
 
-    const subscription = await getSubscriptionStatus(
-      catalog._id as Types.ObjectId,
-      catalog.userId
-    );
-    res.status(200).json({ status: 'success', subscription });
+    const catalogId = catalog._id as Types.ObjectId;
+    const [subscription, nextAllowedAt] = await Promise.all([
+      getSubscriptionStatus(catalogId, catalog.userId),
+      nudgeNextAllowedAt(catalogId),
+    ]);
+    res.status(200).json({
+      status: 'success',
+      subscription,
+      nudge: { nextAllowedAt: nextAllowedAt?.toISOString() ?? null },
+    });
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/subscription/notify-owner — Door 2's nudge. Asks
+ * the owner, by SMS and by the in-app bell, to open the app and pay.
+ *
+ * NO BODY (notifyOwnerSchema refuses any key): the sentence is chosen from
+ * the subscription status, never typed. NEVER a payment write (AC-7.3) —
+ * the service reads the subscription and touches nothing but a Notification
+ * row and the SMS seam. The rate window is the service's own, per CATALOG,
+ * and the router adds none of its own so the 429 here and the cooldown on
+ * the GET above are one and the same window.
+ */
+router.post(
+  '/catalogs/:id/subscription/notify-owner',
+  validateBody(notifyOwnerSchema),
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const result = await notifyOwnerToPay(catalog, {
+      userId: repUserId,
+      role: req.user!.role ?? 'SALES_REP',
+    });
+    switch (result.outcome) {
+      case 'SENT':
+        res.status(200).json({
+          status: 'success',
+          nudge: {
+            channels: result.channels,
+            nextAllowedAt: result.nextAllowedAt?.toISOString() ?? null,
+          },
+        });
+        return;
+      case 'RATE_LIMITED':
+        res.status(429).json({
+          status: 'error',
+          code: 'RATE_LIMITED',
+          message: 'The owner was already reminded recently. Try again later.',
+          retryAfter: result.retryAfter,
+          nextAllowedAt: result.nextAllowedAt.toISOString(),
+        });
+        return;
+      case 'NO_PHONE':
+        return fail(
+          res,
+          409,
+          'OWNER_UNREACHABLE',
+          'This owner has no phone number on file — ask an admin.'
+        );
+      case 'NOT_NEEDED':
+        return fail(
+          res,
+          409,
+          'NUDGE_NOT_NEEDED',
+          'This restaurant is paid up — no reminder is needed right now.'
+        );
+      case 'FAILED':
+        return fail(res, 502, 'NUDGE_FAILED', 'The reminder could not be sent. Try again.');
+    }
   })
 );
 

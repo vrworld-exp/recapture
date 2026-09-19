@@ -333,11 +333,20 @@ class CatalogSubscription {
     required this.standeeIssued,
     required this.plans,
     this.planSnapshot,
+    this.nudgeNextAllowedAt,
   });
 
   final SubscriptionStatus status;
   final PlanId? planId;
   final String? planName;
+
+  /// REP SURFACE ONLY. When the next "Notify owner to pay" nudge on this
+  /// restaurant is allowed (`nudge.nextAllowedAt` beside the DTO on
+  /// `GET /rep/catalogs/:id/subscription`), or null when one is allowed now
+  /// — which is also what the owner's own route, which has no nudge, reads
+  /// as. Not part of `SubscriptionStatusDto`; carried here so the rep card
+  /// has one state to watch.
+  final DateTime? nudgeNextAllowedAt;
 
   /// The plan AS BOUGHT — the server's frozen copy the running period is
   /// under. Null on a trial, a comp, no row, or an older server. Compared to
@@ -383,6 +392,35 @@ class CatalogSubscription {
     );
   }
 
+  /// Whether the rep's nudge is on cooldown at [now].
+  bool nudgeOnCooldownAt(DateTime now) {
+    final at = nudgeNextAllowedAt;
+    return at != null && at.isAfter(now);
+  }
+
+  /// The same row with the nudge cooldown replaced — what the card adopts
+  /// after a send or a 429, without re-reading the whole subscription.
+  CatalogSubscription withNudgeNextAllowedAt(DateTime? at) =>
+      CatalogSubscription(
+        status: status,
+        planId: planId,
+        planName: planName,
+        billingInterval: billingInterval,
+        periodEnd: periodEnd,
+        graceEndsAt: graceEndsAt,
+        daysLeft: daysLeft,
+        threeDDishCount: threeDDishCount,
+        threeDDishCap: threeDDishCap,
+        imageDishCount: imageDishCount,
+        trialAvailable: trialAvailable,
+        isEntitledTo3D: isEntitledTo3D,
+        standeeIncluded: standeeIncluded,
+        standeeIssued: standeeIssued,
+        plans: plans,
+        planSnapshot: planSnapshot,
+        nudgeNextAllowedAt: at,
+      );
+
   /// The compact view of the same row, for a chip that has only this.
   SubscriptionSummary? get summary => hasRow
       ? SubscriptionSummary(
@@ -396,7 +434,13 @@ class CatalogSubscription {
 
   /// Tolerant of every key being absent: an older server answering an empty
   /// object renders as "No subscription yet" with the bundled plans.
-  factory CatalogSubscription.fromMap(Map<String, dynamic> map) {
+  ///
+  /// [nudgeNextAllowedAt] is the rep route's sibling `nudge` block, parsed
+  /// by the rep repository and handed in; the DTO itself never carries it.
+  factory CatalogSubscription.fromMap(
+    Map<String, dynamic> map, {
+    DateTime? nudgeNextAllowedAt,
+  }) {
     final allocation = map['standeeAllocation'];
     final cap = map['threeDDishCap'];
     return CatalogSubscription(
@@ -426,6 +470,7 @@ class CatalogSubscription {
           ? PlanDefinition.fromMap(
               (map['planSnapshot'] as Map).cast<String, dynamic>())
           : null,
+      nudgeNextAllowedAt: nudgeNextAllowedAt,
     );
   }
 }

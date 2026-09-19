@@ -276,7 +276,15 @@ void main() {
     await tester.pumpWidget(_harness(repo, online: false));
     await tester.pumpAndSettle();
 
-    expect(find.text('Needs a connection'), findsOneWidget);
+    // Scoped to the trial button: the nudge button (stage-04) says the same
+    // thing offline, and this test is about the trial.
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rep_start_trial')),
+        matching: find.text('Needs a connection'),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.byKey(const ValueKey('rep_start_trial')));
     await tester.pumpAndSettle();
 

@@ -1,3 +1,5 @@
+⌛⌛⌛⌛⌛⌛⌛⌛⌛⌛⌛
+
 # NEW FEATURE: Rep "Notify owner to pay" nudge + activation-screen payment copy
 # Product: Mirage Menu (ReCapture backend + Flutter client)
 # Scope: New Feature

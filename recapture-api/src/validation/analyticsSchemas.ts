@@ -132,6 +132,12 @@ export const AnalyticsEvent = {
   // `door` says which. Hashed actor only, never the owner's contact.
   SUBSCRIPTION_TRIAL_STARTED: 'subscription_trial_started',
   SUBSCRIPTION_TRIAL_REFUSED: 'subscription_trial_refused',
+  // ── Rep "Notify owner to pay" nudge (Door 2, stage-04) ────────────────────
+  // Emitted by services/subscription/nudgeService.ts. Hashed actor and owner
+  // ids, the status the sentence was chosen from, and which channels landed —
+  // never the phone, never the rendered text.
+  SUBSCRIPTION_NUDGE_SENT: 'subscription_nudge_sent',
+  SUBSCRIPTION_NUDGE_REFUSED: 'subscription_nudge_refused',
   // ── Subscription payments (Doors 2–4, Stage 3) ────────────────────────────
   // Money events carry the opaque catalog id, plan/interval enums, integer
   // paise and hashed actor ids — never a Razorpay contact field, never a card
@@ -964,6 +970,29 @@ const subscriptionTrialRefusedProps = z
   })
   .strict();
 
+const subscriptionNudgeSentProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    actor_id_hash: z.string().min(1),
+    owner_id_hash: z.string().min(1),
+    /** The row's status the clause was chosen from, or NONE when there is no row. */
+    subscription_status: z.enum([...SUBSCRIPTION_STATUSES, 'NONE']),
+    /** Which channels actually landed: both, or IN_APP alone when the SMS stub threw. */
+    channels: z.array(z.enum(['SMS', 'IN_APP'])).min(1),
+  })
+  .strict();
+
+const subscriptionNudgeRefusedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    /**
+     * RATE_LIMITED (the per-catalog window), NO_PHONE (a legacy owner with no
+     * number), NOT_NEEDED (paid up), FAILED (both channels threw).
+     */
+    reason: z.enum(['RATE_LIMITED', 'NO_PHONE', 'NOT_NEEDED', 'FAILED']),
+  })
+  .strict();
+
 const subscriptionOrderCreatedProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1300,6 +1329,8 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.PUBLISH_BLOCKED_BY_SUBSCRIPTION]: publishBlockedBySubscriptionProps,
   [AnalyticsEvent.SUBSCRIPTION_TRIAL_STARTED]: subscriptionTrialStartedProps,
   [AnalyticsEvent.SUBSCRIPTION_TRIAL_REFUSED]: subscriptionTrialRefusedProps,
+  [AnalyticsEvent.SUBSCRIPTION_NUDGE_SENT]: subscriptionNudgeSentProps,
+  [AnalyticsEvent.SUBSCRIPTION_NUDGE_REFUSED]: subscriptionNudgeRefusedProps,
   [AnalyticsEvent.SUBSCRIPTION_ORDER_CREATED]: subscriptionOrderCreatedProps,
   [AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED]: subscriptionPaymentRecordedProps,
   [AnalyticsEvent.SUBSCRIPTION_PAYMENT_FAILED]: subscriptionPaymentFailedProps,

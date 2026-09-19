@@ -1019,6 +1019,36 @@ the owner's `modelCount`, their models list and the project detail's viewer with
     never `ALL`) plus a `console.error`; it never throws. Used for amount
     mismatch, unknown order, orphan payment, duplicate, external refund, failed
     refund and silent webhooks.
+- **The rep's "Notify owner to pay" nudge is a MESSAGE, never a payment
+  (Stage 4, `docs/subscription/stage-04-rep-tools.md`).** `POST
+  /rep/catalogs/:id/subscription/notify-owner` (delegated, NO body) →
+  `services/subscription/nudgeService.ts → notifyOwnerToPay`: reads the
+  subscription to pick ONE clause ("trial ends in 5 days", "payment is
+  overdue", "3D menu is paused", "has no plan yet", "plan expires in N days")
+  and sends it two ways in parallel — a templated SMS through
+  `providers/sms.ts → sendTemplatedSms` (the OTP-shaped `sendSms` is
+  untouched; template text lives in `SMS_TEMPLATES`, the stub logs the
+  template NAME only) and a `PAYMENT_DUE` notification for the owner with
+  `action.url = /catalog/subscription`. The in-app row is the one that must
+  land: an SMS failure is a warning and `channels: ['IN_APP']`; both failing
+  is 502 `NUDGE_FAILED`. It touches no `CatalogSubscription` or
+  `PaymentRecord` (AC-7.3 — `tests/subscription-nudge.test.ts` hashes both
+  collections around a send). ACTIVE with more than 7 days left, or a comp,
+  is 409 `NUDGE_NOT_NEEDED`; an owner with no phone is 409
+  `OWNER_UNREACHABLE`. **Rate-limited per CATALOG, not per rep**, no admin
+  bypass (`sub-nudge:<catalogId>`, `SUBSCRIPTION_NUDGE_MAX_PER_WINDOW` = 2 per
+  `SUBSCRIPTION_NUDGE_WINDOW_SECONDS` = 86400); the same window is PEEKED
+  (`peekRateWindow`, read-only) by `GET /rep/catalogs/:id/subscription`,
+  which answers `nudge: { nextAllowedAt }` BESIDE the owner's DTO so that DTO
+  stays byte-identical. The automated reminder schedule is Stage 6 and is
+  NOT built. Client: `RepRepository.notifyOwner` answers a sealed
+  `NudgeResult` (sent / cooldown / refused — states, not exceptions) and the
+  card adopts `nextAllowedAt` in place ("Sent · again in Nh") with no
+  re-read; the button is HIDDEN for a paid-up owner. 'My restaurants' sorts
+  by `orderRepCatalogsForAttention` (GRACE, PAUSED, none, TRIAL, ACTIVE,
+  COMPED, CANCELLED, then fewest days left, stable). Guardrails:
+  `test/rep/rep_nudge_button_test.dart`, `rep_activation_copy_test.dart`,
+  `rep_catalogs_ordering_test.dart`.
 - **Analytics are a PROXY, not a redirect.** Mirage's three report endpoints are
   admin-scoped and its own in-code note forbids opening them to client scope.
   ReCapture reads them with its admin credential and FORCES `restaurant` from the

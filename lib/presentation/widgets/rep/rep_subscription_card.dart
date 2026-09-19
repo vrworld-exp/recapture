@@ -1,7 +1,9 @@
 // lib/presentation/widgets/rep/rep_subscription_card.dart
 //
 // The Subscription card on a delegated restaurant's detail screen, and the
-// two actions a rep has on it: Start free trial (Door 1) and Record cash
+// three actions a rep has on it: Start free trial (Door 1), Notify owner to
+// pay (Door 2's nudge — an SMS and a bell notification asking the owner to
+// open THEIR app and pay; never a payment itself, AC-7.3) and Record cash
 // payment (Door 3 — a REQUEST an admin verifies; the card says "Awaiting admin
 // verification" while it is pending). There is no Pay, no refund and no
 // "mark paid" here, and there must never be (AC-5.1, AC-6.5).
@@ -24,6 +26,7 @@ import '../../../application/rep/rep_subscription_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_subscription.dart';
+import '../../../domain/entities/subscription_nudge.dart';
 import '../../../utils/analytics.dart';
 import '../app_button.dart';
 import '../catalog/catalog_feedback.dart';
@@ -48,6 +51,7 @@ class RepSubscriptionCard extends ConsumerStatefulWidget {
 
 class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
   bool _starting = false;
+  bool _nudging = false;
 
   @override
   void initState() {
@@ -105,6 +109,26 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
       );
     } finally {
       if (mounted) setState(() => _starting = false);
+    }
+  }
+
+  Future<void> _notifyOwner() async {
+    Analytics.logEvent('rep_nudge_tapped', {'catalog_id': widget.catalogId});
+    final messenger = CatalogFeedback.of(context);
+    setState(() => _nudging = true);
+    try {
+      final result = await ref
+          .read(repSubscriptionProvider(widget.catalogId).notifier)
+          .notifyOwner();
+      CatalogFeedback.confirm(messenger, nudgeResultSentence(result));
+    } on CatalogFailure catch (failure) {
+      CatalogFeedback.failure(
+        messenger,
+        failure,
+        subject: 'The owner could not be notified',
+      );
+    } finally {
+      if (mounted) setState(() => _nudging = false);
     }
   }
 
@@ -220,6 +244,27 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
           ),
           const SizedBox(height: AppSpacing.sm),
         ],
+        // Door 2's nudge. HIDDEN, not disabled, for a paid-up owner (the
+        // server would answer 409 anyway); DISABLED with the wait while the
+        // restaurant's window is spent — the cooldown comes from the server
+        // (per restaurant, shared by every rep) and is adopted in place after
+        // a tap, so it shows without a refresh.
+        if (nudgeOffered(subscription)) ...[
+          Builder(builder: (context) {
+            final cooldown = nudgeCooldownLabel(subscription, DateTime.now());
+            return AppButton.secondary(
+              key: const ValueKey('rep_notify_owner'),
+              label: cooldown ??
+                  (isOnline ? 'Notify owner to pay' : 'Needs a connection'),
+              icon: Icons.notifications_active_outlined,
+              isFullWidth: false,
+              isLoading: _nudging,
+              onPressed:
+                  cooldown == null && isOnline && !_nudging ? _notifyOwner : null,
+            );
+          }),
+          const SizedBox(height: AppSpacing.sm),
+        ],
         if (pendingCash)
           Row(
             key: const ValueKey('rep_cash_pending_line'),
@@ -269,5 +314,62 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
     if (!mounted) return;
     // The sheet may have filed a request; the line under the button reads
     // the same provider it wrote, so nothing more is needed here.
+  }
+}
+
+// ── The nudge's copy and rules, pure so the tests can pin them ──────────────
+
+/// Whether the card offers "Notify owner to pay" at all. Mirrors the server's
+/// NOT_NEEDED rule: ACTIVE with more than a week left, or a comp, has
+/// nothing to pay — offering the button would only earn a 409.
+bool nudgeOffered(CatalogSubscription subscription) {
+  switch (subscription.status) {
+    case SubscriptionStatus.comped:
+      return false;
+    case SubscriptionStatus.active:
+      final days = subscription.daysLeft;
+      return days != null && days <= 7;
+    case SubscriptionStatus.none:
+    case SubscriptionStatus.trial:
+    case SubscriptionStatus.grace:
+    case SubscriptionStatus.paused:
+    case SubscriptionStatus.cancelled:
+    case SubscriptionStatus.unknown:
+      return true;
+  }
+}
+
+/// The disabled button's label while the restaurant's window is spent —
+/// "Sent · again in 23h" — or null when a nudge is allowed at [now].
+String? nudgeCooldownLabel(CatalogSubscription subscription, DateTime now) {
+  if (!subscription.nudgeOnCooldownAt(now)) return null;
+  return 'Sent · again in ${nudgeWaitText(subscription.nudgeNextAllowedAt!, now)}';
+}
+
+/// "23h" for anything an hour or more away, "45m" under that, never "0h".
+/// Rounded UP on both scales: a button that says "again in 1m" for 61
+/// seconds is honest; one that says "0m" for 59 seconds is a bug report.
+String nudgeWaitText(DateTime nextAllowedAt, DateTime now) {
+  final remaining = nextAllowedAt.difference(now);
+  final minutes = (remaining.inSeconds / 60).ceil();
+  if (minutes >= 60) return '${(minutes / 60).ceil()}h';
+  return '${minutes < 1 ? 1 : minutes}m';
+}
+
+/// The toast for each answer — OUR sentence for the server's code, never its
+/// prose (F10), and the same wording the stage doc fixes for a legacy owner.
+String nudgeResultSentence(NudgeResult result, {DateTime? now}) {
+  switch (result) {
+    case NudgeSent(:final bySms, :final inApp):
+      if (bySms && inApp) return 'Sent to the owner by SMS and in-app.';
+      if (inApp) return 'Sent to the owner in-app — the SMS could not be sent.';
+      return 'Sent to the owner by SMS.';
+    case NudgeCooldown(:final nextAllowedAt):
+      return 'Already sent — the owner can be reminded again in '
+          '${nudgeWaitText(nextAllowedAt, now ?? DateTime.now())}.';
+    case NudgeRefused(reason: NudgeRefusal.ownerUnreachable):
+      return 'This owner has no phone number on file — ask an admin.';
+    case NudgeRefused(reason: NudgeRefusal.notNeeded):
+      return 'This restaurant is paid up — no reminder needed.';
   }
 }

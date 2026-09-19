@@ -670,6 +670,15 @@ const envSchema = z.object({
    */
   ADMIN_REFUND_MAX_PER_WINDOW: z.coerce.number().int().positive().default(5),
   ADMIN_REFUND_WINDOW_SECONDS: z.coerce.number().int().positive().default(3600),
+  /**
+   * The rep's "Notify owner to pay" nudge (docs/subscription/stage-04-rep-tools.md):
+   * how many times ONE CATALOG's owner may be nudged per window, whoever taps.
+   * Keyed per catalog, not per rep, so two reps cannot double a restaurant's
+   * reminders — and there is no admin bypass. Two a day is a reminder; more
+   * is nagging an owner who has already been asked.
+   */
+  SUBSCRIPTION_NUDGE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(2),
+  SUBSCRIPTION_NUDGE_WINDOW_SECONDS: z.coerce.number().int().positive().default(86_400),
 });
 
 /** Razorpay issues `rzp_live_…` and `rzp_test_…` key ids; the prefix is the mode. */

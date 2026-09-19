@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/rep_repository.dart';
 import '../../domain/entities/catalog_subscription.dart';
+import '../../domain/entities/subscription_nudge.dart';
 import 'rep_catalogs_notifier.dart';
 import 'rep_restaurant_notifier.dart';
 
@@ -56,6 +57,37 @@ class RepSubscriptionNotifier
       _invalidateSiblings();
       rethrow;
     }
+  }
+
+  /// Asks the owner to pay (Door 2's nudge). Never a payment write, so the
+  /// list chip and the header are NOT invalidated — nothing they show has
+  /// moved. What has moved is the cooldown: a send or a 429 carries the
+  /// server's `nextAllowedAt`, and the card adopts it in place so the button
+  /// shows "again in Nh" without a re-read. A NOT_NEEDED refusal means the
+  /// card's status is stale (the owner paid since it loaded), so that one
+  /// re-reads.
+  ///
+  /// Throws the repository's [CatalogFailure] for anything that is not one of
+  /// the three answers — offline, a 5xx, a revoked delegation.
+  Future<NudgeResult> notifyOwner() async {
+    final result = await _repo.notifyOwner(arg);
+    final current = state.valueOrNull;
+    final DateTime? nextAllowedAt = switch (result) {
+      NudgeSent(:final nextAllowedAt) => nextAllowedAt,
+      NudgeCooldown(:final nextAllowedAt) => nextAllowedAt,
+      NudgeRefused() => null,
+    };
+    switch (result) {
+      case NudgeSent() || NudgeCooldown():
+        if (current != null) {
+          state = AsyncData(current.withNudgeNextAllowedAt(nextAllowedAt));
+        }
+      case NudgeRefused(reason: NudgeRefusal.notNeeded):
+        unawaited(refresh());
+      case NudgeRefused():
+        break;
+    }
+    return result;
   }
 
   void _invalidateSiblings() {

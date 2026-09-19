@@ -384,6 +384,14 @@ class _RepActivationScreenState extends ConsumerState<RepActivationScreen> {
           emphasis: true,
           valueKey: const ValueKey('rep_confirm_phone'),
         ),
+        const SizedBox(height: AppSpacing.sm),
+        // A2: the number is also where the money comes from. The owner pays in
+        // THEIR app, signed in on this number — a rep who hears that sentence
+        // checks the digits once more, and stops expecting to take payment.
+        const _Hint(
+          'The owner will log in and pay using this number.',
+          key: ValueKey('rep_confirm_pay_note'),
+        ),
         const SizedBox(height: AppSpacing.lg),
         if (state.failure != null) ...[
           _FailureNote(failure: state.failure!),
@@ -607,7 +615,7 @@ class _StepTitle extends StatelessWidget {
 }
 
 class _Hint extends StatelessWidget {
-  const _Hint(this.text);
+  const _Hint(this.text, {super.key});
   final String text;
 
   @override

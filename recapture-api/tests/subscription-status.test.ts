@@ -369,7 +369,11 @@ describe('over the wire', () => {
 
     expect(ownerRes.status).toBe(200);
     expect(repRes.status).toBe(200);
-    expect(repRes.body).toEqual(ownerRes.body);
+    // The DTO is identical; the rep's body carries ONE extra sibling, the
+    // nudge cooldown (stage-04), which the owner's route never has.
+    expect(repRes.body.subscription).toEqual(ownerRes.body.subscription);
+    expect(repRes.body).toEqual({ ...ownerRes.body, nudge: { nextAllowedAt: null } });
+    expect(ownerRes.body).not.toHaveProperty('nudge');
     expect(ownerRes.body.subscription).toMatchObject({
       status: 'TRIAL',
       threeDDishCount: 1,

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
+import '../../domain/entities/catalog_json.dart' show catalogDate;
 import '../../domain/entities/catalog_category.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/catalog_subscription.dart';
@@ -34,6 +35,7 @@ import 'catalog_products_repository.dart'
         kBulkProductIdLimit,
         kCatalogUnchanged;
 import '../../domain/entities/rep_activation.dart';
+import '../../domain/entities/subscription_nudge.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
 import 'publish_request_mapping.dart';
@@ -249,6 +251,17 @@ abstract interface class RepRepository {
   /// could fire twice, or for a restaurant the rep has since left.
   Future<CatalogSubscription> startTrial(String catalogId);
 
+  /// Asks the owner, by SMS and by their in-app bell, to open the app and pay
+  /// (Door 2's nudge). No body: the server chooses the sentence from the
+  /// subscription status. NEVER a payment write — the server reads the
+  /// subscription and touches nothing but a notification row.
+  ///
+  /// Answers a [NudgeResult] for the three states the card has copy for —
+  /// sent, on cooldown (429, per RESTAURANT, shared by every rep), refused
+  /// (409: no phone on file, or paid up) — and throws [CatalogFailure] for
+  /// anything else. Never queued offline, for the same reason as [startTrial].
+  Future<NudgeResult> notifyOwner(String catalogId);
+
   /// The restaurant's sections, in their set order.
   ///
   /// WRITABLE on this surface, and it has to be. `activate` seeds no categories
@@ -412,6 +425,14 @@ abstract final class RepErrorCodes {
   /// A publish is already running for this catalog. Mapped to
   /// [PublishAlreadyRunning] rather than thrown; see [RepRepository.publish].
   static const publishInProgress = 'PUBLISH_IN_PROGRESS';
+
+  /// The owner has no phone number on file, so a nudge cannot reach them.
+  /// Mapped to [NudgeRefused]; see [RepRepository.notifyOwner].
+  static const ownerUnreachable = 'OWNER_UNREACHABLE';
+
+  /// The restaurant is paid up — the server refuses to nag. Mapped to
+  /// [NudgeRefused]; the card hides the button for the same state.
+  static const nudgeNotNeeded = 'NUDGE_NOT_NEEDED';
 }
 
 /// Whether a failure means "this standee cannot be used, try another".
@@ -577,8 +598,56 @@ class RemoteRepRepository implements RepRepository {
         );
         final body = res.data?['subscription'];
         if (body is! Map<String, dynamic>) throw _malformed;
-        return CatalogSubscription.fromMap(body);
+        // The nudge cooldown rides BESIDE the owner's DTO, not inside it.
+        final nudge = res.data?['nudge'];
+        return CatalogSubscription.fromMap(
+          body,
+          nudgeNextAllowedAt:
+              nudge is Map ? catalogDate(nudge['nextAllowedAt']) : null,
+        );
       });
+
+  @override
+  Future<NudgeResult> notifyOwner(String catalogId) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/rep/catalogs/$catalogId/subscription/notify-owner',
+      );
+      final nudge = res.data?['nudge'];
+      if (nudge is! Map) throw _malformed;
+      final rawChannels = nudge['channels'];
+      return NudgeSent(
+        channels: [
+          if (rawChannels is List)
+            for (final c in rawChannels)
+              if (c is String) NudgeChannelX.fromApiValue(c),
+        ],
+        nextAllowedAt: catalogDate(nudge['nextAllowedAt']),
+      );
+    } on DioException catch (error) {
+      final body = error.response?.data;
+      final code = body is Map ? body['code'] : null;
+      if (error.response?.statusCode == 429) {
+        // The server's instant where it gave one, else counted from now —
+        // both land on the same second the GET will report.
+        final at = body is Map ? catalogDate(body['nextAllowedAt']) : null;
+        final retryAfter = body is Map ? body['retryAfter'] : null;
+        return NudgeCooldown(
+          nextAllowedAt: at ??
+              DateTime.now().add(
+                Duration(seconds: retryAfter is num ? retryAfter.toInt() : 0),
+              ),
+        );
+      }
+      if (code == RepErrorCodes.ownerUnreachable) {
+        return const NudgeRefused(NudgeRefusal.ownerUnreachable);
+      }
+      if (code == RepErrorCodes.nudgeNotNeeded) {
+        return const NudgeRefused(NudgeRefusal.notNeeded);
+      }
+      throw CatalogFailure.fromDio(error);
+    }
+  }
 
   @override
   Future<CatalogSubscription> startTrial(String catalogId) =>

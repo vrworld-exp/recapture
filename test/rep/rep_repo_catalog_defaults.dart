@@ -31,6 +31,7 @@ import 'package:recapture/domain/entities/catalog_product.dart';
 import 'package:recapture/domain/entities/catalog_subscription.dart';
 import 'package:recapture/domain/entities/product_availability.dart';
 import 'package:recapture/domain/entities/product_food_type.dart';
+import 'package:recapture/domain/entities/subscription_nudge.dart';
 
 mixin RepRepoCatalogDefaults implements RepRepository {
   /// The published history is empty unless a test says otherwise — most of
@@ -51,6 +52,10 @@ mixin RepRepoCatalogDefaults implements RepRepository {
   @override
   Future<CatalogSubscription> startTrial(String catalogId) =>
       throw UnimplementedError('the trial is not exercised by this test');
+
+  @override
+  Future<NudgeResult> notifyOwner(String catalogId) =>
+      throw UnimplementedError('the nudge is not exercised by this test');
 
   @override
   Future<PublishStatus> publishStatus(String catalogId) =>

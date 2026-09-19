@@ -19,6 +19,7 @@ import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/rep_activation.dart';
+import '../../../domain/rep/rep_catalog_ordering.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 
@@ -55,13 +56,19 @@ class RepCatalogsScreen extends ConsumerWidget {
                     title: 'No restaurants yet.',
                     body: 'Activate a standee to sign one up.',
                   )
-                : ListView.separated(
-                    padding: const EdgeInsets.all(AppSpacing.lg),
-                    itemCount: items.length,
-                    separatorBuilder: (_, __) =>
-                        const SizedBox(height: AppSpacing.sm),
-                    itemBuilder: (_, i) => _CatalogTile(summary: items[i]),
-                  ),
+                : Builder(builder: (_) {
+                    // Overdue first, then whoever needs a nudge soonest —
+                    // the order a rep works the list in (see
+                    // orderRepCatalogsForAttention).
+                    final ordered = orderRepCatalogsForAttention(items);
+                    return ListView.separated(
+                      padding: const EdgeInsets.all(AppSpacing.lg),
+                      itemCount: ordered.length,
+                      separatorBuilder: (_, __) =>
+                          const SizedBox(height: AppSpacing.sm),
+                      itemBuilder: (_, i) => _CatalogTile(summary: ordered[i]),
+                    );
+                  }),
           ),
         ),
       ),
