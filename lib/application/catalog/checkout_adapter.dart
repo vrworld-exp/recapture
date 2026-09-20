@@ -2,11 +2,14 @@
 //
 // The in-app payment sheet, behind a seam.
 //
-// The Razorpay SDK (`razorpay_flutter`) exists for Android and iOS and for
-// nothing else, so it lives ONLY in `checkout_adapter_io.dart`, selected by
-// conditional import — the same shape as `rep_capabilities*.dart`, for the
-// same two reasons: the unsupported path is not compiled into the web build,
-// and one widget test can drive both renderings by overriding the provider.
+// Razorpay ships two clients and neither runs everywhere: the native SDK
+// (`razorpay_flutter`) exists for Android and iOS only, and Checkout.js only
+// in a browser. So each lives in its own half — `checkout_adapter_io.dart`
+// and `checkout_adapter_web.dart` — selected by conditional import, the same
+// shape as `rep_capabilities*.dart`, for the same two reasons: neither half
+// is compiled into the other target's build, and one widget test can drive
+// every rendering by overriding the provider. Desktop (the stub, and an io
+// build on a desktop OS) has no client at all and answers "unsupported".
 //
 // WHAT THE ADAPTER DOES NOT DECIDE. It opens a sheet for an order the server
 // already minted and reports what the SDK said. It never activates anything:
@@ -58,7 +61,7 @@ class CheckoutFailed extends CheckoutOutcome {
   final String message;
 }
 
-/// No SDK on this target (web, desktop).
+/// No SDK on this target (desktop).
 class CheckoutUnsupported extends CheckoutOutcome {
   const CheckoutUnsupported();
 }
@@ -66,7 +69,7 @@ class CheckoutUnsupported extends CheckoutOutcome {
 /// Opens the payment sheet for one server-minted order.
 abstract interface class CheckoutAdapter {
   /// Whether [open] can do anything here. False → the screen shows the
-  /// "pay from your phone" card and never calls [open].
+  /// "pay from your phone or browser" card and never calls [open].
   bool get isSupported;
 
   /// [description] is "`<Plan>` plan · monthly/yearly". Deliberately no

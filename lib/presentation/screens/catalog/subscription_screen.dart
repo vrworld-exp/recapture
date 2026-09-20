@@ -11,8 +11,10 @@
 //   • Decide that a payment happened. The Pay / Renew / Upgrade button opens
 //     Razorpay INSIDE the app and then [CheckoutNotifier] polls the server
 //     until it says ACTIVE (§7 rule 1). The SDK's "success" is never shown as
-//     "paid"; the server's status is. On web there is no SDK (README C7), so
-//     the button gives way to "Pay from the ReCapture app on your phone".
+//     "paid"; the server's status is. The sheet is the native SDK on
+//     Android/iOS and Razorpay's Checkout.js overlay in a browser (README
+//     C7); only desktop has neither, and there the button gives way to
+//     "Pay from the ReCapture app on your phone".
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -607,8 +609,9 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
                       style: textTheme.bodyMedium),
                   const SizedBox(height: AppSpacing.xs),
                   Text(
-                    'In-app payment is available on Android and iOS. '
-                    'Your plan and history show here on every device.',
+                    'In-app payment is available on Android, iOS and in '
+                    'the browser. Your plan and history show here on every '
+                    'device.',
                     style: textTheme.bodySmall
                         ?.copyWith(color: AppColors.textMuted),
                   ),
@@ -693,10 +696,16 @@ class _CheckoutProgress extends StatelessWidget {
           false
         ),
       CheckoutPhase.failed => (
-          checkout.failureCode == 'UNSUPPORTED'
-              ? 'In-app payment is not available on this device.'
-              : 'The payment did not go through. Nothing was charged — '
-                  'you can try again.',
+          switch (checkout.failureCode) {
+            'UNSUPPORTED' => 'In-app payment is not available on this device.',
+            // The web half could not fetch checkout.js — a blocker or a
+            // locked-down network. Nothing was even attempted.
+            'SDK_UNAVAILABLE' =>
+              "Couldn't load the payment window. Check your connection or "
+                  'ad blocker and try again.',
+            _ => 'The payment did not go through. Nothing was charged — '
+                'you can try again.',
+          },
           AppColors.error,
           false
         ),

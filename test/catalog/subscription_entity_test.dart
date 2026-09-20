@@ -374,8 +374,12 @@ void main() {
       expect(find.textContaining('Continue to Pay'), findsOneWidget);
     });
 
-    testWidgets('on web there is no Pay button — the phone card instead',
-        (tester) async {
+    testWidgets(
+        'on a target without checkout (desktop) there is no Pay button — '
+        'the phone card instead', (tester) async {
+      // Web is no longer this configuration: checkout_adapter_web.dart drives
+      // Razorpay's Checkout.js, so `isSupported` is true there too. The stub
+      // target still answers false, and the widget contract is unchanged.
       await pump(
         tester,
         subscriptionPayload(status: 'NONE', daysLeft: null),
