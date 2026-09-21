@@ -14,6 +14,12 @@ Stage 6 (later) has no prompt — it is explicitly deferred.
 prompts, interleaved with every manual step (Razorpay, Render, Atlas, Play Console, Mirage
 deploy, marketing site) and the verification gate after each one.
 
+**Everything is built — going live:** [`go-live-checklist.md`](go-live-checklist.md) — the
+tick-box list of what to configure on the Razorpay account, Render, Mirage (Railway + cPanel
+deploy and the `arEnabled` probe) and the Flutter build, then the flag flip in the order
+[`rollout.md`](rollout.md) requires. [`how-a-user-subscribes.txt`](how-a-user-subscribes.txt)
+is the plain-language owner flow.
+
 ---
 
 ## Corrections to the plan, verified against the working tree
@@ -75,3 +81,32 @@ backend suite once at the end of a stage, not per edit.
 | `grandfatherDays` | `30` |
 | `orderTtlHours` | `24` |
 | Currency | `INR` only; all amounts integer paise |
+
+---
+
+## Go-live: what to do and where (as of 2026-09-21)
+
+All code is committed. Nothing below is coding; it is the remaining manual work, in the order it
+must happen. Full detail per row in [`go-live-checklist.md`](go-live-checklist.md).
+
+| # | What | Where | Done when |
+|---|---|---|---|
+| 1 | Activate the Razorpay account (KYC) so Live mode is available | Razorpay Dashboard | Live mode toggle works |
+| 2 | Generate API keys; copy `Key ID` + `Key Secret` | Razorpay → Settings → API Keys | Both values saved somewhere safe |
+| 3 | Create the webhook: URL `https://<recapture-api host>/webhooks/razorpay`, a secret you invent, events `order.paid`, `payment.captured`, `payment.failed`, `refund.processed`, `refund.failed`, `payment.dispute.created/won/lost/closed` | Razorpay → Settings → Webhooks (once in Test mode, once in Live) | Webhook shows as active |
+| 4 | Merge `feature/same-day-qr-f-phase2` → `development`, push | `mirage-be` repo (GitHub Actions → Railway `restaurant-be`) | Action green |
+| 5 | Same merge + push | `mirage-fe` repo (GitHub Actions → FTP → `mirage.mayasabhaxr.co.in`) | Action green |
+| 6 | Run `node scripts/verify-ar-entitlement.js logic`, then `live` with `MIRAGE_BASE_URL` / `MIRAGE_API_KEY` / `MIRAGE_TOKEN` / `MIRAGE_RESTAURANT_ID` set; open the slug on a phone with `arEnabled:false` | Your machine → `mirage-be/scripts/` | `0 failed`; phone shows photos only, then 3D again |
+| 7 | Merge `development` → `production` in both Mirage repos (check `git log production..development` first); re-run the `live` probe against prod | `mirage-be`, `mirage-fe` | Prod probe `0 failed` |
+| 8 | Add `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`; confirm `MIRAGE_*` are correct | Render → recapture-api → Environment | Service redeployed with them |
+| 9 | Deploy `recapture-api` from branch `Ashish` with `subscriptionGatesEnabled` still absent | Render → Deploy | Log shows `[subscription-sweep] to_grace=0 to_paused=0` every 10 min |
+| 10 | Keep the instance awake: cron hitting `GET /health` every 5 min | Render → Cron Jobs (or `utils/axiosBackendMakeAlive.ts` elsewhere) | Sweep line arrives overnight too |
+| 11 | Ship a Flutter build that contains the subscription screens | Play Console / TestFlight / web host | New build is what owners have installed |
+| 12 | Staging rehearsal with `rzp_test_` keys and the flag on — the 5 steps at the bottom of `rollout.md` | Staging Render + Atlas + one test restaurant + owner app | Every step matches; then flag back to `false` |
+| 13 | Grandfather live catalogs: `npx tsx scripts/grandfather-catalogs-comped.ts --dry-run`, read, then real run | Your machine, prod `MONGODB_URI` in `.env` | `comped` = the dry-run count |
+| 14 | Flip: `db.client_configs.updateOne({}, { $set: { subscriptionGatesEnabled: true } })` | Atlas → Browse collections → `client_configs` | No-row catalog's `GET /catalog/publish/status` lists `SUBSCRIPTION_REQUIRED` |
+| 15 | Watch 24 h; rollback is the same update with `false` | Render logs + analytics | No `ENTITLEMENT_FAILED` alerts; blocks are explainable |
+| 16 | Tick the five sign-off boxes (E5/E11/E34/E41/E46); decide G7/G8/G9 | [`edge-cases-hardening.md`](edge-cases-hardening.md), [`gaps-addendum.md`](gaps-addendum.md) | Not blocking; can follow the flip |
+
+Rows 1–3 first (everything needs the keys); 4–7 before 9 (never the other way round); 11 before
+14; weekday morning IST, not a Friday.

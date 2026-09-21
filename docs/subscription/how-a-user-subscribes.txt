@@ -1,0 +1,112 @@
+HOW A USER REACHES THE SUBSCRIPTION SCREEN AND SUBSCRIBES
+=========================================================
+(Plain-language walkthrough of the ReCapture owner flow, as built.)
+
+THE FIRST-TIME OWNER'S JOURNEY
+------------------------------
+
+1. They capture dishes.
+   The owner opens ReCapture, points the camera at a plate, walks around it,
+   and the app uploads the photos. A few minutes later a 3D model of that dish
+   is ready. They repeat for a few more dishes.
+
+2. They build their menu (the "catalog").
+   Each finished 3D dish is added to the menu as a product - name, price,
+   category ("Starters", "Mains", ...). Plain photo-only items can be added too.
+   All of this is a DRAFT; customers cannot see it yet.
+
+3. They press Publish.
+   The menu screen has a Publish button. Tapping it opens the Publish screen,
+   which asks the server: "is this menu ready to go live?"
+   (lib/presentation/screens/catalog/catalog_screen.dart -> _openPublish)
+
+4. The server runs a checklist.
+   Before anything goes live the server checks every reason the menu might not
+   be ready - "a product has no name", "two dishes share a name", "no
+   categories yet", and so on. The SUBSCRIPTION check is one more row on that
+   list. (recapture-api/src/services/subscription/subscriptionGate.ts)
+
+   - First-time owner, no subscription at all
+       -> row says: "No subscription yet - start a free trial or activate a
+          plan to publish."  Publishing is BLOCKED.
+   - Plan lapsed (PAUSED / CANCELLED) but the menu has only photo items
+       -> still publishes. Only 3D dishes need a plan.
+   - Plan lapsed and the menu has 1+ 3D dishes
+       -> "Your 3D menu needs an active plan." BLOCKED.
+   - Plan running but more 3D dishes than the plan covers
+       -> "Menu has N 3D dishes; your <plan> covers M." BLOCKED.
+   - GRACE (just lapsed, inside the grace window)
+       -> never a blocker; a warning banner instead.
+
+5. The blocking row has a "See plans" button.
+   That button is the door to the Subscription screen. The owner does not go
+   hunting for it - it sits directly under the thing blocking them.
+   (lib/domain/catalog/publish_gate.dart  fixLabel -> 'See plans'
+    lib/presentation/screens/catalog/publish_screen.dart  _fix ->
+    pushNamed(catalogSubscription))
+
+6. On the Subscription screen they pick a plan and pay.
+   The screen shows "No subscription yet", how many 3D dishes the menu has,
+   and the three plans side by side (monthly / yearly).
+   They tap a plan -> Pay -> the Razorpay sheet opens INSIDE the app
+   (native SDK on Android/iOS, Checkout.js overlay in a browser) -> they pay
+   by UPI / card.
+   The app never trusts the SDK's "success" popup. It polls the server until
+   the server says ACTIVE, then shows "Payment received - your plan is active."
+   (lib/presentation/screens/catalog/subscription_screen.dart,
+    lib/application/catalog/checkout_notifier.dart)
+
+7. They go back - the block is gone.
+   Returning to the Publish screen re-runs the checklist automatically. The
+   subscription row disappears, Publish goes through, the menu is live and the
+   QR code works.
+
+
+THE FREE-TRIAL SIDE DOOR
+------------------------
+
+The owner CANNOT start the free trial themselves - there is no owner route
+for it. The 30-day trial (up to 10 3D dishes, one per restaurant) is started
+by:
+   - a SALES REP from the rep app  ("Start free trial" on the restaurant card,
+     POST /rep/catalogs/:id/subscription/trial), or
+   - an ADMIN                       (POST /admin/catalogs/:id/subscription/trial)
+
+So for a rep-onboarded restaurant the trial is usually already running by the
+time the owner presses Publish, and they never see the block at all. They meet
+the Subscription screen ~30 days later, when the trial ends and the menu
+screen shows "Your free trial has ended - choose a plan within N days to keep
+3D live", with a button to the plans.
+
+Second door: the menu screen header carries a small subscription chip
+("No plan" / "Trial 12d" / "Active") that opens the same Subscription screen
+at any time.
+
+Third door (rep side): the rep can press "Notify owner to pay", which sends
+the owner an SMS + in-app nudge pointing at the Subscription screen.
+
+
+LIFECYCLE AFTER PAYING (short version)
+--------------------------------------
+
+   NONE ---(rep/admin trial)---> TRIAL ---(period ends)---> GRACE
+   NONE ---(owner pays)--------> ACTIVE --(period ends)---> GRACE
+   GRACE --(owner pays)--------> ACTIVE
+   GRACE --(grace window ends)-> PAUSED   (3D switched off on the live menu;
+                                           photo menu stays up)
+   PAUSED -(owner pays)--------> ACTIVE   (3D switched back on)
+   Catalog deleted ------------> CANCELLED (no refund, trial not reset)
+
+Paying while ACTIVE / TRIAL / COMPED starts the new period at the payment
+date - the remaining days are forfeited, and the checkout section warns about
+this before the Razorpay sheet opens.
+
+
+IMPORTANT CAVEAT - THE FLAG
+---------------------------
+
+The server-side flag `subscriptionGatesEnabled` is NOT flipped yet (it is the
+last ops step in docs/subscription/rollout.md). Until it is, step 4 skips the
+subscription row entirely: a first-time owner today publishes without ever
+being sent to the Subscription screen. Everything above describes the flow
+once the flag is on.
