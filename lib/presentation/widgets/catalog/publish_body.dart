@@ -36,6 +36,7 @@ import '../../../application/catalog/publish_flow.dart';
 import '../../../domain/catalog/publish_gate.dart';
 import '../../../domain/catalog/publish_status.dart';
 import '../../../domain/catalog/subscription_copy.dart';
+import '../../../domain/catalog/subscription_publish_gate.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../app_button.dart';
@@ -128,11 +129,22 @@ const String kPublishStartQuery = 'start';
 /// on the next build. Gates, a run already in flight, or being offline answer
 /// "no", and the screen then shows exactly what a press would have shown — the
 /// checklist, the progress line, or the offline notice.
+/// A settled, blocking [check] answers "no" on its own: the subscription is a
+/// blocker the SERVER may not have evaluated (its gates are behind an ops
+/// flag), so `state.canPublish` cannot be trusted to have seen it. An UNSETTLED
+/// check also answers "no" — but the caller must ask again rather than give up,
+/// or the paywall loses the race against the first status read and the press it
+/// existed to stop goes through. See [PublishScreen] for that half.
 bool publishAutoStartReady({
   required PublishScreenState state,
   required bool isOnline,
+  SubscriptionPublishCheck subscription = SubscriptionPublishCheck.ready,
 }) =>
-    isOnline && state.status.hasValue && state.canPublish;
+    isOnline &&
+    state.status.hasValue &&
+    state.canPublish &&
+    subscription.isSettled &&
+    !subscription.blocks;
 
 class PublishBody extends StatelessWidget {
   const PublishBody({
@@ -151,6 +163,7 @@ class PublishBody extends StatelessWidget {
     this.canFix,
     this.subscription,
     this.onOpenSubscription,
+    this.subscriptionCheck = SubscriptionPublishCheck.ready,
   });
 
   final PublishScreenState state;
@@ -164,9 +177,18 @@ class PublishBody extends StatelessWidget {
   /// already says it, and saying it twice is nagging.
   final SubscriptionSummary? subscription;
 
-  /// Where the GRACE banner's button goes: the owner's plans screen, or the
-  /// rep's card. Null hides the button and leaves the sentence.
+  /// Where the GRACE banner's and the paywall card's button goes: the owner's
+  /// plans screen, or the rep's card. Null hides the button and leaves the
+  /// sentence.
   final VoidCallback? onOpenSubscription;
+
+  /// The pre-publish subscription verdict — the paywall card, and the reason
+  /// Publish is off when it is showing.
+  ///
+  /// Defaults to READY so every existing caller (and every test that only
+  /// cares about a run) keeps the behaviour it had. The two publish screens
+  /// pass a real one.
+  final SubscriptionPublishCheck subscriptionCheck;
   final VoidCallback onPublish;
   final VoidCallback onRetryFailed;
   final ValueChanged<PublishGate> onFixGate;
@@ -188,6 +210,14 @@ class PublishBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final run = status.run;
     final inFlight = status.isPublishing || (run?.state.isInFlight ?? false);
+    // The paywall card takes the subscription rows; the checklist draws what
+    // is left. A blocker that costs money is not a line item between "rename a
+    // category" and "pick a category", and showing it in both places would
+    // read as two separate problems.
+    final paywallGate = status.isPublishing ? null : subscriptionCheck.gate;
+    final checklistGates = paywallGate == null
+        ? status.gates
+        : gatesExcludingSubscription(status.gates);
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -218,6 +248,18 @@ class PublishBody extends StatelessWidget {
                     title: "You're offline",
                     body: 'Publishing needs a connection. Reconnect and this '
                         'page will pick up where it left off.',
+                  ),
+                ],
+                // FIRST of the things that can stop a publish, because it is
+                // the only one the user cannot fix by editing their menu.
+                if (paywallGate case final gate?) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _SubscriptionPaywallCard(
+                    gate: gate,
+                    subscription: subscriptionCheck.subscription,
+                    voice: voice,
+                    isOnline: isOnline,
+                    onOpenSubscription: onOpenSubscription,
                   ),
                 ],
                 if (subscription?.status == SubscriptionStatus.grace) ...[
@@ -259,10 +301,10 @@ class PublishBody extends StatelessWidget {
                   const SizedBox(height: AppSpacing.md),
                   _SuccessCard(status: status, onOpenQr: onOpenQr),
                 ],
-                if (status.gates.isNotEmpty) ...[
+                if (checklistGates.isNotEmpty) ...[
                   const SizedBox(height: AppSpacing.md),
                   _GateChecklist(
-                    gates: status.gates,
+                    gates: checklistGates,
                     isWaiting: status.isWaitingOnGates,
                     canFix: canFix ?? (_) => true,
                     onFix: onFixGate,
@@ -276,6 +318,10 @@ class PublishBody extends StatelessWidget {
                   isOnline: isOnline,
                   inFlight: inFlight,
                   voice: voice,
+                  // The server may not have evaluated the subscription at all
+                  // (its gates sit behind an ops flag), so `state.canPublish`
+                  // is not enough to keep this press off a paywalled catalog.
+                  blockedBySubscription: paywallGate != null,
                   onPublish: onPublish,
                   onUnpublish: onUnpublish,
                 ),
@@ -767,6 +813,7 @@ class _Actions extends StatelessWidget {
     required this.isOnline,
     required this.inFlight,
     required this.voice,
+    required this.blockedBySubscription,
     required this.onPublish,
     required this.onUnpublish,
   });
@@ -776,6 +823,11 @@ class _Actions extends StatelessWidget {
   final bool isOnline;
   final bool inFlight;
   final PublishVoice voice;
+
+  /// A subscription gate is showing. Its card carries the reason and the way
+  /// out, so this only has to switch the button off.
+  final bool blockedBySubscription;
+
   final VoidCallback onPublish;
   final VoidCallback? onUnpublish;
 
@@ -784,7 +836,8 @@ class _Actions extends StatelessWidget {
     // Every reason the button is off, in the order the user would discover
     // them. `null` onPressed is the theme's disabled state — there is no path
     // here that fires a request we already know will be refused.
-    final blocked = !isOnline || inFlight || !state.canPublish;
+    final blocked =
+        !isOnline || inFlight || !state.canPublish || blockedBySubscription;
     final unpublish = onUnpublish;
 
     return Column(
@@ -859,6 +912,121 @@ class _ProductList extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// The pre-publish paywall — a subscription gate, as a card rather than a
+/// checklist row.
+///
+/// WHY IT IS NOT A ROW. Every other gate is a five-second edit the user makes
+/// and comes back from; this one is a purchase. It needs the reason, the
+/// numbers behind it, the second way out (archive the 3D dishes and publish a
+/// photo-only menu, which genuinely works), and one button that goes to the
+/// place where money changes hands. A row with a "See plans" text button next
+/// to "Rename category" gives it none of that.
+///
+/// WHY IT IS AMBER, NOT RED. Nothing has broken and nothing is lost: the menu,
+/// the photos, the categories and the QR code are all exactly where the user
+/// left them, and the card says so. Red is for the grace banner, where a clock
+/// is actually running out.
+class _SubscriptionPaywallCard extends StatelessWidget {
+  const _SubscriptionPaywallCard({
+    required this.gate,
+    required this.subscription,
+    required this.voice,
+    required this.isOnline,
+    required this.onOpenSubscription,
+  });
+
+  final PublishGate gate;
+
+  /// The row the verdict came from, for the usage line. Null when the gate was
+  /// the server's and the row was not loaded.
+  final CatalogSubscription? subscription;
+
+  final PublishVoice voice;
+
+  /// Offline, the button is off: the plans screen cannot be paid on without a
+  /// connection, and the offline banner above already says why.
+  final bool isOnline;
+
+  final VoidCallback? onOpenSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final copy = publishPaywallCopy(
+      gate,
+      subscription: subscription,
+      isRep: voice.isRep,
+    );
+    final open = onOpenSubscription;
+
+    return Container(
+      key: const ValueKey('publish_subscription_gate'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.workspace_premium_outlined,
+                  size: 20, color: AppColors.warning),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  copy.title,
+                  key: const ValueKey('publish_subscription_gate_title'),
+                  style: textTheme.titleMedium?.copyWith(
+                    color: AppColors.warning,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            copy.body,
+            style: textTheme.bodyMedium?.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          if (copy.detail case final detail?) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              '3D/AR dishes: $detail',
+              key: const ValueKey('publish_subscription_gate_usage'),
+              style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            // OUR sentence for the gate — the backend's own owner-safe copy
+            // when it produced the row, this build's mirror of it when it did
+            // not. Kept under the explanation rather than instead of it: it is
+            // the precise reason, and the paragraph above is the way out.
+            gate.message,
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          ),
+          if (open != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            AppButton(
+              key: const ValueKey('publish_subscription_cta'),
+              label: isOnline ? copy.actionLabel : 'Needs a connection',
+              icon: Icons.lock_outline,
+              onPressed: isOnline ? open : null,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

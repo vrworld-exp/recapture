@@ -17,13 +17,16 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../application/catalog/catalog_notifier.dart';
 import '../../../application/catalog/publish_notifier.dart';
+import '../../../application/catalog/subscription_notifier.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/publish_gate.dart';
+import '../../../domain/catalog/subscription_publish_gate.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/publish_body.dart';
+import 'subscription_screen.dart' show kSubscriptionFromPublishQuery;
 
 export '../../widgets/catalog/publish_body.dart' show kPublishContentMaxWidth;
 
@@ -47,11 +50,33 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
   /// Fires the publish the opening button asked for, once, when the screen
   /// can. Called from build, so the request itself is deferred a frame: a
   /// notifier must not be written while the tree that watches it is building.
-  void _maybeAutoStart(PublishScreenState state, bool isOnline) {
+  ///
+  /// THE SUBSCRIPTION IS THE ONE BLOCKER THAT DOES NOT LATCH THE DECISION, and
+  /// that is the whole "pay, then publish" continuation. Every other gate is
+  /// fixed on another screen, and coming back here to find a publish already
+  /// running would be a surprise. Paying is different: the user pressed
+  /// Publish, got a paywall instead, paid, and came back — the run they asked
+  /// for is exactly what should happen next. So while the verdict is unsettled
+  /// (the subscription read is still in flight) or blocking, the intent stays
+  /// ARMED rather than spent, and the first build where the gate is gone fires
+  /// it. Unsettled has to be waited out too: latching on a verdict that has not
+  /// arrived would publish a catalog the paywall was about to refuse.
+  void _maybeAutoStart(
+    PublishScreenState state,
+    bool isOnline,
+    SubscriptionPublishCheck subscription,
+  ) {
     if (!widget.startPublish || _autoStartDecided) return;
     if (!state.status.hasValue) return; // still loading — ask next build
+    if (!subscription.isSettled || subscription.blocks) return; // stay armed
     _autoStartDecided = true;
-    if (!publishAutoStartReady(state: state, isOnline: isOnline)) return;
+    if (!publishAutoStartReady(
+      state: state,
+      isOnline: isOnline,
+      subscription: subscription,
+    )) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       ref.read(publishProvider.notifier).publish();
@@ -87,12 +112,13 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
       // manager is the whole fix.
       case PublishGateCode.catalogNoCategories:
         await context.pushNamed(AppRouteNames.catalogCategories);
-      // Both subscription gates are fixed on the Subscription screen: a trial
-      // or a plan for the first, an upgrade (or archiving dishes) for the
-      // second. The gate re-reads on return, like every other row.
+      // Both subscription gates are fixed on the Subscription screen: a plan
+      // for the first, an upgrade (or archiving dishes) for the second. The
+      // gate re-reads on return, like every other row.
       case PublishGateCode.subscriptionRequired:
       case PublishGateCode.subscriptionCapacityExceeded:
-        await context.pushNamed(AppRouteNames.catalogSubscription);
+        await _openSubscription();
+        return; // _openSubscription already re-read both.
       // Nothing the user can open would help: the preview image is generating,
       // the model is not finished, or publishing is off on this deployment.
       case PublishGateCode.productThumbnailMissing:
@@ -101,6 +127,27 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
       case PublishGateCode.unknown:
         return;
     }
+    if (!mounted) return;
+    await ref.read(publishProvider.notifier).refresh();
+  }
+
+  /// Opens the plans, and re-reads BOTH things a payment moves on the way back.
+  ///
+  /// The subscription first, because it is what the paywall card and the auto-
+  /// start are waiting on: the checkout there polls the server until it says
+  /// ACTIVE, so by the time this pops, the plan really is live. Then the publish
+  /// status, so the checklist and the button catch up in the same frame. With
+  /// the intent still armed (see [_maybeAutoStart]) that is the whole
+  /// pay-then-publish path: press Publish → pay → the run starts by itself.
+  Future<void> _openSubscription() async {
+    await context.pushNamed(
+      AppRouteNames.catalogSubscription,
+      // Tells that screen the owner is mid-publish, so a successful payment
+      // offers the way straight back rather than ending there.
+      queryParameters: {kSubscriptionFromPublishQuery: '1'},
+    );
+    if (!mounted) return;
+    await ref.read(subscriptionProvider.notifier).refresh();
     if (!mounted) return;
     await ref.read(publishProvider.notifier).refresh();
   }
@@ -152,7 +199,16 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(publishProvider);
     final isOnline = ref.watch(isOnlineProvider);
-    _maybeAutoStart(state, isOnline);
+    // The pre-publish subscription check. The server's gates win when it
+    // produced any; this fills the gap while its own gates are still behind the
+    // Stage 5 ops flag — see subscription_publish_gate.dart.
+    final subscriptionAsync = ref.watch(subscriptionProvider);
+    final subscriptionCheck = checkSubscriptionForPublish(
+      serverGates: state.gates,
+      subscription: subscriptionAsync.valueOrNull,
+      isLoading: subscriptionAsync.isLoading,
+    );
+    _maybeAutoStart(state, isOnline, subscriptionCheck);
 
     // A notice or a failure is a RESULT, and a result the user does not see is
     // the same as no result at all.
@@ -238,8 +294,8 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
             // The grace banner reads the server's summary off the catalog
             // the owner already holds; no second request for it.
             subscription: ref.watch(catalogProvider).valueOrNull?.subscription,
-            onOpenSubscription: () =>
-                context.pushNamed(AppRouteNames.catalogSubscription),
+            subscriptionCheck: subscriptionCheck,
+            onOpenSubscription: _openSubscription,
             onPublish: () => ref.read(publishProvider.notifier).publish(),
             onRetryFailed: () =>
                 ref.read(publishProvider.notifier).retryFailed(),

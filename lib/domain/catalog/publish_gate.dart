@@ -125,6 +125,17 @@ extension PublishGateCodeX on PublishGateCode {
         PublishGateCode.unknown => null,
       };
 
+  /// Whether this is one of the two subscription gates.
+  ///
+  /// They are the only blockers that cost MONEY to clear, and the publish
+  /// screen therefore renders them as their own card — the plan, the usage,
+  /// and the way to pay — instead of as a checklist row between "rename a
+  /// category" and "pick a category". So every surface that draws the
+  /// checklist filters on this, and the card draws what it filtered out.
+  bool get isSubscription =>
+      this == PublishGateCode.subscriptionRequired ||
+      this == PublishGateCode.subscriptionCapacityExceeded;
+
   /// Whether time alone clears this. Drives the "waiting" treatment: a gate the
   /// user cannot act on must not be dressed as a task they are ignoring.
   bool get resolvesItself =>

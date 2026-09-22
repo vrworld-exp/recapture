@@ -57,3 +57,22 @@ flutter build apk --release
 
 
                                
+
+
+
+
+
+
+
+
+thisnking to fix it --------------------->>>
+
+
+    1. a env flag that manages the price for subs : something like that subs_tesing : true/false, if its is trure the subs price should be 3,5,7 ruppee only till testing is happenin. If false then actual price will be shown and ready to sub at that price only.
+
+
+    2. If sale rep or staff create a restaurent and publish it then it should get published but one flag should come on mirage menu ui on mirage  also on catalog ui of recap that is payment due is not completed so, this page will deactivated in 7 days (or free trail limit) and inside catalog ui a btn should be there that tell pay otherwise you live link will be deactivated soon. and once user click on pay then subs process happne and user able to subcribe it. also handle other edge cases for this.
+
+
+
+

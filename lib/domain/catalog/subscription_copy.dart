@@ -19,6 +19,7 @@
 // Period lengths are "30 days" / "365 days" (E34), never "a month" / "a year":
 // the server counts days flat, and the copy must not promise a calendar.
 import '../entities/catalog_subscription.dart';
+import 'publish_gate.dart';
 
 /// How urgent a status line is — the colour the screen picks, decided here so
 /// the owner screen and the rep card agree.
@@ -156,6 +157,99 @@ String graceBannerLine(int? daysLeft, {SubscriptionStatus? graceFrom}) =>
 String graceBannerAction({required bool isRep}) => isRep
     ? 'Publishing still works. Notify the owner to pay to keep 3D live.'
     : 'Publishing still works. Pay now to keep your 3D menu live.';
+
+// ── The pre-publish paywall card ────────────────────────────────────────────
+//
+// What the publish screen says when a subscription gate is what stands between
+// a finished menu and a live one. Three sentences and a button label, chosen
+// from the GATE and the row behind it — not from a status alone, because
+// "you are over your cap" and "you have no plan" are the same status often
+// enough that guessing between them would eventually tell a paying restaurant
+// it has no plan.
+//
+// TWO VOICES, as everywhere else on that screen: the owner can pay, the rep
+// can only ask the owner to. Neither is told to do something the other's
+// surface does.
+
+/// One paywall card's words.
+class PublishPaywallCopy {
+  const PublishPaywallCopy({
+    required this.title,
+    required this.body,
+    required this.actionLabel,
+    this.detail,
+  });
+
+  final String title;
+  final String body;
+
+  /// The usage line, where numbers are the point ("12 / 10 (Taste plan)").
+  /// Null when there is nothing numeric to show.
+  final String? detail;
+
+  /// The primary button. Says `Pay now` only where a plan is already picked
+  /// and paying is one step; `See plans` where a tier has to be chosen first,
+  /// because a button called Pay that opens a comparison table is a lie.
+  final String actionLabel;
+}
+
+/// The card for [gate], over the row it was evaluated against (null when the
+/// gate came from the server and the row was not loaded — the copy then falls
+/// back to the wording that assumes least).
+PublishPaywallCopy publishPaywallCopy(
+  PublishGate gate, {
+  CatalogSubscription? subscription,
+  required bool isRep,
+}) {
+  if (gate.code == PublishGateCode.subscriptionCapacityExceeded) {
+    return PublishPaywallCopy(
+      title: 'More 3D dishes than your plan covers',
+      body: isRep
+          ? 'The owner needs the next plan up to publish all of them — or '
+              'archive the extra 3D dishes and publish the rest now.'
+          : 'Upgrade to the next plan to publish all of them — or archive the '
+              'extra 3D dishes and publish the rest now. Your photo dishes are '
+              'never capped.',
+      detail: subscription == null ? null : threeDUsageLine(subscription),
+      actionLabel: isRep ? 'Open subscription' : 'See plans',
+    );
+  }
+
+  // SUBSCRIPTION_REQUIRED, in the words of how the row got there.
+  return switch (subscription?.status) {
+    SubscriptionStatus.paused => PublishPaywallCopy(
+        title: kPausedCardTitle,
+        body: isRep
+            ? '$kPausedPhotoMenuLine. The owner pays in the app to bring 3D '
+                'back — or archive the 3D dishes to publish a photo-only menu.'
+            : '$kPausedCardBody Or archive your 3D dishes and publish a '
+                'photo-only menu.',
+        detail: subscription == null ? null : threeDUsageLine(subscription),
+        actionLabel: isRep ? 'Notify owner' : 'Pay now',
+      ),
+    SubscriptionStatus.cancelled => PublishPaywallCopy(
+        title: 'This subscription is cancelled',
+        body: isRep
+            ? 'The owner resubscribes in the app to publish the 3D dishes — or '
+                'archive them to publish a photo-only menu.'
+            : 'Resubscribe to publish your 3D dishes — or archive them and '
+                'publish a photo-only menu. Nothing has been deleted.',
+        detail: subscription == null ? null : threeDUsageLine(subscription),
+        actionLabel: isRep ? 'Open subscription' : 'See plans',
+      ),
+    // NONE, and the fallback for a row that was never loaded.
+    _ => PublishPaywallCopy(
+        title: 'Choose a plan to publish',
+        body: isRep
+            ? 'This restaurant is not on a plan yet. Start the free trial, or '
+                'hand the phone to the owner to pay in the app.'
+            : 'Your menu is not on a plan yet. Pick one and publish — your '
+                'dishes, photos, categories and QR code stay exactly as they '
+                'are.',
+        actionLabel: isRep ? 'Open subscription' : 'See plans',
+      ),
+  };
+}
 
 const List<String> _months = [
   'Jan',

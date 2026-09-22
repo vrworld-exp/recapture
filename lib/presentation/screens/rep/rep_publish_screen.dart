@@ -26,8 +26,10 @@ import '../../../application/catalog/publish_flow.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
 import '../../../application/rep/rep_publish_notifier.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
+import '../../../application/rep/rep_subscription_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/publish_gate.dart';
+import '../../../domain/catalog/subscription_publish_gate.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
@@ -58,11 +60,25 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
   /// for the owner's reason (see `PublishScreen._maybeAutoStart`).
   bool _autoStartDecided = false;
 
-  void _maybeAutoStart(PublishScreenState state, bool isOnline) {
+  void _maybeAutoStart(
+    PublishScreenState state,
+    bool isOnline,
+    SubscriptionPublishCheck subscription,
+  ) {
     if (!widget.startPublish || _autoStartDecided) return;
     if (!state.status.hasValue) return;
+    // Stays ARMED through an unsettled or blocking subscription verdict, for
+    // the owner's reason: a rep who starts the trial on the restaurant's card
+    // and walks back expects the publish they pressed, not a second press.
+    if (!subscription.isSettled || subscription.blocks) return;
     _autoStartDecided = true;
-    if (!publishAutoStartReady(state: state, isOnline: isOnline)) return;
+    if (!publishAutoStartReady(
+      state: state,
+      isOnline: isOnline,
+      subscription: subscription,
+    )) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       ref.read(repPublishProvider(_catalogId).notifier).publish();
@@ -111,7 +127,8 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
       // says what to archive when the cap is the problem.
       case PublishGateCode.subscriptionRequired:
       case PublishGateCode.subscriptionCapacityExceeded:
-        await context.push(_base);
+        await _openSubscription();
+        return; // _openSubscription already re-read both.
       // Nothing the rep can open would help: the preview image is generating,
       // the model is not finished, or publishing is off on this deployment.
       case PublishGateCode.productThumbnailMissing:
@@ -120,6 +137,18 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
       case PublishGateCode.unknown:
         return;
     }
+    if (!mounted) return;
+    await ref.read(repPublishProvider(_catalogId).notifier).refresh();
+  }
+
+  /// Opens the restaurant's detail screen — the Subscription card is the rep's
+  /// whole fix (Start free trial, Notify owner to pay) — then re-reads both the
+  /// subscription and the publish status, so a trial started there clears the
+  /// paywall card and lets the armed publish go.
+  Future<void> _openSubscription() async {
+    await context.push(_base);
+    if (!mounted) return;
+    await ref.read(repSubscriptionProvider(_catalogId).notifier).refresh();
     if (!mounted) return;
     await ref.read(repPublishProvider(_catalogId).notifier).refresh();
   }
@@ -137,7 +166,16 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
     final provider = repPublishProvider(_catalogId);
     final state = ref.watch(provider);
     final isOnline = ref.watch(isOnlineProvider);
-    _maybeAutoStart(state, isOnline);
+    // The same pre-publish subscription check the owner's screen runs, over
+    // this restaurant's row — so a rep is never told a menu is ready when the
+    // owner would be told to pay for it.
+    final subscriptionAsync = ref.watch(repSubscriptionProvider(_catalogId));
+    final subscriptionCheck = checkSubscriptionForPublish(
+      serverGates: state.gates,
+      subscription: subscriptionAsync.valueOrNull,
+      isLoading: subscriptionAsync.isLoading,
+    );
+    _maybeAutoStart(state, isOnline, subscriptionCheck);
 
     // A notice or a failure is a RESULT, and a result the rep does not see is
     // the same as no result at all.
@@ -220,7 +258,8 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
                 .watch(repCatalogDocumentProvider(widget.catalogId))
                 .valueOrNull
                 ?.subscription,
-            onOpenSubscription: () => context.push(_base),
+            subscriptionCheck: subscriptionCheck,
+            onOpenSubscription: _openSubscription,
             onPublish: () => ref.read(provider.notifier).publish(),
             onRetryFailed: () => ref.read(provider.notifier).retryFailed(),
             // No onUnpublish: see the file header.

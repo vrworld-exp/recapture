@@ -567,7 +567,14 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogSubscription,
         name: AppRouteNames.catalogSubscription,
-        builder: (_, __) => const FlowBackScope(child: SubscriptionScreen()),
+        // `?fromPublish=1` is what the publish screen's paywall appends — see
+        // kSubscriptionFromPublishQuery.
+        builder: (_, state) => FlowBackScope(
+          child: SubscriptionScreen(
+            fromPublish:
+                state.uri.queryParameters[kSubscriptionFromPublishQuery] == '1',
+          ),
+        ),
       ),
       // The category manager. STATIC, and declared before the product routes
       // for the same reason `products/new` is: a literal segment must never be

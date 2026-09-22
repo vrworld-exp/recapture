@@ -351,6 +351,7 @@ class CatalogSubscription {
     this.planSnapshot,
     this.nudgeNextAllowedAt,
     this.graceFrom,
+    this.isReported = true,
   });
 
   final SubscriptionStatus status;
@@ -389,6 +390,19 @@ class CatalogSubscription {
   final int? standeeIncluded;
   final int? standeeIssued;
   final PlanCatalog plans;
+
+  /// Whether the payload actually CARRIED a status — i.e. this is the
+  /// server's subscription DTO and not an older server's empty body.
+  ///
+  /// THE ONE THING [status] ALONE CANNOT TELL YOU. `SubscriptionStatusDto`
+  /// always sends a status, `'NONE'` included, so a body without one did not
+  /// come from a deployment that knows about subscriptions at all — and both
+  /// parse to [SubscriptionStatus.none]. "No row on a server that has rows"
+  /// and "a server that has none" are different answers, and only the first
+  /// is grounds for the client to refuse a publish
+  /// ([evaluateSubscriptionGates]). Defaults to true for a hand-built
+  /// instance; only [CatalogSubscription.fromMap] can set it false.
+  final bool isReported;
 
   bool get hasRow => status != SubscriptionStatus.none;
 
@@ -440,6 +454,7 @@ class CatalogSubscription {
         planSnapshot: planSnapshot,
         nudgeNextAllowedAt: at,
         graceFrom: graceFrom,
+        isReported: isReported,
       );
 
   /// The compact view of the same row, for a chip that has only this.
@@ -494,6 +509,7 @@ class CatalogSubscription {
           : null,
       nudgeNextAllowedAt: nudgeNextAllowedAt,
       graceFrom: _graceFromOrNull(map['graceFrom']),
+      isReported: map['status'] != null,
     );
   }
 }

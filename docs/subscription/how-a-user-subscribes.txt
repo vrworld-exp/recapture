@@ -20,11 +20,24 @@ THE FIRST-TIME OWNER'S JOURNEY
    which asks the server: "is this menu ready to go live?"
    (lib/presentation/screens/catalog/catalog_screen.dart -> _openPublish)
 
-4. The server runs a checklist.
+4. A checklist runs - and the subscription is checked twice, one way.
    Before anything goes live the server checks every reason the menu might not
    be ready - "a product has no name", "two dishes share a name", "no
-   categories yet", and so on. The SUBSCRIPTION check is one more row on that
-   list. (recapture-api/src/services/subscription/subscriptionGate.ts)
+   categories yet", and so on.
+
+   The SUBSCRIPTION is checked by TWO things, against the same table:
+     - the SERVER, as one more row on that checklist - but only once ops has
+       flipped `subscriptionGatesEnabled` (see the caveat at the bottom).
+       (recapture-api/src/services/subscription/subscriptionGate.ts)
+     - the APP, on the Publish screen, always. It reads the subscription and
+       runs the identical rules, so the question is asked the moment Publish is
+       pressed whatever the server flag says. The server's answer wins wherever
+       it gave one.
+       (lib/domain/catalog/subscription_publish_gate.dart)
+
+   The app's copy fails OPEN in every doubtful case: a subscription still
+   loading, a failed read, or an API that sends no subscription DTO at all never
+   blocks a publish.
 
    - First-time owner, no subscription at all
        -> row says: "No subscription yet - start a free trial or activate a
@@ -38,12 +51,15 @@ THE FIRST-TIME OWNER'S JOURNEY
    - GRACE (just lapsed, inside the grace window)
        -> never a blocker; a warning banner instead.
 
-5. The blocking row has a "See plans" button.
-   That button is the door to the Subscription screen. The owner does not go
-   hunting for it - it sits directly under the thing blocking them.
-   (lib/domain/catalog/publish_gate.dart  fixLabel -> 'See plans'
-    lib/presentation/screens/catalog/publish_screen.dart  _fix ->
-    pushNamed(catalogSubscription))
+5. The block is a CARD, with the way out on it.
+   A subscription blocker is not a checklist row. It is the first card on the
+   Publish screen, and it carries the reason, the 3D-dish numbers behind it, the
+   second way out ("archive your 3D dishes and publish a photo-only menu", which
+   genuinely works), and one button: "See plans" where a tier still has to be
+   chosen, "Pay now" where the plan is already known. The Publish button is off
+   while it is up. The owner does not go hunting for any of it.
+   (lib/presentation/widgets/catalog/publish_body.dart -> _SubscriptionPaywallCard
+    lib/domain/catalog/subscription_copy.dart -> publishPaywallCopy)
 
 6. On the Subscription screen they pick a plan and pay.
    The screen shows "No subscription yet", how many 3D dishes the menu has,
@@ -56,10 +72,13 @@ THE FIRST-TIME OWNER'S JOURNEY
    (lib/presentation/screens/catalog/subscription_screen.dart,
     lib/application/catalog/checkout_notifier.dart)
 
-7. They go back - the block is gone.
-   Returning to the Publish screen re-runs the checklist automatically. The
-   subscription row disappears, Publish goes through, the menu is live and the
-   QR code works.
+7. They go back - and the publish they asked for happens by itself.
+   Returning to the Publish screen re-reads the subscription and then the
+   checklist. The card disappears - and because the press that opened the screen
+   is still ARMED, the run starts on its own: the menu goes live and the QR code
+   works without a second Publish tap.
+   (lib/presentation/screens/catalog/publish_screen.dart -> _maybeAutoStart,
+    _openSubscription)
 
 
 THE FREE-TRIAL SIDE DOOR
@@ -106,7 +125,20 @@ IMPORTANT CAVEAT - THE FLAG
 ---------------------------
 
 The server-side flag `subscriptionGatesEnabled` is NOT flipped yet (it is the
-last ops step in docs/subscription/rollout.md). Until it is, step 4 skips the
-subscription row entirely: a first-time owner today publishes without ever
-being sent to the Subscription screen. Everything above describes the flow
-once the flag is on.
+last ops step in docs/subscription/rollout.md). Until it is, the SERVER adds no
+subscription row, and `POST /catalog/publish` will publish a catalog that is on
+no plan at all.
+
+The APP asks anyway: the Publish screen runs the same rules client-side and
+shows the paywall card, so the walkthrough above is what an owner sees today.
+Two things worth knowing while the flag is off:
+
+  - the app is the ONLY thing enforcing it. An older build of the app, or any
+    other client, publishes without a plan.
+  - the two can only disagree in the safe direction: the app may refuse a
+    publish the server would have allowed. It never allows one the server
+    refuses, because the server's gates win wherever it produced any.
+
+Flipping the flag changes nothing about what the owner sees - the same card
+renders from the server's gate instead of the client's evaluation - and makes
+the refusal real.

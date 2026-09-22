@@ -1,9 +1,14 @@
 // test/catalog/publish_fix_routing_test.dart
 //
-// Where the two subscription gates' Fix goes: the owner to the Subscription
+// Where the two subscription gates' button goes: the owner to the Subscription
 // screen, the rep to the restaurant's detail screen (whose card carries Start
 // free trial). A button that renders and goes nowhere is the failure this
 // catches, so both run under a REAL router.
+//
+// The button is the PAYWALL CARD's, not a checklist row's — a subscription gate
+// is a purchase, and the publish screen gives it its own card (see
+// `_SubscriptionPaywallCard`). The destination is the one thing that must not
+// change with that.
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -195,33 +200,40 @@ Widget _repHarness(_FakeRepRepository repo) {
   );
 }
 
+/// The paywall card's primary button, whatever its label says this time.
+Finder _paywallCta() => find.descendant(
+      of: find.byKey(const ValueKey('publish_subscription_cta')),
+      matching: find.byType(ElevatedButton),
+    );
+
 void main() {
   for (final code in const [
     'SUBSCRIPTION_REQUIRED',
     'SUBSCRIPTION_CAPACITY_EXCEEDED',
   ]) {
-    testWidgets('owner: Fix for $code opens /catalog/subscription',
-        (tester) async {
+    testWidgets('owner: $code opens /catalog/subscription', (tester) async {
       final repo = FakePublishRepository(status: _blockedBy(code));
       await tester.pumpWidget(_ownerHarness(repo));
       await tester.pumpAndSettle();
 
-      final label = PublishGateCodeX.fromApiValue(code).fixLabel!;
-      expect(find.widgetWithText(TextButton, label), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, label));
+      // The gate code still knows its own label — it is what a checklist row
+      // falls back to while a run is in flight — but the card is what a blocked
+      // screen shows, and the owner's version of it never says "notify".
+      expect(PublishGateCodeX.fromApiValue(code).fixLabel, 'See plans');
+      expect(_paywallCta(), findsOneWidget);
+      await tester.tap(_paywallCta());
       await tester.pumpAndSettle();
 
       expect(find.text(_kOwnerMarker), findsOneWidget);
     });
 
-    testWidgets('rep: Fix for $code opens /rep/catalogs/:id', (tester) async {
+    testWidgets('rep: $code opens /rep/catalogs/:id', (tester) async {
       final repo = _FakeRepRepository(_blockedBy(code));
       await tester.pumpWidget(_repHarness(repo));
       await tester.pumpAndSettle();
 
-      final label = PublishGateCodeX.fromApiValue(code).fixLabel!;
-      expect(find.widgetWithText(TextButton, label), findsOneWidget);
-      await tester.tap(find.widgetWithText(TextButton, label));
+      expect(_paywallCta(), findsOneWidget);
+      await tester.tap(_paywallCta());
       await tester.pumpAndSettle();
 
       expect(find.text(_kRepMarker), findsOneWidget);

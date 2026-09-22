@@ -38,8 +38,23 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 
+/// The query flag the PUBLISH screen adds when it sends the owner here:
+/// `?fromPublish=1`.
+///
+/// The owner did not come to read about plans — they pressed Publish, were
+/// handed a paywall, and this screen is a detour. So once the server says the
+/// plan is active, the screen offers the way back to the thing they were doing,
+/// which resumes the publish by itself (see `PublishScreen._maybeAutoStart`).
+/// Without the flag, paying here ends here, which is right for the header chip
+/// and the Profile door.
+const String kSubscriptionFromPublishQuery = 'fromPublish';
+
 class SubscriptionScreen extends ConsumerStatefulWidget {
-  const SubscriptionScreen({super.key});
+  const SubscriptionScreen({super.key, this.fromPublish = false});
+
+  /// Opened from the publish screen's paywall — see
+  /// [kSubscriptionFromPublishQuery].
+  final bool fromPublish;
 
   @override
   ConsumerState<SubscriptionScreen> createState() => _SubscriptionScreenState();
@@ -88,7 +103,10 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
           child: subscription.when(
             loading: () => const Center(child: AppLoadingIndicator()),
             error: (error, _) => _errorState(error),
-            data: (data) => SubscriptionBody(subscription: data),
+            data: (data) => SubscriptionBody(
+              subscription: data,
+              fromPublish: widget.fromPublish,
+            ),
           ),
         ),
       ),
@@ -119,9 +137,17 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
 /// The screen's content, over a loaded subscription. Public so the widget
 /// test can render every status line with only the payment providers faked.
 class SubscriptionBody extends ConsumerStatefulWidget {
-  const SubscriptionBody({super.key, required this.subscription});
+  const SubscriptionBody({
+    super.key,
+    required this.subscription,
+    this.fromPublish = false,
+  });
 
   final CatalogSubscription subscription;
+
+  /// See [kSubscriptionFromPublishQuery]. Adds the "back to publishing" card
+  /// once the plan is active, and nothing else.
+  final bool fromPublish;
 
   @override
   ConsumerState<SubscriptionBody> createState() => _SubscriptionBodyState();
@@ -155,6 +181,14 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
       key: const ValueKey('subscription_body'),
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
+        // FIRST, and only after the SERVER says the plan is live — the phase is
+        // CheckoutNotifier's, which reaches `done` by polling the subscription
+        // until the status actually flips, never on the SDK's own "success".
+        if (widget.fromPublish &&
+            ref.watch(checkoutProvider).phase == CheckoutPhase.done) ...[
+          const _BackToPublishingCard(),
+          const SizedBox(height: AppSpacing.md),
+        ],
         _StatusCard(subscription: subscription),
         const SizedBox(height: AppSpacing.md),
         _UsageCard(subscription: subscription),
@@ -220,6 +254,65 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
         const PaymentHistorySection(),
         const SizedBox(height: AppSpacing.huge),
       ],
+    );
+  }
+}
+
+/// "Your plan is active — back to publishing", for an owner who only came here
+/// because Publish sent them.
+///
+/// A BUTTON, NOT AN AUTOMATIC POP. The screen could take itself off the stack
+/// the moment the plan flips, and that is one tap fewer — but it would also
+/// snatch away the receipt, the new period's dates and the confirmation of a
+/// payment that just left the owner's bank, which is the last moment to be
+/// clever with. So the way out is offered, prominently and first, and pressing
+/// it lands back on the publish screen where the run the owner originally asked
+/// for starts on its own.
+class _BackToPublishingCard extends StatelessWidget {
+  const _BackToPublishingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return AppCard(
+      key: const ValueKey('subscription_back_to_publish'),
+      border: const BorderSide(color: AppColors.success, width: 1.5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.check_circle_outline,
+                  size: 20, color: AppColors.success),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  'Your plan is active',
+                  style: textTheme.titleMedium?.copyWith(
+                    color: AppColors.success,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Nothing is blocking your menu now — go back and it publishes.',
+            style: textTheme.bodyMedium?.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          AppButton(
+            key: const ValueKey('subscription_back_to_publish_cta'),
+            label: 'Back to publishing',
+            icon: Icons.cloud_upload_outlined,
+            onPressed: () => navigateBack(context),
+          ),
+        ],
+      ),
     );
   }
 }

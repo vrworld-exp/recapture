@@ -191,17 +191,24 @@ void main() {
       expect(bannerTop, lessThan(checklistTop));
     });
 
-    testWidgets('PAUSED: no banner — the gate row says it', (tester) async {
+    testWidgets('PAUSED: no banner — the paywall card says it', (tester) async {
       final repo = FakePublishRepository(
         catalog: catalogWith(summary('PAUSED')),
         status: statusPayload(gates: [gatePayload(code: 'SUBSCRIPTION_REQUIRED', message: 'Needs a plan.')]),
-      );
+      )..subscriptionPayload = subscriptionPayloadFor(
+          status: 'PAUSED',
+          threeDDishCount: 4,
+        );
 
       await tester.pumpWidget(publishHarness(repo));
       await tester.pumpAndSettle();
 
       expect(find.byKey(const ValueKey('publish_grace_banner')), findsNothing);
-      expect(find.byKey(const ValueKey('publish_gate_checklist')), findsOneWidget);
+      // The subscription gate is the card's, so the checklist — which had this
+      // row and nothing else — is not drawn at all.
+      expect(find.byKey(const ValueKey('publish_subscription_gate')), findsOneWidget);
+      expect(find.byKey(const ValueKey('publish_gate_checklist')), findsNothing);
+      expect(find.text(kPausedCardTitle), findsOneWidget);
     });
   });
 

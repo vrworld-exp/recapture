@@ -204,20 +204,21 @@ void main() {
       expect(find.byIcon(Icons.hourglass_empty), findsOneWidget);
     });
 
-    testWidgets('renders the subscription gates with the server\'s sentence '
-        'and a Fix that opens the plans', (tester) async {
+    testWidgets("a server subscription gate becomes the paywall CARD, not a "
+        'checklist row', (tester) async {
       final repo = FakePublishRepository(
         status: statusPayload(
           gates: [
             gatePayload(
-              code: 'SUBSCRIPTION_REQUIRED',
-              message: 'No subscription yet — start a free trial or activate '
-                  'a plan to publish.',
-            ),
-            gatePayload(
               code: 'SUBSCRIPTION_CAPACITY_EXCEEDED',
               message: 'Menu has 17 3D dishes; your Signature plan covers 15. '
                   'Upgrade to publish all of them.',
+            ),
+            // One ordinary gate beside it, so the checklist still has a reason
+            // to exist and the two can be told apart.
+            gatePayload(
+              code: 'CATALOG_NAME_MISSING',
+              message: 'Give your catalog a name before publishing.',
             ),
           ],
         ),
@@ -226,15 +227,19 @@ void main() {
       await tester.pumpWidget(harness(repo));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const ValueKey('publish_gate_checklist')),
+      expect(find.byKey(const ValueKey('publish_subscription_gate')),
           findsOneWidget);
-      expect(find.textContaining('start a free trial'), findsOneWidget);
+      // The server's own sentence, once — in the card, not repeated in the list.
       expect(find.textContaining('your Signature plan covers 15'),
           findsOneWidget);
-      // Blockers, not waits — and both rows' Fix opens the subscription
-      // screen (routing is pinned by publish_fix_routing_test.dart).
+      expect(find.text('More 3D dishes than your plan covers'), findsOneWidget);
+      // The rest of the checklist is untouched.
+      expect(find.byKey(const ValueKey('publish_gate_checklist')),
+          findsOneWidget);
+      expect(find.text('Give your catalog a name before publishing.'),
+          findsOneWidget);
+      // A blocker, not a wait — and the press it exists to stop cannot happen.
       expect(find.byIcon(Icons.hourglass_empty), findsNothing);
-      expect(find.widgetWithText(TextButton, 'See plans'), findsNWidgets(2));
       expect(_ctaOf(tester).onPressed, isNull);
       expect(repo.publishCalls, 0);
     });

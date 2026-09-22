@@ -104,6 +104,55 @@ Map<String, dynamic> gatePayload({
       if (productName != null) 'productName': productName,
     };
 
+/// A `GET /catalog/subscription` body, in the shape `SubscriptionStatusDto`
+/// emits.
+///
+/// `status` IS ALWAYS THERE on a real server — `'NONE'` included — and that is
+/// the whole point of building these as raw maps: its presence is what tells
+/// the client this deployment does subscriptions at all
+/// ([CatalogSubscription.isReported]), and an empty `{}` (the fake's default)
+/// must therefore never be read as "this restaurant has no plan".
+Map<String, dynamic> subscriptionPayloadFor({
+  String status = 'ACTIVE',
+  String? planId = 'TASTE',
+  String? planName = 'Taste plan',
+  int? threeDDishCap = 10,
+  int threeDDishCount = 0,
+  int imageDishCount = 0,
+  int? daysLeft = 20,
+  String? graceFrom,
+  bool trialAvailable = false,
+  bool? isEntitledTo3D,
+}) =>
+    {
+      'status': status,
+      'planId': planId,
+      'planName': planName,
+      'planSnapshot': planName == null
+          ? null
+          : {
+              'planId': planId,
+              'displayName': planName,
+              'priceMonthlyPaise': 119900,
+              'yearlyDiscountPct': 30,
+              'threeDDishCap': threeDDishCap ?? 0,
+              'includedStandeeCount': 10,
+              'features': <String>[],
+            },
+      'billingInterval': 'MONTHLY',
+      'periodEnd': '2026-10-18T00:00:00.000Z',
+      'graceEndsAt': null,
+      'graceFrom': graceFrom,
+      'daysLeft': daysLeft,
+      'threeDDishCount': threeDDishCount,
+      'threeDDishCap': threeDDishCap,
+      'imageDishCount': imageDishCount,
+      'trialAvailable': trialAvailable,
+      'isEntitledTo3D': isEntitledTo3D ??
+          const ['TRIAL', 'ACTIVE', 'GRACE', 'COMPED'].contains(status),
+      'standeeAllocation': null,
+    };
+
 /// A catalog repository whose publish surface the test drives.
 class FakePublishRepository
     with CatalogRepoAnalyticsDefaults, CatalogRepoDeleteDefaults
