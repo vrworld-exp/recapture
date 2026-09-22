@@ -52,6 +52,13 @@ disagree.
 | 5 | [Enforcement — sweep, pause job, Mirage entitlement, flag on](stage-05-enforcement.md) | BE + FE + **Mirage** | 1–4 | L (two parts) | `subscriptionGatesEnabled: true` — **this is launch** |
 | A | [Gaps addendum — disputes, standee issuance, receipts, admin alerts, 2 copy fixes](gaps-addendum.md) | BE + FE | 3 | M | nothing — ship before the Stage 5 flip |
 | B | [Edge-cases hardening — Prompt B (grace copy, early-renewal warning, PAUSED_90D, cash refund row)](edge-cases-hardening.md) | BE + FE | A, 5A | S | nothing — ship before the Stage 5 flip |
+| C | [Publish-flow edge cases — F1–F10 (silent run failures, key replay, poll discipline, auto-start latch)](publish-edge-cases-hardening.md) | BE + FE | — | L | nothing — independent of the Stage 5 flip |
+
+[`publish-edge-cases-hardening.md`](publish-edge-cases-hardening.md) is about the **press of
+Publish**, not about subscriptions: ten defects in how a run reports itself, replays itself and
+polls itself. It shares no code with the paywall and depends on no flag, so it can run before,
+during or after the stages above. It does touch `publish_body.dart` and `publish_flow.dart`,
+which Stage 5 Part A also edits — run one, then the other, not both in parallel.
 
 [`edge-cases-hardening.md`](edge-cases-hardening.md) is also the **complete edge-case matrix**
 (plan A–D plus 34 E-series cases for webhooks, the job queue, payment failures and the lapse
