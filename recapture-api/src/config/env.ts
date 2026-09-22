@@ -688,6 +688,22 @@ const envSchema = z.object({
    */
   SUBSCRIPTION_NUDGE_MAX_PER_WINDOW: z.coerce.number().int().positive().default(2),
   SUBSCRIPTION_NUDGE_WINDOW_SECONDS: z.coerce.number().int().positive().default(86_400),
+  /**
+   * Escape hatch for B8's "live key outside production" refusal: set to 'true'
+   * and a `rzp_live_` key boots in a dev shell. It exists because a founder
+   * whose Razorpay account has no test mode (or who must verify one real flow
+   * end to end) otherwise cannot boot at all.
+   *
+   * Every payment made while this is on is a REAL charge against a REAL card.
+   * It is deliberately a separate variable rather than a relaxed check, so
+   * turning it on is a typed, visible act and boot says so out loud. It does
+   * NOT relax the other direction: a test key in production is still refused,
+   * because that is a shop silently taking no money.
+   */
+  RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 /** Razorpay issues `rzp_live_…` and `rzp_test_…` key ids; the prefix is the mode. */
@@ -727,13 +743,18 @@ const refinedEnvSchema = envSchema.superRefine((cfg, ctx) => {
         message: `RAZORPAY_KEY_ID must be a live key (${RAZORPAY_LIVE_PREFIX}…) when NODE_ENV=production.`,
       });
     }
-    if (cfg.NODE_ENV !== 'production' && isLive) {
+    if (
+      cfg.NODE_ENV !== 'production' &&
+      isLive &&
+      !cfg.RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['RAZORPAY_KEY_ID'],
         message:
           `RAZORPAY_KEY_ID is a LIVE key but NODE_ENV=${cfg.NODE_ENV} — ` +
-          'use an rzp_test_ key outside production.',
+          'use an rzp_test_ key outside production, or set ' +
+          'RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION=true to charge real cards from here.',
       });
     }
   }
@@ -755,3 +776,19 @@ if (!parsed.success) {
 }
 
 export const env = parsed.data;
+
+/**
+ * The override is only interesting when it is doing something: a live key
+ * really is loaded outside production. Said on every boot so nobody forgets a
+ * dev shell is wired to real money.
+ */
+if (
+  env.NODE_ENV !== 'production' &&
+  env.RAZORPAY_KEY_ID?.startsWith(RAZORPAY_LIVE_PREFIX) === true
+) {
+  console.warn(
+    `⚠️  RAZORPAY_KEY_ID is a LIVE key and NODE_ENV=${env.NODE_ENV} ` +
+      '(RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION=true). ' +
+      'Payments made against this server are REAL and charge REAL cards.'
+  );
+}

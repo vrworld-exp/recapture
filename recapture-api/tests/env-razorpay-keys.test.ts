@@ -2,7 +2,8 @@
 //
 // B8: the env loader refuses a half-configured Razorpay (keys must be
 // present-or-absent together) and a key whose mode contradicts NODE_ENV — a
-// live key in a dev shell, a test key in production. Exercised against the
+// live key in a dev shell (unless RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION
+// opts in), a test key in production. Exercised against the
 // exported schema with hand-built objects, because the module itself parses
 // the REAL process.env once and exits on failure.
 import { describe, it, expect } from 'vitest';
@@ -63,6 +64,31 @@ describe('RAZORPAY_* env rules', () => {
       RAZORPAY_WEBHOOK_SECRET: 'y',
     });
     expect(issues.RAZORPAY_KEY_ID?.[0]).toMatch(/LIVE key but NODE_ENV=development/);
+  });
+
+  it('accepts a live key outside production when the override is set', () => {
+    expect(
+      issuesOn({
+        ...BASE,
+        NODE_ENV: 'development',
+        RAZORPAY_KEY_ID: 'rzp_live_abc',
+        RAZORPAY_KEY_SECRET: 'x',
+        RAZORPAY_WEBHOOK_SECRET: 'y',
+        RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION: 'true',
+      })
+    ).toEqual({});
+  });
+
+  it('still refuses a test key in production despite the override', () => {
+    const issues = issuesOn({
+      ...BASE,
+      NODE_ENV: 'production',
+      RAZORPAY_KEY_ID: 'rzp_test_abc',
+      RAZORPAY_KEY_SECRET: 'x',
+      RAZORPAY_WEBHOOK_SECRET: 'y',
+      RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION: 'true',
+    });
+    expect(issues.RAZORPAY_KEY_ID?.[0]).toMatch(/must be a live key/);
   });
 
   it('refuses a test key in production (B8, the other way)', () => {

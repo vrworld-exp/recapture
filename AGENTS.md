@@ -987,6 +987,8 @@ the owner's `modelCount`, their models list and the project detail's viewer with
     `setRazorpayClient` for tests, CI never calls the live API). `RAZORPAY_KEY_ID`
     / `_KEY_SECRET` / `_WEBHOOK_SECRET` are present-or-absent TOGETHER and the
     key's `rzp_live_`/`rzp_test_` prefix must match `NODE_ENV` or boot refuses
+    (a live key outside production is allowed only with
+    `RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION=true`, which warns on every boot)
     (B8). Absent → `POST /catalog/subscription/order` answers 503
     `PAYMENTS_UNAVAILABLE` and nothing else changes. Order `notes` carry
     `{catalogId, planId, interval}` and NOTHING else — no phone, no name.
