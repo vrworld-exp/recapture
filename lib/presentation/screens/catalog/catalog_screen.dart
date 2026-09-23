@@ -410,7 +410,34 @@ class _CatalogBody extends ConsumerWidget {
                   // else on this screen; a grace one gets the red line.
                   // The status is the SERVER's summary off the catalog DTO —
                   // nothing here decides a state or counts a day.
-                  if (catalog.subscription?.status == SubscriptionStatus.paused)
+                  //
+                  // REQUIREMENT 2 GOES FIRST, ahead of paused and grace, because
+                  // it is the only state where the LIVE LINK itself is at stake:
+                  // an owner whose QR is about to stop working must read that
+                  // before "your 3D is off". Two states, two cards — the page is
+                  // dark (`isPageDeactivated`), or a deadline is running.
+                  if (catalog.subscription?.isPageDeactivated == true)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: _PageOffCard(
+                          onOpenSubscription: onOpenSubscription,
+                        ),
+                      ),
+                    )
+                  else if (catalog.subscription?.hasPaymentDue == true)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+                        child: _PaymentDueCard(
+                          daysLeft: catalog.subscription?.daysLeft,
+                          paymentDueAt: catalog.subscription?.paymentDueAt,
+                          onOpenSubscription: onOpenSubscription,
+                        ),
+                      ),
+                    )
+                  else if (catalog.subscription?.status ==
+                      SubscriptionStatus.paused)
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: AppSpacing.md),
@@ -500,6 +527,135 @@ class _CatalogBody extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Requirement 2's card while the window is still running: the menu is LIVE, a
+/// payment is due, and the link goes when it runs out. The `Pay now` button is
+/// the one the requirement asks for by name.
+///
+/// A CARD, NOT A BANNER, and red rather than amber — the deliberate difference
+/// from [_GraceBanner]. Grace is a warning about a feature; this is a countdown
+/// on the QR code already printed and sitting on the tables.
+class _PaymentDueCard extends StatelessWidget {
+  const _PaymentDueCard({
+    required this.daysLeft,
+    required this.paymentDueAt,
+    required this.onOpenSubscription,
+  });
+
+  /// The SERVER's countdown (D6), rendered verbatim.
+  final int? daysLeft;
+  final DateTime? paymentDueAt;
+  final VoidCallback onOpenSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      key: const ValueKey('subscription_payment_due_card'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.timer_outlined, size: 20, color: AppColors.error),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  paymentDueBannerTitle(daysLeft),
+                  style: textTheme.titleMedium?.copyWith(
+                    color: AppColors.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            paymentDueBannerBody(isRep: false, paymentDueAt: paymentDueAt),
+            style: textTheme.bodyMedium?.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          AppButton(
+            key: const ValueKey('subscription_payment_due_cta'),
+            label: 'Pay now',
+            icon: Icons.lock_open_outlined,
+            isFullWidth: false,
+            onPressed: onOpenSubscription,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Requirement 2's card once the window has EXPIRED and the customer page is
+/// dark. The counterpart of [_PausedCard], for the one case where the photo menu
+/// did not stay live — so it must not borrow a word of that card's copy.
+class _PageOffCard extends StatelessWidget {
+  const _PageOffCard({required this.onOpenSubscription});
+
+  final VoidCallback onOpenSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      key: const ValueKey('subscription_page_off_card'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.link_off, size: 20, color: AppColors.error),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: Text(
+                  kPageOffCardTitle,
+                  style: textTheme.titleMedium?.copyWith(
+                    color: AppColors.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            pageOffCardBody(isRep: false),
+            style: textTheme.bodyMedium?.copyWith(
+              color: AppColors.textSecondary,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          AppButton(
+            key: const ValueKey('subscription_page_off_cta'),
+            label: 'Pay to switch it back on',
+            icon: Icons.lock_open_outlined,
+            isFullWidth: false,
+            onPressed: onOpenSubscription,
+          ),
+        ],
       ),
     );
   }

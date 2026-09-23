@@ -1505,8 +1505,14 @@ router.post(
     // Publish again. With the key the server recognises the request; without
     // it a second press would race the first run's worker.
     const idempotencyKey = req.header('Idempotency-Key') ?? undefined;
+    // WHO pressed it, which the service cannot otherwise know: `requestPublish`
+    // is keyed by the OWNER, so without this a rep publish and an owner publish
+    // are indistinguishable. It is what lets requirement 2's pending-payment
+    // window open on this door and only on this door — an owner pressing
+    // Publish on their own unpaid catalog still meets the paywall.
     const result = await requestPublish(ownerUserId, {
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      publishedBy: { userId: repUserId, role: req.user!.role ?? 'SALES_REP' },
     });
     return respondToRepPublishRequest(res, catalogId, ownerUserId, 'FULL', result);
   })

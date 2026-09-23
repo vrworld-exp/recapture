@@ -13,6 +13,7 @@ import {
   MODEL_OPTIMIZATION_JOB_TYPE,
   PHOTO_UPLOAD_JOB_TYPE,
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
+  SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
   JobState,
   StageProgress,
   StageTimestamps,
@@ -315,7 +316,8 @@ const JobSchema = new Schema<IJob>(
       required(this: IJob) {
         return (
           this.jobType !== MIRAGE_CATALOG_PUBLISH_JOB_TYPE &&
-          this.jobType !== SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE
+          this.jobType !== SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE &&
+          this.jobType !== SUBSCRIPTION_PAGE_STATE_JOB_TYPE
         );
       },
     },

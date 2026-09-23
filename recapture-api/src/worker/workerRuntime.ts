@@ -27,6 +27,7 @@ import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
 import { mirageCatalogPublishProcessor } from '@/worker/processors/mirageCatalogPublishProcessor';
 import { modelOptimizationProcessor } from '@/worker/processors/modelOptimizationProcessor';
 import { subscriptionArEntitlementProcessor } from '@/worker/processors/subscriptionArEntitlementProcessor';
+import { subscriptionPageStateProcessor } from '@/worker/processors/subscriptionPageStateProcessor';
 import { startWorker } from '@/worker/worker';
 import {
   DEFAULT_JOB_TYPE,
@@ -34,6 +35,7 @@ import {
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
+  SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
 } from '@/worker/workerTypes';
 
 /**
@@ -63,6 +65,12 @@ export function registerAllProcessors(): void {
   // partial write — `{ arEnabled }` — through the same injected client the
   // publish executors use; it never unpublishes and never deletes.
   registerProcessor(SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE, subscriptionArEntitlementProcessor);
+  // Switching one restaurant's CUSTOMER PAGE on or off at Mirage when a
+  // pending-payment window opens, expires or is paid for (requirement 2). A
+  // SEPARATE processor from the one above on purpose: that one's contract is
+  // that its Mirage body is `{ arEnabled }` and nothing else, and widening it
+  // to sometimes unpublish would break the invariant that makes it safe.
+  registerProcessor(SUBSCRIPTION_PAGE_STATE_JOB_TYPE, subscriptionPageStateProcessor);
   registerPublishExecutors();
 }
 
@@ -123,7 +131,13 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
     // A 3D resume rides the same lane: an owner who just paid is waiting on
     // it exactly as a rep waits on a publish.
     reservedLane: {
-      jobTypes: [MIRAGE_CATALOG_PUBLISH_JOB_TYPE, SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE],
+      jobTypes: [
+        MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
+        SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
+        // A restaurant that just paid to get its page back is refreshing the
+        // link and watching, exactly as an owner waits on a 3D resume.
+        SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
+      ],
       slots: env.WORKER_PUBLISH_LANE_SLOTS,
     },
     // The safety net under the Razorpay webhook (docs/subscription/stage-03-

@@ -21,6 +21,12 @@ import 'catalog_json.dart';
 enum SubscriptionStatus {
   none,
   trial,
+
+  /// A rep or staff member published this restaurant before anybody paid for
+  /// it. Full access and a DEADLINE: at [CatalogSubscription.paymentDueAt] the
+  /// customer page itself is switched off, not just 3D. The one status whose
+  /// expiry takes a live link down — see [CatalogSubscription.isPageDeactivated].
+  pendingPayment,
   active,
   grace,
   paused,
@@ -33,6 +39,7 @@ extension SubscriptionStatusX on SubscriptionStatus {
   String get apiValue => switch (this) {
         SubscriptionStatus.none => 'NONE',
         SubscriptionStatus.trial => 'TRIAL',
+        SubscriptionStatus.pendingPayment => 'PENDING_PAYMENT',
         SubscriptionStatus.active => 'ACTIVE',
         SubscriptionStatus.grace => 'GRACE',
         SubscriptionStatus.paused => 'PAUSED',
@@ -45,6 +52,7 @@ extension SubscriptionStatusX on SubscriptionStatus {
       switch (value.toUpperCase()) {
         'NONE' => SubscriptionStatus.none,
         'TRIAL' => SubscriptionStatus.trial,
+        'PENDING_PAYMENT' => SubscriptionStatus.pendingPayment,
         'ACTIVE' => SubscriptionStatus.active,
         'GRACE' => SubscriptionStatus.grace,
         'PAUSED' => SubscriptionStatus.paused,
@@ -58,6 +66,10 @@ extension SubscriptionStatusX on SubscriptionStatus {
   /// own flag is what a screen should read when it has one.
   bool get isEntitled =>
       this == SubscriptionStatus.trial ||
+      // Entitled on purpose: the rep's publish leaves a WORKING standee on the
+      // table, 3D included, before anybody pays. What limits it is the cap on
+      // the row and the deadline, not this getter.
+      this == SubscriptionStatus.pendingPayment ||
       this == SubscriptionStatus.active ||
       this == SubscriptionStatus.grace ||
       this == SubscriptionStatus.comped;
@@ -173,6 +185,9 @@ class PlanCatalog {
     required this.graceDays,
     required this.grandfatherDays,
     required this.orderTtlHours,
+    this.pendingPaymentDays = 7,
+    this.pendingPaymentThreeDCap = 10,
+    this.testingPrices = false,
   });
 
   /// In tier order: Taste, Signature, MasterChef.
@@ -182,6 +197,25 @@ class PlanCatalog {
   final int graceDays;
   final int grandfatherDays;
   final int orderTtlHours;
+
+  /// How long a rep/staff publish that nobody has paid for stays live, and how
+  /// many 3D dishes it may carry. Server-resolved; a screen shows the number
+  /// only to explain the window BEFORE one exists — once one does, the
+  /// authority is [CatalogSubscription.paymentDueAt], never days × a day.
+  final int pendingPaymentDays;
+  final int pendingPaymentThreeDCap;
+
+  /// TRUE when every price in [plans] is a TESTING price rather than the real
+  /// tier (the server's `SUBSCRIPTION_TESTING_PRICES`).
+  ///
+  /// The screen must say so, visibly, wherever it shows a price. A ₹3 plan with
+  /// nothing explaining it is how a tester talks a real restaurant into a price
+  /// we cannot honour — and the restaurant would be right to expect it.
+  ///
+  /// Never inferred from a low price: an older server sends nothing here and
+  /// reads as false, which is correct, because an older server has no testing
+  /// mode to be in.
+  final bool testingPrices;
 
   static const PlanCatalog bundledDefault = PlanCatalog(
     plans: [
@@ -254,6 +288,17 @@ class PlanCatalog {
       grandfatherDays:
           _intOr(map['grandfatherDays'], bundledDefault.grandfatherDays),
       orderTtlHours: _intOr(map['orderTtlHours'], bundledDefault.orderTtlHours),
+      pendingPaymentDays: _intOr(
+        map['pendingPaymentDays'],
+        bundledDefault.pendingPaymentDays,
+      ),
+      pendingPaymentThreeDCap: _intOr(
+        map['pendingPaymentThreeDCap'],
+        bundledDefault.pendingPaymentThreeDCap,
+      ),
+      // Only an EXPLICIT true. An absent key is an older server, which has no
+      // testing mode, so its real prices are real.
+      testingPrices: map['testingPrices'] == true,
     );
   }
 
@@ -264,11 +309,23 @@ class PlanCatalog {
         'graceDays': graceDays,
         'grandfatherDays': grandfatherDays,
         'orderTtlHours': orderTtlHours,
+        'pendingPaymentDays': pendingPaymentDays,
+        'pendingPaymentThreeDCap': pendingPaymentThreeDCap,
+        'testingPrices': testingPrices,
       };
 }
 
 int _intOr(dynamic raw, int fallback) =>
     raw is num && raw > 0 ? raw.toInt() : fallback;
+
+/// "A deadline is running and the page is still up", in ONE place, shared by
+/// [SubscriptionSummary] and [CatalogSubscription].
+///
+/// The `!isPageDeactivated` half is the whole point: once the page is dark the
+/// deadline is history, and the surface owes the owner the other sentence
+/// ("your link is off") rather than a countdown to something that happened.
+bool _hasPaymentDue(DateTime? paymentDueAt, bool isPageDeactivated) =>
+    paymentDueAt != null && !isPageDeactivated;
 
 /// The compact summary `GET /catalog` and the rep list carry — enough for a
 /// chip, nothing that needed a second query.
@@ -280,6 +337,8 @@ class SubscriptionSummary {
     required this.isEntitledTo3D,
     required this.trialAvailable,
     this.graceFrom,
+    this.paymentDueAt,
+    this.isPageDeactivated = false,
   });
 
   final SubscriptionStatus status;
@@ -296,6 +355,24 @@ class SubscriptionSummary {
   /// both read as the "payment overdue" wording.
   final SubscriptionStatus? graceFrom;
 
+  /// When this restaurant's LIVE CUSTOMER PAGE is due to be switched off for
+  /// non-payment, or null when nothing is due. The SERVER's instant (D6) —
+  /// never a day count this client multiplies back out.
+  final DateTime? paymentDueAt;
+
+  /// True when the page is ALREADY dark: the window expired unpaid.
+  ///
+  /// Deliberately separate from "[paymentDueAt] is in the past". The sweep that
+  /// takes a page down only runs while the worker is awake, so a deadline can
+  /// sit in the past with the link still answering — and copy that called that
+  /// link dead would be wrong in the direction that loses trust.
+  final bool isPageDeactivated;
+
+  /// See [CatalogSubscription.hasPaymentDue] — the same rule, because a chip
+  /// and a card looking at one restaurant must not disagree about whether its
+  /// link is at risk.
+  bool get hasPaymentDue => _hasPaymentDue(paymentDueAt, isPageDeactivated);
+
   factory SubscriptionSummary.fromMap(Map<String, dynamic> map) =>
       SubscriptionSummary(
         status:
@@ -306,6 +383,8 @@ class SubscriptionSummary {
         isEntitledTo3D: map['isEntitledTo3D'] == true,
         trialAvailable: map['trialAvailable'] == true,
         graceFrom: _graceFromOrNull(map['graceFrom']),
+        paymentDueAt: catalogDate(map['paymentDueAt']),
+        isPageDeactivated: map['isPageDeactivated'] == true,
       );
 
   /// Null in, null out — the catalog DTO carries `subscription: null` for a
@@ -320,6 +399,8 @@ class SubscriptionSummary {
         'graceFrom': graceFrom?.apiValue,
         'isEntitledTo3D': isEntitledTo3D,
         'trialAvailable': trialAvailable,
+        'paymentDueAt': paymentDueAt?.toIso8601String(),
+        'isPageDeactivated': isPageDeactivated,
       };
 }
 
@@ -351,6 +432,8 @@ class CatalogSubscription {
     this.planSnapshot,
     this.nudgeNextAllowedAt,
     this.graceFrom,
+    this.paymentDueAt,
+    this.isPageDeactivated = false,
     this.isReported = true,
   });
 
@@ -390,6 +473,16 @@ class CatalogSubscription {
   final int? standeeIncluded;
   final int? standeeIssued;
   final PlanCatalog plans;
+
+  /// See [SubscriptionSummary.paymentDueAt].
+  final DateTime? paymentDueAt;
+
+  /// See [SubscriptionSummary.isPageDeactivated].
+  final bool isPageDeactivated;
+
+  /// Whether a deadline is running and the page is still up — the state the
+  /// "pay or the link goes" banner and its Pay button exist for.
+  bool get hasPaymentDue => _hasPaymentDue(paymentDueAt, isPageDeactivated);
 
   /// Whether the payload actually CARRIED a status — i.e. this is the
   /// server's subscription DTO and not an older server's empty body.
@@ -454,6 +547,8 @@ class CatalogSubscription {
         planSnapshot: planSnapshot,
         nudgeNextAllowedAt: at,
         graceFrom: graceFrom,
+        paymentDueAt: paymentDueAt,
+        isPageDeactivated: isPageDeactivated,
         isReported: isReported,
       );
 
@@ -466,6 +561,8 @@ class CatalogSubscription {
           isEntitledTo3D: isEntitledTo3D,
           trialAvailable: trialAvailable,
           graceFrom: graceFrom,
+          paymentDueAt: paymentDueAt,
+          isPageDeactivated: isPageDeactivated,
         )
       : null;
 
@@ -509,6 +606,8 @@ class CatalogSubscription {
           : null,
       nudgeNextAllowedAt: nudgeNextAllowedAt,
       graceFrom: _graceFromOrNull(map['graceFrom']),
+      paymentDueAt: catalogDate(map['paymentDueAt']),
+      isPageDeactivated: map['isPageDeactivated'] == true,
       isReported: map['status'] != null,
     );
   }

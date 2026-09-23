@@ -60,6 +60,25 @@ export const MIRAGE_CATALOG_PUBLISH_JOB_TYPE = 'MIRAGE_CATALOG_PUBLISH';
  * live at the same URL, only the 3D viewer goes.
  */
 export const SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE = 'SUBSCRIPTION_AR_ENTITLEMENT';
+/**
+ * Telling Mirage whether one restaurant's CUSTOMER PAGE is live, and when its
+ * payment is due. Carries `payload.{catalogId, isPublished, paymentDueAt,
+ * reason}` and writes exactly those two fields (`isPublished`, `paymentDueAt`)
+ * on the Mirage restaurant.
+ *
+ * WHY THIS IS NOT PART OF SUBSCRIPTION_AR_ENTITLEMENT. That job's contract is
+ * that its Mirage body is `{ arEnabled }` and nothing else — pinned by a test
+ * on the call's argument keys (E36), because anything extra in that body (a
+ * `name`, above all) would rewrite the restaurant behind every printed QR.
+ * Widening it to sometimes also unpublish would break the one invariant that
+ * makes it safe to run unattended. Two jobs, two bodies, two blast radii.
+ *
+ * It is enqueued for the PENDING_PAYMENT lifecycle only (requirement 2): the
+ * window opening, the window expiring, and a payment or trial clearing it. A
+ * subscription that merely lapsed never reaches here — that restaurant paid,
+ * and AC-4 promises its photo menu stays up.
+ */
+export const SUBSCRIPTION_PAGE_STATE_JOB_TYPE = 'SUBSCRIPTION_PAGE_STATE';
 
 /**
  * Claim priority for the jobs a PERSON is standing and waiting on — a catalog

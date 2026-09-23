@@ -704,6 +704,53 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+
+  // -- Subscription testing prices (docs/subscription/testing-prices.md) ------
+  /**
+   * TESTING PRICES ON. While 'true' the plan catalog is served — and CHARGED —
+   * at SUBSCRIPTION_TESTING_PRICE_*_PAISE instead of the real tiers, so a real
+   * Razorpay flow can be walked end to end for a few rupees.
+   *
+   * It is env, not a `client_configs` flag, deliberately: the numbers a shop
+   * charges must not be flippable without a deploy, and boot logs the fact out
+   * loud (see the boot warning below). An ops `subscriptionPlans` override is applied
+   * FIRST and this on top of it, so testing prices always win.
+   *
+   * What it does NOT do: reprice a period that is already running. Every
+   * subscription freezes the plan it was bought under (`planSnapshot`), so a
+   * restaurant that paid 3 rupees keeps a 3-rupee snapshot until its next
+   * renewal — which is exactly what the "your price was locked" notice on the
+   * subscription screen is for. Turning this off does not retro-bill anyone.
+   */
+  SUBSCRIPTION_TESTING_PRICES: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /**
+   * The three testing prices, in integer paise, one per tier. Defaults are the
+   * 3/5/7 rupees the testing plan calls for.
+   *
+   * FLOOR OF 100 PAISE, enforced by the schema: Razorpay refuses an order under
+   * one rupee, and a 0-paise "free" tier here would look like a working
+   * checkout that can never be paid. The YEARLY price stays the real formula
+   * (monthly x 12, less `yearlyDiscountPct`) over these numbers, so the
+   * discount arithmetic is exercised rather than bypassed.
+   */
+  SUBSCRIPTION_TESTING_PRICE_TASTE_PAISE: z.coerce.number().int().min(100).default(300),
+  SUBSCRIPTION_TESTING_PRICE_SIGNATURE_PAISE: z.coerce.number().int().min(100).default(500),
+  SUBSCRIPTION_TESTING_PRICE_MASTERCHEF_PAISE: z.coerce.number().int().min(100).default(700),
+
+  /**
+   * How long a rep/staff publish that has never been paid for stays live before
+   * the customer page is switched off (days) — requirement 2's "deactivated in
+   * 7 days". A FLOOR on the window, not a promise: the sweep that closes it
+   * only runs while the worker is awake (E17), so it can be late, never early.
+   *
+   * Env rather than the plan catalog because it is not a price and no client
+   * renders it as one; the DTO carries the resolved `paymentDueAt` instant
+   * instead, so nothing downstream ever multiplies days by a day again.
+   */
+  SUBSCRIPTION_PENDING_PAYMENT_DAYS: z.coerce.number().int().positive().max(90).default(7),
 });
 
 /** Razorpay issues `rzp_live_…` and `rzp_test_…` key ids; the prefix is the mode. */
@@ -791,4 +838,24 @@ if (
       '(RAZORPAY_ALLOW_LIVE_KEY_OUTSIDE_PRODUCTION=true). ' +
       'Payments made against this server are REAL and charge REAL cards.'
   );
+}
+
+/**
+ * Testing prices are never the thing you want to discover from a bank
+ * statement, in EITHER direction: on in production means a real shop is selling
+ * plans for pocket change, and on anywhere means the quotes this server mints
+ * are not the ones on the price list. Both boot loudly.
+ */
+if (env.SUBSCRIPTION_TESTING_PRICES) {
+  const rupees = (paise: number): string => `₹${(paise / 100).toFixed(2)}`;
+  const line =
+    `SUBSCRIPTION_TESTING_PRICES=true — plans are quoted and CHARGED at ` +
+    `${rupees(env.SUBSCRIPTION_TESTING_PRICE_TASTE_PAISE)} / ` +
+    `${rupees(env.SUBSCRIPTION_TESTING_PRICE_SIGNATURE_PAISE)} / ` +
+    `${rupees(env.SUBSCRIPTION_TESTING_PRICE_MASTERCHEF_PAISE)} per month, not the real tiers.`;
+  if (env.NODE_ENV === 'production') {
+    console.warn(`🚨 ${line} THIS IS PRODUCTION.`);
+  } else {
+    console.warn(`⚠️  ${line}`);
+  }
 }

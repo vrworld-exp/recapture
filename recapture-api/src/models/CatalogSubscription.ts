@@ -78,6 +78,27 @@ export interface ICatalogSubscription extends Document {
   trialUsedAt?: Date;
   /** Which rep or admin activated the trial. Trials are never automatic. */
   trialActivatedBy?: Actor;
+  /**
+   * Set once, never cleared — the "one rep-publish window ever" flag, exactly
+   * as `trialUsedAt` is. Without it, `DELETE /catalog` + re-create + publish
+   * would mint a fresh free week every time, and the rows that make the trial
+   * rule stick (this collection outlives the catalogs it names, see `userId`)
+   * are the same rows that make this one stick.
+   */
+  pendingPaymentUsedAt?: Date;
+  /** Which rep or staff member's publish opened the window. */
+  pendingPaymentActivatedBy?: Actor;
+  /**
+   * Set when a PENDING_PAYMENT window expired and the CUSTOMER PAGE was
+   * switched off — `isPublished: false` on the Mirage restaurant, not just
+   * `arEnabled: false`.
+   *
+   * THE ONLY PLACE THIS HAPPENS. A restaurant that has paid keeps its photo
+   * menu forever (AC-4); this field marks the one case that was never paid for,
+   * and it is what tells an activation that it has a page to turn back ON as
+   * well as a 3D entitlement. Cleared when the page is restored.
+   */
+  pageDeactivatedAt?: Date;
   /** How the CURRENT period came to be. */
   source: SubscriptionSource;
   /**
@@ -99,11 +120,19 @@ export interface ICatalogSubscription extends Document {
 
 /**
  * Whether a status carries the right to publish 3D dishes at all. GRACE is
- * in: grace keeps full access while a payment is chased (§6). PAUSED and
- * CANCELLED are out: the photo menu stays live, 3D does not.
+ * in: grace keeps full access while a payment is chased (§6). PENDING_PAYMENT
+ * is in too — the whole point of the window is that the rep leaves a WORKING
+ * standee on the table, 3D included. PAUSED and CANCELLED are out: the photo
+ * menu stays live, 3D does not.
  */
 export function isEntitledTo3D(status: SubscriptionStatus): boolean {
-  return status === 'TRIAL' || status === 'ACTIVE' || status === 'GRACE' || status === 'COMPED';
+  return (
+    status === 'TRIAL' ||
+    status === 'PENDING_PAYMENT' ||
+    status === 'ACTIVE' ||
+    status === 'GRACE' ||
+    status === 'COMPED'
+  );
 }
 
 /**
@@ -162,6 +191,9 @@ const CatalogSubscriptionSchema = new Schema<ICatalogSubscription>(
     disputeGraceAt: { type: Date },
     trialUsedAt: { type: Date },
     trialActivatedBy: { type: ActorSchema },
+    pendingPaymentUsedAt: { type: Date },
+    pendingPaymentActivatedBy: { type: ActorSchema },
+    pageDeactivatedAt: { type: Date },
     source: { type: String, enum: SUBSCRIPTION_SOURCES, required: true },
     // -1 is the one negative value with a meaning (UNCAPPED_THREE_D); anything
     // else negative is a bug.
@@ -198,6 +230,11 @@ CatalogSubscriptionSchema.index({ status: 1, graceEndsAt: 1 });
 // Trial eligibility is judged per OWNER, across every catalog they have had
 // (the deleted ones included) — "did this person already use a trial".
 CatalogSubscriptionSchema.index({ userId: 1, trialUsedAt: 1 });
+
+// The same question for the rep-publish window: "has this person already had
+// their free week". Its own index rather than a suffix on the trial one,
+// because the two are asked independently and each is a two-field equality.
+CatalogSubscriptionSchema.index({ userId: 1, pendingPaymentUsedAt: 1 });
 
 export const CatalogSubscription = model<ICatalogSubscription>(
   'CatalogSubscription',

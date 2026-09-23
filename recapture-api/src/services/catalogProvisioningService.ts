@@ -28,6 +28,11 @@ import { CatalogSubscription, isEntitledTo3D } from '@/models/CatalogSubscriptio
 import type { PublicUrlScheme } from '@/models/types/catalog.types';
 import type { SubscriptionStatus } from '@/models/types/subscription.types';
 import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
+import {
+  desiredPageStateFor,
+  enqueuePageStateJob,
+  type PageStateRow,
+} from '@/services/subscription/pageStateJobs';
 import { mintPublicUrl } from '@/services/customerUrl';
 import { getObjectBytes } from '@/services/s3ObjectStore';
 import {
@@ -419,6 +424,7 @@ async function finish(
         adopted_existing: opts.adoptedExisting,
       });
       await syncEntitlementIfNotEntitled(catalog);
+      await syncPageStateIfAnythingDue(catalog);
       return {
         outcome: opts.adoptedExisting ? 'ADOPTED' : 'CREATED',
         mapping: persisted.mapping,
@@ -460,6 +466,56 @@ async function syncEntitlementIfNotEntitled(catalog: ICatalog): Promise<void> {
   } catch (err) {
     console.error(
       `[provisioning] entitlement sync for ${catalogId.toHexString()} could not be enqueued`,
+      err
+    );
+  }
+}
+
+/**
+ * E15's sibling, for the payment deadline (requirement 2).
+ *
+ * THE ORDERING THIS EXISTS FOR. A rep's first publish opens a pending-payment
+ * window at the TOP of `requestPublish`, before provisioning — because the row
+ * it writes is the row the publish gate is about to read. The page-state job it
+ * enqueues therefore names a catalog with no `mirageRestaurantId` yet, and its
+ * processor correctly no-ops. Without this hook the deadline would never reach
+ * Mirage on the one flow the whole feature is about, and the customer page would
+ * carry no banner.
+ *
+ * Runs once per provisioning (the CREATED/ADOPTED branch only), and only when
+ * the row has something to say, so a normal paid catalog enqueues nothing.
+ *
+ * Keyed on "now" rather than the row's `updatedAt`: the job the window already
+ * enqueued holds that key, and finding it would mean enqueuing nothing — which
+ * is precisely the bug being fixed. A re-provision genuinely wants a fresh
+ * attempt, the same reasoning as the admin resync's.
+ *
+ * Never throws: the mapping is already written and a provisioning must not fail
+ * over a queue hiccup.
+ */
+async function syncPageStateIfAnythingDue(catalog: ICatalog): Promise<void> {
+  const catalogId = catalog._id as Types.ObjectId;
+  try {
+    const row = await CatalogSubscription.findOne({ catalogId })
+      .select({ status: 1, userId: 1, periodEnd: 1, pageDeactivatedAt: 1 })
+      .lean<PageStateRow & { userId: Types.ObjectId }>()
+      .exec();
+    if (!row) return;
+    const desired = desiredPageStateFor(row);
+    // Nothing due and the page should be live is Mirage's own default for a
+    // restaurant it just created — there is nothing to tell it.
+    if (desired.paymentDueAt === null && desired.isPublished) return;
+    await enqueuePageStateJob({
+      catalogId,
+      ownerUserId: row.userId,
+      isPublished: desired.isPublished,
+      paymentDueAt: desired.paymentDueAt,
+      reason: 'PENDING_PAYMENT_STARTED',
+      dedupeAt: new Date(),
+    });
+  } catch (err) {
+    console.error(
+      `[provisioning] page-state sync for ${catalogId.toHexString()} could not be enqueued`,
       err
     );
   }

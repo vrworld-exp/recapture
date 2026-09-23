@@ -53,6 +53,18 @@ disagree.
 | A | [Gaps addendum — disputes, standee issuance, receipts, admin alerts, 2 copy fixes](gaps-addendum.md) | BE + FE | 3 | M | nothing — ship before the Stage 5 flip |
 | B | [Edge-cases hardening — Prompt B (grace copy, early-renewal warning, PAUSED_90D, cash refund row)](edge-cases-hardening.md) | BE + FE | A, 5A | S | nothing — ship before the Stage 5 flip |
 | C | [Publish-flow edge cases — F1–F10 (silent run failures, key replay, poll discipline, auto-start latch)](publish-edge-cases-hardening.md) | BE + FE | — | L | nothing — independent of the Stage 5 flip |
+| D | [Testing prices + the rep-publish payment window](testing-prices-and-pending-payment.md) | BE + FE + **Mirage** | 3, 5 | M (two features) | `SUBSCRIPTION_TESTING_PRICES` (absent = real prices); the window is inert until the rep publish route passes `publishedBy` |
+
+[`testing-prices-and-pending-payment.md`](testing-prices-and-pending-payment.md) holds two
+features asked for after launch planning. **Testing prices** quote and charge the three plans at
+₹3/₹5/₹7 from an env flag, so a real Razorpay flow can be walked end to end; it re-prices only,
+never a running period, and the app puts a visible badge over the cards. **The pending-payment
+window** is the one place in this whole system where a live customer page can go dark: a rep or
+staff member publishes a restaurant nobody has paid for, it goes live with a deadline
+(`PENDING_PAYMENT`), and the sweep switches the page off when the deadline passes. That is a
+DEPARTURE from AC-4 — which is kept intact for every restaurant that has ever paid — and the
+doc explains why the two rules coexist and which single code path separates them. It needs a
+Mirage deploy first (`paymentDueAt`), exactly as Stage 5 needed one for `arEnabled`.
 
 [`publish-edge-cases-hardening.md`](publish-edge-cases-hardening.md) is about the **press of
 Publish**, not about subscriptions: ten defects in how a run reports itself, replays itself and

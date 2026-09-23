@@ -149,6 +149,7 @@ import {
   listSubscriptionsByState,
   refundPayment,
   resyncArEntitlement,
+  resyncPageState,
   setStandeesIssued,
 } from '@/services/subscription/adminSubscriptionService';
 import {
@@ -2894,6 +2895,39 @@ router.post(
       status: 'success',
       jobId: result.jobId.toHexString(),
       enabled: result.enabled,
+    });
+  })
+);
+
+/**
+ * POST /admin/catalogs/:id/subscription/resync-page — re-tell Mirage whether
+ * this restaurant's CUSTOMER PAGE should be live, and what its payment deadline
+ * is. The button the "A paid restaurant's page is still switched off" alert
+ * names. Answers 202 with the job id; the write happens on the worker.
+ *
+ * It can only RE-ASSERT what the row already says (the desired state is computed
+ * by the same function the processor uses), so an admin cannot take a paid page
+ * down with it.
+ */
+router.post(
+  '/catalogs/:id/subscription/resync-page',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const catalog = await liveCatalogOr404(res, req.params.id);
+    if (!catalog) return;
+    const result = await resyncPageState(catalog._id as Types.ObjectId, adminActor(req));
+    if (result.outcome === 'NO_SUBSCRIPTION') {
+      return subscriptionFail(
+        res,
+        409,
+        'NO_SUBSCRIPTION',
+        'This catalog has no subscription yet, so there is no page state to sync.'
+      );
+    }
+    res.status(202).json({
+      status: 'success',
+      jobId: result.jobId.toHexString(),
+      isPublished: result.isPublished,
     });
   })
 );

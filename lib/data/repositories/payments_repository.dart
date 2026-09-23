@@ -132,6 +132,12 @@ abstract interface class PaymentsRepository {
   /// the catalog has no row.
   Future<String> resyncArEntitlement(String catalogId);
 
+  /// Re-tells Mirage whether this restaurant's CUSTOMER PAGE should be live,
+  /// and what its payment deadline is. The sibling of [resyncArEntitlement] for
+  /// the field that decides whether the printed QR answers at all. Answers the
+  /// job id.
+  Future<String> resyncPageState(String catalogId);
+
   /// Refund ONE PAID row in full. Needs the row flagged as a suspected
   /// duplicate, or [override] with a note of at least thirty characters.
   Future<PaymentRecordSummary> refund(
@@ -362,6 +368,15 @@ class RemotePaymentsRepository implements PaymentsRepository {
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/admin/catalogs/$catalogId/subscription/resync-ar',
+        );
+        return (res.data?['jobId'] ?? '').toString();
+      });
+
+  @override
+  Future<String> resyncPageState(String catalogId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/catalogs/$catalogId/subscription/resync-page',
         );
         return (res.data?['jobId'] ?? '').toString();
       });

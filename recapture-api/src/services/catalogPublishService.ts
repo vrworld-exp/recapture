@@ -54,6 +54,8 @@ import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { CatalogSyncErrorCode, syncFailure } from '@/services/catalog/publishSyncErrors';
 import { mirageCategoryName } from '@/services/catalog/categorySync';
 import { getMirageClient, isMirageConfigured, MirageError } from '@/services/mirage';
+import type { Actor } from '@/models/types/subscription.types';
+import { openPendingPaymentWindowForPublish } from '@/services/subscription/pendingPaymentService';
 import {
   evaluateSubscriptionGate,
   isSubscriptionGateEnabled,
@@ -749,10 +751,19 @@ async function ownCatalog(userId: string): Promise<ICatalog | null> {
  * gate has passed — an empty catalog never provisions, which is what keeps a
  * user who tapped Publish too early from permanently owning a Mirage restaurant
  * (and a public URL) for a catalog with nothing in it.
+ *
+ * `publishedBy` is the REP OR STAFF MEMBER who pressed it, when it was not the
+ * owner. It is always the catalog's owner this runs FOR (the rep route resolves
+ * the delegation and passes `catalog.userId`), so the actor is the only way this
+ * service can tell the two doors apart — and the one thing it changes is
+ * requirement 2's window; see the call to
+ * `openPendingPaymentWindowForPublish` below. The promotion path
+ * (`catalogModelPromotionService`) passes nothing and is treated as the owner,
+ * which is right: a model finishing generation is not a person at a table.
  */
 export async function requestPublish(
   userId: string,
-  options: { idempotencyKey?: string } = {}
+  options: { idempotencyKey?: string; publishedBy?: Actor } = {}
 ): Promise<RequestPublishResult> {
   const catalog = await ownCatalog(userId);
   if (!catalog) return { outcome: 'NOT_FOUND' };
@@ -762,6 +773,28 @@ export async function requestPublish(
   const active = await hasActiveRun(catalogId);
   if (active.active && active.runId) {
     return { outcome: 'IN_PROGRESS', runId: active.runId };
+  }
+
+  // REQUIREMENT 2, and it must run BEFORE the gates, because the row it writes
+  // is the row the subscription gate is about to read. A rep or staff member
+  // publishing a restaurant that is on nothing opens a pending-payment window
+  // instead of being refused: the menu goes live, the customer page carries a
+  // deadline, and the sweep switches it off if nobody pays.
+  //
+  // It is deliberately NOT inside evaluatePublishGates. That function is also
+  // the client's read-only preview ("why is Publish disabled?"), called on every
+  // catalog screen, and a preview must never write a row — let alone start a
+  // seven-day clock on a restaurant nobody has published yet.
+  //
+  // Best-effort by construction: the helper swallows its own failures and
+  // answers false, and the gates then refuse the publish with the ordinary
+  // "choose a plan" sentence rather than a 500.
+  if (options.publishedBy) {
+    await openPendingPaymentWindowForPublish(
+      catalogId,
+      catalog.userId as Types.ObjectId,
+      options.publishedBy
+    );
   }
 
   const products = await CatalogProduct.find({ catalogId, deletedAt: null }).exec();

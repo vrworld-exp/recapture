@@ -119,6 +119,16 @@ class _AdminSubscriptionDetailScreenState
         subject: 'The 3D sync could not be queued',
       );
 
+  /// Re-tells Mirage the current page state. Same contract as [_resyncAr]: no
+  /// dialog, because it can only re-assert what the row already says — the
+  /// server computes the desired state from the row, so this cannot take a paid
+  /// restaurant's page down however many times it is pressed.
+  Future<void> _resyncPage() => _run(
+        () => _notifier.resyncPageState(),
+        done: 'Page sync queued — the stamp below updates when it lands.',
+        subject: 'The page sync could not be queued',
+      );
+
   Future<void> _setStandees(CatalogSubscription subscription) async {
     final result = await showDialog<_StandeesInput>(
       context: context,
@@ -250,6 +260,17 @@ class _AdminSubscriptionDetailScreenState
                   icon: Icons.sync,
                   isFullWidth: false,
                   onPressed: _acting ? null : _resyncAr,
+                ),
+              // The button the "a paid restaurant's page is still switched off"
+              // alert points at — the most damaging state this product has, and
+              // the only one an operator has to fix by hand.
+              if (subscription != null && subscription.hasRow)
+                AppButton.secondary(
+                  key: const ValueKey('admin_resync_page'),
+                  label: 'Resync page',
+                  icon: Icons.link,
+                  isFullWidth: false,
+                  onPressed: _acting ? null : _resyncPage,
                 ),
               // Only a plan that includes standees has a count to keep.
               if (subscription != null &&

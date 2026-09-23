@@ -172,6 +172,17 @@ export const AnalyticsEvent = {
   // is on. `skipped` is the D4 last-write check: the owner paid between the
   // enqueue and the run, so the payload no longer matched the row.
   SUBSCRIPTION_AR_ENTITLEMENT_SYNCED: 'subscription_ar_entitlement_synced',
+  // The worker told Mirage (or decided not to) whether one restaurant's
+  // CUSTOMER PAGE is live — the pending-payment window opening, expiring, or
+  // being cleared. `skipped` is the same D4 last-write check, and here it is
+  // the guard that stops a stale expiry taking a paid restaurant offline.
+  SUBSCRIPTION_PAGE_STATE_SYNCED: 'subscription_page_state_synced',
+  // A rep or staff publish opened a pending-payment window: the menu went live
+  // before anybody paid, with a deadline. `days` is the window length in force.
+  SUBSCRIPTION_PENDING_PAYMENT_STARTED: 'subscription_pending_payment_started',
+  // The window ran out unpaid and the customer page was switched off. The one
+  // event that means a live link died for non-payment.
+  SUBSCRIPTION_PENDING_PAYMENT_EXPIRED: 'subscription_pending_payment_expired',
   // One per lifecycle sweep, zeros included — the heartbeat the runbook
   // watches for. A worker that stops emitting this has stopped sweeping.
   SUBSCRIPTION_SWEEP_RAN: 'subscription_sweep_ran',
@@ -1149,10 +1160,44 @@ const subscriptionArEntitlementSyncedProps = z
   })
   .strict();
 
+const subscriptionPageStateSyncedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    is_published: z.boolean(),
+    reason: z.enum([
+      'PENDING_PAYMENT_STARTED',
+      'PENDING_PAYMENT_EXPIRED',
+      'PAYMENT',
+      'COMP',
+      'TRIAL',
+      'ADMIN',
+    ]),
+    skipped: z.boolean(),
+  })
+  .strict();
+
+const subscriptionPendingPaymentStartedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    actor_role: z.enum(USER_ROLES),
+    days: z.number().int().positive(),
+  })
+  .strict();
+
+const subscriptionPendingPaymentExpiredProps = z
+  .object({
+    catalog_id: z.string().min(1),
+  })
+  .strict();
+
 const subscriptionSweepRanProps = z
   .object({
     to_grace: z.number().int().nonnegative(),
     to_paused: z.number().int().nonnegative(),
+    // Pending-payment windows this pass expired. Its own number rather than
+    // folded into `to_paused`: one means "a plan lapsed", the other means "a
+    // live link died", and a dashboard must never average the two.
+    to_page_off: z.number().int().nonnegative().optional(),
     duration_ms: z.number().int().nonnegative(),
   })
   .strict();
@@ -1385,6 +1430,9 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_DISPUTE_CLOSED]: subscriptionDisputeClosedProps,
   [AnalyticsEvent.SUBSCRIPTION_STATE_CHANGED]: subscriptionStateChangedProps,
   [AnalyticsEvent.SUBSCRIPTION_AR_ENTITLEMENT_SYNCED]: subscriptionArEntitlementSyncedProps,
+  [AnalyticsEvent.SUBSCRIPTION_PAGE_STATE_SYNCED]: subscriptionPageStateSyncedProps,
+  [AnalyticsEvent.SUBSCRIPTION_PENDING_PAYMENT_STARTED]: subscriptionPendingPaymentStartedProps,
+  [AnalyticsEvent.SUBSCRIPTION_PENDING_PAYMENT_EXPIRED]: subscriptionPendingPaymentExpiredProps,
   [AnalyticsEvent.SUBSCRIPTION_SWEEP_RAN]: subscriptionSweepRanProps,
   [AnalyticsEvent.SUBSCRIPTION_STANDEES_ISSUED]: subscriptionStandeesIssuedProps,
   [AnalyticsEvent.SUBSCRIPTION_RECEIPT_DOWNLOADED]: subscriptionReceiptDownloadedProps,

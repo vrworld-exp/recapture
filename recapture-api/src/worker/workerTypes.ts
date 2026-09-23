@@ -16,6 +16,7 @@ import {
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
+  SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
   type ExecutableStage,
   type JobState,
   type StageProgress,
@@ -33,6 +34,7 @@ export {
   MIRAGE_CATALOG_PUBLISH_JOB_TYPE,
   MODEL_OPTIMIZATION_JOB_TYPE,
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
+  SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
 };
 
 /** Fallback for job documents created before the worker fields existed. */

@@ -189,6 +189,10 @@ class AdminSubscriptionDetailNotifier
   Future<String> resyncArEntitlement() =>
       _act(() => _repo.resyncArEntitlement(arg));
 
+  /// Re-tells Mirage the current CUSTOMER PAGE state and payment deadline.
+  /// Answers the job id.
+  Future<String> resyncPageState() => _act(() => _repo.resyncPageState(arg));
+
   /// The standees-delivered counter (README C8). An absolute number.
   Future<CatalogSubscription> setStandeesIssued({
     required int issued,

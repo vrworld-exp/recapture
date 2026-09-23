@@ -216,6 +216,14 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
             ),
           ],
         ),
+        // REQUIREMENT 1. Prices are being served at testing rates, so say so
+        // ABOVE the cards rather than next to one of them: the badge is about
+        // every number below it, and a restaurant that agrees to ₹3 on the
+        // strength of an unlabelled card is owed ₹3 forever.
+        if (subscription.plans.testingPrices) ...[
+          const SizedBox(height: AppSpacing.md),
+          const _TestingPricesBadge(),
+        ],
         const SizedBox(height: AppSpacing.md),
         for (final plan in subscription.plans.plans) ...[
           _PlanCard(
@@ -467,6 +475,60 @@ class _UsageRow extends StatelessWidget {
 }
 
 /// One plan, priced for the chosen interval. The yearly figure is the
+/// Requirement 1's badge: every price on this screen is a TESTING price.
+///
+/// Deliberately loud and deliberately unmissable. The failure this exists to
+/// prevent is not a technical one — it is a rep showing a real restaurant a ₹3
+/// card during a test window and that restaurant reasonably expecting ₹3.
+class _TestingPricesBadge extends StatelessWidget {
+  const _TestingPricesBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      key: const ValueKey('subscription_testing_prices_badge'),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.science_outlined, size: 16, color: AppColors.warning),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'TEST PRICING — not the real prices',
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: AppColors.warning,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  'The amounts below are test amounts and a payment made now is '
+                  'a real charge at the test amount. Do not quote these to a '
+                  'restaurant as its price.',
+                  style: textTheme.bodySmall?.copyWith(
+                    color: AppColors.textSecondary,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// server's formula rounded to whole rupees FOR DISPLAY (`formatRupees`);
 /// the paise stay the truth.
 class _PlanCard extends StatelessWidget {

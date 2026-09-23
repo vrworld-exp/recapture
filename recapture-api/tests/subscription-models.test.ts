@@ -121,11 +121,14 @@ describe('CatalogSubscription', () => {
     ).rejects.toThrow(/validation/i);
   });
 
-  it('isEntitledTo3D is true for exactly TRIAL, ACTIVE, GRACE and COMPED', () => {
+  it('isEntitledTo3D is true for exactly TRIAL, PENDING_PAYMENT, ACTIVE, GRACE and COMPED', () => {
     const entitled = SUBSCRIPTION_STATUSES.filter((status: SubscriptionStatus) =>
       isEntitledTo3D(status)
     );
-    expect(entitled).toEqual(['TRIAL', 'ACTIVE', 'GRACE', 'COMPED']);
+    // PENDING_PAYMENT is entitled on purpose (requirement 2): the rep's publish
+    // leaves a WORKING standee on the table, 3D included, before anybody pays.
+    // What limits it is the cap on the row and the deadline, not this function.
+    expect(entitled).toEqual(['TRIAL', 'PENDING_PAYMENT', 'ACTIVE', 'GRACE', 'COMPED']);
   });
 });
 

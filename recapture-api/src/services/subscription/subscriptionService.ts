@@ -34,6 +34,7 @@ import {
 } from '@/models/types/subscription.types';
 import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
+import { enqueuePageStateJob } from '@/services/subscription/pageStateJobs';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { countThreeDDishes, countsAsThreeD } from '@/services/subscription/threeDDishCount';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -56,6 +57,23 @@ export interface SubscriptionSummaryDto {
   isEntitledTo3D: boolean;
   /** Whether Start trial would succeed right now — see {@link startTrial}. */
   trialAvailable: boolean;
+  /**
+   * ISO — when this restaurant's LIVE CUSTOMER PAGE is due to be switched off
+   * for non-payment, or null when nothing is due (requirement 2). Set while
+   * PENDING_PAYMENT, and kept after the window expired so the copy can still
+   * name the date the link died.
+   *
+   * SERVER-COMPUTED, like `daysLeft` and for the same reason (D6): it is the
+   * instant the sweep will act on, not a day count a client multiplies out.
+   */
+  paymentDueAt: string | null;
+  /**
+   * True when the page is ALREADY dark — the window expired unpaid. Distinct
+   * from `paymentDueAt` being in the past: a sweep that has not run yet leaves
+   * a deadline behind with the page still up, and the copy must not claim a
+   * link is dead while it is still answering.
+   */
+  isPageDeactivated: boolean;
 }
 
 /** The subscription screen, in one read. */
@@ -89,6 +107,10 @@ export interface SubscriptionStatusDto {
   imageDishCount: number;
   trialAvailable: boolean;
   isEntitledTo3D: boolean;
+  /** See {@link SubscriptionSummaryDto.paymentDueAt}. */
+  paymentDueAt: string | null;
+  /** See {@link SubscriptionSummaryDto.isPageDeactivated}. */
+  isPageDeactivated: boolean;
   standeeAllocation: { included: number; issued: number } | null;
   /** So the screen never needs a second call for the plan cards. */
   plans: PlanCatalog;
@@ -106,6 +128,7 @@ export type SubscriptionRow = Pick<
   | 'trialUsedAt'
   | 'threeDDishCap'
   | 'standeeAllocation'
+  | 'pageDeactivatedAt'
 >;
 
 /** The catalog's row, or null when it has none. */
@@ -146,6 +169,10 @@ export function daysForfeitedFor(
     case 'TRIAL':
     case 'COMPED':
       return daysUntil(row.periodEnd, now);
+    // PENDING_PAYMENT forfeits NOTHING, deliberately: the days left on it are
+    // days of unpaid grace, not days that were bought. Telling an owner that
+    // paying today throws away six free days is both true and exactly the
+    // wrong thing to put in front of a restaurant we are chasing for money.
     default:
       return 0;
   }
@@ -161,6 +188,10 @@ export function daysLeftFor(row: SubscriptionRow, now: Date): number | null {
     case 'GRACE':
       return daysUntil(row.graceEndsAt ?? row.periodEnd, now);
     case 'TRIAL':
+    // PENDING_PAYMENT counts to `periodEnd` like any other running period.
+    // There is no grace behind it: `periodEnd` IS the moment the page goes
+    // dark, which is why the window is the whole countdown.
+    case 'PENDING_PAYMENT':
     case 'ACTIVE':
     case 'COMPED':
       return daysUntil(row.periodEnd, now);
@@ -179,7 +210,18 @@ export function daysLeftFor(row: SubscriptionRow, now: Date): number | null {
  */
 function rowAllowsTrial(row: SubscriptionRow | null): boolean {
   if (row === null) return true;
-  return !row.trialUsedAt && (row.status === 'CANCELLED' || row.status === 'PAUSED');
+  return (
+    !row.trialUsedAt &&
+    (row.status === 'CANCELLED' ||
+      row.status === 'PAUSED' ||
+      // A trial SUPERSEDES a pending-payment window — the "(or free trial
+      // limit)" half of the requirement. A rep who published a restaurant
+      // before anybody paid can still grant the free month afterwards, and
+      // doing so has to clear the deadline rather than run beside it. This is
+      // the one LIVE status a trial may replace, and startTrial is what puts
+      // the customer page back and cancels the debt.
+      row.status === 'PENDING_PAYMENT')
+  );
 }
 
 /**
@@ -227,7 +269,27 @@ function toSummary(
     graceFrom: graceFromOf(row),
     isEntitledTo3D: isEntitledTo3D(row.status),
     trialAvailable,
+    paymentDueAt: paymentDueAtOf(row),
+    isPageDeactivated: row.pageDeactivatedAt != null,
   };
+}
+
+/**
+ * The deadline a client renders, or null when there is none.
+ *
+ * Two rows carry one: a running PENDING_PAYMENT window (its `periodEnd` IS the
+ * deadline — there is no grace behind it) and a row whose page has already been
+ * switched off (kept, so the copy can name the date). Every other status — a
+ * trial, a plan, a lapse, a comp — has nothing due, because nothing about them
+ * can take a customer page down.
+ */
+function paymentDueAtOf(
+  row: Pick<SubscriptionRow, 'status' | 'periodEnd' | 'pageDeactivatedAt'>
+): string | null {
+  if (row.status === 'PENDING_PAYMENT' || row.pageDeactivatedAt != null) {
+    return row.periodEnd.toISOString();
+  }
+  return null;
 }
 
 /** Only meaningful while the row IS in grace; anything else reads as null. */
@@ -326,6 +388,10 @@ export async function getSubscriptionStatus(
       imageDishCount,
       trialAvailable,
       isEntitledTo3D: false,
+      // No row means nothing was ever published on anybody's behalf, so there
+      // is no deadline and no page that was taken down.
+      paymentDueAt: null,
+      isPageDeactivated: false,
       standeeAllocation: null,
       plans,
     };
@@ -346,6 +412,8 @@ export async function getSubscriptionStatus(
     imageDishCount,
     trialAvailable,
     isEntitledTo3D: isEntitledTo3D(row.status),
+    paymentDueAt: paymentDueAtOf(row),
+    isPageDeactivated: row.pageDeactivatedAt != null,
     standeeAllocation: {
       included: row.standeeAllocation?.included ?? 0,
       issued: row.standeeAllocation?.issued ?? 0,
@@ -435,9 +503,20 @@ export async function startTrial(
     trialActivatedBy: actor,
   };
 
+  // Was this restaurant's page dark, or carrying a payment deadline, before the
+  // trial? Read BEFORE the write, because the write clears both. A trial
+  // superseding a pending-payment window is the "(or free trial limit)" half of
+  // requirement 2, and the deadline it replaces has to come off Mirage too.
+  const beforeTrial = await previousRowOf(catalogId);
+
   let started = false;
+  let startedRow: ICatalogSubscription | { updatedAt: Date; userId: Types.ObjectId } | null = null;
   try {
-    await CatalogSubscription.create({ catalogId, userId: ownerUserId, ...trialFields });
+    startedRow = await CatalogSubscription.create({
+      catalogId,
+      userId: ownerUserId,
+      ...trialFields,
+    });
     started = true;
   } catch (err) {
     if (!isDuplicateKey(err)) throw err;
@@ -446,7 +525,12 @@ export async function startTrial(
 
   if (!started) {
     const updated = await CatalogSubscription.findOneAndUpdate(
-      { catalogId, trialUsedAt: null, status: { $in: ['CANCELLED', 'PAUSED'] } },
+      // PENDING_PAYMENT joins the two lapsed statuses here: a trial is strictly
+      // better for the restaurant than a week-long ultimatum, and a rep who
+      // published first and granted the trial afterwards must not be told the
+      // restaurant "already has an active subscription". `rowAllowsTrial` — what
+      // `trialAvailable` on every screen is computed from — lists the same three.
+      { catalogId, trialUsedAt: null, status: { $in: ['CANCELLED', 'PAUSED', 'PENDING_PAYMENT'] } },
       {
         $set: trialFields,
         $unset: {
@@ -456,11 +540,18 @@ export async function startTrial(
           graceEndsAt: 1,
           graceFrom: 1,
           disputeGraceAt: 1,
+          pausedAt: 1,
+          cancelledAt: 1,
+          // The trial replaces the deadline; the page is live and nothing is
+          // due. `pendingPaymentUsedAt` is NOT unset — like `trialUsedAt` it is
+          // a one-ever flag and outlives the period it opened.
+          pageDeactivatedAt: 1,
         },
       },
       { new: true }
     ).exec();
 
+    startedRow = updated;
     if (!updated) {
       const row = await getOrNull(catalogId);
       // The guard failed for one of two reasons; the re-read tells them apart.
@@ -468,6 +559,40 @@ export async function startTrial(
       // started) is "active"; a lapsed row can only have failed on trialUsedAt.
       if (row && isEntitledTo3D(row.status)) return refused('SUBSCRIPTION_ACTIVE');
       return refused('TRIAL_ALREADY_USED');
+    }
+  }
+
+  // 3D, if the trial displaced a row Mirage is currently hiding it on. A trial
+  // over a PAUSED / CANCELLED row was always allowed (see `rowAllowsTrial`) and
+  // never enqueued this; the expired-window path — PAUSED with a dark page, then
+  // a rep grants the trial — is what makes it routine rather than theoretical.
+  // Same best-effort contract as `enqueueArResume`, which is what this calls.
+  if (startedRow && needsArResumeFrom(beforeTrial.status)) {
+    await enqueueArResume(
+      { catalogId, userId: ownerUserId, updatedAt: startedRow.updatedAt },
+      'PAYMENT',
+      beforeTrial.status
+    );
+  }
+
+  // The page and the deadline, if the trial displaced either. Best-effort and
+  // never fatal: the trial IS started, and an admin resync is the backstop.
+  if (startedRow && needsPageRestoreFrom(beforeTrial)) {
+    try {
+      await enqueuePageStateJob({
+        catalogId,
+        ownerUserId,
+        isPublished: true,
+        paymentDueAt: null,
+        reason: 'TRIAL',
+        dedupeAt: startedRow.updatedAt,
+      });
+    } catch (err) {
+      console.error(
+        `[subscription] ${catalogId.toHexString()} trial superseded a pending-payment window but ` +
+          'the page-state job could not be enqueued — admin resync needed',
+        err
+      );
     }
   }
 
@@ -511,6 +636,16 @@ export interface ApplyPeriodResult {
    * the resume job on this; until then it is returned and logged.
    */
   needsArResume: boolean;
+  /**
+   * True when Mirage is holding a payment deadline, a dark customer page, or
+   * both, and this activation has just made them wrong (requirement 2). Two
+   * separate cases, one flag:
+   *   • the row was PENDING_PAYMENT — the page is live but carrying a "switches
+   *     off on the Nth" banner that has to come down;
+   *   • the row had `pageDeactivatedAt` — the window expired and the page is
+   *     DARK. This is the case an owner is refreshing the link waiting for.
+   */
+  needsPageRestore: boolean;
 }
 
 /** Every field the previous period may have set that a fresh one must clear. */
@@ -520,6 +655,15 @@ const CLEARED_ON_NEW_PERIOD = {
   disputeGraceAt: null,
   pausedAt: null,
   cancelledAt: null,
+  // Whatever the page state was, a paid (or comped) period means it is live and
+  // nothing is due. Cleared here rather than only where the job is enqueued, so
+  // the ROW is the truth even if the job never lands — and the processor, which
+  // re-derives the desired state from the row, then does the right thing on an
+  // admin resync.
+  //
+  // NOT cleared: `pendingPaymentUsedAt`, which is the "one window ever" flag and
+  // outlives everything, exactly as `trialUsedAt` does.
+  pageDeactivatedAt: null,
 } as const;
 
 /**
@@ -551,16 +695,53 @@ async function upsertSubscriptionRow(
   }
 }
 
-async function previousStatusOf(catalogId: Types.ObjectId): Promise<SubscriptionStatus | 'NONE'> {
+/**
+ * The row as it stood BEFORE this activation — its status and whether its
+ * customer page had been switched off. Both are needed to decide what Mirage
+ * has to be told, and reading them together is one query instead of two.
+ */
+interface PreviousRow {
+  status: SubscriptionStatus | 'NONE';
+  pageDeactivatedAt: Date | null;
+}
+
+/**
+ * The three fields the two enqueue helpers need — the catalog, its owner, and
+ * the `updatedAt` the idempotency key is derived from.
+ *
+ * Narrower than `ICatalogSubscription` on purpose: `startTrial` reaches these
+ * helpers without a Mongoose document in hand (its write may have been a lean
+ * `findOneAndUpdate`), and a signature that demanded one would only be satisfied
+ * with a cast — which is how a field nobody passed becomes an undefined at
+ * runtime.
+ */
+type ResumableRow = Pick<ICatalogSubscription, 'catalogId' | 'userId' | 'updatedAt'>;
+
+async function previousRowOf(catalogId: Types.ObjectId): Promise<PreviousRow> {
   const row = await CatalogSubscription.findOne({ catalogId })
-    .select({ status: 1 })
-    .lean<{ status: SubscriptionStatus }>()
+    .select({ status: 1, pageDeactivatedAt: 1 })
+    .lean<{ status: SubscriptionStatus; pageDeactivatedAt?: Date }>()
     .exec();
-  return row?.status ?? 'NONE';
+  return {
+    status: row?.status ?? 'NONE',
+    pageDeactivatedAt: row?.pageDeactivatedAt ?? null,
+  };
 }
 
 function needsArResumeFrom(previousStatus: SubscriptionStatus | 'NONE'): boolean {
   return previousStatus === 'PAUSED' || previousStatus === 'CANCELLED';
+}
+
+/**
+ * Whether Mirage's page fields are now wrong — see
+ * {@link ApplyPeriodResult.needsPageRestore}.
+ *
+ * PENDING_PAYMENT is in even though its page is already live, because the
+ * DEADLINE is also on Mirage and a paid restaurant must not keep showing
+ * "switches off in 2 days" to its diners.
+ */
+function needsPageRestoreFrom(previous: PreviousRow): boolean {
+  return previous.status === 'PENDING_PAYMENT' || previous.pageDeactivatedAt !== null;
 }
 
 /**
@@ -628,7 +809,8 @@ async function nudgeIfOverCap(
  */
 export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<ApplyPeriodResult> {
   const { catalogId, ownerUserId, paidAt, planSnapshot } = input;
-  const previousStatus = await previousStatusOf(catalogId);
+  const previous = await previousRowOf(catalogId);
+  const previousStatus = previous.status;
   const periodEnd = new Date(paidAt.getTime() + (input.interval === 'YEARLY' ? 365 : 30) * DAY_MS);
 
   const subscription = await upsertSubscriptionRow(catalogId, ownerUserId, {
@@ -657,6 +839,13 @@ export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<Appl
     await enqueueArResume(subscription, 'PAYMENT', previousStatus);
   }
 
+  // Requirement 2's other half: the page and the deadline. Independent of the
+  // 3D resume above and enqueued separately, because a window that merely
+  // expired needs BOTH (its 3D went off with its page) while a window paid
+  // inside its deadline needs only this one.
+  const needsPageRestore = needsPageRestoreFrom(previous);
+  if (needsPageRestore) await enqueuePageRestore(subscription, 'PAYMENT', previous);
+
   track(AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED, {
     catalog_id: catalogId.toHexString(),
     source: input.source,
@@ -668,7 +857,7 @@ export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<Appl
 
   await nudgeIfOverCap(catalogId, ownerUserId, planSnapshot);
 
-  return { previousStatus, subscription, needsArResume };
+  return { previousStatus, subscription, needsArResume, needsPageRestore };
 }
 
 export interface ApplyCompInput {
@@ -689,7 +878,8 @@ export interface ApplyCompInput {
 export async function applyComp(input: ApplyCompInput): Promise<ApplyPeriodResult> {
   const now = input.now ?? new Date();
   const { catalogId, ownerUserId } = input;
-  const previousStatus = await previousStatusOf(catalogId);
+  const previous = await previousRowOf(catalogId);
+  const previousStatus = previous.status;
 
   const subscription = await upsertSubscriptionRow(catalogId, ownerUserId, {
     $set: {
@@ -726,7 +916,10 @@ export async function applyComp(input: ApplyCompInput): Promise<ApplyPeriodResul
   const needsArResume = needsArResumeFrom(previousStatus);
   if (needsArResume) await enqueueArResume(subscription, 'COMP', previousStatus);
 
-  return { previousStatus, subscription, needsArResume };
+  const needsPageRestore = needsPageRestoreFrom(previous);
+  if (needsPageRestore) await enqueuePageRestore(subscription, 'COMP', previous);
+
+  return { previousStatus, subscription, needsArResume, needsPageRestore };
 }
 
 /**
@@ -737,7 +930,7 @@ export async function applyComp(input: ApplyCompInput): Promise<ApplyPeriodResul
  * resync away, and is logged loudly here.
  */
 async function enqueueArResume(
-  subscription: ICatalogSubscription,
+  subscription: ResumableRow,
   reason: 'PAYMENT' | 'COMP',
   previousStatus: SubscriptionStatus | 'NONE'
 ): Promise<void> {
@@ -757,6 +950,46 @@ async function enqueueArResume(
     console.error(
       `[subscription] ${catalogId.toHexString()} resumed from ${previousStatus} but the AR resume ` +
         'job could not be enqueued — admin resync needed',
+      err
+    );
+  }
+}
+
+/**
+ * The page half of the resume (requirement 2): this restaurant's customer page
+ * is dark, or is showing a payment deadline, and the money that just arrived
+ * makes both wrong. `{ isPublished: true, paymentDueAt: null }`.
+ *
+ * NEVER THROWS, for the same reason {@link enqueueArResume} does not: the period
+ * IS applied and the ledger IS written, and a job that could not be queued is an
+ * admin resync away. It is logged loudly because this is the expensive one — an
+ * owner whose page stays dark after paying is the worst state this feature has,
+ * and the log line is what an operator greps for.
+ */
+async function enqueuePageRestore(
+  subscription: ResumableRow,
+  reason: 'PAYMENT' | 'COMP',
+  previous: PreviousRow
+): Promise<void> {
+  const catalogId = subscription.catalogId;
+  const wasDark = previous.pageDeactivatedAt !== null;
+  try {
+    await enqueuePageStateJob({
+      catalogId,
+      ownerUserId: subscription.userId,
+      isPublished: true,
+      paymentDueAt: null,
+      reason,
+      dedupeAt: subscription.updatedAt,
+    });
+    console.log(
+      `[subscription] ${catalogId.toHexString()} page restored from ${previous.status}` +
+        `${wasDark ? ' (was dark)' : ' (deadline cleared)'} — page-state job enqueued`
+    );
+  } catch (err) {
+    console.error(
+      `[subscription] ${catalogId.toHexString()} paid but the page-state job could not be ` +
+        `enqueued — admin resync needed${wasDark ? ' URGENTLY: the customer page is DARK' : ''}`,
       err
     );
   }

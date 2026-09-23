@@ -338,7 +338,20 @@ class PublishBody extends StatelessWidget {
                     onOpenSubscription: onOpenSubscription,
                   ),
                 ],
-                if (subscription?.status == SubscriptionStatus.grace) ...[
+                // Requirement 2, ABOVE the grace banner: publishing works in
+                // both states, but only one of them is a countdown on the QR
+                // code. `hasPaymentDue` is false once the page is actually dark
+                // — that case reaches the paywall card above instead, because a
+                // dark page with 3D dishes is a blocked publish, not a warning.
+                if (subscription?.hasPaymentDue == true) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _PaymentDueBanner(
+                    daysLeft: subscription?.daysLeft,
+                    paymentDueAt: subscription?.paymentDueAt,
+                    voice: voice,
+                    onOpenSubscription: onOpenSubscription,
+                  ),
+                ] else if (subscription?.status == SubscriptionStatus.grace) ...[
                   const SizedBox(height: AppSpacing.md),
                   _GraceBanner(
                     daysLeft: subscription?.daysLeft,
@@ -1259,6 +1272,82 @@ class _SubscriptionPaywallCard extends StatelessWidget {
 /// in the voice of whoever is standing here — an owner pays, a rep tells the
 /// owner. Red because the clock is running; a banner, not a gate, because
 /// publishing still works in grace.
+/// Requirement 2's banner on the publish screen: the menu is live, a payment is
+/// due, and the link goes when the deadline does. Publishing still works — which
+/// is why this is a banner and not the paywall card above it.
+class _PaymentDueBanner extends StatelessWidget {
+  const _PaymentDueBanner({
+    required this.daysLeft,
+    required this.paymentDueAt,
+    required this.voice,
+    required this.onOpenSubscription,
+  });
+
+  /// The SERVER's countdown (D6), rendered verbatim.
+  final int? daysLeft;
+  final DateTime? paymentDueAt;
+  final PublishVoice voice;
+  final VoidCallback? onOpenSubscription;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final isRep = voice.isRep;
+    return Container(
+      key: const ValueKey('publish_payment_due_banner'),
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.xs),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.timer_outlined, size: 16, color: AppColors.error),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  paymentDueBannerTitle(daysLeft),
+                  style:
+                      textTheme.bodyMedium?.copyWith(color: AppColors.error),
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  paymentDueBannerBody(
+                    isRep: isRep,
+                    paymentDueAt: paymentDueAt,
+                  ),
+                  style: textTheme.bodySmall
+                      ?.copyWith(color: AppColors.textSecondary, height: 1.4),
+                ),
+                if (onOpenSubscription != null) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      key: const ValueKey('publish_payment_due_cta'),
+                      onPressed: onOpenSubscription,
+                      // A rep standing at the table can take the payment there
+                      // and then, so the label is the same as the owner's — the
+                      // grace banner's "Notify owner" is for a restaurant the
+                      // rep has already left.
+                      child: const Text('Pay now'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GraceBanner extends StatelessWidget {
   const _GraceBanner({
     required this.daysLeft,

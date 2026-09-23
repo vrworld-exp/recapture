@@ -40,11 +40,20 @@ export interface SubscriptionGateInput {
  *   2. PAUSED / CANCELLED → SUBSCRIPTION_REQUIRED only when the menu carries
  *      ≥ 1 3D dish. A photo-only menu still publishes (README C5): the plan
  *      lapsing takes the AR away, not the menu.
- *   3. TRIAL / ACTIVE / GRACE / COMPED → SUBSCRIPTION_CAPACITY_EXCEEDED when
- *      the count is over a cap that exists. A comp is uncapped and never trips
- *      this; GRACE keeps full access but not extra capacity, so it can.
+ *   3. TRIAL / PENDING_PAYMENT / ACTIVE / GRACE / COMPED →
+ *      SUBSCRIPTION_CAPACITY_EXCEEDED when the count is over a cap that exists.
+ *      A comp is uncapped and never trips this; GRACE keeps full access but not
+ *      extra capacity, so it can.
  *   4. Otherwise nothing. GRACE never produces a gate of its own — "your plan
  *      has lapsed, pay soon" is a banner (Stage 2), not a blocker.
+ *
+ * PENDING_PAYMENT FALLS THROUGH RULE 3 AND PASSES, which is the whole point of
+ * requirement 2: a rep's publish goes live before anybody has paid. The
+ * pressure is the deadline on the row, the banner on both UIs, and the sweep
+ * that switches the page off — not a refusal here. What it does NOT get is
+ * extra capacity: the window carries the trial's 3D cap and rule 3 enforces it,
+ * so a rep cannot publish thirty free 3D dishes on a restaurant that owes us
+ * money.
  */
 export function evaluateSubscriptionGate(input: SubscriptionGateInput): PublishGate[] {
   const { subscription, threeDDishCount } = input;

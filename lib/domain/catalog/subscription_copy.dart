@@ -6,6 +6,8 @@
 //
 //   | status    | owner line                                          | rep chip     |
 //   | NONE      | No subscription yet                                 | No plan      |
+//   | PENDING_  | Live now — payment due in N days, then this page     | Due Nd       |
+//   |  PAYMENT  |   switches off                             (danger)  |              |
 //   | TRIAL     | Free trial — N days left, up to 10 3D dishes        | Trial Nd     |
 //   | ACTIVE    | Active until <d MMM yyyy> · <Plan>                  | Active       |
 //   | GRACE     | Payment overdue — 3D menu pauses in N days  (red)   | Overdue Nd   |
@@ -52,6 +54,11 @@ String _ownerLine({
     SubscriptionStatus.none => 'No subscription yet',
     SubscriptionStatus.trial => 'Free trial — ${_days(days)} left, '
         'up to $trialThreeDCap 3D dishes',
+    // NOT "your trial ends in N days". This restaurant has no trial, and what
+    // runs out is the LIVE PAGE, not a feature on it — the one sentence here
+    // that has to be read as a deadline rather than a reminder.
+    SubscriptionStatus.pendingPayment =>
+      'Live now — payment due in ${_days(days)}, then this page switches off',
     SubscriptionStatus.active => periodEnd == null
         ? 'Active${planName == null ? '' : ' · $planName'}'
         : 'Active until ${formatSubscriptionDate(periodEnd)}'
@@ -74,6 +81,7 @@ String repStatusChip(SubscriptionSummary? summary) {
   return switch (summary.status) {
     SubscriptionStatus.none => 'No plan',
     SubscriptionStatus.trial => 'Trial ${days}d',
+    SubscriptionStatus.pendingPayment => 'Due ${days}d',
     SubscriptionStatus.active => 'Active',
     SubscriptionStatus.grace => 'Overdue ${days}d',
     SubscriptionStatus.paused => '3D paused',
@@ -90,6 +98,9 @@ SubscriptionTone subscriptionTone(SubscriptionStatus status) =>
       SubscriptionStatus.comped =>
         SubscriptionTone.good,
       SubscriptionStatus.trial => SubscriptionTone.warning,
+      // DANGER, like grace, and for a sharper reason: a lapsed plan costs a
+      // restaurant its 3D, this costs it the printed QR.
+      SubscriptionStatus.pendingPayment => SubscriptionTone.danger,
       SubscriptionStatus.grace => SubscriptionTone.danger,
       SubscriptionStatus.paused ||
       SubscriptionStatus.cancelled ||
@@ -105,6 +116,9 @@ String threeDUsageLine(CatalogSubscription subscription) {
   if (cap == null) return '${subscription.threeDDishCount} (unlimited)';
   final label = switch (subscription.status) {
     SubscriptionStatus.trial => 'trial',
+    // Not "plan": there is no plan. The cap is the window's, and calling it a
+    // plan is how an owner comes to believe they already have one.
+    SubscriptionStatus.pendingPayment => 'before payment',
     _ => subscription.planName ?? 'plan',
   };
   return '${subscription.threeDDishCount} / $cap ($label)';
@@ -157,6 +171,51 @@ String graceBannerLine(int? daysLeft, {SubscriptionStatus? graceFrom}) =>
 String graceBannerAction({required bool isRep}) => isRep
     ? 'Publishing still works. Notify the owner to pay to keep 3D live.'
     : 'Publishing still works. Pay now to keep your 3D menu live.';
+
+// ── The pending-payment window (requirement 2) ───────────────────────────────
+//
+// A rep or staff member published this restaurant before anybody paid for it.
+// The menu is LIVE — that is the point — and a deadline is running, after which
+// the customer page itself switches off.
+//
+// WHY THIS COPY IS NOT THE GRACE COPY. Every other lapse in this file costs a
+// restaurant its 3D and promises the photo menu stays up (AC-4). This one costs
+// them the printed QR. Reusing a sentence about 3D pausing would be a lie about
+// the only case where the link really does die, so nothing is shared: no noun,
+// no verb, no button label.
+
+/// The payment-due banner's title while the page is still LIVE. `N` is the
+/// server's `daysLeft`, never a client clock.
+String paymentDueBannerTitle(int? daysLeft) {
+  final days = daysLeft ?? 0;
+  if (days <= 0) return 'Your live menu switches off today';
+  return 'Your live menu switches off in ${_days(days)}';
+}
+
+/// The banner's second line, in the voice of whoever is standing there.
+String paymentDueBannerBody({required bool isRep, DateTime? paymentDueAt}) {
+  final by = paymentDueAt == null
+      ? ''
+      : ' before ${formatSubscriptionDate(paymentDueAt)}';
+  return isRep
+      ? 'This restaurant is live but has not been paid for. Take payment$by, or '
+          'start the free trial, to keep the QR working.'
+      : 'Your menu is live, but it has not been paid for yet. Choose a plan$by '
+          'to keep your QR code working — nothing is deleted.';
+}
+
+/// The card shown once the window has expired and the page IS dark — the
+/// counterpart of [kPausedCardTitle], for the one case where the customer page
+/// really did go down.
+const String kPageOffCardTitle = 'Your live menu is switched off';
+
+String pageOffCardBody({required bool isRep}) => isRep
+    ? 'The QR code stops working until this restaurant is on a plan. Every dish, '
+        'photo and category is still here, and the same QR comes back the moment '
+        'it is paid for.'
+    : 'Your QR code is not working because your menu was never paid for. Nothing '
+        'has been deleted — choose a plan and the same QR code comes straight '
+        'back on.';
 
 // ── The pre-publish paywall card ────────────────────────────────────────────
 //
@@ -216,6 +275,21 @@ PublishPaywallCopy publishPaywallCopy(
   }
 
   // SUBSCRIPTION_REQUIRED, in the words of how the row got there.
+  //
+  // FIRST, THE ONE CASE THAT BREAKS THE PROMISE THE REST OF THIS MAKES. A row
+  // whose page was deactivated is PAUSED like any other, so without this it
+  // would be told "your photo menu is still live at the same QR" — the exact
+  // opposite of the truth, to the one owner who can check it in a second by
+  // opening their own link. Deliberately ahead of the status switch.
+  if (subscription?.isPageDeactivated == true) {
+    return PublishPaywallCopy(
+      title: kPageOffCardTitle,
+      body: pageOffCardBody(isRep: isRep),
+      detail: subscription == null ? null : threeDUsageLine(subscription),
+      actionLabel: isRep ? 'Open subscription' : 'See plans',
+    );
+  }
+
   return switch (subscription?.status) {
     SubscriptionStatus.paused => PublishPaywallCopy(
         title: kPausedCardTitle,

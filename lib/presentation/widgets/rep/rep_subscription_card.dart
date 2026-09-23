@@ -212,13 +212,39 @@ class _RepSubscriptionCardState extends ConsumerState<RepSubscriptionCard> {
         // Stage 5: a worried owner's first question is "is my menu down?".
         // It is not, and the rep should be able to read the answer off the
         // card without looking anything up.
-        if (subscription.status == SubscriptionStatus.paused) ...[
+        if (subscription.status == SubscriptionStatus.paused &&
+            !subscription.isPageDeactivated) ...[
           const SizedBox(height: AppSpacing.xs),
           Text(
             kPausedPhotoMenuLine,
             key: const ValueKey('rep_paused_photo_menu_line'),
             style:
                 textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+        ],
+        // Requirement 2: the answer to the SAME question, when the answer is
+        // the other one. A deactivated page is PAUSED like any other row, so
+        // without the guard above a rep would read "photo menu is still live"
+        // off the card and repeat it to an owner whose QR is dead. The rep is
+        // the person most likely to be asked and least able to check.
+        if (subscription.isPageDeactivated) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            pageOffCardBody(isRep: true),
+            key: const ValueKey('rep_page_off_line'),
+            style: textTheme.bodySmall
+                ?.copyWith(color: AppColors.error, height: 1.4),
+          ),
+        ] else if (subscription.hasPaymentDue) ...[
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            paymentDueBannerBody(
+              isRep: true,
+              paymentDueAt: subscription.paymentDueAt,
+            ),
+            key: const ValueKey('rep_payment_due_line'),
+            style: textTheme.bodySmall
+                ?.copyWith(color: AppColors.error, height: 1.4),
           ),
         ],
         const SizedBox(height: AppSpacing.xs),
@@ -343,6 +369,10 @@ bool nudgeOffered(CatalogSubscription subscription) {
       return days != null && days <= 7;
     case SubscriptionStatus.none:
     case SubscriptionStatus.trial:
+    // Offered, and this is the case it matters most in: the rep has left, the
+    // deadline is running, and the nudge is the only thing that reaches an
+    // owner who never opens the app.
+    case SubscriptionStatus.pendingPayment:
     case SubscriptionStatus.grace:
     case SubscriptionStatus.paused:
     case SubscriptionStatus.cancelled:

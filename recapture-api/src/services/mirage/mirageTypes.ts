@@ -277,6 +277,21 @@ export interface UpdateRestaurantInput {
    * nothing else — and that processor sends THIS FIELD ALONE (E36).
    */
   arEnabled?: boolean;
+  /**
+   * ReCapture-owned payment deadline (requirement 2). An ISO instant when this
+   * restaurant's page is due to be switched off for non-payment, or `null` to
+   * clear it. Mirage stores it verbatim and its PUBLIC menu payload carries it,
+   * so the customer page can render the countdown banner without knowing
+   * anything about plans, statuses or money.
+   *
+   * Written by the SUBSCRIPTION_PAGE_STATE processor and by nothing else, always
+   * together with `isPublished` and never with anything from the catalog.
+   * `null` is MEANINGFUL here (clear it), which is why it is `string | null`
+   * rather than an optional string — an omitted field leaves Mirage's value
+   * alone, and "leave it alone" is not the same instruction as "there is
+   * nothing due".
+   */
+  paymentDueAt?: string | null;
   image?: MirageFileUpload;
 }
 

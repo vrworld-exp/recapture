@@ -16,15 +16,21 @@ import '../entities/rep_activation.dart';
 
 /// Lower is more urgent. `NONE` (no row) sits with PAUSED and above TRIAL:
 /// a restaurant with no plan at all is exactly who a rep should be calling.
+/// PENDING_PAYMENT outranks all of them — see the note on that arm.
 int repAttentionRank(SubscriptionStatus status) => switch (status) {
-      SubscriptionStatus.grace => 0,
-      SubscriptionStatus.paused => 1,
-      SubscriptionStatus.none => 2,
-      SubscriptionStatus.trial => 3,
-      SubscriptionStatus.active => 4,
-      SubscriptionStatus.comped => 5,
-      SubscriptionStatus.cancelled => 6,
-      SubscriptionStatus.unknown => 7,
+      // TOP OF THE LIST, above grace. Every other row on this list is a
+      // restaurant whose 3D is at stake; this one's printed QR code stops
+      // working, and it is the only kind a rep can still fix by phoning the
+      // owner they signed up last week.
+      SubscriptionStatus.pendingPayment => 0,
+      SubscriptionStatus.grace => 1,
+      SubscriptionStatus.paused => 2,
+      SubscriptionStatus.none => 3,
+      SubscriptionStatus.trial => 4,
+      SubscriptionStatus.active => 5,
+      SubscriptionStatus.comped => 6,
+      SubscriptionStatus.cancelled => 7,
+      SubscriptionStatus.unknown => 8,
     };
 
 /// A copy of [items] sorted for attention: by status rank, then by

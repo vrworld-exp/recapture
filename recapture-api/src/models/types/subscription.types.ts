@@ -13,18 +13,39 @@ import type { UserRole } from '../User';
 
 /**
  * Where a catalog's subscription is in its life (§6).
- *   TRIAL     — the one-per-catalog free period a rep or admin activated.
- *   ACTIVE    — a paid period is running.
- *   GRACE     — the paid period ended; full access continues for `graceDays`
- *               while a payment is chased. Grace keeps ACCESS, never adds
- *               CAPACITY — the 3D cap still applies.
- *   PAUSED    — grace ran out. The photo menu stays live; 3D is switched off.
- *   CANCELLED — the owner asked to stop. Same entitlement as PAUSED.
- *   COMPED    — granted by an admin (or the launch grandfather window), no
- *               money involved. Uncapped.
+ *   TRIAL           — the one-per-catalog free period a rep or admin activated.
+ *   PENDING_PAYMENT — a rep or staff member published this restaurant before
+ *                     anybody paid for it. Full access, a cap, and a DEADLINE:
+ *                     at `periodEnd` the customer page itself is switched off,
+ *                     not just 3D. See the note below.
+ *   ACTIVE          — a paid period is running.
+ *   GRACE           — the paid period ended; full access continues for
+ *                     `graceDays` while a payment is chased. Grace keeps
+ *                     ACCESS, never adds CAPACITY — the 3D cap still applies.
+ *   PAUSED          — grace ran out. The photo menu stays live; 3D is switched
+ *                     off. (The one exception is a PENDING_PAYMENT window that
+ *                     expired — see `pageDeactivatedAt`.)
+ *   CANCELLED       — the owner asked to stop. Same entitlement as PAUSED.
+ *   COMPED          — granted by an admin (or the launch grandfather window),
+ *                     no money involved. Uncapped.
+ *
+ * WHY PENDING_PAYMENT IS NOT A TRIAL. A rep leaves a working standee on the
+ * table, so the publish has to go through before any money does; but the one
+ * free trial a restaurant gets is a thing a rep GRANTS on purpose, and
+ * consuming it as a side effect of pressing Publish would silently spend it.
+ * So this is its own short window with its own consequence, and the trial is
+ * still there to be started — a trial started later SUPERSEDES the window and
+ * clears the debt (see startTrial).
+ *
+ * WHY ITS EXPIRY IS HARSHER THAN A LAPSE. AC-4 promises a restaurant that has
+ * PAID that its photo menu never goes dark. A restaurant that has never paid a
+ * rupee was never given that promise, and "pay or the link dies" is the only
+ * lever a rep has once they have left the table. The two rules live side by
+ * side: `pageDeactivatedAt` is set for this case and for no other.
  */
 export const SUBSCRIPTION_STATUSES = [
   'TRIAL',
+  'PENDING_PAYMENT',
   'ACTIVE',
   'GRACE',
   'PAUSED',
@@ -47,7 +68,14 @@ export type BillingInterval = (typeof BILLING_INTERVALS)[number];
  * trial period needs a source too, and overloading `COMP` would make "how many
  * catalogs did we comp" count every trial (see the stage-1 assumptions).
  */
-export const SUBSCRIPTION_SOURCES = ['ONLINE', 'MANUAL', 'COMP', 'TRIAL'] as const;
+export const SUBSCRIPTION_SOURCES = [
+  'ONLINE',
+  'MANUAL',
+  'COMP',
+  'TRIAL',
+  /** A rep/staff publish opened the window; nobody has paid (PENDING_PAYMENT). */
+  'REP_PUBLISH',
+] as const;
 export type SubscriptionSource = (typeof SUBSCRIPTION_SOURCES)[number];
 
 /**
@@ -119,6 +147,25 @@ export interface PlanCatalog {
   grandfatherDays: number;
   /** How long an in-app checkout order stays payable (§7 rule 4). */
   orderTtlHours: number;
+  /**
+   * How long a never-paid rep/staff publish stays live before the customer page
+   * is switched off, and how many 3D dishes it may carry meanwhile. Resolved
+   * from `SUBSCRIPTION_PENDING_PAYMENT_DAYS` and `trialThreeDCap` by
+   * planCatalogService — NOT settable by an ops override, which is why neither
+   * appears in `planCatalogSchema`.
+   */
+  pendingPaymentDays: number;
+  pendingPaymentThreeDCap: number;
+  /**
+   * TRUE when every price above is a testing price rather than the real tier
+   * (`SUBSCRIPTION_TESTING_PRICES`). On the wire so a screen can put a visible
+   * badge over its own plan cards: a ₹3 plan with nothing saying why is how a
+   * tester talks a real restaurant into a price we cannot honour.
+   *
+   * Server-resolved and read-only. An ops override cannot set it (it is not in
+   * `planCatalogSchema`) and a client must never infer it from a low price.
+   */
+  testingPrices: boolean;
 }
 
 /**

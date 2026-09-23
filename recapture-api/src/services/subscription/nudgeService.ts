@@ -61,6 +61,11 @@ export function nudgeClauseFor(
   switch (status) {
     case 'TRIAL':
       return `trial ends in ${days(daysLeft ?? 0)}`;
+    // The sharpest clause there is, because it is the only one where the
+    // customer page itself is what runs out. The rep's nudge is the main way
+    // this ever reaches an owner who has not opened the app.
+    case 'PENDING_PAYMENT':
+      return `live page switches off in ${days(daysLeft ?? 0)} unless it is paid for`;
     case 'ACTIVE':
       if (daysLeft !== null && daysLeft > NOT_NEEDED_ABOVE_DAYS) return null;
       return `plan expires in ${days(daysLeft ?? 0)}`;

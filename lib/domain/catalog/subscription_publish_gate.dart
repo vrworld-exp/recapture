@@ -129,15 +129,21 @@ SubscriptionPublishCheck checkSubscriptionForPublish({
 ///   2. PAUSED / CANCELLED → `SUBSCRIPTION_REQUIRED` only when the menu
 ///      carries at least one 3D dish. A photo-only menu still publishes
 ///      (README C5): the plan lapsing takes the AR away, not the menu.
-///   3. TRIAL / ACTIVE / GRACE / COMPED → `SUBSCRIPTION_CAPACITY_EXCEEDED`
-///      when the count is over a cap that exists. A comp is uncapped and
-///      never trips this; GRACE keeps full access but not extra capacity.
+///   3. TRIAL / PENDING_PAYMENT / ACTIVE / GRACE / COMPED →
+///      `SUBSCRIPTION_CAPACITY_EXCEEDED` when the count is over a cap that
+///      exists. A comp is uncapped and never trips this; GRACE keeps full
+///      access but not extra capacity.
 ///   4. Otherwise nothing. GRACE produces no gate of its own — "your plan has
-///      lapsed, pay soon" is the banner above this card, not a blocker.
+///      lapsed, pay soon" is the banner above this card, not a blocker. Nor
+///      does PENDING_PAYMENT: a rep's publish is meant to go live before
+///      anybody pays, and "pay or this link goes" is the banner, not a refusal.
 ///
 /// [SubscriptionStatus.unknown] — a status this build has not heard of —
 /// deliberately falls through to rule 3 and then to nothing. A client one
 /// deploy behind must not invent a paywall out of a word it does not know.
+/// PENDING_PAYMENT falls through the same way, and that is not an accident of
+/// the ordering: it is the rule. An older build that has never heard the word
+/// reaches exactly the verdict this one does.
 List<PublishGate> evaluateSubscriptionGates(CatalogSubscription subscription) {
   // An older API that sends no subscription DTO at all cannot be read as "no
   // subscription" — see [CatalogSubscription.isReported].

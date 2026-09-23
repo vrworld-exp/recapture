@@ -16,6 +16,18 @@ import {
 } from '@/models/types/captureVariants';
 
 /**
+ * The plan catalog AS SERVED: the stored override's shape plus the three fields
+ * planCatalogService resolves from env (`pendingPaymentDays`,
+ * `pendingPaymentThreeDCap`, `testingPrices`). Still strict, so an internal
+ * field added to the catalog in future cannot reach the wire unnoticed.
+ */
+const servedPlanCatalogSchema = planCatalogSchema.extend({
+  pendingPaymentDays: z.number().int().positive(),
+  pendingPaymentThreeDCap: z.number().int().positive(),
+  testingPrices: z.boolean(),
+});
+
+/**
  * Wire schema for GET /remote-config — runtime tuning the mobile client/viewer
  * fetches so behaviour can change without an app release. Kept deliberately
  * small (low-end Android consumes this) and free of any internal/store fields.
@@ -84,7 +96,13 @@ export const remoteConfigSchema = z
     // service fills this from getPlanCatalog(), which has ALREADY validated or
     // defaulted it, so it can never be what fails this strict parse. Optional
     // so a stored document (or a test fixture) predating it still validates.
-    subscriptionPlans: planCatalogSchema.optional(),
+    //
+    // NOT `planCatalogSchema` itself: that one is the shape an OPS OVERRIDE may
+    // take, and it is strict, so the three server-resolved fields
+    // planCatalogService stamps on would fail it — and a failure here drops the
+    // WHOLE remote config to defaults for every app in the field. The served
+    // shape is therefore its own schema, the override's plus those three.
+    subscriptionPlans: servedPlanCatalogSchema.optional(),
   })
   .strict();
 

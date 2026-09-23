@@ -157,6 +157,10 @@ describe('getSubscriptionStatus — the DTO', () => {
       imageDishCount: 1,
       trialAvailable: true,
       isEntitledTo3D: false,
+      // No row: nothing was published on anybody's behalf, so no deadline and
+      // no page that was taken down (requirement 2).
+      paymentDueAt: null,
+      isPageDeactivated: false,
       standeeAllocation: null,
       plans: DEFAULT_PLAN_CATALOG,
     });
@@ -296,6 +300,10 @@ describe('the compact summary', () => {
       graceFrom: null,
       isEntitledTo3D: true,
       trialAvailable: false,
+      // A trial is not a pending-payment window: nothing about it can take the
+      // customer page down, so there is nothing due.
+      paymentDueAt: null,
+      isPageDeactivated: false,
     });
   });
 

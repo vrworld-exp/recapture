@@ -21,6 +21,10 @@ import type { Actor, PlanId, SubscriptionStatus } from '@/models/types/subscript
 import { getRazorpayClient, isRazorpayConfigured } from '@/providers/razorpay';
 import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
+import {
+  desiredPageStateFor,
+  enqueuePageStateJob,
+} from '@/services/subscription/pageStateJobs';
 import { daysLeftFor } from '@/services/subscription/subscriptionService';
 import type { AdminSubscriptionState } from '@/validation/subscriptionSchemas';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -341,6 +345,60 @@ export async function resyncArEntitlement(
       `catalog=${catalogId.toHexString()} enabled=${enabled} job=${jobId.toHexString()}`
   );
   return { outcome: 'ENQUEUED', jobId, enabled };
+}
+
+// ── Resync the Mirage page state ────────────────────────────────────────────
+
+export type ResyncPageStateResult =
+  | { outcome: 'ENQUEUED'; jobId: Types.ObjectId; isPublished: boolean }
+  /** No subscription row — there is no desired state to sync. */
+  | { outcome: 'NO_SUBSCRIPTION' };
+
+/**
+ * The sibling of {@link resyncArEntitlement}, for the field that decides whether
+ * the CUSTOMER PAGE is live at all — the button the "A paid restaurant's page is
+ * still switched off" alert names.
+ *
+ * It sends the row's CURRENT desired state, computed by the same function the
+ * processor uses (`desiredPageStateFor`), so an admin pressing this can never
+ * invent a state: it can only re-assert what the row already says. In
+ * particular, a restaurant that merely lapsed resolves to `isPublished: true`,
+ * so this button cannot be used to take a paid page down.
+ *
+ * Keyed on "now" rather than the row's `updatedAt`, so pressing it again after a
+ * failed attempt queues a fresh job instead of landing on the failed one.
+ */
+export async function resyncPageState(
+  catalogId: Types.ObjectId,
+  admin: Actor,
+  now: Date = new Date()
+): Promise<ResyncPageStateResult> {
+  const row = await CatalogSubscription.findOne({ catalogId })
+    .select({ status: 1, userId: 1, periodEnd: 1, pageDeactivatedAt: 1 })
+    .lean<{
+      status: SubscriptionStatus;
+      userId: Types.ObjectId;
+      periodEnd: Date;
+      pageDeactivatedAt?: Date;
+    }>()
+    .exec();
+  if (!row) return { outcome: 'NO_SUBSCRIPTION' };
+
+  const desired = desiredPageStateFor(row);
+  const { jobId } = await enqueuePageStateJob({
+    catalogId,
+    ownerUserId: row.userId,
+    isPublished: desired.isPublished,
+    paymentDueAt: desired.paymentDueAt,
+    reason: 'ADMIN',
+    dedupeAt: now,
+  });
+  console.log(
+    `[subscription] admin ${hashIdentifier(admin.userId.toHexString())} resync-page ` +
+      `catalog=${catalogId.toHexString()} isPublished=${desired.isPublished} ` +
+      `job=${jobId.toHexString()}`
+  );
+  return { outcome: 'ENQUEUED', jobId, isPublished: desired.isPublished };
 }
 
 // ── The collections list ────────────────────────────────────────────────────

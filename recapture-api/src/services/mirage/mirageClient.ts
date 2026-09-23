@@ -824,6 +824,13 @@ export const mirageClient: MirageClient = {
         address: input.address,
         isPublished: input.isPublished,
         arEnabled: input.arEnabled,
+        // `null` means CLEAR IT, and this transport has no null: every field
+        // reaches Mirage as a string and `undefined` is dropped (an omitted
+        // field leaves Mirage's value alone, which is the opposite
+        // instruction). So it rides the empty-string idiom this client already
+        // uses to clear a socialLinks key, and Mirage's parser reads '' as
+        // "nothing due".
+        paymentDueAt: input.paymentDueAt === null ? '' : input.paymentDueAt,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
