@@ -69,6 +69,16 @@ abstract interface class PaymentsRepository {
   });
 
   /// `GET /catalog/subscription/payments` — the owner's last fifty rows.
+  /// `POST /catalog/subscription/verify` — hands the sheet's signed success
+  /// response to the server, which checks the signature, asks Razorpay and
+  /// records the payment at once. [recorded] false (202) means genuine but not
+  /// captured yet: keep polling. Either way [subscription] is the server's.
+  Future<({bool recorded, CatalogSubscription subscription})> verifyPayment({
+    required String orderId,
+    required String paymentId,
+    required String signature,
+  });
+
   Future<List<PaymentRecordSummary>> ownerPayments();
 
   /// `GET /catalog/subscription/payments/:id/receipt` — one row as a PDF
@@ -187,6 +197,28 @@ class RemotePaymentsRepository implements PaymentsRepository {
           _object(res.data?['order']),
           reused: res.headers.value('x-order-reused') == '1' ||
               res.statusCode == 200,
+        );
+      });
+
+  @override
+  Future<({bool recorded, CatalogSubscription subscription})> verifyPayment({
+    required String orderId,
+    required String paymentId,
+    required String signature,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/subscription/verify',
+          data: {
+            'orderId': orderId,
+            'paymentId': paymentId,
+            'signature': signature,
+          },
+        );
+        return (
+          recorded: res.data?['recorded'] == true,
+          subscription:
+              CatalogSubscription.fromMap(_object(res.data?['subscription'])),
         );
       });
 

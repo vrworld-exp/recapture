@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../application/catalog/subscription_sync.dart';
 import '../application/config/config_notifier.dart';
 import '../application/offline/offline_queue_notifier.dart';
 import '../application/warmup/backend_warmup.dart';
@@ -36,6 +37,11 @@ class ReCapture extends ConsumerWidget {
     // every foreground resume, so the Render instance is awake before the
     // user's first real request. Read, not watch — nothing to rebuild on.
     ref.read(backendWarmupProvider);
+
+    // Eager-init the subscription re-check: the catalog (and with it the plan
+    // chip and the Profile row) is re-read on every foreground resume, so a
+    // payment finished in a UPI app shows without a manual pull-to-refresh.
+    ref.read(subscriptionSyncProvider);
 
     // Force dark status bar icons + transparent status bar globally.
     SystemChrome.setSystemUIOverlayStyle(

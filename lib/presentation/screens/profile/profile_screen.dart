@@ -35,10 +35,13 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../application/auth/auth_notifier.dart';
 import '../../../application/auth/profile_provider.dart';
 import '../../../application/auth/user_role_notifier.dart';
+import '../../../application/catalog/catalog_notifier.dart';
 import '../../../data/datasources/avatar_image_picker.dart';
 import '../../../dev/dev_log/dev_upload_log.dart';
 import '../../../application/notifications/notifications_notifier.dart';
+import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/avatar_upload_failure.dart';
+import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/user_profile.dart';
 import '../../../domain/entities/user_role.dart';
 import '../../../utils/analytics.dart';
@@ -85,6 +88,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(ref.read(notificationsProvider.notifier).refresh());
+      // And the plan on the Subscription row — silent, keeps what is shown.
+      if (ref.read(catalogProvider).hasValue) {
+        unawaited(ref.read(catalogProvider.notifier).refresh());
+      }
     });
   }
 
@@ -535,6 +542,16 @@ class _IdentityBlock extends ConsumerWidget {
     // that renders and then answers 403. Fails CLOSED on a failed role fetch.
     final canMintStandees = ref.watch(isAdminProvider);
     final uploading = ref.watch(avatarUploadingProvider);
+    // The plan line on the Subscription row: the SAME compact summary the
+    // catalog header reads, so the two never disagree. Null while the catalog
+    // loads, on a failed load, or with no catalog — the row keeps its generic
+    // subtitle then rather than claiming "No plan".
+    final catalog = ref.watch(catalogProvider).valueOrNull;
+    final planSummary = catalog?.subscription;
+    final onPaidPlan = planSummary != null &&
+        !planSummary.isPageDeactivated &&
+        (planSummary.status == SubscriptionStatus.active ||
+            planSummary.status == SubscriptionStatus.comped);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -651,10 +668,12 @@ class _IdentityBlock extends ConsumerWidget {
           onTap: () => context.push(AppRoutes.catalogSubscription),
           child: Row(
             children: [
-              const Icon(
-                Icons.workspace_premium_outlined,
+              Icon(
+                onPaidPlan
+                    ? Icons.workspace_premium
+                    : Icons.workspace_premium_outlined,
                 size: 20,
-                color: AppColors.textSecondary,
+                color: onPaidPlan ? AppColors.royalGold : AppColors.textSecondary,
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
@@ -668,9 +687,15 @@ class _IdentityBlock extends ConsumerWidget {
                     ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
-                      'Your plan, 3D dish usage and prices',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: AppColors.textMuted),
+                      catalog == null
+                          ? 'Your plan, 3D dish usage and prices'
+                          : summaryStatusLine(planSummary),
+                      key: const ValueKey('profile_subscription_status'),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: onPaidPlan
+                            ? AppColors.success
+                            : AppColors.textMuted,
+                      ),
                     ),
                   ],
                 ),

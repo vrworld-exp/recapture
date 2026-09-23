@@ -108,6 +108,11 @@ class FakePaymentsRepository implements PaymentsRepository {
   final List<String> calls = [];
 
   CheckoutOrder Function()? onCreateOrder;
+
+  /// The verify answer, or null to answer with [verifyFailure] (or a
+  /// NOT_SCRIPTED failure — the notifier treats any failure as best-effort).
+  ({bool recorded, CatalogSubscription subscription}) Function()? onVerify;
+  CatalogFailure? verifyFailure;
   List<PaymentRecordSummary> ownerLedger = const [];
   ManualPaymentRecord? pending;
   CatalogFailure? submitFailure;
@@ -133,6 +138,19 @@ class FakePaymentsRepository implements PaymentsRepository {
     final make = onCreateOrder;
     if (make == null) throw UnimplementedError('createOrder not scripted');
     return make();
+  }
+
+  @override
+  Future<({bool recorded, CatalogSubscription subscription})> verifyPayment({
+    required String orderId,
+    required String paymentId,
+    required String signature,
+  }) async {
+    calls.add('verify:$orderId:$paymentId:$signature');
+    final make = onVerify;
+    if (make != null) return make();
+    throw verifyFailure ??
+        const CatalogFailure(code: 'NOT_SCRIPTED', message: 'verify not scripted');
   }
 
   @override

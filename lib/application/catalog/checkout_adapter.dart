@@ -13,9 +13,10 @@
 //
 // WHAT THE ADAPTER DOES NOT DECIDE. It opens a sheet for an order the server
 // already minted and reports what the SDK said. It never activates anything:
-// `success(paymentId)` means "the SDK reported success", and the notifier
-// then POLLS the subscription until the server — told by Razorpay's webhook —
-// says ACTIVE (§7 rule 1). A payment is real when the server says so.
+// `success(...)` means "the SDK reported success". The notifier hands the
+// signed response to `POST /catalog/subscription/verify`, where the SERVER
+// checks the signature and asks Razorpay, then polls until it says ACTIVE
+// (§7 rule 1). A payment is real when the server says so.
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -40,7 +41,11 @@ final String kCheckoutThemeColor =
 sealed class CheckoutOutcome {
   const CheckoutOutcome();
 
-  const factory CheckoutOutcome.success(String paymentId) = CheckoutSuccess;
+  const factory CheckoutOutcome.success(
+    String paymentId, {
+    String? orderId,
+    String? signature,
+  }) = CheckoutSuccess;
   const factory CheckoutOutcome.cancelled() = CheckoutCancelled;
   const factory CheckoutOutcome.failed({
     required String code,
@@ -51,8 +56,18 @@ sealed class CheckoutOutcome {
 
 /// The SDK says the payment went through. NOT an activation — see the header.
 class CheckoutSuccess extends CheckoutOutcome {
-  const CheckoutSuccess(this.paymentId);
+  const CheckoutSuccess(this.paymentId, {this.orderId, this.signature});
   final String paymentId;
+
+  /// `razorpay_order_id` and `razorpay_signature` as the SDK returned them —
+  /// passed to the server verbatim for it to verify. Either may be null (an
+  /// SDK that did not send it); the server's other paths still activate.
+  final String? orderId;
+  final String? signature;
+
+  /// Whether there is anything for the server to verify.
+  bool get canVerify =>
+      (orderId?.isNotEmpty ?? false) && (signature?.isNotEmpty ?? false);
 }
 
 /// The user closed the sheet. The open order stays open on the server.

@@ -181,3 +181,35 @@ export function verifyWebhookSignature(rawBody: Buffer, signature: string | unde
 export function signWebhookBody(rawBody: Buffer | string, secret: string): string {
   return createHmac('sha256', secret).update(rawBody).digest('hex');
 }
+
+/**
+ * The Checkout sheet's success handler hands the app `razorpay_order_id`,
+ * `razorpay_payment_id` and `razorpay_signature`, where the signature is
+ * `hex(HMAC-SHA256(KEY_SECRET, orderId + "|" + paymentId))`. Only Razorpay and
+ * this server hold the key secret, so a valid signature proves the pair came
+ * out of a real checkout for THIS order — the app cannot mint one.
+ *
+ * Same constant-time compare as the webhook. Unconfigured secret → false.
+ */
+export function verifyCheckoutSignature(
+  orderId: string,
+  paymentId: string,
+  signature: string | undefined
+): boolean {
+  const secret = env.RAZORPAY_KEY_SECRET;
+  if (!secret || typeof signature !== 'string' || signature.length === 0) return false;
+  const expected = createHmac('sha256', secret).update(`${orderId}|${paymentId}`).digest();
+  let provided: Buffer;
+  try {
+    provided = Buffer.from(signature, 'hex');
+  } catch {
+    return false;
+  }
+  if (provided.length !== expected.length) return false;
+  return timingSafeEqual(provided, expected);
+}
+
+/** Test helper: the signature the Checkout sheet would hand the app. */
+export function signCheckoutResponse(orderId: string, paymentId: string, secret: string): string {
+  return createHmac('sha256', secret).update(`${orderId}|${paymentId}`).digest('hex');
+}

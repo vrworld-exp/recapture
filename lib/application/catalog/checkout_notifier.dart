@@ -7,9 +7,12 @@
 //                 ↘ failed                 will still reconcile, never "unpaid")
 //
 // THE SDK'S SUCCESS IS NOT THE ANSWER (§7 rule 1). The Razorpay sheet says
-// "paid" to the phone; the SERVER learns it from Razorpay's webhook, and the
-// subscription is ACTIVE only when that has happened. So after `success` this
-// notifier POLLS `subscriptionProvider` — 2 s → 10 s, for up to two minutes —
+// "paid" to the phone; the subscription is ACTIVE only when the SERVER has
+// recorded it. The server hears it three ways: this notifier POSTs the signed
+// success response to `/catalog/subscription/verify` straight away (the
+// server checks the signature and asks Razorpay — usually ACTIVE right
+// there), Razorpay's webhook, and the reconciler. After the verify this
+// notifier checks at once, then POLLS `subscriptionProvider` — 2 s → 10 s, for up to two minutes —
 // and calls it done when the status actually flips. If two minutes pass it
 // says "being confirmed" and stops: the backend's reconciler will find the
 // payment within its own window, and a screen that said "unpaid" now would be
@@ -31,6 +34,7 @@ import '../../data/repositories/payments_repository.dart';
 import '../../domain/entities/catalog_subscription.dart';
 import '../../domain/entities/subscription_payment.dart';
 import '../../utils/analytics.dart';
+import 'catalog_notifier.dart';
 import 'checkout_adapter.dart';
 import 'subscription_notifier.dart';
 
@@ -211,6 +215,12 @@ class CheckoutNotifier extends AutoDisposeNotifier<CheckoutState> {
     if (state.phase == CheckoutPhase.done) return;
 
     switch (outcome) {
+      case CheckoutSuccess() when outcome.canVerify:
+        Analytics.logEvent('checkout_result', {'result': 'success'});
+        state = state.copyWith(phase: CheckoutPhase.activating);
+        await _verify(outcome);
+        if (_disposed || state.phase != CheckoutPhase.activating) return;
+        _startActivationPoll(checkNow: true);
       case CheckoutSuccess():
         Analytics.logEvent('checkout_result', {'result': 'success'});
         _startActivationPoll();
@@ -237,13 +247,35 @@ class CheckoutNotifier extends AutoDisposeNotifier<CheckoutState> {
     state = state.copyWith(phase: CheckoutPhase.idle, failureCode: null);
   }
 
+  /// Hands the signed response to the server. Best-effort: a failure here
+  /// (offline, 5xx, a signature the server rejects) is NOT "unpaid" — the
+  /// webhook and the reconciler still stand behind it, and the poll that
+  /// follows reads whatever the server decided.
+  Future<void> _verify(CheckoutSuccess success) async {
+    try {
+      await _repo.verifyPayment(
+        orderId: success.orderId!,
+        paymentId: success.paymentId,
+        signature: success.signature!,
+      );
+    } on CatalogFailure catch (failure) {
+      Analytics.logEvent('checkout_verify_failed', {'code': failure.code});
+    }
+  }
+
   // ── The activation poll ───────────────────────────────────────────────────
 
-  void _startActivationPoll() {
+  /// [checkNow]: read at once instead of after the first backoff — the verify
+  /// that preceded it has usually already made the row ACTIVE.
+  void _startActivationPoll({bool checkNow = false}) {
     state = state.copyWith(phase: CheckoutPhase.activating);
     _pollAttempt = 0;
     _pollStartedAt = DateTime.now();
-    _scheduleNextPoll();
+    if (checkNow) {
+      unawaited(_checkOnce());
+    } else {
+      _scheduleNextPoll();
+    }
   }
 
   void _scheduleNextPoll() {
@@ -275,6 +307,12 @@ class CheckoutNotifier extends AutoDisposeNotifier<CheckoutState> {
         phase: CheckoutPhase.done,
         secondsToConfirm: seconds,
       );
+      // The app-wide catalog carries the compact summary the catalog header
+      // and the Profile row read — bring it along, or they say "No plan" to
+      // an owner who just paid until something else happens to refresh it.
+      if (ref.exists(catalogProvider)) {
+        unawaited(ref.read(catalogProvider.notifier).refresh());
+      }
       return;
     }
 

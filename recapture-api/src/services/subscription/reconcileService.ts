@@ -16,6 +16,7 @@
 // If the reconciler is the one finding payments in two consecutive runs, the
 // webhook is almost certainly disabled on Razorpay's side (E4) — that is the
 // one alarm this file raises itself.
+import type { Types } from 'mongoose';
 import { PaymentRecord, type IPaymentRecord } from '@/models/PaymentRecord';
 import { getRazorpayClient, isRazorpayConfigured } from '@/providers/razorpay';
 import { alertAdmins } from '@/services/subscription/adminAlerts';
@@ -81,6 +82,106 @@ async function settleIfPaid(
     now,
   });
   return recorded;
+}
+
+/** At most one provider check per catalog per this long, however often the owner reads. */
+export const ON_READ_MIN_GAP_MS = 5_000;
+/** A read waits this long for the provider, then answers with what the DB says. */
+export const ON_READ_BUDGET_MS = 4_000;
+/** Only the newest few orders — an owner who tapped Pay ten times has one that matters. */
+const ON_READ_MAX_ORDERS = 3;
+
+const lastOnReadCheck = new Map<string, number>();
+const onReadInFlight = new Map<string, Promise<number>>();
+
+/** Exposed for tests only. */
+export function resetOnReadSettleState(): void {
+  lastOnReadCheck.clear();
+  onReadInFlight.clear();
+}
+
+async function settleCatalogOrders(catalogId: Types.ObjectId, now: Date): Promise<number> {
+  const rows = await PaymentRecord.find({
+    catalogId,
+    kind: 'CHECKOUT_CREATED',
+    expiresAt: { $gt: new Date(now.getTime() - LATE_PAYMENT_WINDOW_MS) },
+  })
+    .sort({ createdAt: -1 })
+    .limit(ON_READ_MAX_ORDERS)
+    .select({ providerOrderId: 1 })
+    .lean<Pick<IPaymentRecord, '_id' | 'providerOrderId'>[]>()
+    .exec();
+  const orderIds = rows.map((r) => r.providerOrderId!).filter(Boolean);
+  if (orderIds.length === 0) return 0;
+  const settled = new Set(
+    await PaymentRecord.distinct('providerOrderId', {
+      kind: 'PAID',
+      providerOrderId: { $in: orderIds },
+    }).exec()
+  );
+
+  let recorded = 0;
+  for (const row of rows) {
+    if (!row.providerOrderId || settled.has(row.providerOrderId)) continue;
+    try {
+      if (await settleIfPaid(row, now)) recorded += 1;
+    } catch (err) {
+      console.error(`[reconcile] on-read check failed for order ${row.providerOrderId}`, err);
+    }
+  }
+  if (recorded > 0) {
+    console.log(`[reconcile] on-read recorded=${recorded} catalog=${String(catalogId)}`);
+  }
+  return recorded;
+}
+
+/**
+ * The owner's own read as a reconcile trigger, for ONE catalog. A paid order
+ * must not wait on a webhook that cannot reach this server (a dev box, a
+ * disabled hook) or on the worker's next five-minute pass — or on the worker
+ * being up at all. So `GET /catalog` and `GET /catalog/subscription` ask
+ * Razorpay about this catalog's unsettled orders first, with no five-minute
+ * floor: the checkout screen's activation poll is exactly this read.
+ *
+ * FAIL-OPEN: never throws, and never holds the read past [ON_READ_BUDGET_MS]
+ * (a check still running then finishes in the background — recording is
+ * idempotent). Throttled per catalog; a catalog with no open order costs one
+ * indexed query. Does not feed the WEBHOOKS_SILENT alarm, which is about the
+ * worker's own passes.
+ */
+export async function settleOpenOrdersOnRead(
+  catalogId: Types.ObjectId,
+  now: Date = new Date()
+): Promise<number> {
+  if (!isRazorpayConfigured()) return 0;
+  const key = String(catalogId);
+  let pending = onReadInFlight.get(key);
+  if (!pending) {
+    const last = lastOnReadCheck.get(key);
+    if (last !== undefined && now.getTime() - last < ON_READ_MIN_GAP_MS) return 0;
+    if (lastOnReadCheck.size > 1000) {
+      for (const [k, at] of lastOnReadCheck) {
+        if (now.getTime() - at >= ON_READ_MIN_GAP_MS) lastOnReadCheck.delete(k);
+      }
+    }
+    lastOnReadCheck.set(key, now.getTime());
+    pending = settleCatalogOrders(catalogId, now)
+      .catch((err: unknown) => {
+        console.error(`[reconcile] on-read scan failed for catalog ${key}`, err);
+        return 0;
+      })
+      .finally(() => onReadInFlight.delete(key));
+    onReadInFlight.set(key, pending);
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const budget = new Promise<number>((resolve) => {
+    timer = setTimeout(() => resolve(0), ON_READ_BUDGET_MS);
+  });
+  try {
+    return await Promise.race([pending, budget]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function reconcileOpenOrders(now: Date = new Date()): Promise<ReconcileReport> {

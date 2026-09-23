@@ -1048,8 +1048,8 @@ const subscriptionPaymentRecordedProps = z
     plan_id: z.enum(PLAN_IDS).nullable(),
     amount_paise: z.number().int().nonnegative(),
     previous_status: z.enum([...SUBSCRIPTION_STATUSES, 'NONE']),
-    /** Which path applied it: the webhook, the reconciler, or an admin route. */
-    via: z.enum(['WEBHOOK', 'RECONCILE', 'ADMIN']),
+    /** Which path applied it: the webhook, the reconciler, the app's verified checkout response, or an admin route. */
+    via: z.enum(['WEBHOOK', 'RECONCILE', 'CLIENT', 'ADMIN']),
   })
   .strict();
 

@@ -627,7 +627,8 @@ export async function startTrial(
 // ── The activation primitive (Stage 3) ──────────────────────────────────────
 
 /** Which path is applying the period — an analytics dimension, not an authority. */
-export type ApplyVia = 'WEBHOOK' | 'RECONCILE' | 'ADMIN';
+/** CLIENT: the app's signed checkout response, verified server-side (clientVerifyService). */
+export type ApplyVia = 'WEBHOOK' | 'RECONCILE' | 'CLIENT' | 'ADMIN';
 
 export interface ApplyPaidPeriodInput {
   catalogId: Types.ObjectId;

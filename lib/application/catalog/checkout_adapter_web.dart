@@ -107,7 +107,11 @@ class RazorpayWebCheckoutAdapter implements CheckoutAdapter {
                 code: 'NO_PAYMENT_ID',
                 message: 'The payment sheet closed without a payment id.',
               )
-            : CheckoutOutcome.success(paymentId));
+            : CheckoutOutcome.success(
+                paymentId,
+                orderId: response.orderId,
+                signature: response.signature,
+              ));
       }).toJS
       ..modal = (_ModalOptions()
         ..ondismiss = (() {
@@ -252,11 +256,15 @@ extension type _ThemeOptions._(JSObject _) implements JSObject {
 }
 
 /// What `handler` receives: `{ razorpay_payment_id, razorpay_order_id,
-/// razorpay_signature }`. Only the payment id is read; the signature is the
-/// SERVER's to verify, off the webhook, never the client's.
+/// razorpay_signature }`. All three are handed to the server as-is; the
+/// signature is the SERVER's to verify, never the client's.
 extension type _SuccessResponse._(JSObject _) implements JSObject {
   @JS('razorpay_payment_id')
   external String? get paymentId;
+  @JS('razorpay_order_id')
+  external String? get orderId;
+  @JS('razorpay_signature')
+  external String? get signature;
 }
 
 /// What `payment.failed` receives: `{ error: { code, description, source,

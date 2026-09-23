@@ -43,6 +43,20 @@ export const createOrderSchema = z
   .strict();
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
+/**
+ * POST /catalog/subscription/verify — exactly what the Razorpay sheet's success
+ * handler returned. No amount and no plan: those come from Razorpay and the
+ * frozen quote, never the body.
+ */
+export const verifyPaymentSchema = z
+  .object({
+    orderId: z.string().min(1).max(64),
+    paymentId: z.string().min(1).max(64),
+    signature: z.string().min(1).max(256),
+  })
+  .strict();
+export type VerifyPaymentInput = z.infer<typeof verifyPaymentSchema>;
+
 // ── Door 3: manual payments ─────────────────────────────────────────────────
 
 const manualPaymentFields = {

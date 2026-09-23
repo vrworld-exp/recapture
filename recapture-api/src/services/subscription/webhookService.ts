@@ -64,7 +64,7 @@ export interface OnlinePaymentInput {
   amountPaise: number;
   /** The order's `notes` as Razorpay echoes them — our own breadcrumb (E3). */
   notes?: Record<string, unknown> | null;
-  via: Extract<ApplyVia, 'WEBHOOK' | 'RECONCILE'>;
+  via: Extract<ApplyVia, 'WEBHOOK' | 'RECONCILE' | 'CLIENT'>;
   now?: Date;
 }
 
@@ -220,7 +220,7 @@ async function recordPaidRow(
  */
 export async function applyRecordedPayment(
   paid: IPaymentRecord,
-  via: Extract<ApplyVia, 'WEBHOOK' | 'RECONCILE'>,
+  via: Extract<ApplyVia, 'WEBHOOK' | 'RECONCILE' | 'CLIENT'>,
   now: Date = new Date()
 ): Promise<OnlinePaymentOutcome> {
   if (paid.appliedAt) return 'ALREADY_APPLIED';

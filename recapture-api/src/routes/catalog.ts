@@ -98,6 +98,8 @@ import {
 import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { getSubscriptionStatus } from '@/services/subscription/subscriptionService';
+import { settleOpenOrdersOnRead } from '@/services/subscription/reconcileService';
+import { verifyClientPayment } from '@/services/subscription/clientVerifyService';
 import { createOrReturnOrder } from '@/services/subscription/checkoutService';
 import { listPaymentsForOwner, receiptNoFor } from '@/services/subscription/paymentLedgerService';
 import {
@@ -106,7 +108,7 @@ import {
   renderReceipt,
 } from '@/services/subscription/receiptPdf';
 import { PaymentRecord } from '@/models/PaymentRecord';
-import { createOrderSchema } from '@/validation/subscriptionSchemas';
+import { createOrderSchema, verifyPaymentSchema } from '@/validation/subscriptionSchemas';
 import { validateBody } from '@/middleware/validate';
 import type { Response } from 'express';
 import type { ZodError } from 'zod';
@@ -1309,6 +1311,9 @@ router.get(
     const catalog = await findOwnedCatalog(req.user!.userId);
     if (!catalog) return noCatalog(res);
 
+    // The checkout's activation poll lands here: settle a paid order now
+    // rather than waiting on the webhook or the worker (fail-open, bounded).
+    await settleOpenOrdersOnRead(catalog._id as Types.ObjectId);
     const subscription = await getSubscriptionStatus(
       catalog._id as Types.ObjectId,
       catalog.userId
@@ -1327,7 +1332,8 @@ router.get(
  * 201 for a fresh order, 200 + `X-Order-Reused: 1` when the open one came
  * back (a double-tap, a retried UPI attempt, a re-opened screen). The body
  * carries ids and amounts for the in-app SDK and NO URL (AC-7.1). Nothing
- * here activates anything — that is the webhook's job alone.
+ * here activates anything — that is /subscription/verify's, the webhook's and
+ * the reconciler's, which all converge on one PAID row.
  */
 router.post(
   '/subscription/order',
@@ -1356,6 +1362,48 @@ router.post(
           'PAYMENTS_UNAVAILABLE',
           "Couldn't reach the payment service. Try again in a minute."
         );
+    }
+  })
+);
+
+/**
+ * POST /catalog/subscription/verify — the app's signed checkout response.
+ * Activates at once when the signature is Razorpay's and Razorpay says the
+ * payment is captured; the webhook is no longer the only way in. Answers the
+ * subscription either way, so the app renders the result of this one call:
+ *   200 { recorded: true,  subscription }  — the PAID row exists now
+ *   202 { recorded: false, subscription }  — genuine but not captured yet;
+ *                                            the app keeps polling
+ * OWNER ONLY, like the order route.
+ */
+router.post(
+  '/subscription/verify',
+  validateBody(verifyPaymentSchema),
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    const catalogId = catalog._id as Types.ObjectId;
+
+    const result = await verifyClientPayment(catalogId, req.body);
+    switch (result.kind) {
+      case 'BAD_SIGNATURE':
+        return fail(res, 400, 'INVALID_PAYMENT_SIGNATURE', "We couldn't confirm this payment.");
+      case 'UNKNOWN_ORDER':
+        return fail(res, 404, 'ORDER_NOT_FOUND', "We couldn't find this payment's order.");
+      case 'UNAVAILABLE':
+        return fail(
+          res,
+          503,
+          'PAYMENTS_UNAVAILABLE',
+          "Couldn't reach the payment service. Try again in a minute."
+        );
+      case 'PENDING':
+      case 'RECORDED': {
+        const subscription = await getSubscriptionStatus(catalogId, catalog.userId);
+        const recorded = result.kind === 'RECORDED';
+        res.status(recorded ? 200 : 202).json({ status: 'success', recorded, subscription });
+        return;
+      }
     }
   })
 );

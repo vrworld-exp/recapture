@@ -27,6 +27,7 @@ import {
   getSubscriptionSummary,
   type SubscriptionSummaryDto,
 } from '@/services/subscription/subscriptionService';
+import { settleOpenOrdersOnRead } from '@/services/subscription/reconcileService';
 import { rejectPendingOnCatalogDelete } from '@/services/subscription/manualPaymentService';
 import {
   buildBrandingImageKey,
@@ -197,6 +198,11 @@ function subscriptionSummaryOf(c: ICatalog): Promise<SubscriptionSummaryDto | nu
 export async function getCatalog(userId: string): Promise<CatalogDto | null> {
   const catalog = await findOwnedCatalog(userId);
   if (!catalog) return null;
+
+  // A paid order the webhook never delivered becomes ACTIVE here, before the
+  // summary is read — so the catalog chip is right on the first load after
+  // paying (or after signing in on another phone). Fail-open and bounded.
+  await settleOpenOrdersOnRead(catalog._id as Types.ObjectId);
 
   const [counts, activeRun, subscription] = await Promise.all([
     countsFor(catalog._id as Types.ObjectId),

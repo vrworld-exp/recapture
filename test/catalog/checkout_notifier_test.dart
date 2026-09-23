@@ -139,6 +139,68 @@ void main() {
     expect(events[1].$2, {'result': 'success'});
   });
 
+  test('a signed success is verified with the server, then read at once',
+      () async {
+    // Backoff far longer than the test: "done" can only come from the
+    // immediate read that follows the verify, not from a scheduled poll.
+    final c = ProviderContainer(overrides: [
+      paymentsRepositoryProvider.overrideWithValue(repo),
+      checkoutAdapterProvider.overrideWithValue(adapter),
+      subscriptionProvider
+          .overrideWith(() => _ScriptedSubscription([sub('NONE'), sub('ACTIVE')])),
+      checkoutPollBackoffProvider
+          .overrideWithValue(const [Duration(minutes: 5)]),
+    ]);
+    addTearDown(c.dispose);
+    c.listen(subscriptionProvider, (_, __) {}, fireImmediately: true);
+    c.listen(checkoutProvider, (_, __) {}, fireImmediately: true);
+    await c.read(subscriptionProvider.future);
+    repo.onVerify = () => (recorded: true, subscription: sub('ACTIVE'));
+    adapter.outcome = const CheckoutOutcome.success(
+      'pay_v',
+      orderId: 'order_test_1',
+      signature: 'sig_v',
+    );
+
+    await c.read(checkoutProvider.notifier).pay(
+          planId: PlanId.taste,
+          interval: BillingInterval.monthly,
+        );
+    await settle();
+
+    expect(repo.calls, [
+      'createOrder:TASTE:MONTHLY',
+      'verify:order_test_1:pay_v:sig_v',
+    ]);
+    expect(c.read(checkoutProvider).phase, CheckoutPhase.done);
+  });
+
+  test('a failed verify is not "unpaid": the poll still decides', () async {
+    final c = container([sub('NONE'), sub('NONE'), sub('ACTIVE')]);
+    await c.read(subscriptionProvider.future);
+    repo.verifyFailure = const CatalogFailure(
+      code: 'INVALID_PAYMENT_SIGNATURE',
+      message: 'x',
+    );
+    adapter.outcome = const CheckoutOutcome.success(
+      'pay_f',
+      orderId: 'order_test_1',
+      signature: 'bad',
+    );
+
+    await c.read(checkoutProvider.notifier).pay(
+          planId: PlanId.taste,
+          interval: BillingInterval.monthly,
+        );
+    await settle();
+
+    expect(c.read(checkoutProvider).phase, CheckoutPhase.done);
+    expect(
+      events.where((e) => e.$1 == 'checkout_verify_failed').single.$2,
+      {'code': 'INVALID_PAYMENT_SIGNATURE'},
+    );
+  });
+
   test(
       'an early renewal is done only when periodEnd MOVES, not on the old ACTIVE',
       () async {

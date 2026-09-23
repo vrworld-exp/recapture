@@ -33,6 +33,7 @@ import {
   HALF_APPLIED_AFTER_MS,
   OPEN_ORDER_CHECK_AFTER_MS,
   reconcileOpenOrders,
+  resetOnReadSettleState,
   resetReconcileState,
 } from '@/services/subscription/reconcileService';
 import {
@@ -69,6 +70,7 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   resetReconcileState();
+  resetOnReadSettleState();
   setRazorpayClient(fakeRazorpay());
 });
 
@@ -321,5 +323,66 @@ describe('reconcileOpenOrders', () => {
         [String(one.admin.id), String(two.admin.id)].sort()
       );
     });
+  });
+});
+
+describe('settle on read: the owner read activates a paid order', () => {
+  it('GET /catalog/subscription records a paid order at once, with no webhook and no worker', async () => {
+    const { owner, catalogId } = await delegated();
+    const orderId = await openOrder(owner.auth);
+    // Seconds old — the worker's pass would still leave it alone.
+    setRazorpayClient(
+      providerWithPaid({ [orderId]: { paymentId: 'pay_on_read', amount: MONTHLY } })
+    );
+
+    const res = await request(app).get('/catalog/subscription').set(owner.auth).expect(200);
+
+    expect(res.body.subscription.status).toBe('ACTIVE');
+    expect(res.body.subscription.planId).toBe('TASTE');
+    const row = await CatalogSubscription.findOne({ catalogId }).lean().exec();
+    expect(row!.status).toBe('ACTIVE');
+    expect(await PaymentRecord.countDocuments({ kind: 'PAID' })).toBe(1);
+  });
+
+  it('GET /catalog carries the ACTIVE summary on the first load after paying (sign-in)', async () => {
+    const { owner } = await delegated();
+    const orderId = await openOrder(owner.auth);
+    setRazorpayClient(
+      providerWithPaid({ [orderId]: { paymentId: 'pay_signin', amount: MONTHLY } })
+    );
+
+    const res = await request(app).get('/catalog').set(owner.auth).expect(200);
+
+    expect(res.body.catalog.subscription.status).toBe('ACTIVE');
+    expect(res.body.catalog.subscription.isEntitledTo3D).toBe(true);
+  });
+
+  it('asks the provider at most once per catalog per throttle window', async () => {
+    const { owner } = await delegated();
+    await openOrder(owner.auth);
+    const client = fakeRazorpay();
+    setRazorpayClient(client);
+
+    await request(app).get('/catalog/subscription').set(owner.auth).expect(200);
+    await request(app).get('/catalog/subscription').set(owner.auth).expect(200);
+    await request(app).get('/catalog').set(owner.auth).expect(200);
+
+    expect(client.fetchOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails open: a provider outage still answers the read, unchanged', async () => {
+    const { owner } = await delegated();
+    await openOrder(owner.auth);
+    setRazorpayClient(
+      fakeRazorpay({
+        fetchOrder: vi.fn(async () => {
+          throw new Error('razorpay down');
+        }),
+      })
+    );
+
+    const res = await request(app).get('/catalog/subscription').set(owner.auth).expect(200);
+    expect(res.body.subscription.status).not.toBe('ACTIVE');
+    expect(await PaymentRecord.countDocuments({ kind: 'PAID' })).toBe(0);
   });
 });

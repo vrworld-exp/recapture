@@ -53,7 +53,11 @@ class RazorpayCheckoutAdapter implements CheckoutAdapter {
               code: 'NO_PAYMENT_ID',
               message: 'The payment sheet closed without a payment id.',
             )
-          : CheckoutOutcome.success(paymentId));
+          : CheckoutOutcome.success(
+              paymentId,
+              orderId: r.orderId,
+              signature: r.signature,
+            ));
     });
     razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, (PaymentFailureResponse r) {
       finish(r.code == Razorpay.PAYMENT_CANCELLED
