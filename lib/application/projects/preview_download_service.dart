@@ -18,9 +18,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/entities/preview_manifest.dart';
+// `dart.library.js_interop`, NOT `dart.library.html` — the condition every
+// other seam in this tree uses. `dart:html` is absent under dart2wasm, so the
+// old `html` condition resolved to FALSE on a Wasm web build and quietly
+// selected the stub, turning "download this photo" into an UnsupportedError on
+// web only. js_interop is true on every web compiler.
 import 'preview_download_delivery_stub.dart'
     if (dart.library.io) 'preview_download_delivery_io.dart'
-    if (dart.library.html) 'preview_download_delivery_web.dart';
+    if (dart.library.js_interop) 'preview_download_delivery_web.dart';
 
 /// Seam over "download one photo": production delivers per-platform; tests fake it.
 abstract interface class PreviewDownloader {

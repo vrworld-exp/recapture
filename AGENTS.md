@@ -1154,6 +1154,46 @@ the owner's `modelCount`, their models list and the project detail's viewer with
     ops action after Mirage Part B is deployed and the grandfather script has
     run — the order in `rollout.md` is load-bearing. Rollback is the same
     flag set `false`; nothing is deleted or unpublished by any of the above.
+- **Every subscription EVENT reaches the owner's bell, once
+  (`services/subscription/ownerNotifications.ts`).** The sweep's four
+  countdown reminders say what is COMING; this module says what HAPPENED —
+  trial started, payment received (with the next due date), comp granted, the
+  pending-payment window opened, 3D paused, the live page switched off, a cash
+  payment recorded / not confirmed, a duplicate refunded, grace extended, and
+  the one event that is an ABSENCE rather than a transition: a catalog that has
+  never opted into anything (`NO_PLAN_YET`, the sweep's fifth scan, after
+  `SUBSCRIPTION_NO_PLAN_REMINDER_DAYS`, bounded to catalogs created inside a
+  30-day lookback so the scan cannot grow without limit).
+  - **Every message is KEYED on `Notification.key`**, whose unique partial
+    index is the whole dedupe. The activation message is keyed on the
+    **PaymentRecord**, not on a date — the reconciler re-applies a period that
+    a crashed webhook already applied, with a FRESH `paidAt`, and one payment
+    must be announced once. `paymentRecordId` is therefore REQUIRED on
+    `ApplyPaidPeriodInput`. `NO_PLAN_YET` is keyed on the catalog alone and is
+    sent exactly once ever: its scan re-finds the same rows every ten minutes
+    and the key is the only thing standing between that and a message every
+    ten minutes.
+  - **The WRITE never throws** (a store failure or a duplicate key is logged
+    and dropped); callers are on paths that owe Razorpay a 200 or must finish a
+    sweep. A missing required field is NOT swallowed — `tsc` is that guard.
+  - **No PII and no internal prose.** Amounts, dates and plan names only. An
+    admin's rejection or refund note NEVER travels: `notifyManualPaymentRejected`
+    takes no note parameter at all.
+  - **Not here, deliberately:** chargebacks (the owner gets the ordinary GRACE
+    reminder; `disputeService` alerts admins) and SMS/WhatsApp (Stage 6's other
+    half — the rep's nudge is still the only thing that leaves the app).
+  - `SUBSCRIPTION_OWNER_NOTIFIED` carries `{catalog_id, event}` and never the
+    sentence. Guardrail: `tests/subscription-owner-notifications.test.ts`.
+    ⚠ That file's own comments must not spell out the activation primitive's
+    identifier — `tests/subscription-admin-actions.test.ts` greps `src/` for it
+    and a mention in prose reads as a caller.
+- **The catalog screen states the subscription in WORDS, not only a chip.**
+  `summaryStatusLine` / `summaryTone` (`domain/catalog/subscription_copy.dart`)
+  are the [`ownerStatusLine`] table said with the compact summary the catalog
+  DTO already carries — so the line costs no second request. ⚠ Both read
+  `isPageDeactivated` BEFORE the status, as does `repStatusChip` (which answers
+  `Page off`): a dark page is PAUSED like any other, and "your photo menu is
+  still live" is the one sentence its owner can disprove in a single tap.
 - **Analytics are a PROXY, not a redirect.** Mirage's three report endpoints are
   admin-scoped and its own in-code note forbids opening them to client scope.
   ReCapture reads them with its admin credential and FORCES `restaurant` from the
@@ -1229,6 +1269,12 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   row in place. The cost of the rule: a time-bound broadcast ("renew by
   Friday") is also seen by a user who signs up after Friday unless it carries
   an `expiresAt` — set one.
+- **Not every row has a human sender any more.** `ownerNotifications.ts` (the
+  subscription layer, above) and `adminAlerts.ts` both write `Notification`
+  rows directly, with a `key` for idempotency and no `createdByUserId`. They do
+  NOT go through `createNotification`, which stamps an admin — there is no
+  admin behind a sweep. The `key` index does for them what `ReminderLog` does
+  for the countdown reminders: dedupe a replay without a second collection.
 - **Sending is ADMIN-only and has no client UI yet.** `POST/GET/DELETE
   /admin/notifications` (`requireRole('ADMIN')`; the body is `.strict()`,
   `notificationSchemas.ts`). `action.url` is either an in-app path (leading
@@ -1419,6 +1465,40 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   `active_session` box (not secure storage — it is server-enforced, not a
   secret). Staff-only surfaces (the Projects screen's "Live projects" tab)
   gate on `isStaffProvider`; the backend re-checks the role on every request.
+
+### Platform seams (web ⟷ native parity)
+- **A capability split is a CONDITIONAL IMPORT with a provider-exposed flag —
+  never a `kIsWeb` branch.** A branch on a compile-time constant cannot be
+  tested at all (the untaken half is not compiled into the test binary), so the
+  other platform's rendering would be unverifiable from the one `flutter test`
+  run CI does. The seam shape is `x_stub.dart` (the default) +
+  `x_io.dart` + `x_web.dart`, and the flags (`kCanShareLink`, `kCanOpenLink`,
+  `kCanScanQrCode`, `kCanCaptureDish`, `kCanCheckoutInApp`) are declared in ALL
+  variants — a name present in one and absent in another is an
+  undefined-identifier failure on ONE target, found by whoever builds it next.
+  A seam may legitimately have no native half (`model_viewer_load_probe`): the
+  stub IS its mobile half. Layout is never a platform question — a narrow
+  browser window is a phone layout, decided from `BoxConstraints`.
+- **The web half is selected by `if (dart.library.js_interop)` and written
+  against `package:web`.** ⚠ NOT `dart.library.html`, and not `dart:html`:
+  both are absent under `dart2wasm`, so a seam selecting on `html` resolves to
+  its STUB on a Wasm web build and the feature becomes an `UnsupportedError`
+  **on web only, with nothing failing on any other build**.
+  `preview_download_delivery` was exactly that — the photo download quietly
+  unavailable on a Wasm web build — and is now `package:web`, like every other
+  web half.
+- **Guardrails: `test/catalog/web_parity_test.dart`.** Source-level, over the
+  whole of `lib/` for the seam rules and over the catalog/rep/admin trees for
+  `dart:io` and `kIsWeb`: every file a conditional import names exists, no
+  `dart.library.html`, no `dart:html`, `_allSeams` names every seam the walker
+  finds AND the walker finds every seam the list names (a regex that stopped
+  matching would pass every other guard over an empty set). Behavioural gates
+  drive the capability providers, so one VM test asserts both renderings.
+  `test/rep/rep_web_parity_test.dart` does the same for the rep surface. The
+  failure these catch has no runtime symptom on the platform you are testing.
+- **`dart:io` is legitimate in the capture/upload tree** (`application/upload`,
+  `presentation/screens/capture`, `domain/upload`) — that flow is native by
+  nature. It is a bug anywhere the catalog, rep or admin surfaces reach.
 
 ### Web upload of artist photo sets (LIVE on web and native)
 - The presigned part PUTs go **direct to S3**, and the avatar bytes-proxy

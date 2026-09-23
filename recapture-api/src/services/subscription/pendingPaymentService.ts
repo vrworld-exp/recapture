@@ -29,6 +29,7 @@ import { CatalogSubscription, isEntitledTo3D } from '@/models/CatalogSubscriptio
 import { hasRoleAtLeast, type UserRole } from '@/models/User';
 import { PaymentRecord } from '@/models/PaymentRecord';
 import type { Actor, SubscriptionStatus } from '@/models/types/subscription.types';
+import { notifyPaymentWindowOpened } from '@/services/subscription/ownerNotifications';
 import { enqueuePageStateJob } from '@/services/subscription/pageStateJobs';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -228,6 +229,17 @@ export async function startPendingPayment(
       );
     }
   }
+
+  // The owner is told the moment the window opens, not ten minutes later in
+  // the words of a countdown. The sweep's earliest reminder is -7 d, so a
+  // window configured longer than a week would otherwise open in silence —
+  // and "your menu is live" is news on the day it becomes true.
+  await notifyPaymentWindowOpened({
+    catalogId,
+    ownerUserId,
+    paymentDueAt,
+    windowDays: pendingPaymentDays,
+  });
 
   return { outcome: 'STARTED', paymentDueAt };
 }

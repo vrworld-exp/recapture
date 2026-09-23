@@ -74,9 +74,78 @@ String _ownerLine({
   };
 }
 
+/// The catalog screen's status SENTENCE, built from the compact summary the
+/// catalog DTO carries — the same table as [ownerStatusLine], in the words a
+/// summary can support.
+///
+/// WHY A SECOND FUNCTION AND NOT [ownerStatusLine]. That one reads a full
+/// [CatalogSubscription] (`periodEnd`, `planName`, `threeDDishCap`), which the
+/// catalog DTO does not carry: its summary has a status, a countdown, a plan
+/// ID and the two page flags, and nothing else. Rather than have the catalog
+/// screen fetch the whole subscription to print one line — a second request on
+/// every open, for a sentence — the same vocabulary is said with the fields at
+/// hand. Dates become day counts; the plan is named from its id.
+///
+/// ⚠ [SubscriptionSummary.isPageDeactivated] IS CHECKED FIRST, before the
+/// status, and it has to stay that way. A dark page is PAUSED like any other,
+/// so the status switch alone would tell the one owner who can disprove it in
+/// a single tap that their photo menu is still live.
+String summaryStatusLine(SubscriptionSummary? summary) {
+  if (summary == null) return _kNoPlanLine;
+  if (summary.isPageDeactivated) {
+    return 'Live menu switched off — choose a plan to bring the same QR back';
+  }
+  final days = summary.daysLeft ?? 0;
+  final plan = summary.planId?.displayName;
+  return switch (summary.status) {
+    SubscriptionStatus.none => _kNoPlanLine,
+    SubscriptionStatus.trial => 'Free trial — ${_days(days)} left',
+    SubscriptionStatus.pendingPayment =>
+      'Live now — payment due in ${_days(days)}, then this page switches off',
+    SubscriptionStatus.active =>
+      'Active — ${_days(days)} left${plan == null ? '' : ' · $plan'}',
+    SubscriptionStatus.grace => graceLine(summary.graceFrom, days),
+    SubscriptionStatus.paused =>
+      '3D menu paused — your photo menu is still live',
+    SubscriptionStatus.cancelled => 'Cancelled — resubscribe anytime',
+    SubscriptionStatus.comped => 'Complimentary — ${_days(days)} left',
+    SubscriptionStatus.unknown => 'Subscription status unavailable',
+  };
+}
+
+/// What "no row" says. One string, because `null` and an explicit
+/// [SubscriptionStatus.none] are the same fact reached two ways — and because
+/// it has to match the notification the server sends for exactly this state
+/// (`NO_PLAN_YET` in `ownerNotifications.ts`), which an owner may well be
+/// holding open beside this screen.
+const String _kNoPlanLine =
+    'No plan yet — choose one to publish your menu';
+
+/// Whether this summary already gets a CARD of its own on the catalog screen —
+/// the page-off card, the payment-due card, the paused card or the grace
+/// banner. Those say the whole sentence in full, so the header's compact
+/// [summaryStatusLine] is redundant beside one and is not drawn.
+///
+/// Lives here, beside the words, rather than in the screen: the card chain and
+/// this predicate are the same decision, and a copy of it in the widget tree
+/// is a copy that drifts. The order does not matter (any one card suppresses
+/// the line); the chain's order does, and is the screen's business.
+bool subscriptionHasOwnCard(SubscriptionSummary? summary) {
+  if (summary == null) return false;
+  return summary.isPageDeactivated ||
+      summary.hasPaymentDue ||
+      summary.status == SubscriptionStatus.paused ||
+      summary.status == SubscriptionStatus.grace;
+}
+
 /// The rep's chip for a list row.
+///
+/// ⚠ Same first check as [summaryStatusLine], for the same reason: a row whose
+/// page is dark is PAUSED, and "3D paused" on a restaurant whose QR has
+/// stopped answering is the chip that sends a rep to argue with a customer.
 String repStatusChip(SubscriptionSummary? summary) {
   if (summary == null) return 'No plan';
+  if (summary.isPageDeactivated) return 'Page off';
   final days = summary.daysLeft ?? 0;
   return switch (summary.status) {
     SubscriptionStatus.none => 'No plan',
@@ -89,6 +158,15 @@ String repStatusChip(SubscriptionSummary? summary) {
     SubscriptionStatus.comped => 'Comped',
     SubscriptionStatus.unknown => 'Unknown',
   };
+}
+
+/// The tone a SUMMARY renders in — [subscriptionTone], with the page flag
+/// ahead of it. A dark page is the loudest state this feature has and PAUSED's
+/// neutral grey is the one colour it must not wear.
+SubscriptionTone summaryTone(SubscriptionSummary? summary) {
+  if (summary == null) return SubscriptionTone.neutral;
+  if (summary.isPageDeactivated) return SubscriptionTone.danger;
+  return subscriptionTone(summary.status);
 }
 
 /// The tone a status renders in, on either surface.

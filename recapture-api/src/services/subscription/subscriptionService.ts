@@ -35,6 +35,11 @@ import {
 import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
 import { enqueuePageStateJob } from '@/services/subscription/pageStateJobs';
+import {
+  notifyCompGranted,
+  notifyPlanActivated,
+  notifyTrialStarted,
+} from '@/services/subscription/ownerNotifications';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { countThreeDDishes, countsAsThreeD } from '@/services/subscription/threeDDishCount';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -187,10 +192,12 @@ export function daysLeftFor(row: SubscriptionRow, now: Date): number | null {
   switch (row.status) {
     case 'GRACE':
       return daysUntil(row.graceEndsAt ?? row.periodEnd, now);
-    case 'TRIAL':
     // PENDING_PAYMENT counts to `periodEnd` like any other running period.
     // There is no grace behind it: `periodEnd` IS the moment the page goes
-    // dark, which is why the window is the whole countdown.
+    // dark, which is why the window is the whole countdown. (The comment sits
+    // ABOVE the group rather than between two labels: `no-fallthrough` reads a
+    // comment inside an empty case body as a non-empty one and rejects it.)
+    case 'TRIAL':
     case 'PENDING_PAYMENT':
     case 'ACTIVE':
     case 'COMPED':
@@ -603,6 +610,17 @@ export async function startTrial(
     door,
   });
 
+  // The rep who started this walks out of the restaurant; the end date has to
+  // stay behind in writing. Keyed on the trial's own end, so the two taps that
+  // race for one trial send one message. Never throws (ownerNotifications.ts).
+  await notifyTrialStarted({
+    catalogId,
+    ownerUserId,
+    endsAt: trialFields.periodEnd,
+    trialDays,
+    threeDDishCap: trialThreeDCap,
+  });
+
   return { outcome: 'STARTED', dto: await getSubscriptionStatus(catalogId, ownerUserId, now) };
 }
 
@@ -624,6 +642,15 @@ export interface ApplyPaidPeriodInput {
   standeeIncluded: number;
   /** For the `subscription_payment_recorded` event. */
   amountPaise: number;
+  /**
+   * The ledger row this period was bought with. REQUIRED, and only the owner's
+   * "payment received" notification reads it: keying that message on the
+   * PAYMENT rather than on `paidAt` is what makes it exactly-once. A webhook
+   * that applied a period but crashed before stamping `appliedAt` is re-run by
+   * the reconciler with a fresh clock — a different `paidAt`, the same payment
+   * — and an owner must not be told twice that one payment arrived.
+   */
+  paymentRecordId: Types.ObjectId;
   via: ApplyVia;
 }
 
@@ -857,6 +884,22 @@ export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<Appl
 
   await nudgeIfOverCap(catalogId, ownerUserId, planSnapshot);
 
+  // "Subs done, next date for payment" — the message the whole notification
+  // layer exists for. Keyed on `paidAt` (= `periodStart`), so the webhook, the
+  // reconciler and an admin's VERIFY all converge on ONE row for one payment,
+  // exactly as this function itself converges on one period.
+  await notifyPlanActivated({
+    catalogId,
+    ownerUserId,
+    paymentRecordId: input.paymentRecordId,
+    plan: planSnapshot,
+    interval: input.interval,
+    amountPaise: input.amountPaise,
+    periodEnd,
+    resumedThreeD: needsArResume,
+    restoredPage: needsPageRestore,
+  });
+
   return { previousStatus, subscription, needsArResume, needsPageRestore };
 }
 
@@ -918,6 +961,10 @@ export async function applyComp(input: ApplyCompInput): Promise<ApplyPeriodResul
 
   const needsPageRestore = needsPageRestoreFrom(previous);
   if (needsPageRestore) await enqueuePageRestore(subscription, 'COMP', previous);
+
+  // A comp is still a period with an end date, and an owner who was never
+  // told about it cannot plan for the day it stops.
+  await notifyCompGranted({ catalogId, ownerUserId, grantedAt: now, until: input.until });
 
   return { previousStatus, subscription, needsArResume, needsPageRestore };
 }

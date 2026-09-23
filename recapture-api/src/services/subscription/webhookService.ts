@@ -262,6 +262,7 @@ export async function applyRecordedPayment(
       planSnapshot: quote.planSnapshot,
       standeeIncluded: quote.planSnapshot.includedStandeeCount,
       amountPaise: paid.amountPaise,
+      paymentRecordId: paid._id as Types.ObjectId,
       via,
     });
   }

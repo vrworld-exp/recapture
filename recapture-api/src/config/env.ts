@@ -673,6 +673,17 @@ const envSchema = z.object({
    */
   SUBSCRIPTION_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(600_000),
   /**
+   * How long a catalog may sit with NO subscription row before its owner is
+   * told, once, that they have not chosen a plan (the sweep's fifth scan).
+   *
+   * A DELAY, not a schedule: the message is keyed per catalog and therefore
+   * sent exactly once, ever. The delay exists because a catalog is created
+   * empty — an owner who is still adding their first three dishes has not
+   * "failed to choose a plan", and telling them so on day zero is the kind of
+   * nag that teaches people to ignore the bell. Three days.
+   */
+  SUBSCRIPTION_NO_PLAN_REMINDER_DAYS: z.coerce.number().int().positive().max(90).default(3),
+  /**
    * Per-ADMIN refund window (E43): a leaked admin token cannot drain the
    * Razorpay balance in a loop, and a real admin never needs six refunds an
    * hour. Same generic consumeRateWindow as the other admin meters.

@@ -25,6 +25,10 @@ import {
   desiredPageStateFor,
   enqueuePageStateJob,
 } from '@/services/subscription/pageStateJobs';
+import {
+  notifyGraceExtended,
+  notifyRefundIssued,
+} from '@/services/subscription/ownerNotifications';
 import { daysLeftFor } from '@/services/subscription/subscriptionService';
 import type { AdminSubscriptionState } from '@/validation/subscriptionSchemas';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -55,8 +59,8 @@ export async function extendGrace(
   input: { days: number; note: string }
 ): Promise<ExtendGraceResult> {
   const row = await CatalogSubscription.findOne({ catalogId, status: 'GRACE' })
-    .select({ graceEndsAt: 1, periodEnd: 1 })
-    .lean<Pick<ICatalogSubscription, 'graceEndsAt' | 'periodEnd'>>()
+    .select({ graceEndsAt: 1, periodEnd: 1, userId: 1 })
+    .lean<Pick<ICatalogSubscription, 'graceEndsAt' | 'periodEnd' | 'userId'>>()
     .exec();
   if (!row) return { outcome: 'NOT_IN_GRACE' };
 
@@ -72,6 +76,16 @@ export async function extendGrace(
   track(AnalyticsEvent.SUBSCRIPTION_GRACE_EXTENDED, {
     catalog_id: catalogId.toHexString(),
     admin_id_hash: hashIdentifier(admin.userId.toHexString()),
+    days: input.days,
+  });
+  // The owner is watching a deadline by definition; moving it under them with
+  // no explanation is the one thing this must not do. `input.note` stays
+  // internal. Keyed on the NEW `graceEndsAt`, so two admins racing to add the
+  // same days send one message and a second, later extension sends its own.
+  await notifyGraceExtended({
+    catalogId,
+    ownerUserId: row.userId,
+    graceEndsAt,
     days: input.days,
   });
   return { outcome: 'EXTENDED', graceEndsAt };
@@ -237,6 +251,17 @@ export async function refundPayment(
     override,
     manual: false,
   });
+  // Money leaving our account without a word is how a duplicate payment turns
+  // into a support call. The message says the PERIOD is untouched, because an
+  // owner who reads "refunded" and assumes their menu just went off is the
+  // expensive misunderstanding here.
+  await notifyRefundIssued({
+    catalogId,
+    ownerUserId: paid.userId,
+    paymentRecordId: record._id as Types.ObjectId,
+    amountPaise: paid.amountPaise,
+    manual: false,
+  });
   return { outcome: 'REFUNDED', record };
 }
 
@@ -302,6 +327,13 @@ async function refundManualRow(
     admin_id_hash: hashIdentifier(admin.userId.toHexString()),
     amount_paise: paid.amountPaise,
     override: true,
+    manual: true,
+  });
+  await notifyRefundIssued({
+    catalogId,
+    ownerUserId: paid.userId,
+    paymentRecordId: record._id as Types.ObjectId,
+    amountPaise: paid.amountPaise,
     manual: true,
   });
   return { outcome: 'REFUNDED', record };

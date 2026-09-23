@@ -15,11 +15,19 @@
 //
 // The presigned url is a bearer credential — it is never logged.
 //
-// This file is ONLY ever compiled for the web target (selected by the
-// conditional import in preview_download_service.dart), so the web-library and
-// deprecation lints are expected here.
-// ignore: deprecated_member_use, avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+// WRITTEN AGAINST `package:web`, like every other web seam in this tree
+// (`model_export_delivery_web.dart` is the same anchor trick, line for line).
+// It used to be `dart:html`, and its service selected it with
+// `if (dart.library.html)` — the only seam here that did. That matters beyond
+// tidiness: `dart:html` does not exist under `dart2wasm`, so on a Wasm web
+// build `dart.library.html` is FALSE, the conditional import silently fell
+// through to the stub, and "download this photo" became an UnsupportedError on
+// web while every neighbouring download kept working. A seam that picks the
+// wrong half is invisible until someone runs the build that exposes it.
+//
+// Only ever compiled for the web target, selected by the conditional import in
+// preview_download_service.dart.
+import 'package:web/web.dart' as web;
 
 import '../../domain/entities/preview_manifest.dart';
 
@@ -32,12 +40,13 @@ Future<void> deliverPreviewDownload(PreviewPhoto photo) async {
     throw StateError('Photo has no download url — resolve one before delivery.');
   }
 
-  final anchor = html.AnchorElement(href: url)
+  final anchor = web.HTMLAnchorElement()
+    ..href = url
     // Cross-origin browsers ignore this filename in favour of S3's
     // Content-Disposition, but it also signals "download, don't navigate".
     ..download = photo.fileName
     ..style.display = 'none';
-  html.document.body?.append(anchor);
+  web.document.body?.append(anchor);
   anchor.click();
   anchor.remove();
 }

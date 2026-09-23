@@ -168,7 +168,10 @@ class _SubscriptionChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color =
-        switch (subscriptionTone(summary?.status ?? SubscriptionStatus.none)) {
+        // summaryTone, not subscriptionTone: a row whose customer page is dark
+        // is PAUSED, and the grey PAUSED wears is the wrong colour for the one
+        // state where a rep has to ring the owner today.
+        switch (summaryTone(summary)) {
       SubscriptionTone.good => AppColors.success,
       SubscriptionTone.warning => AppColors.warning,
       SubscriptionTone.danger => AppColors.error,

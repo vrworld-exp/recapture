@@ -300,6 +300,8 @@ describe('payment.captured — activation', () => {
       planSnapshot: DEFAULT_PLAN_CATALOG.plans.TASTE,
       standeeIncluded: 10,
       amountPaise: 119_900,
+      // The ledger row the owner's "payment received" message is keyed on.
+      paymentRecordId: new Types.ObjectId(),
       via: 'WEBHOOK',
     });
 
@@ -373,7 +375,15 @@ describe('payment.captured — activation', () => {
     await deliver(paymentCaptured({ orderId, paymentId: 'pay_c', amountPaise })).expect(200);
 
     expect((await CatalogSubscription.findOne({ catalogId }).lean().exec())!.status).toBe('ACTIVE');
-    const notice = await Notification.findOne({ audienceUserIds: owner.id }).lean().exec();
+    // TWO messages now reach this owner — the activation ("payment received,
+    // next payment due on…") and this nudge — so the over-cap one is asked for
+    // by name rather than by "the first notification addressed to them".
+    const notices = await Notification.find({ audienceUserIds: owner.id }).lean().exec();
+    expect(notices.map((n) => n.title).sort()).toEqual([
+      'Payment received — your plan is active',
+      'Your menu has more 3D dishes than your plan covers',
+    ]);
+    const notice = notices.find((n) => n.title.startsWith('Your menu has more'));
     expect(notice?.message).toMatch(/12 3D dishes; Taste plan covers 10/);
     expect(emitted('subscription_over_cap_on_activate')).toEqual([
       expect.objectContaining({ three_d_dish_count: 12, three_d_dish_cap: 10, plan_id: 'TASTE' }),

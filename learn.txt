@@ -74,4 +74,33 @@ thisnking to fix it --------------------->>>
    ✅ 2. If sale rep or staff create a restaurent and publish it then it should get published but one flag should come on mirage menu ui on mirage  also on catalog ui of recap that is payment due is not completed so, this page will deactivated in 7 days (or free trail limit) and inside catalog ui a btn should be there that tell pay otherwise you live link will be deactivated soon. and once user click on pay then subs process happne and user able to subcribe it. also handle other edge cases for this.
 
 
-    3. catalog will show the subcription status on ui. And user also get appropiate notifications like subs due, subs done next date for payment and alll other subs related edge cases. user should get notification for these events.
+    ✅3. catalog will show the subcription status on ui. And user also get appropiate notifications like subs due, subs done next date for payment and alll other subs related edge cases. user should get notification for these events. also one more event not opted any subcription yet.
+
+
+
+
+    ✅4. do you know we are print bulk qr by clicking o a btn ?? Can plz tell me the one qr size in cms ??? also if you can tell me single qr size in cm.
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Once you done with subcription and ready for prod.
+
+    1. verify it every thing is working good and nothing get breaked now. Now tell me what envs i need to chnage or update to make it for production ready and where one frontend or on backend of recap or on mirage. and visiable otp section on otp fill screen should be hidded and actual otp should't get back by any req user making for login, req only return the status of otp it is send on mail or not and that should be shown on ui.
+
+
+    2. we have a problem when did't opted for sms otp service, so once dev is done and sended otp will be hidded on screen then we are thinking to user email otp service only, so you job is that create a env var (like isPhoneOtpServiceRunning : t/f ) that manages otp on phone is open or closed now.if phone otp is not running then make disable phone btn (it should there but inactive condition so user not able to touch it and use it) on login screen user only able to click on email btn and after fill their mail id op send btn should activated and process happen. 
+
+
+    do it carefully for web and apk both.
+
+

@@ -24,6 +24,10 @@ import type {
 } from '@/models/types/subscription.types';
 import { quoteFor } from '@/services/subscription/checkoutService';
 import { receiptNoFor } from '@/services/subscription/paymentLedgerService';
+import {
+  notifyManualPaymentRejected,
+  notifyManualPaymentSubmitted,
+} from '@/services/subscription/ownerNotifications';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import {
   applyPaidPeriod,
@@ -182,6 +186,20 @@ export async function submitManualPaymentRequest(
 
   const row = await insertManualRow(catalogId, ownerUserId, actor, input);
   if (row === 'COLLECTOR_NOT_FOUND') return { outcome: 'COLLECTOR_NOT_FOUND' };
+
+  // Door 3 is the door with a HUMAN STEP in it: the money is taken, and
+  // nothing on the owner's screen moves until an admin verifies. An owner who
+  // is not told reads their own unchanged status as the payment having been
+  // lost. `createAndVerifyManualPayment` does NOT come through here — it
+  // activates in the same call and sends the activation message instead.
+  await notifyManualPaymentSubmitted({
+    catalogId,
+    ownerUserId,
+    paymentRecordId: row._id as Types.ObjectId,
+    amountPaise: row.amountPaise,
+    method: row.method ?? 'CASH',
+  });
+
   return { outcome: 'CREATED', record: toManualPaymentDto(row) };
 }
 
@@ -266,6 +284,18 @@ async function decideOnRow(
       admin_id_hash: hashIdentifier(admin.userId.toHexString()),
       same_actor: String(row.initiatedBy.userId) === String(admin.userId),
     });
+    // The owner was told this payment was recorded; they are owed the other
+    // half. `input.note` is NOT passed on — it is written for us, about a
+    // payment we could not find, and it is not the restaurant's to read.
+    // The CATALOG_DELETED auto-reject above deliberately never reaches here:
+    // there is no catalog left to notify anybody about.
+    await notifyManualPaymentRejected({
+      catalogId,
+      ownerUserId: rejected.userId,
+      paymentRecordId: rejected._id as Types.ObjectId,
+      amountPaise: rejected.amountPaise,
+      method: rejected.method ?? 'CASH',
+    });
     return { outcome: 'REJECTED', record: toManualPaymentDto(rejected) };
   }
 
@@ -297,6 +327,7 @@ async function decideOnRow(
     planSnapshot: quote.planSnapshot,
     standeeIncluded: quote.planSnapshot.includedStandeeCount,
     amountPaise: row.amountPaise,
+    paymentRecordId: verified._id as Types.ObjectId,
     via: 'ADMIN',
   });
 

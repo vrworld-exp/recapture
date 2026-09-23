@@ -22,6 +22,7 @@ import { User } from '@/models/User';
 import type { Actor, SubscriptionStatus } from '@/models/types/subscription.types';
 import { sendTemplatedSms, renderSmsTemplate } from '@/providers/sms';
 import { createNotification } from '@/services/notificationsService';
+import { SUBSCRIPTION_ACTION_ROUTE } from '@/services/subscription/ownerNotifications';
 import { getSubscriptionSummary } from '@/services/subscription/subscriptionService';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { toDisplayName } from '@/utils/catalogNames';
@@ -43,8 +44,13 @@ export type NotifyOwnerResult =
  */
 const NOT_NEEDED_ABOVE_DAYS = 7;
 
-/** The in-app route the bell's tap handler pushes (lib/app/routes/app_router.dart). */
-export const NUDGE_ACTION_ROUTE = '/catalog/subscription';
+/**
+ * The in-app route the bell's tap handler pushes (lib/app/routes/app_router.dart).
+ * Aliased from `ownerNotifications` rather than re-typed: a rep's nudge and an
+ * automatic subscription message must open the same screen, and two string
+ * literals are how they eventually stop doing that.
+ */
+export const NUDGE_ACTION_ROUTE = SUBSCRIPTION_ACTION_ROUTE;
 
 const rateKey = (catalogId: Types.ObjectId) => `sub-nudge:${catalogId.toHexString()}`;
 

@@ -99,6 +99,7 @@ backend suite once at the end of a stage, not per edit.
 | `graceDays` | `7` |
 | `grandfatherDays` | `30` |
 | `orderTtlHours` | `24` |
+| `SUBSCRIPTION_NO_PLAN_REMINDER_DAYS` | `3` — env, not the plan catalog. How long a catalog may sit with NO subscription row before its owner is told, ONCE EVER, that they have not chosen a plan (the sweep's fifth scan). The delay exists because a catalog is created empty; the once-ever is the `Notification.key`, since the scan re-finds the row on every pass. |
 | Currency | `INR` only; all amounts integer paise |
 
 ---

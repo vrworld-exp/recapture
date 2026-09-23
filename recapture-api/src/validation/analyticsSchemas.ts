@@ -191,6 +191,11 @@ export const AnalyticsEvent = {
   SUBSCRIPTION_STANDEES_ISSUED: 'subscription_standees_issued',
   // The owner downloaded a receipt PDF. The kind of row, never its amount.
   SUBSCRIPTION_RECEIPT_DOWNLOADED: 'subscription_receipt_downloaded',
+  // One in-app message TO THE OWNER about their own subscription
+  // (services/subscription/ownerNotifications.ts). The `event` is what
+  // happened, never the sentence sent: a message can name one restaurant's
+  // overdue invoice, and the text is the reader's business.
+  SUBSCRIPTION_OWNER_NOTIFIED: 'subscription_owner_notified',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
   // ── Pre-printed standee inventory ─────────────────────────────────────────
   // The MINT, not the code. A code value is a public identifier for a specific
@@ -1218,6 +1223,25 @@ const subscriptionReceiptDownloadedProps = z
   })
   .strict();
 
+const subscriptionOwnerNotifiedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    event: z.enum([
+      'TRIAL_STARTED',
+      'PLAN_ACTIVATED',
+      'COMP_GRANTED',
+      'PAYMENT_WINDOW_OPENED',
+      'THREE_D_PAUSED',
+      'PAGE_DEACTIVATED',
+      'MANUAL_PAYMENT_SUBMITTED',
+      'MANUAL_PAYMENT_REJECTED',
+      'REFUND_ISSUED',
+      'GRACE_EXTENDED',
+      'NO_PLAN_YET',
+    ]),
+  })
+  .strict();
+
 const publishBlockedBySubscriptionProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1436,6 +1460,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_SWEEP_RAN]: subscriptionSweepRanProps,
   [AnalyticsEvent.SUBSCRIPTION_STANDEES_ISSUED]: subscriptionStandeesIssuedProps,
   [AnalyticsEvent.SUBSCRIPTION_RECEIPT_DOWNLOADED]: subscriptionReceiptDownloadedProps,
+  [AnalyticsEvent.SUBSCRIPTION_OWNER_NOTIFIED]: subscriptionOwnerNotifiedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
   [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,

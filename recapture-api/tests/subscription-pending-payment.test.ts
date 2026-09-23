@@ -496,6 +496,8 @@ describe('clearing a window', () => {
       planSnapshot: DEFAULT_PLAN_CATALOG.plans.TASTE,
       standeeIncluded: 10,
       amountPaise: 119_900,
+      // The ledger row the owner's "payment received" message is keyed on.
+      paymentRecordId: new Types.ObjectId(),
       via: 'WEBHOOK',
     });
 
@@ -536,6 +538,8 @@ describe('clearing a window', () => {
       planSnapshot: DEFAULT_PLAN_CATALOG.plans.TASTE,
       standeeIncluded: 10,
       amountPaise: 119_900,
+      // The ledger row the owner's "payment received" message is keyed on.
+      paymentRecordId: new Types.ObjectId(),
       via: 'WEBHOOK',
     });
     expect(result.needsPageRestore).toBe(true);

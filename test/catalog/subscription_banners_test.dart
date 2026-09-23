@@ -157,12 +157,79 @@ void main() {
 
     testWidgets('ACTIVE, or no row: neither', (tester) async {
       for (final subscription in [summary('ACTIVE', daysLeft: 20), null]) {
+        // The blank frame matters here too, and this loop is where it was
+        // easiest to miss: both cases assert `findsNothing`, so a second
+        // iteration still showing the FIRST case's screen would pass anyway.
+        await tester.pumpWidget(const SizedBox.shrink());
         final repo = FakePublishRepository(catalog: catalogWith(subscription));
         await tester.pumpWidget(catalogHarness(repo));
         await tester.pumpAndSettle();
 
         expect(find.byKey(const ValueKey('subscription_paused_card')), findsNothing);
         expect(find.byKey(const ValueKey('subscription_grace_banner')), findsNothing);
+      }
+    });
+
+    // ── The header's status line (requirement 3) ────────────────────────────
+    //
+    // The four states above get a card; every OTHER state used to get a
+    // two-word chip and nothing else. The line fills exactly that gap, and
+    // `subscriptionHasOwnCard` is the single predicate that decides which side
+    // a status falls on — which is what stops the two saying the same sentence
+    // twice on one screen.
+    const lineKey = ValueKey('catalog_subscription_status_line');
+
+    testWidgets('states with no card of their own say it in words',
+        (tester) async {
+      final cases = {
+        summary('ACTIVE', daysLeft: 20): 'Active — 20 days left · Taste plan',
+        summary('TRIAL', daysLeft: 12): 'Free trial — 12 days left',
+        summary('COMPED', daysLeft: 40): 'Complimentary — 40 days left',
+        summary('CANCELLED'): 'Cancelled — resubscribe anytime',
+      };
+
+      for (final entry in cases.entries) {
+        // A blank frame FIRST. `catalogHarness` builds a ProviderScope with no
+        // key, so pumping the next case straight after the last one UPDATES
+        // that element rather than replacing it — the scope survives, the
+        // providers keep the previous repository's catalog, and the second
+        // case silently asserts against the first case's screen.
+        await tester.pumpWidget(const SizedBox.shrink());
+
+        final repo = FakePublishRepository(catalog: catalogWith(entry.key));
+        await tester.pumpWidget(catalogHarness(repo));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(lineKey), findsOneWidget, reason: entry.value);
+        expect(find.text(entry.value), findsOneWidget);
+      }
+    });
+
+    testWidgets('a catalog with no row is told it has no plan', (tester) async {
+      final repo = FakePublishRepository(catalog: catalogWith(null));
+      await tester.pumpWidget(catalogHarness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(lineKey), findsOneWidget);
+      expect(find.text('No plan yet — choose one to publish your menu'),
+          findsOneWidget);
+    });
+
+    testWidgets('a state that already has a card does NOT repeat itself',
+        (tester) async {
+      // The GRACE case is the one that caught this: the banner and the line
+      // render the very same string, so `findsOneWidget` on that sentence
+      // fails the moment both are drawn.
+      for (final subscription in [
+        summary('GRACE', daysLeft: 3, graceFrom: 'ACTIVE'),
+        summary('PAUSED'),
+      ]) {
+        await tester.pumpWidget(const SizedBox.shrink()); // see above
+        final repo = FakePublishRepository(catalog: catalogWith(subscription));
+        await tester.pumpWidget(catalogHarness(repo));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(lineKey), findsNothing);
       }
     });
   });

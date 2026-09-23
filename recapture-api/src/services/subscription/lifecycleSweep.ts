@@ -19,21 +19,46 @@
 //      ever reach a restaurant that never paid a rupee — see the note there.
 //   4. In-app reminders at −7 d, −1 d, on GRACE and at grace midpoint (E14),
 //      deduped through ReminderLog so two instances send one.
-//   5. (nothing else) — the sweep never reads `activePublishRunId`, never
+//
+// TWO KINDS OF MESSAGE LEAVE THIS FILE, and they are not the same mechanism.
+// Scan 4's reminders are COUNTDOWNS, deduped per (catalog, milestone, period)
+// through `ReminderLog`. Scans 2 and 3 each also send ONE message about what
+// just happened — 3D paused, the live page switched off — through
+// `ownerNotifications.ts`, deduped on `Notification.key`. A countdown is about
+// a date that is coming; these are about a thing that has occurred, and an
+// owner whose last word from us was "3D pauses in 3 days" is owed the moment
+// it did. Both are best-effort and neither can fail a sweep.
+//   5. Catalogs that have NEVER opted into anything — no subscription row at
+//      all — told once, `SUBSCRIPTION_NO_PLAN_REMINDER_DAYS` after the catalog
+//      was created. The one scan driven by an ABSENCE rather than a date, and
+//      the only one whose dedupe is the notification key itself.
+//   6. (nothing else) — the sweep never reads `activePublishRunId`, never
 //      touches `Catalog.status`, `publishedRevision` or a Mirage item (D5,
 //      AC-4.1). Pausing is a flag on Mirage's restaurant, written by the job.
+//      Scan 5 is the first thing here to READ the `Catalog` collection at all
+//      (it has to: "no subscription row" is a fact about a catalog, and there
+//      is no row to find it from). It still writes nothing there, so D5 holds
+//      exactly as stated — the sweep's only writes remain the subscription
+//      row, the reminder log and the notifications.
 //
 // CLOCK RULE (D3): every comparison is `$lte: now`. The sweep can only ever be
 // LATE — an instance that slept for an hour pauses an hour late, never a
 // minute early. Nothing here extrapolates.
 import { Types } from 'mongoose';
 
+import { env } from '@/config/env';
+import { Catalog } from '@/models/Catalog';
 import { CatalogSubscription } from '@/models/CatalogSubscription';
 import { Notification } from '@/models/Notification';
 import { ReminderLog, type ReminderMilestone } from '@/models/ReminderLog';
 import type { SubscriptionStatus } from '@/models/types/subscription.types';
 import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
 import { enqueuePageStateJob } from '@/services/subscription/pageStateJobs';
+import {
+  notifyNoPlanYet,
+  notifyPageDeactivated,
+  notifyThreeDPaused,
+} from '@/services/subscription/ownerNotifications';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 
@@ -72,6 +97,13 @@ export interface SweepReport {
    */
   resumesEnqueued: 0;
   remindersSent: number;
+  /**
+   * Owners told, for the first and only time, that they are not on a plan.
+   * Falls to zero once every existing catalog has been told, and stays there
+   * apart from new signups — a number that keeps climbing means the key is
+   * not doing its job.
+   */
+  noPlanNudges: number;
   durationMs: number;
 }
 
@@ -178,6 +210,17 @@ async function sweepToPaused(now: Date): Promise<{ toPaused: number; pausesEnque
       by: 'SWEEP',
     });
 
+    // The countdown reminders stop at the grace midpoint, so without this the
+    // owner's last word from us is "3D pauses in N days" and the moment it
+    // happened is never announced. Only the row THIS pass moved gets here —
+    // the same D4 guard the job is enqueued behind — so a concurrent sweep
+    // sends nothing, and the notification's own key catches a replay.
+    await notifyThreeDPaused({
+      catalogId: paused.catalogId,
+      ownerUserId: paused.userId,
+      pausedAt: now,
+    });
+
     try {
       await enqueueArEntitlementJob({
         catalogId: paused.catalogId,
@@ -266,6 +309,15 @@ async function sweepToPageOff(
       from: 'PENDING_PAYMENT',
       to: 'PAUSED',
       by: 'SWEEP',
+    });
+
+    // The one state where the PRINTED QR stops answering, so it gets its own
+    // message rather than the pause sentence above — an owner told "your photo
+    // menu is still live" can disprove it in one tap.
+    await notifyPageDeactivated({
+      catalogId: closed.catalogId,
+      ownerUserId: closed.userId,
+      deactivatedAt: now,
     });
 
     try {
@@ -495,6 +547,76 @@ async function sweepReminders(now: Date, graceDays: number): Promise<number> {
   return sent;
 }
 
+// ── 5. Never opted in ────────────────────────────────────────────────────────
+
+/**
+ * How far back this scan looks. A catalog older than this that still has no
+ * plan has passed the moment where a first nudge helps — by then the rep's
+ * `notify-owner` and the publish paywall are the surfaces doing the asking,
+ * and a message about a restaurant somebody set up and abandoned two months
+ * ago is noise in a bell that has to stay worth opening.
+ *
+ * It is also what BOUNDS the scan: without it this query grows with every
+ * catalog ever created and is re-run every ten minutes forever, re-finding
+ * rows whose notification key was written months ago.
+ */
+const NO_PLAN_LOOKBACK_DAYS = 30;
+
+/** At most this many first-time nudges per pass, so a backfill cannot storm. */
+const NO_PLAN_MAX_PER_SWEEP = 50;
+
+/**
+ * The scan requirement 3's last clause asks for: "also one more event, not
+ * opted any subscription yet."
+ *
+ * Every other scan here is driven by a DATE on a row. This one is driven by
+ * the absence of the row — a catalog whose owner never started a trial, never
+ * paid, and was never published by a rep (which would have opened a window).
+ * Nothing ever happens to such a catalog, so without this its owner is never
+ * told anything at all; they meet the subscription for the first time as a
+ * wall in front of Publish.
+ *
+ * IT SENDS ONE MESSAGE PER CATALOG, EVER. This scan re-finds the same rows on
+ * every pass for as long as they stay planless, and the ONLY thing that makes
+ * that safe is the unique `Notification.key` inside `notifyNoPlanYet`. There
+ * is deliberately no ReminderLog row here: a ReminderLog key is scoped to a
+ * PERIOD, and the whole point of this scan is that there is no period.
+ */
+async function sweepNoPlanYet(now: Date): Promise<number> {
+  const newestEligible = new Date(now.getTime() - env.SUBSCRIPTION_NO_PLAN_REMINDER_DAYS * DAY_MS);
+  const oldestEligible = new Date(newestEligible.getTime() - NO_PLAN_LOOKBACK_DAYS * DAY_MS);
+
+  const catalogs = await Catalog.find({
+    deletedAt: null,
+    createdAt: { $gte: oldestEligible, $lte: newestEligible },
+  })
+    .select({ _id: 1, userId: 1 })
+    .limit(NO_PLAN_MAX_PER_SWEEP)
+    .lean<{ _id: Types.ObjectId; userId: Types.ObjectId }[]>()
+    .exec();
+  if (catalogs.length === 0) return 0;
+
+  // ONE query for the whole page, not one per catalog. A row in ANY status
+  // disqualifies: CANCELLED and PAUSED mean the owner opted in once and this
+  // sentence ("you have not chosen a plan yet") would be false.
+  const withRows = await CatalogSubscription.find({
+    catalogId: { $in: catalogs.map((c) => c._id) },
+  })
+    .select({ catalogId: 1 })
+    .lean<{ catalogId: Types.ObjectId }[]>()
+    .exec();
+  const opted = new Set(withRows.map((r) => r.catalogId.toHexString()));
+
+  let sent = 0;
+  for (const catalog of catalogs) {
+    if (opted.has(catalog._id.toHexString())) continue;
+    if (await notifyNoPlanYet({ catalogId: catalog._id, ownerUserId: catalog.userId })) {
+      sent += 1;
+    }
+  }
+  return sent;
+}
+
 // ── The sweep ────────────────────────────────────────────────────────────────
 
 /**
@@ -518,6 +640,10 @@ export async function runSubscriptionSweep(now: Date = new Date()): Promise<Swee
   // reads the status this scan has already changed.
   const { toPageOff, pageOffsEnqueued } = await sweepToPageOff(now);
   const remindersSent = await sweepReminders(now, graceDays);
+  // LAST, and after the reminders for the same reason they run after the
+  // scans: a catalog that opened a pending-payment window this pass has a row
+  // now and is no longer "not opted in".
+  const noPlanNudges = await sweepNoPlanYet(now);
 
   const durationMs = Date.now() - startedAt;
   track(AnalyticsEvent.SUBSCRIPTION_SWEEP_RAN, {
@@ -530,7 +656,7 @@ export async function runSubscriptionSweep(now: Date = new Date()): Promise<Swee
     `[subscription-sweep] to_grace=${toGrace} to_paused=${toPaused} ` +
       `to_page_off=${toPageOff} pauses_enqueued=${pausesEnqueued} ` +
       `page_offs_enqueued=${pageOffsEnqueued} reminders_sent=${remindersSent} ` +
-      `duration_ms=${durationMs}`
+      `no_plan_nudges=${noPlanNudges} duration_ms=${durationMs}`
   );
 
   return {
@@ -541,6 +667,7 @@ export async function runSubscriptionSweep(now: Date = new Date()): Promise<Swee
     pageOffsEnqueued,
     resumesEnqueued: 0,
     remindersSent,
+    noPlanNudges,
     durationMs,
   };
 }

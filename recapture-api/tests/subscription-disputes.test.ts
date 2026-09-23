@@ -13,7 +13,7 @@
 //     warn and a 200, nothing written.
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
-import mongoose from 'mongoose';
+import mongoose, { Types } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
 import { createApp } from '@/app';
@@ -435,6 +435,8 @@ describe('a new period clears the dispute marker', () => {
       planSnapshot: DEFAULT_PLAN_CATALOG.plans.TASTE,
       standeeIncluded: 10,
       amountPaise: MONTHLY,
+      // The ledger row the owner's "payment received" message is keyed on.
+      paymentRecordId: new Types.ObjectId(),
       via: 'WEBHOOK',
     });
 

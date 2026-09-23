@@ -71,6 +71,79 @@ const List<String> _extraSources = [
   'lib/data/repositories/bytes_response.dart',
 ];
 
+/// EVERY conditional-import seam in `lib/`, by its common prefix — the file
+/// name minus `_stub.dart` / `_io.dart` / `_web.dart`.
+///
+/// Hand-written, because the guards below need a name to print when one is
+/// broken; kept honest by `no conditional import is left off this list`, which
+/// walks the tree and fails if it finds a seam this list does not know about.
+const List<String> _allSeams = [
+  'lib/application/catalog/qr_delivery',
+  'lib/application/catalog/catalog_link_delivery',
+  'lib/application/catalog/checkout_adapter',
+  'lib/application/rep/rep_capabilities',
+  'lib/application/rep/web_dish_camera',
+  'lib/application/projects/model_export_delivery',
+  'lib/application/projects/preview_download_delivery',
+  'lib/platform/unsaved_changes',
+  'lib/presentation/screens/projects/model_viewer_load_probe',
+];
+
+/// Every `.dart` file under `lib/`, for the tree-wide guards.
+List<File> _allSources() => Directory('lib')
+    .listSync(recursive: true)
+    .whereType<File>()
+    .where((f) => f.path.endsWith('.dart'))
+    .toList();
+
+/// One conditional-import seam as the source actually declares it.
+class _Seam {
+  const _Seam(this.prefix, this.targets);
+
+  /// The common prefix — the stub's path minus `_stub.dart`, repo-relative.
+  final String prefix;
+
+  /// Every file the import names: the default, then each branch's target.
+  /// Repo-relative, resolved against the importing file's folder.
+  final List<String> targets;
+}
+
+/// A conditional import: the default library, then one or more
+/// `if (dart.library.x) '…'` branches, ending at the `;`.
+final RegExp _conditionalImport = RegExp(
+  '[\'"]([a-zA-Z_0-9/.]+)_stub\\.dart[\'"]((?:\\s*if \\(dart\\.library\\.[a-z_]+\\)\\s*[\'"][a-zA-Z_0-9/.]+[\'"])+)',
+);
+final RegExp _branchTarget =
+    RegExp('if \\(dart\\.library\\.[a-z_]+\\)\\s*[\'"]([a-zA-Z_0-9/.]+)[\'"]');
+
+/// Resolves `import`'s relative target against the importing file's folder.
+String _resolvedFrom(File importer, String relative) =>
+    Uri.parse('${importer.parent.path.replaceAll(r'\', '/')}/')
+        .resolve(relative)
+        .path
+        .replaceFirst(RegExp(r'^/'), '');
+
+/// Every conditional-import seam declared across [files], deduplicated by
+/// prefix (a seam re-imported by a second file is one seam).
+List<_Seam> _seamsIn(List<File> files) {
+  final seams = <String, _Seam>{};
+
+  for (final file in files) {
+    final source = _stripComments(file.readAsStringSync());
+    for (final match in _conditionalImport.allMatches(source)) {
+      final stub = _resolvedFrom(file, '${match.group(1)!}_stub.dart');
+      final targets = [
+        stub,
+        for (final branch in _branchTarget.allMatches(match.group(2)!))
+          _resolvedFrom(file, branch.group(1)!),
+      ];
+      seams[stub.replaceFirst('_stub.dart', '')] =
+          _Seam(stub.replaceFirst('_stub.dart', ''), targets);
+    }
+  }
+  return seams.values.toList();
+}
+
 /// Files allowed to import `dart:io`: the native half of a conditional-import
 /// seam. These are selected by `if (dart.library.io)` and are never compiled
 /// into a web build, which is precisely what makes them safe — and what makes
@@ -158,29 +231,106 @@ void main() {
       );
     });
 
-    test('every platform seam ships all three variants', () {
-      // A seam missing its stub still compiles on both real targets and fails
-      // only on a third — but a seam missing its _web half fails the web build
-      // outright, and the conditional import makes that a link error with no
-      // obvious cause. Cheap to assert, expensive to debug.
-      const seams = [
-        'lib/application/catalog/qr_delivery',
-        'lib/application/catalog/catalog_link_delivery',
-        'lib/application/catalog/checkout_adapter',
-        'lib/application/rep/rep_capabilities',
-      ];
+    test('every file a conditional import names actually exists', () {
+      // A seam whose _web half is missing fails the web build outright, and
+      // the conditional import turns that into a link error with no obvious
+      // cause. Cheap to assert, expensive to debug.
+      //
+      // Asked of the IMPORT rather than of a fixed `_stub`/`_io`/`_web` triple,
+      // because not every seam has all three and demanding it would be wrong:
+      // `model_viewer_load_probe` is web-only by nature (mobile gets the load
+      // lifecycle over a JavascriptChannel instead), so its stub IS its native
+      // half and an `_io` variant would have nothing to put in it.
+      final missing = <String>[];
 
-      for (final seam in seams) {
-        for (final variant in ['_stub.dart', '_io.dart', '_web.dart']) {
-          expect(
-            File('$seam$variant').existsSync(),
-            isTrue,
-            reason: '$seam$variant is missing. A conditional import needs all '
-                'three: the stub is the default, and the other two are '
-                'selected by dart.library.io / dart.library.js_interop.',
-          );
+      for (final seam in _seamsIn(_allSources())) {
+        for (final target in seam.targets) {
+          if (!File(target).existsSync()) missing.add(target);
         }
       }
+
+      expect(
+        missing,
+        isEmpty,
+        reason: 'A conditional import names a file that is not there. The '
+            'default (the stub) and every `if (dart.library.…)` branch must '
+            'all exist, or the target selecting the missing one will not '
+            'compile.',
+      );
+    });
+
+    test('every web half is selected by `dart.library.js_interop`', () {
+      // THE BUG THIS EXISTS FOR, found in `preview_download_service.dart`: its
+      // web half was selected with `if (dart.library.html)`, the only seam in
+      // the tree that was. `dart:html` does not exist under dart2wasm, so on a
+      // Wasm web build that condition is FALSE, the import falls through to
+      // the STUB, and "download this photo" becomes an UnsupportedError — on
+      // web only, with nothing failing anywhere else, on any other build, ever.
+      // `dart.library.js_interop` is true on every web compiler.
+      final offenders = [
+        for (final file in _allSources())
+          if (_stripComments(file.readAsStringSync())
+              .contains('dart.library.html'))
+            file.path,
+      ];
+
+      expect(
+        offenders,
+        isEmpty,
+        reason: 'Select a web half with `if (dart.library.js_interop)`. '
+            '`dart.library.html` is false under dart2wasm, so the seam '
+            'silently resolves to its stub on a Wasm web build and the '
+            'feature is missing on web with nothing to show for it.',
+      );
+    });
+
+    test('no `dart:html` import survives anywhere in lib/', () {
+      // The other half of the same rule. `package:web` is the supported DOM
+      // binding in this SDK; `dart:html` is deprecated and absent on Wasm, so
+      // a web half written against it cannot compile for the target its own
+      // seam selects.
+      final pattern = RegExp('import\\s+[\'"]dart:html[\'"]');
+      final offenders = [
+        for (final file in _allSources())
+          if (pattern.hasMatch(_stripComments(file.readAsStringSync())))
+            file.path,
+      ];
+
+      expect(
+        offenders,
+        isEmpty,
+        reason: 'Use `package:web` — model_export_delivery_web.dart and '
+            'preview_download_delivery_web.dart are the same anchor download '
+            'written against it.',
+      );
+    });
+
+    test('the seam list names every seam, and the walker finds every one', () {
+      // Two failures, one test, because each covers the other's blind spot.
+      //
+      // `_allSeams` is hand-written and what rots is a NEW seam nobody added
+      // to it — the one that then ships with a missing variant, since the
+      // capability-name guard below reads the list rather than the tree.
+      // And the WALKER can rot too: a regex that stopped matching would let
+      // every guard above pass while checking nothing at all, which is the
+      // quietest way this whole file could stop being worth running.
+      final found = _seamsIn(_allSources()).map((s) => s.prefix).toSet();
+
+      expect(
+        found.difference(_allSeams.toSet()),
+        isEmpty,
+        reason: 'A conditional-import seam exists that `_allSeams` does not '
+            'name, so nothing checks its variants or its capability flags. '
+            'Add it to that list.',
+      );
+      expect(
+        _allSeams.toSet().difference(found),
+        isEmpty,
+        reason: '`_allSeams` names a seam the walker did not find. Either the '
+            'seam is gone (drop it from the list) or `_conditionalImport` no '
+            'longer matches how these imports are written — in which case '
+            'every guard in this group is silently passing over an empty set.',
+      );
     });
 
     test('the native and web seams agree on the capability names', () {

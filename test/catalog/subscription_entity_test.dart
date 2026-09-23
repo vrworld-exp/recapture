@@ -203,6 +203,82 @@ void main() {
       expect(repStatusChip(summary('COMPED')), 'Comped');
     });
 
+    // ── The catalog screen's status sentence ────────────────────────────────
+    //
+    // Same table as the owner line, said with the summary's fields. What these
+    // pin is the ONE rule that is easy to lose: `isPageDeactivated` is read
+    // before the status, on the line AND on the chip AND in the colour, so the
+    // one owner who can check their own link in a second is never told their
+    // menu is still live.
+    test('the summary status line covers every status', () {
+      SubscriptionSummary summary(
+        String status, {
+        int? daysLeft,
+        String? planId,
+        String? graceFrom,
+        bool pageOff = false,
+      }) =>
+          SubscriptionSummary.fromMap({
+            'status': status,
+            'daysLeft': daysLeft,
+            'planId': planId,
+            'graceFrom': graceFrom,
+            'isPageDeactivated': pageOff,
+          });
+
+      expect(summaryStatusLine(null),
+          'No plan yet — choose one to publish your menu');
+      expect(summaryStatusLine(summary('NONE')),
+          'No plan yet — choose one to publish your menu');
+      expect(summaryStatusLine(summary('TRIAL', daysLeft: 12)),
+          'Free trial — 12 days left');
+      expect(
+        summaryStatusLine(summary('PENDING_PAYMENT', daysLeft: 5)),
+        'Live now — payment due in 5 days, then this page switches off',
+      );
+      expect(
+        summaryStatusLine(summary('ACTIVE', daysLeft: 21, planId: 'SIGNATURE')),
+        'Active — 21 days left · Signature plan',
+      );
+      // No plan id on the summary (an older server): the tier is dropped, the
+      // sentence is not.
+      expect(summaryStatusLine(summary('ACTIVE', daysLeft: 1)),
+          'Active — 1 day left');
+      expect(summaryStatusLine(summary('GRACE', daysLeft: 3)),
+          'Payment overdue — 3D menu pauses in 3 days');
+      expect(
+        summaryStatusLine(summary('GRACE', daysLeft: 3, graceFrom: 'TRIAL')),
+        'Your free trial has ended — choose a plan within 3 days to keep 3D live',
+      );
+      expect(summaryStatusLine(summary('PAUSED')),
+          '3D menu paused — your photo menu is still live');
+      expect(summaryStatusLine(summary('CANCELLED')),
+          'Cancelled — resubscribe anytime');
+      expect(summaryStatusLine(summary('COMPED', daysLeft: 40)),
+          'Complimentary — 40 days left');
+      expect(summaryStatusLine(summary('WHAT_IS_THIS')),
+          'Subscription status unavailable');
+    });
+
+    test('a dark page is never described as a pause', () {
+      final pageOff = SubscriptionSummary.fromMap(
+        {'status': 'PAUSED', 'isPageDeactivated': true},
+      );
+
+      // The line, the chip and the colour all read the flag before the status.
+      expect(summaryStatusLine(pageOff),
+          'Live menu switched off — choose a plan to bring the same QR back');
+      expect(summaryStatusLine(pageOff), isNot(contains('still live')));
+      expect(repStatusChip(pageOff), 'Page off');
+      expect(summaryTone(pageOff), SubscriptionTone.danger);
+
+      // An ordinary pause is untouched by that branch.
+      final paused = SubscriptionSummary.fromMap({'status': 'PAUSED'});
+      expect(repStatusChip(paused), '3D paused');
+      expect(summaryTone(paused), SubscriptionTone.neutral);
+      expect(summaryTone(null), SubscriptionTone.neutral);
+    });
+
     test('the usage line names the cap the server sent', () {
       expect(threeDUsageLine(sub('TRIAL')), '4 / 10 (trial)');
       expect(

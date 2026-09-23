@@ -416,6 +416,12 @@ class _CatalogBody extends ConsumerWidget {
                   // an owner whose QR is about to stop working must read that
                   // before "your 3D is off". Two states, two cards — the page is
                   // dark (`isPageDeactivated`), or a deadline is running.
+                  //
+                  // ⚠ THE SAME CHAIN DECIDES THE HEADER'S STATUS LINE, through
+                  // `subscriptionHasOwnCard` below — one predicate, so the two
+                  // cannot drift. A card here already says the whole sentence
+                  // in full; printing the summary line under the chips as well
+                  // would show a GRACE owner the identical words twice.
                   if (catalog.subscription?.isPageDeactivated == true)
                     SliverToBoxAdapter(
                       child: Padding(
@@ -458,6 +464,8 @@ class _CatalogBody extends ConsumerWidget {
                     ),
                   SliverToBoxAdapter(
                     child: _CatalogHeaderCard(
+                      showSubscriptionLine:
+                          !subscriptionHasOwnCard(catalog.subscription),
                       catalog: catalog,
                       onDeleteCatalog: onDeleteCatalog,
                       onOpenBusinessProfile: onOpenBusinessProfile,
@@ -782,7 +790,13 @@ class _CatalogHeaderCard extends StatelessWidget {
     required this.onOpenQr,
     required this.onOpenAnalytics,
     required this.onOpenSubscription,
+    required this.showSubscriptionLine,
   });
+
+  /// False while a subscription CARD is drawn above this header: it already
+  /// says the same sentence, at length. Decided once by
+  /// [subscriptionHasOwnCard] so the card chain and this cannot drift.
+  final bool showSubscriptionLine;
 
   final Catalog catalog;
   final VoidCallback onDeleteCatalog;
@@ -901,18 +915,48 @@ class _CatalogHeaderCard extends StatelessWidget {
                 onTap: onOpenSubscription,
                 child: _Chip(
                   label: repStatusChip(catalog.subscription),
-                  color: switch (subscriptionTone(
-                    catalog.subscription?.status ?? SubscriptionStatus.none,
-                  )) {
-                    SubscriptionTone.good => AppColors.success,
-                    SubscriptionTone.warning => AppColors.warning,
-                    SubscriptionTone.danger => AppColors.error,
-                    SubscriptionTone.neutral => AppColors.textMuted,
-                  },
+                  color: _subscriptionColor(catalog.subscription),
                 ),
               ),
             ],
           ),
+          // The status in WORDS, under the chips and above the counts.
+          //
+          // ONLY where no card above already said it. The four states where
+          // something is at stake get a full card; every OTHER state had a
+          // two-word chip and nothing else, so "Active" never said until when
+          // and "No plan" never said what that costs. Tappable, like the chip,
+          // because the sentence and the chip are one control with two halves.
+          //
+          // From the catalog DTO's own summary — no second request, and
+          // nothing here counts a day or decides a state.
+          if (showSubscriptionLine) ...[
+            const SizedBox(height: AppSpacing.md),
+            InkWell(
+              key: const ValueKey('catalog_subscription_status_line'),
+              borderRadius: BorderRadius.circular(AppRadius.xs),
+              onTap: onOpenSubscription,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.card_membership_outlined,
+                    size: 16,
+                    color: _subscriptionColor(catalog.subscription),
+                  ),
+                  const SizedBox(width: AppSpacing.sm),
+                  Expanded(
+                    child: Text(
+                      summaryStatusLine(catalog.subscription),
+                      style: textTheme.bodySmall?.copyWith(
+                        color: _subscriptionColor(catalog.subscription),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: AppSpacing.md),
           Text(
             '${catalog.counts.products} products · '
@@ -973,6 +1017,17 @@ class _CatalogHeaderCard extends StatelessWidget {
     );
   }
 }
+
+/// The chip's and the status line's colour, resolved once so the two halves of
+/// one control can never disagree. [summaryTone] — not [subscriptionTone] —
+/// because a dark page is danger, not the PAUSED grey its status would give.
+Color _subscriptionColor(SubscriptionSummary? summary) =>
+    switch (summaryTone(summary)) {
+      SubscriptionTone.good => AppColors.success,
+      SubscriptionTone.warning => AppColors.warning,
+      SubscriptionTone.danger => AppColors.error,
+      SubscriptionTone.neutral => AppColors.textMuted,
+    };
 
 /// The header's overflow menu. An enum with one entry rather than a bare
 /// callback because this menu is where the next catalog-level action lands, and
