@@ -47,6 +47,19 @@ export async function getServerFlag(key: string): Promise<boolean | undefined> {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+/**
+ * The baked defaults with the plan catalog RESOLVED. DEFAULT_REMOTE_CONFIG carries
+ * the raw DEFAULT_PLAN_CATALOG (real prices, testingPrices false), so serving it
+ * as-is would quote the real tiers on screen while checkout charges the
+ * SUBSCRIPTION_TESTING_PRICES ones. getPlanCatalog never throws.
+ */
+async function servedDefaults(): Promise<RemoteConfigResult> {
+  return {
+    config: { ...DEFAULT_REMOTE_CONFIG, subscriptionPlans: await getPlanCatalog() },
+    servedDefaults: true,
+  };
+}
+
 export async function getRemoteConfig(): Promise<RemoteConfigResult> {
   try {
     // Single global config; newest wins if more than one exists.
@@ -54,7 +67,7 @@ export async function getRemoteConfig(): Promise<RemoteConfigResult> {
 
     if (!doc) {
       console.warn('[remote-config] no config document found; serving defaults');
-      return { config: DEFAULT_REMOTE_CONFIG, servedDefaults: true };
+      return servedDefaults();
     }
 
     // Pick only the served fields so store-internal keys (_id, timestamps, __v)
@@ -79,7 +92,7 @@ export async function getRemoteConfig(): Promise<RemoteConfigResult> {
         `[remote-config] stored config failed validation at "${where}": ` +
           `${issue?.message ?? 'invalid'}; serving defaults`
       );
-      return { config: DEFAULT_REMOTE_CONFIG, servedDefaults: true };
+      return servedDefaults();
     }
 
     return { config: parsed.data, servedDefaults: false };
@@ -87,6 +100,6 @@ export async function getRemoteConfig(): Promise<RemoteConfigResult> {
     // DB unreachable / timeout / unexpected — degrade, never 5xx.
     const message = err instanceof Error ? err.message : 'unknown error';
     console.warn(`[remote-config] store read failed (${message}); serving defaults`);
-    return { config: DEFAULT_REMOTE_CONFIG, servedDefaults: true };
+    return servedDefaults();
   }
 }

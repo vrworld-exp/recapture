@@ -144,7 +144,7 @@ Future<void> _run() async {
       '"name":"Mirage Menu"',
       '"description":"Growth plan · monthly"',
       '"retry":{"enabled":true,"max_count":3}',
-      '"theme":{"color":"#C9A24D"}',
+      '"theme":{"color":"#E10600"}',
       '"handlerType":"function"',
       '"ondismissType":"function"',
     ]) {

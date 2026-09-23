@@ -80,12 +80,14 @@ int _comparePrices(double? a, double? b) {
   return a.compareTo(b);
 }
 
-/// One labelled, horizontally scrolling row of chips — "SORT", then the
-/// options; "SHOW", then the filters.
+/// One labelled, wrapping group of chips — "SORT", then the options; "SHOW",
+/// then the filters.
 ///
-/// A scrolling row rather than a menu: the options are few, naming them all is
-/// cheaper to read than opening something, and the row doubles as the display
-/// of what is currently on — which a closed menu cannot do.
+/// Chips rather than a menu: the options are few, naming them all is cheaper
+/// to read than opening something, and the group doubles as the display of
+/// what is currently on — which a closed menu cannot do. Wrapped, not
+/// side-scrolled: on a phone a scrolling row cut its last chips off at the
+/// panel edge, so they read as broken; wrapping keeps every chip in view.
 class ControlRow extends StatelessWidget {
   const ControlRow({super.key, required this.label, required this.children});
 
@@ -110,17 +112,12 @@ class ControlRow extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
+        Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-          child: Row(
-            children: [
-              for (final child in children)
-                Padding(
-                  padding: const EdgeInsets.only(right: AppSpacing.sm),
-                  child: child,
-                ),
-            ],
+          child: Wrap(
+            spacing: AppSpacing.sm,
+            runSpacing: AppSpacing.sm,
+            children: children,
           ),
         ),
       ],

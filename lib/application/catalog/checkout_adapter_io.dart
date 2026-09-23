@@ -82,7 +82,7 @@ class RazorpayCheckoutAdapter implements CheckoutAdapter {
         'name': 'Mirage Menu',
         'description': description,
         'retry': {'enabled': true, 'max_count': 3},
-        'theme': {'color': '#C9A24D'},
+        'theme': {'color': kCheckoutThemeColor},
       });
       return await completer.future;
     } finally {

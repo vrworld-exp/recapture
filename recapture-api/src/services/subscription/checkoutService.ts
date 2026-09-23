@@ -125,7 +125,28 @@ export async function createOrReturnOrder(
     .sort({ createdAt: -1 })
     .lean<IPaymentRecord>()
     .exec();
-  if (open) {
+
+  const plans = await getPlanCatalog();
+
+  // A1 freezes the quote against the OWNER changing their mind, not against the
+  // catalog's prices changing under it. An open order minted before
+  // SUBSCRIPTION_TESTING_PRICES was flipped (or before an ops re-price) would
+  // otherwise keep charging the old amount for its whole TTL, so it is retired
+  // here and a fresh one minted. A late payment on the retired order is still
+  // matched by providerOrderId in the webhook and applied against its own quote.
+  const stale =
+    open?.quote != null &&
+    quoteFor(plans, open.quote.planId, open.quote.interval).totalPaise !== open.amountPaise;
+  if (open && stale) {
+    await PaymentRecord.updateOne(
+      { _id: open._id, expiresAt: { $gt: now } },
+      { $set: { expiresAt: now } }
+    ).exec();
+    console.warn(
+      `[checkout] open order ${open.providerOrderId} no longer matches the plan price; ` +
+        'retiring it and minting a new one'
+    );
+  } else if (open) {
     track(AnalyticsEvent.SUBSCRIPTION_ORDER_CREATED, {
       catalog_id: catalogId.toHexString(),
       plan_id: open.quote!.planId,
@@ -146,7 +167,6 @@ export async function createOrReturnOrder(
   );
   if (rate.limited) return { outcome: 'RATE_LIMITED', retryAfter: rate.retryAfter };
 
-  const plans = await getPlanCatalog();
   const quote = quoteFor(plans, input.planId, input.interval);
 
   let providerOrder: { id: string };

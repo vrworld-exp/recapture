@@ -19,6 +19,7 @@
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app/theme/app_colors.dart';
 import 'checkout_adapter_stub.dart'
     if (dart.library.io) 'checkout_adapter_io.dart'
     if (dart.library.js_interop) 'checkout_adapter_web.dart';
@@ -27,6 +28,12 @@ export 'checkout_adapter_stub.dart'
     if (dart.library.io) 'checkout_adapter_io.dart'
     if (dart.library.js_interop) 'checkout_adapter_web.dart'
     show kCanCheckoutInApp;
+
+/// The sheet's `theme.color` — Razorpay paints its header and Pay button
+/// with it, so it is the CTA colour ([AppColors.mirageRed]), not royalGold.
+/// Derived from the token so the hex lives only in app_colors.dart.
+final String kCheckoutThemeColor =
+    '#${(AppColors.mirageRed.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0').toUpperCase()}';
 
 /// What the SDK reported. Sealed so the notifier's switch is exhaustive.
 @immutable

@@ -84,7 +84,8 @@ Widget harness(
       overrides: [
         authProvider.overrideWith(_StubAuth.new),
         catalogProductsRepositoryProvider.overrideWithValue(repo),
-        catalogRepositoryProvider.overrideWithValue(grid.FakeCatalogRepository()),
+        catalogRepositoryProvider
+            .overrideWithValue(grid.FakeCatalogRepository()),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -132,6 +133,24 @@ List<String> itemIds(WidgetTester tester) {
 }
 
 void main() {
+  // The SORT / SHOW chips wrap rather than side-scroll, so on a narrow harness
+  // they take several lines and push the first cards below the default 800x600
+  // test view. A tall view keeps the cards on screen, where taps can reach them.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized()
+        .platformDispatcher
+        .implicitView!;
+    view.physicalSize = const Size(800, 1400);
+    view.devicePixelRatio = 1;
+  });
+  tearDown(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized()
+        .platformDispatcher
+        .implicitView!;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
+  });
+
   group('archive (feature 19)', () {
     testWidgets('removes the row optimistically and offers a real undo',
         (tester) async {

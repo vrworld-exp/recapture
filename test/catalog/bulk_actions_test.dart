@@ -132,6 +132,24 @@ BulkRepository repositoryOf(
     );
 
 void main() {
+  // The SORT / SHOW chips wrap rather than side-scroll, so on a narrow harness
+  // they take several lines and push the first cards below the default 800x600
+  // test view. A tall view keeps the cards on screen, where taps can reach them.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized()
+        .platformDispatcher
+        .implicitView!;
+    view.physicalSize = const Size(800, 1400);
+    view.devicePixelRatio = 1;
+  });
+  tearDown(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized()
+        .platformDispatcher
+        .implicitView!;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
+  });
+
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('per-item reporting', () {

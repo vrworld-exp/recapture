@@ -140,6 +140,34 @@ describe('POST /catalog/subscription/order', () => {
     expect(emitted('subscription_order_created').map((e) => e.reused)).toEqual([false, true]);
   });
 
+  it('retires an open order whose price no longer matches the catalog (testing prices flipped)', async () => {
+    const { owner, catalogId } = await delegated();
+    const first = await request(app)
+      .post(ORDER)
+      .set(owner.auth)
+      .send({ planId: 'TASTE', interval: 'MONTHLY' })
+      .expect(201);
+    expect(first.body.order.amountPaise).toBe(119_900);
+
+    vi.spyOn(env, 'SUBSCRIPTION_TESTING_PRICES', 'get').mockReturnValue(true);
+    const second = await request(app)
+      .post(ORDER)
+      .set(owner.auth)
+      .send({ planId: 'TASTE', interval: 'MONTHLY' });
+
+    expect(second.status).toBe(201);
+    expect(second.body.order.providerOrderId).not.toBe(first.body.order.providerOrderId);
+    expect(second.body.order.amountPaise).toBe(env.SUBSCRIPTION_TESTING_PRICE_TASTE_PAISE);
+
+    const old = await PaymentRecord.findOne({ providerOrderId: first.body.order.providerOrderId })
+      .lean()
+      .exec();
+    expect(old!.expiresAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(
+      await PaymentRecord.countDocuments({ catalogId, expiresAt: { $gt: new Date() } })
+    ).toBe(1);
+  });
+
   it('spends the rate window only on a FRESH order, never on a reuse (E8)', async () => {
     const { owner } = await delegated();
     for (let i = 0; i < 12; i++) {

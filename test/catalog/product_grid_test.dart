@@ -342,6 +342,24 @@ CatalogProductPage pageOf(List<CatalogProduct> items, {String? next}) =>
     CatalogProductPage(items: items, nextCursor: next);
 
 void main() {
+  // The SORT / SHOW chips wrap rather than side-scroll, so on a narrow harness
+  // they take several lines and push the first cards below the default 800x600
+  // test view. A tall view keeps the cards on screen, where taps can reach them.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized()
+        .platformDispatcher
+        .implicitView!;
+    view.physicalSize = const Size(800, 1400);
+    view.devicePixelRatio = 1;
+  });
+  tearDown(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized()
+        .platformDispatcher
+        .implicitView!;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
+  });
+
   group('column count comes from the constraints', () {
     // The rule under test is that a NARROW BROWSER WINDOW is a phone layout.
     // Nothing here knows or cares which platform it is on, which is the point —
@@ -1065,6 +1083,9 @@ void main() {
     Future<void> tapSort(WidgetTester tester, String name) async {
       final chip = find.byKey(ValueKey('catalog_sort_$name'));
       await tester.ensureVisible(chip);
+      // Let the scroll land: with the chips wrapped, a chip can sit above the
+      // viewport, and tapping before the jump settles misses it.
+      await tester.pumpAndSettle();
       await tester.tap(chip);
       await tester.pumpAndSettle();
     }

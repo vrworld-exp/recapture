@@ -10,6 +10,7 @@ import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
 import { createApp } from '@/app';
+import { env } from '@/config/env';
 import { ClientConfig } from '@/models/ClientConfig';
 import { DEFAULT_PLAN_CATALOG } from '@/config/subscriptionPlans';
 import { PLAN_CATALOG_STORE_KEY } from '@/services/subscription/planCatalogService';
@@ -62,6 +63,19 @@ describe('GET /remote-config — subscriptionPlans', () => {
       'TASTE',
     ]);
     expect(res.body.subscriptionPlans).toEqual(DEFAULT_PLAN_CATALOG);
+  });
+
+  it('an empty store still serves TESTING prices when SUBSCRIPTION_TESTING_PRICES is on', async () => {
+    // The fallback used to serve the raw DEFAULT_PLAN_CATALOG, so with no
+    // client_configs document the app showed ₹1,199 while checkout charged ₹3.
+    vi.spyOn(env, 'SUBSCRIPTION_TESTING_PRICES', 'get').mockReturnValue(true);
+    const res = await request(app).get('/remote-config');
+
+    expect(res.status).toBe(200);
+    expect(res.body.subscriptionPlans.testingPrices).toBe(true);
+    expect(res.body.subscriptionPlans.plans.TASTE.priceMonthlyPaise).toBe(
+      env.SUBSCRIPTION_TESTING_PRICE_TASTE_PAISE
+    );
   });
 
   it('a stored config without the key still serves the plans (from defaults)', async () => {

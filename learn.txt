@@ -91,8 +91,6 @@ thisnking to fix it --------------------->>>
 
 
 
-
-
 # Once you done with subcription and ready for prod.
 
     1. verify it every thing is working good and nothing get breaked now. Now tell me what envs i need to chnage or update to make it for production ready and where one frontend or on backend of recap or on mirage. and visiable otp section on otp fill screen should be hidded and actual otp should't get back by any req user making for login, req only return the status of otp it is send on mail or not and that should be shown on ui.

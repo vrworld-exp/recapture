@@ -99,7 +99,7 @@ class RazorpayWebCheckoutAdapter implements CheckoutAdapter {
       ..retry = (_RetryOptions()
         ..enabled = true
         ..maxCount = 3)
-      ..theme = (_ThemeOptions()..color = '#C9A24D')
+      ..theme = (_ThemeOptions()..color = kCheckoutThemeColor)
       ..handler = ((_SuccessResponse response) {
         final paymentId = response.paymentId;
         finish(paymentId == null || paymentId.isEmpty

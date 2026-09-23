@@ -447,7 +447,8 @@ class _CatalogBody extends ConsumerWidget {
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                        child: _PausedCard(onOpenSubscription: onOpenSubscription),
+                        child:
+                            _PausedCard(onOpenSubscription: onOpenSubscription),
                       ),
                     )
                   else if (catalog.subscription?.status ==
@@ -480,44 +481,60 @@ class _CatalogBody extends ConsumerWidget {
                     child: SizedBox(height: AppSpacing.xxl),
                   ),
                   SliverToBoxAdapter(
-                    // Wrap, not Row: a heading plus three buttons does not fit a
-                    // phone width, and an overflow stripe is not a header.
-                    child: Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      alignment: WrapAlignment.spaceBetween,
-                      children: [
-                        Text(
+                    // A heading plus three buttons does not fit a phone, and an
+                    // overflow stripe is not a header. Wide: one line, as ever.
+                    // Narrow: heading, then the actions on their own line, each
+                    // an equal third that scales its label down (never up), so
+                    // nothing runs past the edge at any width.
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final heading = Text(
                           'Products',
                           style: Theme.of(context).textTheme.headlineMedium,
-                        ),
+                        );
                         // Hidden while selecting: the selection bars own the
                         // screen's actions then, and these would compete with
                         // them for the same tap.
-                        if (!selecting)
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              TextButton.icon(
-                                icon: const Icon(Icons.checklist, size: 18),
-                                label: const Text('Select'),
-                                onPressed: onSelect,
-                              ),
-                              TextButton.icon(
-                                icon: const Icon(
-                                  Icons.category_outlined,
-                                  size: 18,
-                                ),
-                                label: const Text('Categories'),
-                                onPressed: onOpenCategories,
-                              ),
-                              TextButton.icon(
-                                icon: const Icon(Icons.add, size: 18),
-                                label: const Text('Add product'),
-                                onPressed: onAddProduct,
-                              ),
-                            ],
+                        if (selecting) return heading;
+                        final narrow =
+                            constraints.maxWidth < _kProductsHeaderOneLineMin;
+                        final actions = [
+                          _HeaderAction(
+                            icon: Icons.checklist,
+                            label: 'Select',
+                            onPressed: onSelect,
+                            expand: narrow,
                           ),
-                      ],
+                          _HeaderAction(
+                            icon: Icons.category_outlined,
+                            label: 'Categories',
+                            onPressed: onOpenCategories,
+                            expand: narrow,
+                          ),
+                          _HeaderAction(
+                            icon: Icons.add,
+                            label: 'Add product',
+                            onPressed: onAddProduct,
+                            expand: narrow,
+                          ),
+                        ];
+                        if (!narrow) {
+                          return Row(
+                            children: [
+                              Expanded(child: heading),
+                              ...actions,
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            heading,
+                            const SizedBox(height: AppSpacing.xs),
+                            Row(children: actions),
+                          ],
+                        );
+                      },
                     ),
                   ),
                   const SliverToBoxAdapter(
@@ -575,7 +592,8 @@ class _PaymentDueCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.timer_outlined, size: 20, color: AppColors.error),
+              const Icon(Icons.timer_outlined,
+                  size: 20, color: AppColors.error),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
                 child: Text(
@@ -1073,4 +1091,58 @@ class CatalogEntryAction extends StatelessWidget {
             color: AppColors.textSecondary),
         onPressed: () => context.goNamed(AppRouteNames.catalog),
       );
+}
+
+/// Below this width the Products heading and its three actions stop sharing a
+/// line (heading ≈150 + the three buttons ≈350 at default text scale).
+const double _kProductsHeaderOneLineMin = 520;
+
+/// One of the three actions beside / under the Products heading.
+///
+/// [expand] (the narrow layout) makes it an equal third of its row, with the
+/// label scaled down (never up) when that third is too narrow — so the row fits
+/// any width without clipping or an overflow stripe. Otherwise it is an
+/// ordinary icon button at its natural size.
+class _HeaderAction extends StatelessWidget {
+  const _HeaderAction({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    required this.expand,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!expand) {
+      return TextButton.icon(
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+        onPressed: onPressed,
+      );
+    }
+    return Expanded(
+      child: TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+        ),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18),
+              const SizedBox(width: AppSpacing.xs),
+              Text(label, maxLines: 1),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
