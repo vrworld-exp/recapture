@@ -205,15 +205,23 @@ class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
       );
 }
 
-Widget _harness(_FakeRepRepository repo, {bool online = true}) => ProviderScope(
+Widget _harness(
+  _FakeRepRepository repo, {
+  bool online = true,
+  bool startPublish = false,
+}) =>
+    ProviderScope(
       overrides: [
         authProvider.overrideWith(_StubAuth.new),
         repRepositoryProvider.overrideWithValue(repo),
         isOnlineProvider.overrideWithValue(online),
         catalogLinkActionsProvider.overrideWithValue(FakeLinkActions()),
       ],
-      child: const MaterialApp(
-        home: RepPublishScreen(catalogId: kCatalogId),
+      child: MaterialApp(
+        home: RepPublishScreen(
+          catalogId: kCatalogId,
+          startPublish: startPublish,
+        ),
       ),
     );
 
@@ -508,6 +516,105 @@ void main() {
     });
   });
 
+  // ── Both doors, one rule ──────────────────────────────────────────────────
+  //
+  // The rep's screen had its own copy of the auto-start latch, and its own copy
+  // of the same bug: a rep who tapped Publish from the dish list while a 3D
+  // model was still generating — the common case at a table — watched the
+  // checklist clear itself and nothing start.
+  group('Publish pressed while a model is still generating', () {
+    Map<String, dynamic> generating() => statusPayload(
+          gates: [
+            gatePayload(
+              code: 'PRODUCT_MODEL_NOT_READY',
+              message: '"Paneer Tikka" is still building its 3D model.',
+              productId: 'p1',
+              productName: 'Paneer Tikka',
+            ),
+          ],
+        );
+
+    testWidgets('stays armed and fires once the gate clears', (tester) async {
+      final repo = _FakeRepRepository(status: generating());
+
+      await tester.pumpWidget(_harness(repo, startPublish: true));
+      await tester.pumpAndSettle();
+      expect(repo.publishCalls, 0);
+
+      repo.setStatus(statusPayload());
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+
+      expect(repo.publishCalls, 1);
+
+      // Once, not once per build.
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pumpAndSettle();
+      expect(repo.publishCalls, 1);
+    });
+
+    testWidgets('spends the intent on a gate the rep must go and fix',
+        (tester) async {
+      final repo = _FakeRepRepository(
+        status: statusPayload(
+          gates: [
+            gatePayload(
+              code: 'CATALOG_EMPTY',
+              message: 'Add at least one dish before publishing.',
+            ),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(_harness(repo, startPublish: true));
+      await tester.pumpAndSettle();
+
+      repo.setStatus(statusPayload());
+      await _notifierOf(tester).refresh();
+      await tester.pumpAndSettle();
+
+      expect(repo.publishCalls, 0);
+    });
+  });
+
+  group('a run that failed with nothing to blame', () {
+    testWidgets('says so in the rep’s words, with a way to try again',
+        (tester) async {
+      final repo = _FakeRepRepository(
+        status: statusPayload(
+          run: runPayload(
+            state: 'FAILED',
+            total: 12,
+            synced: 0,
+            failed: 1,
+            error: {
+              'code': 'PUBLISH_RESTAURANT_UNAVAILABLE',
+              'message': 'internal prose nobody should read',
+            },
+          ),
+          products: [
+            productPayload(id: 'p1', name: 'Dal Fry', syncStatus: 'NEVER'),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(_harness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('publish_run_failure')), findsOneWidget);
+      // The rep's voice: a restaurant a rep is standing in is not "your
+      // catalog".
+      expect(find.text('The menu did not go live'), findsOneWidget);
+      expect(find.textContaining('internal prose'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('publish_run_failure_retry')));
+      await tester.pumpAndSettle();
+
+      expect(repo.publishCalls, 1);
+      expect(repo.retryCalls, 0);
+    });
+  });
+
   group('what the rep is not offered', () {
     testWidgets('no "take offline", even on a live menu', (tester) async {
       final repo = _FakeRepRepository(
@@ -628,15 +735,20 @@ void main() {
       repo.setStatus(statusPayload(
         status: 'PUBLISHED',
         publicUrl: 'https://menu.example.com/abc',
-        run: runPayload(state: 'PARTIAL', total: 10, synced: 7, failed: 3),
+        // The run's `counts` are PLAN STEP counts — they include the restaurant
+        // and one per section — so the toast counts the ROWS instead, which is
+        // what the retry list below it actually holds. Ten dishes, three of
+        // them failed.
+        run: runPayload(state: 'PARTIAL', total: 12, synced: 8, failed: 3),
         products: [
-          productPayload(id: 'p1', name: 'soup'),
-          productPayload(
-            id: 'p2',
-            name: 'steak',
-            syncStatus: 'FAILED',
-            code: 'PUBLISH_UPSTREAM_TIMEOUT',
-          ),
+          for (var i = 0; i < 7; i++) productPayload(id: 'ok$i', name: 'soup $i'),
+          for (var i = 0; i < 3; i++)
+            productPayload(
+              id: 'bad$i',
+              name: 'steak $i',
+              syncStatus: 'FAILED',
+              code: 'PUBLISH_UPSTREAM_TIMEOUT',
+            ),
         ],
       ));
       // The poll lands, the status resolves, the listener speaks, the toast

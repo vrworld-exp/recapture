@@ -14,12 +14,19 @@
 // the create returns and (b) reconciling when even that was too late. The test
 // below kills the process in exactly that window.
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import mongoose from 'mongoose';
+import request from 'supertest';
+import mongoose, { Types } from 'mongoose';
+import jwt from 'jsonwebtoken';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 
+import { createApp } from '@/app';
+import { env } from '@/config/env';
 import { Catalog } from '@/models/Catalog';
+import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun } from '@/models/CatalogPublishRun';
+import { Job } from '@/models/Job';
+import { User } from '@/models/User';
 import { resetAssetUploader } from '@/services/catalog/assetUploader';
 import { categoryExecutor } from '@/services/catalog/categorySync';
 import {
@@ -39,9 +46,25 @@ import {
   type PublishFixture,
 } from './fixtures/publishHarness';
 
+const app = createApp();
 let mongod: MongoMemoryServer;
 const mirage = new FakeMirage();
 let restaurantId: string;
+
+type Auth = { Authorization: string };
+
+/** A signed-in user, for the HTTP-level describe at the bottom. */
+async function makeUser(): Promise<{ id: string; auth: Auth }> {
+  const user = await User.create({
+    authProvider: 'custom',
+    authUid: `test|${new Types.ObjectId().toHexString()}`,
+  });
+  const id = user.id as string;
+  const token = jwt.sign({ userId: id, authUid: user.authUid }, env.JWT_SECRET, {
+    expiresIn: '15m',
+  });
+  return { id, auth: { Authorization: `Bearer ${token}` } };
+}
 
 /** The restaurant is already provisioned; B4 owns the step that mints it. */
 const provisionedRestaurant: PublishStepExecutor = async (_step, context) => {
@@ -52,6 +75,10 @@ const provisionedRestaurant: PublishStepExecutor = async (_step, context) => {
 beforeAll(async () => {
   mongod = await MongoMemoryServer.create();
   await mongoose.connect(mongod.getUri());
+  // WITHOUT THIS the replay describe below tests nothing: the unique partial
+  // index on {userId, idempotencyKey} is the race authority, and an in-memory
+  // database that never built it lets a second run be created happily.
+  await CatalogPublishRun.syncIndexes();
 });
 
 afterAll(async () => {
@@ -63,6 +90,14 @@ beforeEach(() => {
   mirage.reset();
   restaurantId = mirage.seedRestaurant('blue_cafe').id;
   setMirageClient(mirage);
+  // The HTTP describe publishes through the real route, whose gates refuse a
+  // deployment with no Mirage configured.
+  Object.assign(env, {
+    MIRAGE_BASE_URL: 'https://mirage.test',
+    MIRAGE_API_KEY: 'test-api-key',
+    MIRAGE_ADMIN_TOKEN: 'test-admin-token',
+    MIRAGE_PUBLIC_BASE_URL: 'https://menu.test',
+  });
   stubAssetUploader();
   setPublishExecutors({
     RESTAURANT: provisionedRestaurant,
@@ -76,6 +111,11 @@ beforeEach(() => {
 
 afterEach(async () => {
   await clearCatalogCollections();
+  await Promise.all([
+    User.deleteMany({}),
+    Job.deleteMany({}),
+    mongoose.connection.collection('ratewindows').deleteMany({}),
+  ]);
   resetMirageClient();
   resetAssetUploader();
   resetPublishExecutors();
@@ -288,5 +328,159 @@ describe('the whole run', () => {
     expect(catalog?.publishedRevision).toBe(-1);
     // The lock is released on every terminal path, PARTIAL included.
     expect(catalog?.activePublishRunId).toBeNull();
+  });
+});
+
+// ── The KEY, at the HTTP boundary ───────────────────────────────────────────
+//
+// The suite above is about Mirage's missing idempotency. This one is about
+// OURS: the `{userId, idempotencyKey}` unique index whose own comment has
+// always claimed "a double-tap's E11000 is resolved to a replay of the winner",
+// while nothing in the code did that. A replayed key reached `create`, lost to
+// the index and left the service as a 500 — and the client keeps a key across a
+// 5xx on purpose, so the SAME key went back on the next press, and every press
+// after that was the same 500 for the life of the screen.
+describe('POST /catalog/publish — a replayed Idempotency-Key', () => {
+  async function publishable(userId: string): Promise<Types.ObjectId> {
+    const restaurant = mirage.seedRestaurant(`cafe_${Date.now()}`);
+    const catalog = await Catalog.create({
+      userId: new Types.ObjectId(userId),
+      name: 'Blue Cafe',
+      status: 'DRAFT',
+      draftRevision: 1,
+      publishedRevision: -1,
+      mirageRestaurantId: restaurant.id,
+      publicUrl: `https://menu.test/${restaurant.id}`,
+      publicUrlScheme: 'MIRAGE_OBJECT_ID',
+    });
+    const catalogId = catalog._id as mongoose.Types.ObjectId;
+    const category = await CatalogCategory.create({
+      catalogId,
+      userId: new Types.ObjectId(userId),
+      name: 'menu',
+      position: 0,
+    });
+    await CatalogProduct.create({
+      catalogId,
+      userId: new Types.ObjectId(userId),
+      type: 'IMAGE_ONLY',
+      name: 'Chair',
+      position: 0,
+      categoryId: category._id,
+      assets: { imageKey: 'dev/catalog/x/products/p/0.jpg' },
+    });
+    return catalogId;
+  }
+
+  /** Finishes the run and drops the lock, as the worker's finalize would. */
+  async function settle(catalogId: mongoose.Types.ObjectId, runId: string): Promise<void> {
+    await CatalogPublishRun.updateOne(
+      { _id: new mongoose.Types.ObjectId(runId) },
+      { $set: { state: 'SUCCEEDED', finishedAt: new Date() } }
+    ).exec();
+    await Catalog.updateOne({ _id: catalogId }, { $set: { activePublishRunId: null } }).exec();
+  }
+
+  it('answers 200 replayed with the first run, and creates no second run', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await publishable(id);
+
+    const first = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k1')
+      .send({});
+    expect(first.status).toBe(202);
+    await settle(catalogId, first.body.runId);
+
+    const replay = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k1')
+      .send({});
+
+    // 200, NOT 202: nothing was queued by this request.
+    expect(replay.status).toBe(200);
+    expect(replay.body).toMatchObject({
+      status: 'success',
+      runId: first.body.runId,
+      queued: false,
+      replayed: true,
+    });
+    expect(await CatalogPublishRun.countDocuments({ idempotencyKey: 'k1' })).toBe(1);
+  });
+
+  it('is what the second device sees while the first one is still watching', async () => {
+    const { id, auth } = await makeUser();
+    await publishable(id);
+
+    const first = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k2')
+      .send({});
+    // No settle: the run still holds the lock, so the in-progress check answers
+    // first and this never reaches `create`. Either way the answer names the
+    // one run, which is the property that matters.
+    const second = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k2')
+      .send({});
+
+    expect(second.body.runId).toBe(first.body.runId);
+    expect(await CatalogPublishRun.countDocuments({ idempotencyKey: 'k2' })).toBe(1);
+  });
+
+  it('starts a new run when the run the key owned has been pruned away', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await publishable(id);
+
+    const first = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k3')
+      .send({});
+    await settle(catalogId, first.body.runId);
+    // pruneRunHistory, or a manual clean-up.
+    await CatalogPublishRun.deleteOne({
+      _id: new mongoose.Types.ObjectId(first.body.runId),
+    }).exec();
+
+    const replay = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k3')
+      .send({});
+
+    // NO WEDGE. A partial index indexes DOCUMENTS, so deleting the run frees
+    // its key with it — the create simply succeeds and the user gets the
+    // publish they pressed. The `!existing` rethrow in `openRun` covers only
+    // the genuine race (the document deleted between our failed create and our
+    // read of it), which is why the client also retires its key on a
+    // pull-to-refresh: one press recovers a screen, whatever wedged it.
+    expect(replay.status).toBe(202);
+    expect(replay.body.runId).not.toBe(first.body.runId);
+  });
+
+  it('starts a fresh run under a different key', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await publishable(id);
+
+    const first = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k4')
+      .send({});
+    await settle(catalogId, first.body.runId);
+
+    const second = await request(app)
+      .post('/catalog/publish')
+      .set(auth)
+      .set('Idempotency-Key', 'k5')
+      .send({});
+
+    expect(second.status).toBe(202);
+    expect(second.body.runId).not.toBe(first.body.runId);
   });
 });

@@ -675,6 +675,313 @@ void main() {
     });
   });
 
+  // ── The run failed and no ROW can say why ─────────────────────────────────
+  //
+  // A run that fails at the RESTAURANT step aborts before a single product is
+  // attempted, so nothing is marked FAILED — and the failure card (which
+  // renders rows) and the success card (which needs the catalog live) were both
+  // correctly skipped. The screen went back to its resting state, re-enabled
+  // the button, and said nothing at all. The user pressed Publish and was told
+  // neither that it worked nor that it did not.
+  group('a run-level failure', () {
+    Map<String, dynamic> failedRun({
+      String code = 'PUBLISH_RESTAURANT_UNAVAILABLE',
+      String? suggestedName,
+      String state = 'FAILED',
+      String message = 'E11000 duplicate key error collection: mirage.items',
+    }) =>
+        statusPayload(
+          run: runPayload(
+            state: state,
+            total: 12,
+            synced: 0,
+            failed: 1,
+            error: {
+              'code': code,
+              'message': message,
+              if (suggestedName != null) 'suggestedName': suggestedName,
+            },
+          ),
+          // Live, untouched rows: the run never got far enough to fail one.
+          products: [
+            productPayload(id: 'p1', name: 'Soup', syncStatus: 'NEVER'),
+            productPayload(id: 'p2', name: 'Steak', syncStatus: 'NEVER'),
+          ],
+        );
+
+    testWidgets('is shown, with a reason and a way to try again',
+        (tester) async {
+      final repo = FakePublishRepository(status: failedRun());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('publish_run_failure')), findsOneWidget);
+      expect(find.textContaining('Nothing could be published'), findsOneWidget);
+      // NOT the per-row card — there are no rows to retry, and "Retry failed"
+      // would answer NOTHING_TO_RETRY, which reads as a success.
+      expect(find.byKey(const ValueKey('publish_failure_headline')), findsNothing);
+      expect(find.byKey(const ValueKey('publish_retry_failed')), findsNothing);
+      expect(find.text('Live on Mirage'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('publish_run_failure_retry')));
+      await tester.pumpAndSettle();
+
+      // Publish, not retry: a new run, not a re-run of rows nobody attempted.
+      expect(repo.publishCalls, 1);
+      expect(repo.retryCalls, 0);
+    });
+
+    testWidgets('never renders the server’s own message', (tester) async {
+      const prose = 'E11000 duplicate key error collection: mirage.items';
+      final repo = FakePublishRepository(status: failedRun(message: prose));
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('E11000'), findsNothing);
+      expect(find.textContaining(prose), findsNothing);
+    });
+
+    testWidgets('degrades to the generic sentence on a code we have never seen',
+        (tester) async {
+      final repo = FakePublishRepository(
+        status: failedRun(code: 'PUBLISH_SOMETHING_INVENTED_NEXT_QUARTER'),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('publish_run_failure')), findsOneWidget);
+      expect(find.textContaining('Something went wrong'), findsOneWidget);
+      expect(find.textContaining('E11000'), findsNothing);
+    });
+
+    testWidgets('a name collision found mid-run offers the same rename',
+        (tester) async {
+      final repo = FakePublishRepository(
+        status: failedRun(code: 'CATALOG_NAME_TAKEN', suggestedName: 'blue_cafe_2'),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      // The rename card, not the dead end — the same one a synchronous 409
+      // produces, because the way out is the same.
+      expect(find.byKey(const ValueKey('publish_name_taken')), findsOneWidget);
+      expect(find.byKey(const ValueKey('publish_run_failure')), findsNothing);
+      expect(find.textContaining('blue_cafe_2'), findsWidgets);
+    });
+
+    testWidgets('a collision with NO suggestion falls back to the plain card',
+        (tester) async {
+      // A run document written before `suggestedName` existed.
+      final repo =
+          FakePublishRepository(status: failedRun(code: 'CATALOG_NAME_TAKEN'));
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      // A rename card with an empty name in its button is worse than none.
+      expect(find.byKey(const ValueKey('publish_name_taken')), findsNothing);
+      expect(find.byKey(const ValueKey('publish_run_failure')), findsOneWidget);
+      expect(find.textContaining('Another business'), findsOneWidget);
+    });
+
+    testWidgets('does not appear for a PARTIAL run — the rows explain that one',
+        (tester) async {
+      final repo = FakePublishRepository(
+        status: statusPayload(
+          status: 'PUBLISHED',
+          run: runPayload(state: 'PARTIAL', total: 10, synced: 7, failed: 3),
+          products: [
+            productPayload(id: 'ok', name: 'Fine'),
+            productPayload(
+              id: 'bad',
+              name: 'Broken',
+              syncStatus: 'FAILED',
+              code: 'PUBLISH_UPSTREAM_TIMEOUT',
+            ),
+          ],
+        ),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('publish_failure_headline')), findsOneWidget);
+      expect(find.byKey(const ValueKey('publish_retry_failed')), findsOneWidget);
+      expect(find.byKey(const ValueKey('publish_run_failure')), findsNothing);
+    });
+
+    testWidgets('does not appear on a SUCCEEDED run carrying a stale error',
+        (tester) async {
+      final repo = FakePublishRepository(
+        status: statusPayload(
+          status: 'PUBLISHED',
+          publicUrl: 'https://menu.example.com/abc',
+          lastPublishedAt: '2026-08-23T09:00:00.000Z',
+          run: runPayload(
+            state: 'SUCCEEDED',
+            total: 2,
+            synced: 2,
+            error: {'code': 'PUBLISH_STEP_FAILED', 'message': 'from last time'},
+          ),
+          products: [productPayload(id: 'p1', name: 'Soup')],
+        ),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('publish_run_failure')), findsNothing);
+      expect(find.text('Live on Mirage'), findsOneWidget);
+    });
+
+    testWidgets('the finish toast does not point at a retry list that is not there',
+        (tester) async {
+      final repo = FakePublishRepository(
+        status: statusPayload(
+          activeRunId: 'run-1',
+          run: runPayload(state: 'RUNNING', total: 12, synced: 0),
+          products: [productPayload(id: 'p1', name: 'Soup', syncStatus: 'NEVER')],
+        ),
+      );
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+
+      repo.setStatus(failedRun());
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(find.textContaining('Publishing could not finish'), findsOneWidget);
+      // The old sentence counted PLAN STEPS — "1 of 12 could not be published"
+      // over a ten-product catalog — and sent the user to a card that is not
+      // rendered, for a retry that would answer NOTHING_TO_RETRY.
+      expect(find.textContaining('Retry them below'), findsNothing);
+      expect(find.textContaining('of 12'), findsNothing);
+
+      await tester.pumpAndSettle();
+    });
+  });
+
+  // ── A dropped READ is not a failed PUBLISH ────────────────────────────────
+  group('a failing poll', () {
+    Map<String, dynamic> running() => statusPayload(
+          activeRunId: 'run-1',
+          run: runPayload(state: 'RUNNING', total: 10, synced: 4),
+          products: [productPayload(id: 'p1', name: 'Soup', syncStatus: 'PENDING')],
+        );
+
+    testWidgets('says so inline and never toasts a publish failure',
+        (tester) async {
+      final repo = FakePublishRepository(status: running());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+
+      repo.statusFailure = const CatalogFailure(
+        code: 'OFFLINE',
+        message: 'offline',
+        isOffline: true,
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('publish_poll_stale_note')), findsOneWidget);
+      // THE BUG: a flaky poll during a healthy run announced "Your catalog
+      // could not be published" over a progress bar that was still moving.
+      expect(find.textContaining('could not be published'), findsNothing);
+      // The run the user is watching survives.
+      expect(find.text('4 of 10 published'), findsOneWidget);
+
+      repo.statusFailure = null;
+      repo.setStatus(running());
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('publish_poll_stale_note')), findsNothing);
+
+      repo.setStatus(statusPayload(
+        status: 'PUBLISHED',
+        run: runPayload(state: 'SUCCEEDED', total: 10, synced: 10),
+      ));
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('stops for good on a 404, and says a refresh is the way back',
+        (tester) async {
+      final repo = FakePublishRepository(status: running());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+
+      // The catalog was deleted in another tab. Asking again every eight
+      // seconds for the life of the screen gets the same answer every time.
+      repo.statusFailure = const CatalogFailure(
+        code: 'CATALOG_NOT_FOUND',
+        message: 'gone',
+        statusCode: 404,
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('publish_poll_stopped_note')), findsOneWidget);
+
+      final settled = repo.statusCalls;
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(seconds: 10));
+      }
+      expect(repo.statusCalls, settled, reason: 'the timer is gone, not merely slow');
+      // No `pumpAndSettle` here on purpose: the run card is still on screen
+      // with its indeterminate progress bar, which never settles. That there
+      // are no PENDING TIMERS left is what this test is about, and the
+      // framework's own teardown check is what asserts it.
+    });
+
+    testWidgets('gives up after ten in a row, and a refresh resumes it',
+        (tester) async {
+      final repo = FakePublishRepository(status: running());
+
+      await tester.pumpWidget(harness(repo));
+      await tester.pump();
+
+      // 503s are about the MOMENT, not about the request, so they keep backing
+      // off — until the cap, which is the backstop for a server that will
+      // never answer.
+      repo.statusFailure = const CatalogFailure(
+        code: 'INTERNAL_ERROR',
+        message: 'upstream',
+        statusCode: 503,
+      );
+      for (var i = 0; i < 30; i++) {
+        await tester.pump(const Duration(seconds: 10));
+      }
+
+      expect(find.byKey(const ValueKey('publish_poll_stopped_note')), findsOneWidget);
+      final capped = repo.statusCalls;
+      await tester.pump(const Duration(seconds: 30));
+      expect(repo.statusCalls, capped);
+
+      // A pull-to-refresh is a deliberate "start over" and reopens the window.
+      repo.statusFailure = null;
+      await notifierOf(tester).refresh();
+      await tester.pump();
+
+      expect(find.byKey(const ValueKey('publish_poll_stopped_note')), findsNothing);
+      expect(repo.statusCalls, greaterThan(capped));
+
+      repo.setStatus(statusPayload(
+        status: 'PUBLISHED',
+        run: runPayload(state: 'SUCCEEDED', total: 10, synced: 10),
+      ));
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pumpAndSettle();
+    });
+  });
+
   group('pressing Publish', () {
     FakePublishRepository ready() => FakePublishRepository(
           status: statusPayload(

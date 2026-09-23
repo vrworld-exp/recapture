@@ -183,13 +183,31 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   ///
   /// WITH THE START FLAG: the header button says Publish, so the screen it
   /// opens starts the run rather than asking again — see kPublishStartQuery.
+  /// ONE GESTURE, ONE SCREEN. [AppButton] disables itself only while it is
+  /// LOADING, and opening a route is not loading — so two taps in one frame
+  /// pushed two publish screens, each with its own auto-start (the second
+  /// answering 409) and its own poll loop against one endpoint, with Back
+  /// landing on the duplicate. The guard is here rather than inside
+  /// [AppButton]: a debounce baked into the shared button would change every
+  /// button in the app.
+  ///
+  /// No `setState` — nothing renders from this flag, and rebuilding the header
+  /// on a navigation is waste.
+  bool _openingPublish = false;
+
   Future<void> _openPublish() async {
-    await context.pushNamed(
-      AppRouteNames.catalogPublish,
-      queryParameters: {kPublishStartQuery: '1'},
-    );
-    if (!mounted) return;
-    await ref.read(catalogProvider.notifier).refresh();
+    if (_openingPublish) return;
+    _openingPublish = true;
+    try {
+      await context.pushNamed(
+        AppRouteNames.catalogPublish,
+        queryParameters: {kPublishStartQuery: '1'},
+      );
+      if (!mounted) return;
+      await ref.read(catalogProvider.notifier).refresh();
+    } finally {
+      if (mounted) _openingPublish = false;
+    }
   }
 
   /// Opens the QR screen. Offered whenever the catalog has been provisioned —

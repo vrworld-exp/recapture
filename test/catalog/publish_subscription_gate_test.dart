@@ -29,6 +29,7 @@ import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_link_service.dart';
 import 'package:recapture/application/catalog/checkout_adapter.dart';
 import 'package:recapture/application/catalog/checkout_notifier.dart';
+import 'package:recapture/application/catalog/publish_notifier.dart';
 import 'package:recapture/application/catalog/subscription_notifier.dart';
 import 'package:recapture/application/connectivity/connectivity_providers.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
@@ -333,6 +334,76 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(repo.publishCalls, 1);
+    });
+  });
+
+  // ── The intent survives a gate that clears ITSELF ─────────────────────────
+  //
+  // The subscription was the only blocker that left the intent armed. So a user
+  // who tapped Publish from the catalog while a 3D preview was still rendering
+  // watched the checklist empty itself over two minutes, saw the button quietly
+  // enable, and nothing ever started — the press was spent on the first status
+  // read that happened to carry a gate.
+  group('press Publish while something is still generating', () {
+    Map<String, dynamic> generating() => statusPayload(
+          gates: [
+            gatePayload(
+              code: 'PRODUCT_THUMBNAIL_MISSING',
+              message: '"Chair" is still generating its preview image.',
+              productId: 'p1',
+              productName: 'Chair',
+            ),
+          ],
+        );
+
+    testWidgets('stays armed, then fires ONCE the moment the gate clears',
+        (tester) async {
+      final repo = FakePublishRepository(status: generating())
+        ..subscriptionPayload = subscriptionPayloadFor(status: 'ACTIVE');
+
+      await tester.pumpWidget(harness(repo, startPublish: true));
+      await tester.pumpAndSettle();
+      expect(repo.publishCalls, 0, reason: 'nothing to publish yet');
+
+      // The preview finished. The screen's own gate wait is what notices.
+      repo.setStatus(statusPayload());
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+
+      expect(repo.publishCalls, 1);
+
+      // ONCE. A second look would republish after a run the user watched
+      // finish, or after they had cancelled.
+      repo.setStatus(statusPayload());
+      await tester.pump(const Duration(seconds: 10));
+      await tester.pumpAndSettle();
+      expect(repo.publishCalls, 1);
+    });
+
+    testWidgets('spends the intent on a gate fixed on ANOTHER screen',
+        (tester) async {
+      final repo = FakePublishRepository(
+        status: statusPayload(
+          gates: [
+            gatePayload(
+              code: 'CATALOG_NO_CATEGORIES',
+              message: 'Create a section before publishing.',
+            ),
+          ],
+        ),
+      )..subscriptionPayload = subscriptionPayloadFor(status: 'ACTIVE');
+
+      await tester.pumpWidget(harness(repo, startPublish: true));
+      await tester.pumpAndSettle();
+      expect(repo.publishCalls, 0);
+
+      // Coming back from the category manager to find a publish already
+      // running would be a surprise, so this one is spent on sight.
+      repo.setStatus(statusPayload());
+      await _containerOf(tester).read(publishProvider.notifier).refresh();
+      await tester.pumpAndSettle();
+
+      expect(repo.publishCalls, 0);
     });
   });
 

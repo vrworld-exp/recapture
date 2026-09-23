@@ -151,6 +151,22 @@ function invalidCode(res: Response): void {
 }
 
 /**
+ * A publish/retry 429, with the wait — the OWNER's `rateLimited`, byte for
+ * byte, for the same reason the rest of this pair matches: a rep and an owner
+ * refused for the same catalog must be told the same thing, including how long
+ * to wait. Header and envelope both; seconds, never an HTTP-date.
+ */
+function repRateLimited(res: Response, retryAfter: number): void {
+  res.setHeader('Retry-After', String(retryAfter));
+  res.status(429).json({
+    status: 'error',
+    code: 'RATE_LIMITED',
+    message: 'Too many requests. Please try again shortly.',
+    retryAfter,
+  });
+}
+
+/**
  * The ONE mapping from a trial-start result to a response, shared by the rep
  * and admin doors so the two can never disagree about a 409's code or
  * sentence. The sentences are the client's copy for the refusal dialogs.
@@ -1482,9 +1498,7 @@ router.post(
       env.PUBLISH_MAX_PER_WINDOW,
       env.PUBLISH_WINDOW_SECONDS
     );
-    if (rate.limited) {
-      return fail(res, 429, 'RATE_LIMITED', 'Too many requests. Please try again shortly.');
-    }
+    if (rate.limited) return repRateLimited(res, rate.retryAfter);
 
     // The same header the owner's route honours, for the same lost-202 case:
     // the run was enqueued, the response never arrived, and the rep presses
@@ -1523,9 +1537,7 @@ router.post(
       env.PUBLISH_RETRY_MAX_PER_WINDOW,
       env.PUBLISH_WINDOW_SECONDS
     );
-    if (rate.limited) {
-      return fail(res, 429, 'RATE_LIMITED', 'Too many requests. Please try again shortly.');
-    }
+    if (rate.limited) return repRateLimited(res, rate.retryAfter);
 
     const result = await requestRetry(ownerUserId);
     return respondToRepPublishRequest(res, catalogId, ownerUserId, 'RETRY_FAILED', result);
@@ -1606,6 +1618,17 @@ function respondToRepPublishRequest(
       // A retry with nothing failed is the state the rep asked for — a 200
       // with no run, exactly as the owner's route answers it.
       res.status(200).json({ status: 'success', runId: null, queued: false });
+      return;
+
+    case 'REPLAYED':
+      // Byte-identical to the owner's answer, for the reason the whole of this
+      // function exists. See `respondToPublishRequest`.
+      res.status(200).json({
+        status: 'success',
+        runId: result.run.runId,
+        queued: false,
+        replayed: true,
+      });
       return;
 
     case 'QUEUED':

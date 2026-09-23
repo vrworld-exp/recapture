@@ -209,6 +209,87 @@ describe('POST /catalog/unpublish', () => {
     expect(res.body.code).toBe('PUBLISH_IN_PROGRESS');
   });
 
+  /**
+   * Arms the race the rollback exists for.
+   *
+   * The lock has to be taken AFTER `requestUnpublish`'s own in-progress check
+   * and BEFORE `openRun`'s conditional update — seeding it beforehand only
+   * reproduces the 409 above, which returns before anything destructive
+   * happens. The first `updateRestaurant` (the flip to dark) sits exactly in
+   * that window, so claiming the catalog from inside it IS the race, without a
+   * second process.
+   */
+  async function claimDuringTheFlip(
+    userId: string,
+    catalogId: Types.ObjectId
+  ): Promise<void> {
+    const job = await Job.create({
+      userId: new Types.ObjectId(userId),
+      jobType: 'MIRAGE_CATALOG_PUBLISH',
+      state: 'QUEUED',
+    });
+    const winner = await CatalogPublishRun.create({
+      catalogId,
+      userId: new Types.ObjectId(userId),
+      jobId: job._id,
+      snapshotRevision: 1,
+      mode: 'FULL',
+      state: 'QUEUED',
+    });
+
+    const real = mirage.updateRestaurant.bind(mirage);
+    let claimed = false;
+    vi.spyOn(mirage, 'updateRestaurant').mockImplementation(async (rid, input) => {
+      if (!claimed) {
+        claimed = true;
+        await Catalog.updateOne(
+          { _id: catalogId },
+          { $set: { activePublishRunId: winner._id } }
+        ).exec();
+      }
+      return real(rid, input);
+    });
+  }
+
+  it('puts the catalog and the page back when no run could be queued', async () => {
+    const { id, auth } = await makeUser();
+    const { catalogId, restaurantId } = await seedPublished(id);
+    await claimDuringTheFlip(id, catalogId);
+
+    const res = await request(app).post('/catalog/unpublish').set(auth).send({});
+
+    expect(res.status).toBe(409);
+    // THE STATE NOTHING ELSE REPAIRS is a page left dark with no run to finish
+    // the job: the catalog reads UNPUBLISHED, the items are still live over
+    // there, and the user has no reason to think Publish is the way out. Both
+    // halves of the destructive write are compensated.
+    expect((await Catalog.findById(catalogId).lean().exec())?.status).toBe('PUBLISHED');
+    expect(mirage.restaurants.get(restaurantId)?.isPublished).toBe(true);
+    // Flipped off, then back on.
+    expect(mirage.callsTo('updateRestaurant')).toHaveLength(2);
+  });
+
+  it('still answers 409 when the rollback’s own Mirage call fails', async () => {
+    const { id, auth } = await makeUser();
+    const { catalogId } = await seedPublished(id);
+    await claimDuringTheFlip(id, catalogId);
+    // The restore is the SECOND updateRestaurant; the flip to dark is the
+    // first and must be allowed through, or nothing destructive happens and
+    // there is nothing to roll back.
+    mirage.failNext({ method: 'updateRestaurant', status: 500, message: 'boom' });
+    mirage.failNext({ method: 'updateRestaurant', status: 500, message: 'boom' });
+
+    const res = await request(app).post('/catalog/unpublish').set(auth).send({});
+
+    // Swallowed and logged, never thrown: a Mirage that refuses the restore
+    // leaves the page dark, which is recoverable by publishing — whereas
+    // throwing here would leave the caller with no answer at all. The half of
+    // the rollback that DID land (the status) is what tells the user which
+    // button to press.
+    expect(res.status).toBe(409);
+    expect((await Catalog.findById(catalogId).lean().exec())?.status).toBe('PUBLISHED');
+  });
+
   it('proceeds with the item removal even when Mirage refuses the flag', async () => {
     const { id, auth } = await makeUser();
     const { catalogId } = await seedPublished(id);

@@ -66,11 +66,14 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
     SubscriptionPublishCheck subscription,
   ) {
     if (!widget.startPublish || _autoStartDecided) return;
-    if (!state.status.hasValue) return;
-    // Stays ARMED through an unsettled or blocking subscription verdict, for
-    // the owner's reason: a rep who starts the trial on the restaurant's card
-    // and walks back expects the publish they pressed, not a second press.
-    if (!subscription.isSettled || subscription.blocks) return;
+    // The OWNER's rule, from the one place it lives — stays ARMED through an
+    // unsettled or blocking subscription verdict (a rep who starts the trial on
+    // the restaurant's card and walks back expects the publish they pressed)
+    // and through gates that clear themselves while the rep watches (a dish's
+    // 3D model still generating, which is the common case at a table).
+    if (!publishAutoStartSettled(state: state, subscription: subscription)) {
+      return;
+    }
     _autoStartDecided = true;
     if (!publishAutoStartReady(
       state: state,

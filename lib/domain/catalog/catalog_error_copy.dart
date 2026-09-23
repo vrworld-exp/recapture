@@ -297,14 +297,44 @@ CatalogErrorCopy? catalogErrorCopyOrNull(String? code) {
 CatalogErrorCopy catalogErrorCopy(String? code) =>
     catalogErrorCopyOrNull(code) ?? kCatalogUnknownError;
 
+/// "Try again in about 2 minutes." — the REAL wait, when a 429 named one.
+///
+/// The `RATE_LIMITED` entry above says "wait a moment", which is true of a
+/// two-second window and a lie about a two-minute one; the publish window is
+/// the second kind. Null when the server did not say, and the table's own
+/// sentence stands — a made-up number is worse than a vague one.
+///
+/// Rounded, never counted down: whole minutes above 90 s, whole seconds below.
+/// A live countdown is a different feature with a timer to own, and the header
+/// is a single value read once.
+String? retryAfterAction(int? seconds) {
+  if (seconds == null || seconds <= 0) return null;
+  if (seconds > 90) {
+    final minutes = (seconds / 60).round();
+    return 'Try again in about $minutes ${minutes == 1 ? 'minute' : 'minutes'}.';
+  }
+  return 'Try again in about $seconds ${seconds == 1 ? 'second' : 'seconds'}.';
+}
+
 /// The whole thing as one line: what failed, why, and what to do.
 ///
 /// [subject] names the object and the attempt — "Chair 02 could not be
 /// archived". Without it the user is left to guess which of the two things they
 /// just did is the one that failed.
-String catalogErrorSentence(String? code, {String? subject}) {
+///
+/// [actionOverride] replaces the table's next-action clause where the SERVER
+/// told us something more specific than the table could know — today that is
+/// only a 429's wait (see [retryAfterAction]). It is an action, never a
+/// message: the "what happened" half still comes from the code, so this cannot
+/// become a path for upstream prose.
+String catalogErrorSentence(
+  String? code, {
+  String? subject,
+  String? actionOverride,
+}) {
   final copy = catalogErrorCopy(code);
   final lead = subject == null || subject.isEmpty ? '' : '$subject. ';
-  final action = copy.action == null ? '' : ' ${copy.action}';
+  final next = actionOverride ?? copy.action;
+  final action = next == null ? '' : ' $next';
   return '$lead${copy.message}$action';
 }

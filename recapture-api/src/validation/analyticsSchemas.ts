@@ -943,7 +943,19 @@ const catalogPublishRequestedProps = z
     user_id_hash: z.string().min(1),
     catalog_id: z.string().min(1),
     mode: z.enum(PUBLISH_MODES),
-    outcome: z.enum(['QUEUED', 'BLOCKED', 'IN_PROGRESS', 'NAME_TAKEN', 'NOTHING_TO_RETRY']),
+    // REPLAYED is an Idempotency-Key that had already made a run: nothing was
+    // queued by that request, and the answer was the run the key already owns.
+    // It rides the existing event rather than growing a new one — the question
+    // ("how often is a publish attempted for this catalog, and what stops it")
+    // is the same question.
+    outcome: z.enum([
+      'QUEUED',
+      'BLOCKED',
+      'IN_PROGRESS',
+      'NAME_TAKEN',
+      'NOTHING_TO_RETRY',
+      'REPLAYED',
+    ]),
     /** How many gates failed. Zero on a successful request. */
     gate_count: z.number().int().nonnegative(),
     /** The distinct UPPER_SNAKE gate codes, deduplicated. Never messages. */

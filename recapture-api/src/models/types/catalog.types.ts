@@ -373,4 +373,11 @@ export interface PublishRunEntry {
 export interface PublishRunError {
   code: string;
   message: string;
+  /**
+   * On `CATALOG_NAME_TAKEN` only: a name Mirage would accept. Carried so a
+   * collision discovered DURING a run offers the same one-tap rename the
+   * synchronous 409 does. OPTIONAL FOREVER — every run written before this
+   * field existed lacks it, and there is no backfill.
+   */
+  suggestedName?: string;
 }

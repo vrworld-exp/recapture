@@ -96,6 +96,10 @@ const PublishRunErrorSchema = new Schema<PublishRunError>(
   {
     code: { type: String, required: true },
     message: { type: String, required: true },
+    // OPTIONAL AND UNINDEXED, and it stays that way: every run document written
+    // before this field existed lacks it, so `required` would make history
+    // unreadable and a backfill would be inventing names nobody suggested.
+    suggestedName: { type: String, maxlength: 200 },
   },
   { _id: false }
 );

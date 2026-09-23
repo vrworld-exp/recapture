@@ -455,26 +455,36 @@ class _PublishBarState extends ConsumerState<_PublishBar> {
       ..scheduleIfPending(isPending: true);
   }
 
+  /// ONE GESTURE, ONE SCREEN — the owner's guard, for the owner's reason (see
+  /// `CatalogScreen._openPublish`). No `setState`: nothing renders from it.
+  bool _openingPublish = false;
+
   Future<void> _openPublish() async {
-    // A button that SAYS Publish starts the run; the "see progress" door only
-    // watches. The label above is what decides which one this press was.
-    final running = ref
-            .read(repCatalogDocumentProvider(widget.catalogId))
-            .valueOrNull
-            ?.isPublishing ??
-        false;
-    await context.push(
-      '${AppRoutes.repCatalogs}/${widget.catalogId}/publish'
-      '${running ? '' : '?$kPublishStartQuery=1'}',
-    );
-    if (!mounted) return;
-    // Both halves of this screen move on a publish: the status the dish rows
-    // render, and the draft flag this bar reads. The publish screen refreshes
-    // the document as it polls; this is the belt to those braces.
-    ref.invalidate(repCatalogDocumentProvider(widget.catalogId));
-    await ref
-        .read(repCatalogProductsProvider(widget.catalogId).notifier)
-        .refresh();
+    if (_openingPublish) return;
+    _openingPublish = true;
+    try {
+      // A button that SAYS Publish starts the run; the "see progress" door only
+      // watches. The label above is what decides which one this press was.
+      final running = ref
+              .read(repCatalogDocumentProvider(widget.catalogId))
+              .valueOrNull
+              ?.isPublishing ??
+          false;
+      await context.push(
+        '${AppRoutes.repCatalogs}/${widget.catalogId}/publish'
+        '${running ? '' : '?$kPublishStartQuery=1'}',
+      );
+      if (!mounted) return;
+      // Both halves of this screen move on a publish: the status the dish rows
+      // render, and the draft flag this bar reads. The publish screen refreshes
+      // the document as it polls; this is the belt to those braces.
+      ref.invalidate(repCatalogDocumentProvider(widget.catalogId));
+      await ref
+          .read(repCatalogProductsProvider(widget.catalogId).notifier)
+          .refresh();
+    } finally {
+      if (mounted) _openingPublish = false;
+    }
   }
 
   @override

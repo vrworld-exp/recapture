@@ -75,6 +75,12 @@ export interface PublishStepResult {
   code?: string;
   /** Our user-facing sentence, stored on the row's `syncError`. */
   message?: string;
+  /**
+   * A name Mirage would accept, on CATALOG_NAME_TAKEN only. Travels to the run
+   * document so the client can offer the same one-tap rename the synchronous
+   * 409 offers.
+   */
+  suggestedName?: string;
 }
 
 export type PublishStepExecutor = (

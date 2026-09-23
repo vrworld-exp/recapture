@@ -20,6 +20,7 @@ import 'package:recapture/data/repositories/business_profile_repository.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
+import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/product_type.dart';
 
@@ -608,6 +609,106 @@ void main() {
         'socials': {'instagram': 'mocha'},
       });
       expect(body.containsKey('name'), isFalse);
+    });
+  });
+
+  // ── The publish POST's answers ────────────────────────────────────────────
+  group('publish request mapping', () {
+    test('a 202 is a queued run', () async {
+      final repo = RemoteCatalogRepository(
+        always({'status': 'success', 'runId': 'run-1', 'queued': true}, status: 202),
+      );
+
+      expect(await repo.publish(), isA<PublishQueued>());
+    });
+
+    test('a 200 with replayed:true is the run the key already made', () async {
+      // Nothing was queued by this press, so it is NOT a 202 — but to the
+      // screen it means exactly what a 409 does: a run exists, go and watch it.
+      final repo = RemoteCatalogRepository(always({
+        'status': 'success',
+        'runId': 'run-1',
+        'queued': false,
+        'replayed': true,
+      }));
+
+      final result = await repo.publish(idempotencyKey: 'k1');
+
+      expect(
+        result,
+        isA<PublishAlreadyRunning>().having((r) => r.runId, 'runId', 'run-1'),
+      );
+      expect(requests.single.headers['Idempotency-Key'], 'k1');
+    });
+
+    test('a 200 with no run id is still "nothing to retry"', () async {
+      final repo = RemoteCatalogRepository(
+        always({'status': 'success', 'runId': null, 'queued': false}),
+      );
+
+      expect(await repo.retryFailedPublish(), isA<PublishNothingToRetry>());
+    });
+
+    test('a 429 carries the wait it named, from the header', () async {
+      final dio = buildDio((o) async => ResponseBody.fromString(
+            jsonEncode({
+              'status': 'error',
+              'code': 'RATE_LIMITED',
+              'message': 'Too many requests. Please try again shortly.',
+            }),
+            429,
+            headers: {
+              Headers.contentTypeHeader: ['application/json'],
+              'retry-after': ['120'],
+            },
+          ));
+
+      await expectLater(
+        RemoteCatalogRepository(dio).publish(),
+        throwsA(isA<CatalogFailure>()
+            .having((f) => f.code, 'code', CatalogErrorCodes.rateLimited)
+            .having((f) => f.retryAfterSeconds, 'retryAfterSeconds', 120)),
+      );
+    });
+
+    test('and from the envelope when the header did not survive', () async {
+      // This API has always put the wait in the body; anything between us and
+      // the client may drop a header, and neither source is a reason to fall
+      // back to "try again in a moment" over a two-minute window.
+      final repo = RemoteCatalogRepository(always(
+        {
+          'status': 'error',
+          'code': 'RATE_LIMITED',
+          'message': 'Too many requests. Please try again shortly.',
+          'retryAfter': 90,
+        },
+        status: 429,
+      ));
+
+      await expectLater(
+        repo.publish(),
+        throwsA(isA<CatalogFailure>()
+            .having((f) => f.retryAfterSeconds, 'retryAfterSeconds', 90)),
+      );
+    });
+
+    test('a 429 that named no wait leaves it null', () async {
+      final repo = RemoteCatalogRepository(always(
+        {
+          'status': 'error',
+          'code': 'RATE_LIMITED',
+          'message': 'Too many requests. Please try again shortly.',
+        },
+        status: 429,
+      ));
+
+      // Null is what makes the copy fall back to the generic sentence rather
+      // than saying "in about null minutes".
+      await expectLater(
+        repo.publish(),
+        throwsA(isA<CatalogFailure>()
+            .having((f) => f.retryAfterSeconds, 'retryAfterSeconds', isNull)),
+      );
     });
   });
 }

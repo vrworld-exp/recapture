@@ -33,6 +33,7 @@ import 'package:flutter/material.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/publish_flow.dart';
+import '../../../data/repositories/catalog_failure.dart' show CatalogErrorCodes;
 import '../../../domain/catalog/publish_gate.dart';
 import '../../../domain/catalog/publish_status.dart';
 import '../../../domain/catalog/subscription_copy.dart';
@@ -62,6 +63,7 @@ class PublishVoice {
     required this.publishFirstCta,
     required this.nameTakenTitle,
     required this.nameTakenBody,
+    required this.nothingPublished,
     required this.listTitle,
     required this.itemNoun,
     required this.itemNounPlural,
@@ -74,6 +76,7 @@ class PublishVoice {
     publishFirstCta: 'Publish catalog',
     nameTakenTitle: 'That catalog name is already taken',
     nameTakenBody: 'Catalog names have to be unique. We can rename yours to ',
+    nothingPublished: 'Nothing was published',
     listTitle: 'Products',
     itemNoun: 'product',
     itemNounPlural: 'products',
@@ -86,6 +89,7 @@ class PublishVoice {
     publishFirstCta: 'Publish menu',
     nameTakenTitle: 'That restaurant name is already taken online',
     nameTakenBody: 'Names have to be unique online. We can rename it to ',
+    nothingPublished: 'The menu did not go live',
     listTitle: 'Dishes',
     itemNoun: 'dish',
     itemNounPlural: 'dishes',
@@ -98,6 +102,12 @@ class PublishVoice {
 
   /// Followed by the quoted suggestion and " and publish.".
   final String nameTakenBody;
+
+  /// The headline on a run that failed with NO product row to blame — the
+  /// restaurant step never got off the ground, so there is no item list to
+  /// point at and the sentence has to carry the whole story itself.
+  final String nothingPublished;
+
   final String listTitle;
   final String itemNoun;
   final String itemNounPlural;
@@ -145,6 +155,44 @@ bool publishAutoStartReady({
     state.canPublish &&
     subscription.isSettled &&
     !subscription.blocks;
+
+/// Whether a screen opened with [kPublishStartQuery] should stop waiting and
+/// spend its intent — the shared half of both screens' auto-start latch.
+///
+/// The intent stays ARMED — not spent — while the only thing between the user
+/// and a run will clear ITSELF on this screen:
+///
+///   • an unsettled or blocking subscription (they may be paying right now;
+///     this is the pay-then-publish continuation), and
+///   • a gate set that is entirely "wait for it" — a preview image rendering,
+///     a model generating ([PublishStatus.isWaitingOnGates]).
+///
+/// Every OTHER gate is fixed on another screen, and coming back from that
+/// screen to find a publish already running would be a surprise, so those spend
+/// the intent.
+///
+/// Spending it on a self-clearing gate is how a user who tapped Publish while
+/// a thumbnail was still rendering sat and watched the checklist empty itself
+/// and the button quietly enable, with nothing ever starting.
+///
+/// AN ARMED INTENT CANNOT WAIT FOREVER, and needs nothing extra to bound it:
+/// the gate wait stops at its own cap (~15 minutes, past the backend's
+/// generation timeout), and once the loop stops the gates cannot clear, so the
+/// intent expires with the loop.
+///
+/// It lives here, beside [publishAutoStartReady], so the owner's screen and the
+/// rep's share one RULE while keeping their two bodies (different providers,
+/// different voice). The two screens each had their own copy of this guard, and
+/// each had the same bug.
+bool publishAutoStartSettled({
+  required PublishScreenState state,
+  required SubscriptionPublishCheck subscription,
+}) {
+  if (!state.status.hasValue) return false; // still loading — ask next build
+  if (!subscription.isSettled || subscription.blocks) return false;
+  if (state.value?.isWaitingOnGates ?? false) return false;
+  return true;
+}
 
 class PublishBody extends StatelessWidget {
   const PublishBody({
@@ -219,6 +267,34 @@ class PublishBody extends StatelessWidget {
         ? status.gates
         : gatesExcludingSubscription(status.gates);
 
+    // THE RUN ITSELF FAILED, AND NO ROW CAN EXPLAIN IT. A RESTAURANT step that
+    // fails aborts the walk and marks no product (there is no row for the
+    // restaurant, and faking one would make "Retry failed" re-run products that
+    // were never attempted), so `failures` is empty and both the failure card
+    // and the success card used to be skipped — the screen simply went back to
+    // its resting state and said nothing at all.
+    //
+    // Gated on the run's STATE being FAILED, not on `hasError` alone: a
+    // SUCCEEDED or PARTIAL run carrying a stale error from an older document
+    // must draw nothing. `failed` is terminal by construction, and a state this
+    // build does not recognise reads as in-flight — so a newer server renders
+    // no failure card rather than a wrong one.
+    final runFailure = !inFlight &&
+            status.failures.isEmpty &&
+            (run?.hasError ?? false) &&
+            run?.state == PublishRunState.failed
+        ? run
+        : null;
+
+    // ONE CARD, TWO SOURCES. A name collision reaches this screen either
+    // synchronously (the 409 from a press, on `state.suggestedName`) or as the
+    // run-level error of a run that discovered it mid-flight — and the way out
+    // is the same rename either way, so it is the same card.
+    final suggestedName = state.suggestedName ??
+        (runFailure?.errorCode == CatalogErrorCodes.catalogNameTaken
+            ? runFailure?.suggestedName
+            : null);
+
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(
@@ -271,7 +347,7 @@ class PublishBody extends StatelessWidget {
                     onOpenSubscription: onOpenSubscription,
                   ),
                 ],
-                if (state.suggestedName case final suggested?) ...[
+                if (suggestedName case final suggested?) ...[
                   const SizedBox(height: AppSpacing.md),
                   _NameTakenCard(
                     suggested: suggested,
@@ -288,6 +364,17 @@ class PublishBody extends StatelessWidget {
                     voice: voice,
                   ),
                 ],
+                // A failed READ, said quietly and in place. NEVER a toast: a
+                // dropped poll is not a failed publish, and this screen
+                // announcing one as the other is exactly what sent users to
+                // look for a failure list that was not there.
+                if (state.pollFailure != null) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _PollFailureNote(
+                    stopped: state.pollStopped,
+                    inFlight: inFlight,
+                  ),
+                ],
                 if (!inFlight && status.failures.isNotEmpty) ...[
                   const SizedBox(height: AppSpacing.md),
                   _FailureCard(
@@ -297,7 +384,29 @@ class PublishBody extends StatelessWidget {
                     onRetryFailed: isOnline ? onRetryFailed : null,
                   ),
                 ],
-                if (!inFlight && status.isLive && status.failures.isEmpty) ...[
+                // The run-level failure, in the failure card's place and
+                // mutually exclusive with it — `runFailure` is non-null only
+                // when there is no failed row. A rename card above has already
+                // taken the one run error that has a better answer than
+                // "try again", so this never doubles up with it.
+                if (runFailure case final failed? when suggestedName == null)
+                  ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _RunFailureCard(
+                    run: failed,
+                    voice: voice,
+                    busy: state.isRequesting,
+                    onPublish: !isOnline ||
+                            !state.canPublish ||
+                            paywallGate != null
+                        ? null
+                        : onPublish,
+                  ),
+                ],
+                if (!inFlight &&
+                    status.isLive &&
+                    status.failures.isEmpty &&
+                    runFailure == null) ...[
                   const SizedBox(height: AppSpacing.md),
                   _SuccessCard(status: status, onOpenQr: onOpenQr),
                 ],
@@ -553,6 +662,121 @@ class _FailureCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A run that failed with nothing to blame it on (F1).
+///
+/// THE CARD THAT WAS MISSING. When a run fails at the RESTAURANT step the walk
+/// aborts before a single product is attempted, so no row is marked FAILED —
+/// and `_FailureCard` (which renders rows) and `_SuccessCard` (which needs the
+/// catalog live) were both correctly skipped, leaving the screen silently back
+/// at rest with the button re-enabled, as though the press had never happened.
+///
+/// The way out is Publish, NOT "Retry failed": there are no failed rows to
+/// retry, and `requestRetry` would answer `NOTHING_TO_RETRY` — a success
+/// message for a catalog that is not live.
+class _RunFailureCard extends StatelessWidget {
+  const _RunFailureCard({
+    required this.run,
+    required this.voice,
+    required this.busy,
+    required this.onPublish,
+  });
+
+  final PublishRun run;
+  final PublishVoice voice;
+  final bool busy;
+
+  /// Null disables Try again — offline, paywalled, or otherwise exactly the
+  /// conditions that disable the main Publish button.
+  final VoidCallback? onPublish;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    // From the CODE, through the total envelope+sync table. The payload's own
+    // `message` is never parsed, so there is no field upstream prose could
+    // have arrived in — and an error code this build has never seen degrades
+    // to the generic sentence rather than showing a raw code.
+    final copy = run.errorCopy;
+
+    return Container(
+      key: const ValueKey('publish_run_failure'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.error.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.error.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            voice.nothingPublished,
+            style: textTheme.titleMedium?.copyWith(color: AppColors.error),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            copy.message,
+            style: textTheme.bodySmall?.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+          if (copy.action case final action?) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              action,
+              style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.md),
+          AppButton(
+            key: const ValueKey('publish_run_failure_retry'),
+            label: 'Try again',
+            icon: Icons.refresh,
+            isLoading: busy,
+            onPressed: onPublish,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "We could not refresh" — and which kind of could-not it is (F4, F5).
+///
+/// A MUTED LINE, not an error card. The publish itself is fine; what failed is
+/// this screen's own reading of it, and the difference between those two is the
+/// whole of F4. The stopped variant exists because a loop that has given up
+/// must say so — otherwise the numbers just quietly stop moving and the user
+/// has no reason to think a pull-to-refresh would help.
+class _PollFailureNote extends StatelessWidget {
+  const _PollFailureNote({required this.stopped, required this.inFlight});
+
+  final bool stopped;
+
+  /// A run is on screen. Only then is "your publish is still running" true —
+  /// a stale read of a resting screen has no run to reassure anyone about.
+  final bool inFlight;
+
+  @override
+  Widget build(BuildContext context) => stopped
+      ? const _Banner(
+          key: ValueKey('publish_poll_stopped_note'),
+          icon: Icons.sync_problem_outlined,
+          color: AppColors.textMuted,
+          title: "Couldn't refresh",
+          body: 'Pull down to try again.',
+        )
+      : _Banner(
+          key: const ValueKey('publish_poll_stale_note'),
+          icon: Icons.sync_outlined,
+          color: AppColors.textMuted,
+          title: "Couldn't refresh just now",
+          body: inFlight
+              ? 'Your publish is still running. Retrying…'
+              : 'These numbers are from a moment ago. Retrying…',
+        );
 }
 
 /// One failed product: its name, OUR sentence, and the next action.
@@ -1214,14 +1438,30 @@ String? publishTransitionToast({
 
   // Finished. WHICH ending it was, not just that it ended — "done" over a
   // run that failed half its products is the message that stops someone
-  // ever looking at the list below. The FINISHED run's counts, not the last
-  // in-flight poll's: a failure that landed between the two polls is on the
-  // run document and not yet on the previous frame.
-  final counts = after.run?.counts ?? before.run?.counts;
-  final failed = counts?.failed ?? 0;
-  return switch ((after.isLive, failed)) {
-    (_, > 0) => '$failed of ${counts?.total ?? failed} could not be published. '
-        'Retry them below.',
+  // ever looking at the list below.
+  final run = after.run ?? before.run;
+
+  // COUNT THE ROWS, NOT THE STEPS. `run.counts` are PLAN STEP counts: they
+  // include the RESTAURANT step and one per CATEGORY, so "1 of 12 could not be
+  // published" was describing a twelve-step plan over ten products. The failure
+  // list the sentence points at is products, so the number has to be products.
+  final failedRows = after.failures.length;
+
+  // A run that failed with NO failed row — the restaurant step never got off
+  // the ground. Pointing at a retry list that is not rendered, for a retry that
+  // would answer NOTHING_TO_RETRY, is how the old sentence sent people looking
+  // for a card that does not exist. The reason goes in the toast instead, from
+  // the CODE as everywhere else.
+  if (run != null &&
+      run.hasError &&
+      run.state == PublishRunState.failed &&
+      failedRows == 0) {
+    return 'Publishing could not finish. ${run.errorCopy.message}';
+  }
+
+  return switch ((after.isLive, failedRows)) {
+    (_, > 0) => '$failedRows of ${after.products.length} could not be '
+        'published. Retry them below.',
     (true, _) => liveLine,
     (false, _) => offlineLine,
   };

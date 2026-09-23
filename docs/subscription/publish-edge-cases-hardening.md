@@ -1,4 +1,4 @@
-✅ NOT STARTED
+✅✅✅✅✅✅✅✅✅✅
 # BUG FIX: Publish-flow edge cases (F1–F10) — the silent failures after Publish
 # Product: Mirage Menu (ReCapture backend + Flutter client)
 # Scope: Bug Fix (10 defects, one batch)

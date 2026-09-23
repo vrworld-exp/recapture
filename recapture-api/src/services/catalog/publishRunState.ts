@@ -300,7 +300,7 @@ export function resolveRunState(counts: { synced: number; failed: number }): Pub
 export async function finalizeRun(
   runId: Types.ObjectId,
   state: PublishRunState,
-  error?: { code: string; message: string }
+  error?: { code: string; message: string; suggestedName?: string }
 ): Promise<boolean> {
   const res = await CatalogPublishRun.updateOne(
     { _id: runId, state: { $nin: TERMINAL_RUN_STATES } },

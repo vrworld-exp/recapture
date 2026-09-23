@@ -224,6 +224,66 @@ describe('GET /catalog/publish/status', () => {
     expect(a.body).toEqual(b.body);
   });
 
+  it('surfaces a run-level error, including the name it suggests', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id);
+    await CatalogPublishRun.create({
+      catalogId,
+      userId: new Types.ObjectId(id),
+      jobId: new Types.ObjectId(),
+      snapshotRevision: 1,
+      mode: 'FULL',
+      state: 'FAILED',
+      counts: { total: 2, synced: 0, failed: 1, skipped: 0 },
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      error: {
+        code: 'CATALOG_NAME_TAKEN',
+        message: 'That catalog name is already taken online. Try "blue_cafe_2".',
+        suggestedName: 'blue_cafe_2',
+      },
+    });
+
+    const res = await request(app).get('/catalog/publish/status').set(auth);
+
+    // WITHOUT THIS the client has a failed run it cannot explain and a rename
+    // it cannot offer — the run's error was the only record of either.
+    expect(res.body.publish.run.error).toEqual({
+      code: 'CATALOG_NAME_TAKEN',
+      message: 'That catalog name is already taken online. Try "blue_cafe_2".',
+      suggestedName: 'blue_cafe_2',
+    });
+  });
+
+  it('omits suggestedName entirely when there is none, rather than sending null', async () => {
+    const { id, auth } = await makeUser();
+    const catalogId = await seed(id);
+    await CatalogPublishRun.create({
+      catalogId,
+      userId: new Types.ObjectId(id),
+      jobId: new Types.ObjectId(),
+      snapshotRevision: 1,
+      mode: 'FULL',
+      state: 'FAILED',
+      counts: { total: 1, synced: 0, failed: 1, skipped: 0 },
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      // Every run written before the field existed looks exactly like this.
+      error: {
+        code: 'PUBLISH_RESTAURANT_UNAVAILABLE',
+        message: 'Nothing could be published this time.',
+      },
+    });
+
+    const res = await request(app).get('/catalog/publish/status').set(auth);
+
+    expect(res.body.publish.run.error).toEqual({
+      code: 'PUBLISH_RESTAURANT_UNAVAILABLE',
+      message: 'Nothing could be published this time.',
+    });
+    expect('suggestedName' in res.body.publish.run.error).toBe(false);
+  });
+
   it('carries the gates so the Publish button can explain itself before it is pressed', async () => {
     const { id, auth } = await makeUser();
     const catalogId = await seed(id);

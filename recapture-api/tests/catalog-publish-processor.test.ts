@@ -315,6 +315,93 @@ describe('mirageCatalogPublishProcessor — failures are isolated', () => {
     expect(catalog?.activePublishRunId).toBeNull();
   });
 
+  it('finalises with the step’s OWN error, not a hardcoded one', async () => {
+    const fixture = await seed();
+    setPublishExecutors({
+      RESTAURANT: async () => ({
+        outcome: 'FAILED',
+        code: 'CATALOG_NAME_TAKEN',
+        message: 'That catalog name is already taken online. Try "blue_cafe_2".',
+        suggestedName: 'blue_cafe_2',
+      }),
+    });
+
+    await mirageCatalogPublishProcessor(job(fixture));
+
+    const run = await CatalogPublishRun.findById(fixture.runId).lean().exec();
+    expect(run?.state).toBe('FAILED');
+    // The REAL reason, with the way out. This used to be overwritten with
+    // PUBLISH_RESTAURANT_UNAVAILABLE, which threw away both.
+    expect(run?.error?.code).toBe('CATALOG_NAME_TAKEN');
+    expect(run?.error?.suggestedName).toBe('blue_cafe_2');
+
+    // NO ROW IS MARKED. The restaurant has no row of its own, and faking
+    // product failures would make "Retry failed" re-run products this run
+    // never attempted. The walk broke, so there is one entry and it is the
+    // restaurant's.
+    expect(await CatalogProduct.countDocuments({ syncStatus: 'FAILED' })).toBe(0);
+    expect(run?.entries).toHaveLength(1);
+    expect(run?.entries[0]?.target).toBe('RESTAURANT');
+  });
+
+  it('falls back to a sentence that does not point at an empty item list', async () => {
+    const fixture = await seed();
+    setPublishExecutors({
+      // No code, no message — the shape a bare refusal takes.
+      RESTAURANT: async () => ({ outcome: 'FAILED' }),
+    });
+
+    await mirageCatalogPublishProcessor(job(fixture));
+
+    const run = await CatalogPublishRun.findById(fixture.runId).lean().exec();
+    expect(run?.error?.message).not.toContain('item list');
+    expect(run?.error?.suggestedName).toBeUndefined();
+  });
+
+  it('leaves a PARTIAL run with no run-level error at all', async () => {
+    const fixture = await seed();
+    successfulExecutors([fixture.productIds[0].toHexString()]);
+
+    await mirageCatalogPublishProcessor(job(fixture));
+
+    const run = await CatalogPublishRun.findById(fixture.runId).lean().exec();
+    expect(run?.state).toBe('PARTIAL');
+    // The per-row failure list is the whole story here; a run-level error would
+    // make the screen draw a second, contradictory card.
+    expect(run?.error).toBeUndefined();
+  });
+
+  it('keeps the FIRST failure as the run’s reason, not the last', async () => {
+    const fixture = await seed();
+    successfulExecutors();
+    setPublishExecutors({
+      // SKIPPED, not SUCCEEDED: a success here would make the run PARTIAL, and
+      // the rule under test only applies to a run that failed outright.
+      RESTAURANT: async (_step, context) => {
+        context.mirageRestaurantId = context.snapshot.catalog.mirageRestaurantId ?? 'mr-1';
+        return { outcome: 'SKIPPED' };
+      },
+      CATEGORY: async () => ({
+        outcome: 'FAILED',
+        code: 'PUBLISH_CATEGORY_REJECTED',
+        message: 'Mirage would not accept this section.',
+      }),
+      PRODUCT: async () => ({
+        outcome: 'FAILED',
+        code: 'PUBLISH_PARENT_MISSING',
+        message: 'Its section is not online.',
+      }),
+    });
+
+    await mirageCatalogPublishProcessor(job(fixture));
+
+    const run = await CatalogPublishRun.findById(fixture.runId).lean().exec();
+    expect(run?.state).toBe('FAILED');
+    // The category is the REASON; the products failing behind it are the
+    // symptom, and a run explained by its symptom explains nothing.
+    expect(run?.error?.code).toBe('PUBLISH_CATEGORY_REJECTED');
+  });
+
   it('treats an unclassified executor throw as a ROW failure, not a run failure', async () => {
     const fixture = await seed();
     successfulExecutors();

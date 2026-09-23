@@ -85,6 +85,16 @@ const List<Duration> _gateBackoff = [
 /// this file's header is about.
 const int _gatePollCap = 100;
 
+/// How many CONSECUTIVE failed polls before the loop gives up on a run.
+///
+/// Generous on purpose: a multi-minute publish across a sleeping tier
+/// legitimately drops requests, and stopping early freezes a progress line that
+/// was about to move. This is the backstop for a server that will never answer,
+/// not a tripwire for a flaky one. Reset by a successful read and by an
+/// explicit [PublishFlow.refresh] — and by nothing else, so a browser tab going
+/// away and coming back cannot quietly hand the loop a fresh budget.
+const int _runPollFailureCap = 10;
+
 /// Where one door's publish requests go.
 ///
 /// The owner's gateway is `CatalogRepository` and the app-wide catalog
@@ -125,6 +135,8 @@ class PublishScreenState {
     this.status = const AsyncLoading(),
     this.isRequesting = false,
     this.actionFailure,
+    this.pollFailure,
+    this.pollStopped = false,
     this.notice,
     this.suggestedName,
     this.isPollingPaused = false,
@@ -139,7 +151,28 @@ class PublishScreenState {
 
   /// The last action failed for a reason worth showing. Cleared by the next
   /// action and by a successful refresh.
+  ///
+  /// AN ACTION, meaning something the user pressed. A failed status READ is
+  /// [pollFailure] and is a different sentence — see there.
   final CatalogFailure? actionFailure;
+
+  /// The last status READ failed while a run was already on screen.
+  ///
+  /// SEPARATE FROM [actionFailure] because "we could not refresh" and "your
+  /// publish failed" are different sentences, and only one of them is about the
+  /// publish. They shared a field, and a single dropped poll during a perfectly
+  /// healthy run therefore toasted "Your catalog could not be published" over a
+  /// progress bar that was still moving. Rendered INLINE, never as a toast:
+  /// this screen already says too much about failures that are not the
+  /// publish's. Cleared by every successful read.
+  final CatalogFailure? pollFailure;
+
+  /// The loop has given up — the failure is permanent for this catalog and
+  /// session (a 404, a 401, a 403), or the consecutive-failure cap was reached.
+  ///
+  /// Only meaningful alongside [pollFailure]; it picks which of the two inline
+  /// lines the body draws ("retrying…" versus "pull down to try again").
+  final bool pollStopped;
 
   /// A one-line result of the last action ("Nothing left to retry"). Not an
   /// error — the outcomes that are neither a failure nor a new run.
@@ -170,6 +203,8 @@ class PublishScreenState {
     AsyncValue<PublishStatus>? status,
     bool? isRequesting,
     Object? actionFailure = _unset,
+    Object? pollFailure = _unset,
+    bool? pollStopped,
     Object? notice = _unset,
     Object? suggestedName = _unset,
     bool? isPollingPaused,
@@ -180,6 +215,10 @@ class PublishScreenState {
         actionFailure: identical(actionFailure, _unset)
             ? this.actionFailure
             : actionFailure as CatalogFailure?,
+        pollFailure: identical(pollFailure, _unset)
+            ? this.pollFailure
+            : pollFailure as CatalogFailure?,
+        pollStopped: pollStopped ?? this.pollStopped,
         notice: identical(notice, _unset) ? this.notice : notice as String?,
         suggestedName: identical(suggestedName, _unset)
             ? this.suggestedName
@@ -232,6 +271,15 @@ class PublishFlow {
   /// every time the screen comes back into view — a cap that reset with it
   /// would not be a cap.
   int _gatePolls = 0;
+
+  /// Failed status reads in a row, against [_runPollFailureCap].
+  ///
+  /// Reset by a SUCCESSFUL read and by an explicit [refresh] — never by the
+  /// lifecycle listener. Web is in scope here: a browser tab that is hidden and
+  /// shown again must not hand a dead server a fresh budget, because the pause
+  /// says nothing about whether the server came back.
+  int _consecutivePollFailures = 0;
+
   bool _disposed = false;
   AppLifecycleListener? _lifecycle;
 
@@ -290,7 +338,19 @@ class PublishFlow {
   /// asked; a pull-to-refresh or a return from the screen where they fixed
   /// something is that user, and leaving them capped would mean the checklist
   /// never updates itself again for the life of the screen.
+  /// A pull-to-refresh is a deliberate START OVER, and it retires three things:
+  ///
+  ///   • the gate window, for the reason above;
+  ///   • the consecutive-poll-failure count, so a loop that stopped at the cap
+  ///     resumes for a user who came back and asked;
+  ///   • the REPLAY KEY. This is the one gesture that recovers a key the server
+  ///     can no longer replay — its run was pruned, so the unique index still
+  ///     holds the key while nothing exists to answer with, and every press
+  ///     under it is a 500 forever. A different key is a different question,
+  ///     and this is the press that asks it.
   Future<void> refresh() {
+    _idempotencyKey = null;
+    _consecutivePollFailures = 0;
     _restartGateWait();
     return _loadStatus();
   }
@@ -305,7 +365,13 @@ class PublishFlow {
     try {
       final status = await gateway.status();
       if (_disposed) return;
-      state = state.copyWith(status: AsyncData(status), actionFailure: null);
+      _consecutivePollFailures = 0;
+      state = state.copyWith(
+        status: AsyncData(status),
+        actionFailure: null,
+        pollFailure: null,
+        pollStopped: false,
+      );
       _syncPollingTo(status);
       // The shell's own chips (Published / Draft changes / Publishing) read a
       // different provider from this one. Keeping them in step here is what
@@ -318,13 +384,40 @@ class PublishFlow {
       // failure with nothing behind it takes the screen.
       if (state.value == null) {
         state = state.copyWith(status: AsyncError(failure, stack));
-      } else {
-        state = state.copyWith(actionFailure: failure);
-        // Keep polling: a single dropped request during a multi-minute run is
-        // ordinary, and giving up would freeze the progress line for good.
+        return;
+      }
+      _consecutivePollFailures++;
+      final keepGoing = _shouldKeepPolling(failure);
+      // NOT `actionFailure`. This is a read we made on the user's behalf, not
+      // a thing they pressed, and the screen says so inline instead of
+      // announcing a publish failure that did not happen.
+      state = state.copyWith(pollFailure: failure, pollStopped: !keepGoing);
+      if (keepGoing) {
+        // A single dropped request during a multi-minute run is ordinary, and
+        // giving up would freeze the progress line for good.
         _scheduleNextPoll();
+      } else {
+        // Cancel as well as decline to schedule: a timer set elsewhere (the
+        // catch-up poll on resume, a race with `_syncPollingTo`) must not be
+        // left alive to revive a loop we have just decided to stop.
+        _cancelPoll();
       }
     }
+  }
+
+  /// Whether another poll could plausibly answer differently.
+  ///
+  /// A 401, 403 or 404 is a FACT about this catalog and this session — the
+  /// catalog was deleted in another tab, the session expired, the delegation
+  /// was revoked — and asking again every eight seconds for as long as the
+  /// screen is open gets the same answer every time, forever. Transport
+  /// failures and 5xx are the opposite: they are about the moment, not about
+  /// the request, so they keep backing off until the cap.
+  bool _shouldKeepPolling(CatalogFailure failure) {
+    if (_consecutivePollFailures >= _runPollFailureCap) return false;
+    final status = failure.statusCode;
+    if (status == null) return true; // transport — nothing was decided
+    return status != 401 && status != 403 && status != 404;
   }
 
   // ── Polling ───────────────────────────────────────────────────────────────
@@ -482,9 +575,26 @@ class PublishFlow {
       }
     } on CatalogFailure catch (failure) {
       if (_disposed) return;
-      // The key is KEPT: this attempt may well have reached the server and lost
-      // its response, and the next press must be the same request, not a
-      // second one.
+      // THE KEY IS KEPT ONLY WHERE IT COULD STILL BE ANSWERING A LIVE QUESTION.
+      //
+      // A refusal the server clearly authored (a 4xx) means the request was
+      // seen, decided and answered — so the next press is a NEW request, and
+      // reusing the key would make the server replay an answer to a question
+      // the user is no longer asking. Transport failures and 5xx are the case
+      // this key exists for: the run may well have been enqueued and only the
+      // response lost, and a fresh key there would race our own worker.
+      //
+      // 408 and 429 are the two 4xx exceptions, on purpose. A timeout may have
+      // been delivered; a rate-limited request definitely was not, so replaying
+      // it is both free and correct.
+      final status = failure.statusCode;
+      if (status != null &&
+          status >= 400 &&
+          status < 500 &&
+          status != 408 &&
+          status != 429) {
+        _idempotencyKey = null;
+      }
       state = state.copyWith(isRequesting: false, actionFailure: failure);
     }
   }

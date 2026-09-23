@@ -302,6 +302,59 @@ void main() {
     });
   });
 
+  // ── A 429 that named its window says the real number ──────────────────────
+  //
+  // "Wait a moment, then try again" is true of a two-second window and a lie
+  // about the publish window's two minutes — and a user told to wait a moment
+  // presses again straight away and is refused again.
+  group('a rate limit says the real wait (feature 69)', () {
+    test('rounds to whole minutes above ninety seconds', () {
+      expect(retryAfterAction(120), 'Try again in about 2 minutes.');
+      expect(retryAfterAction(91), 'Try again in about 2 minutes.');
+      expect(retryAfterAction(60), 'Try again in about 60 seconds.');
+      expect(retryAfterAction(1), 'Try again in about 1 second.');
+      expect(retryAfterAction(300), 'Try again in about 5 minutes.');
+    });
+
+    test('says nothing at all when the server named no wait', () {
+      // Null is what leaves the table's own sentence standing. A made-up
+      // number is worse than a vague one.
+      expect(retryAfterAction(null), isNull);
+      expect(retryAfterAction(0), isNull);
+      expect(retryAfterAction(-5), isNull);
+    });
+
+    test('replaces only the ACTION, never the "what happened" half', () {
+      const limited = CatalogFailure(
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please try again shortly.',
+        statusCode: 429,
+        retryAfterSeconds: 120,
+      );
+
+      final sentence = CatalogFeedback.failureText(limited);
+
+      expect(sentence, contains(catalogErrorCopy('RATE_LIMITED').message));
+      expect(sentence, contains('about 2 minutes'));
+      // The server's own prose still has no way in.
+      expect(sentence, isNot(contains('Too many requests')));
+    });
+
+    test('falls back to the generic sentence with no wait to name', () {
+      const limited = CatalogFailure(
+        code: 'RATE_LIMITED',
+        message: 'Too many requests. Please try again shortly.',
+        statusCode: 429,
+      );
+
+      expect(
+        CatalogFeedback.failureText(limited),
+        catalogErrorSentence('RATE_LIMITED'),
+      );
+      expect(CatalogFeedback.failureText(limited), isNot(contains('null')));
+    });
+  });
+
   group('toast behaviour (features 67, 68)', () {
     testWidgets('two rapid actions leave one readable toast, not a pile',
         (tester) async {

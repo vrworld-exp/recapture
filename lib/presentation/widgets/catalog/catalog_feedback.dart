@@ -154,7 +154,17 @@ abstract final class CatalogFeedback {
   /// One function for both so the two never diverge: a message worth writing
   /// for a snackbar is the message the banner should carry.
   static String failureText(CatalogFailure failure, {String? subject}) =>
-      catalogErrorSentence(failure.code, subject: subject);
+      catalogErrorSentence(
+        failure.code,
+        subject: subject,
+        // The one place the server's own answer beats the table: a 429 that
+        // named its window. "Wait a moment" is true of two seconds and a lie
+        // about the publish window's two minutes, and a user told to wait a
+        // moment presses again immediately and is refused again.
+        actionOverride: failure.code == CatalogErrorCodes.rateLimited
+            ? retryAfterAction(failure.retryAfterSeconds)
+            : null,
+      );
 
   /// The mapped sentence for a bare [code], where the caller holds a code
   /// rather than a [CatalogFailure] — a notifier's stored error, a publish

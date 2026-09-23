@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/app/routes/flow_back.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
@@ -132,6 +133,16 @@ class _FakeCatalogRepo
   @override
   Future<void> reorderCategories(List<String> orderedIds) =>
       throw UnimplementedError('not used here');
+}
+
+/// Stands in for [PublishScreen] behind the router, so the double-tap test can
+/// count screens without dragging the whole publish surface into this suite.
+class _StubPublishScreen extends StatelessWidget {
+  const _StubPublishScreen();
+
+  @override
+  Widget build(BuildContext context) =>
+      const Scaffold(body: Center(child: Text('publish')));
 }
 
 Widget _app(_FakeCatalogRepo repo) => ProviderScope(
@@ -451,6 +462,61 @@ void main() {
       // dialog is still the empty state — it must not have blanked or errored.
       expect(find.text('No catalog yet'), findsOneWidget);
       expect(find.textContaining("couldn't load"), findsNothing);
+    });
+  });
+
+  // ── One gesture, one screen ───────────────────────────────────────────────
+  group('the Publish CTA', () {
+    testWidgets('opens exactly one publish screen on a double tap',
+        (tester) async {
+      final repo = _FakeCatalogRepo(
+        () async => Catalog.fromMap(golden.catalogGolden()),
+      );
+
+      final router = GoRouter(
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (_, __) => const CatalogScreen(),
+            routes: [
+              GoRoute(
+                path: 'catalog/publish',
+                name: AppRouteNames.catalogPublish,
+                builder: (_, __) => const _StubPublishScreen(),
+              ),
+            ],
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            authProvider.overrideWith(_StubAuth.new),
+            catalogRepositoryProvider.overrideWithValue(repo),
+            catalogProductsRepositoryProvider.overrideWithValue(
+              FakeProductsRepository((_) async => pageOf([])),
+            ),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // TWO TAPS IN ONE FRAME, which is what a real double-tap is: AppButton
+      // disables only while it is LOADING, and opening a route is not loading.
+      final cta = find.byKey(const ValueKey('catalog_publish_cta'));
+      await tester.tap(cta, warnIfMissed: false);
+      await tester.tap(cta, warnIfMissed: false);
+      await tester.pumpAndSettle();
+
+      // Two screens would mean two auto-starts (the second answering 409), two
+      // poll loops on one endpoint, and a Back that lands on a duplicate.
+      expect(
+        find.byType(_StubPublishScreen, skipOffstage: false),
+        findsOneWidget,
+      );
     });
   });
 

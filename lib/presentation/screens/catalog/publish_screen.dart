@@ -51,24 +51,20 @@ class _PublishScreenState extends ConsumerState<PublishScreen> {
   /// can. Called from build, so the request itself is deferred a frame: a
   /// notifier must not be written while the tree that watches it is building.
   ///
-  /// THE SUBSCRIPTION IS THE ONE BLOCKER THAT DOES NOT LATCH THE DECISION, and
-  /// that is the whole "pay, then publish" continuation. Every other gate is
-  /// fixed on another screen, and coming back here to find a publish already
-  /// running would be a surprise. Paying is different: the user pressed
-  /// Publish, got a paywall instead, paid, and came back — the run they asked
-  /// for is exactly what should happen next. So while the verdict is unsettled
-  /// (the subscription read is still in flight) or blocking, the intent stays
-  /// ARMED rather than spent, and the first build where the gate is gone fires
-  /// it. Unsettled has to be waited out too: latching on a verdict that has not
-  /// arrived would publish a catalog the paywall was about to refuse.
+  /// WHICH BLOCKERS DO NOT LATCH THE DECISION is [publishAutoStartSettled]'s
+  /// to say, shared with the rep's screen so one rule governs both doors.
+  /// In short: a subscription that is unsettled or blocking (the "pay, then
+  /// publish" continuation) and gates that clear THEMSELVES on this screen
+  /// leave the intent ARMED; everything else spends it.
   void _maybeAutoStart(
     PublishScreenState state,
     bool isOnline,
     SubscriptionPublishCheck subscription,
   ) {
     if (!widget.startPublish || _autoStartDecided) return;
-    if (!state.status.hasValue) return; // still loading — ask next build
-    if (!subscription.isSettled || subscription.blocks) return; // stay armed
+    if (!publishAutoStartSettled(state: state, subscription: subscription)) {
+      return; // stay armed — ask again next build
+    }
     _autoStartDecided = true;
     if (!publishAutoStartReady(
       state: state,

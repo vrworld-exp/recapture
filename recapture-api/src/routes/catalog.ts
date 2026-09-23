@@ -179,6 +179,13 @@ function failImageKey(
 
 /** 429, with the retry hint the client backs off on. */
 function rateLimited(res: Response, retryAfter: number): void {
+  // THE HEADER AS WELL AS THE ENVELOPE. The envelope's `retryAfter` is what
+  // this API has always sent and what the client reads first; the standard
+  // header is set beside it so the wait survives anything between us that
+  // speaks HTTP but not our envelope, and so "try again in a moment" can
+  // become the real number. Seconds, never an HTTP-date — the client parses
+  // an integer and nothing else.
+  res.setHeader('Retry-After', String(retryAfter));
   res.status(429).json({
     status: 'error',
     code: 'RATE_LIMITED',
@@ -264,6 +271,19 @@ async function respondToPublishRequest(
       // A retry with nothing failed is the state the user asked for, so it is a
       // success with a zero-count run rather than an error.
       res.status(200).json({ status: 'success', runId: null, queued: false });
+      return;
+
+    case 'REPLAYED':
+      // 200, NOT 202. A 202 says "accepted, and now queued"; this request
+      // queued nothing — the Idempotency-Key had already made the run being
+      // named. The client keys off `replayed`, not off the status code, so it
+      // treats this exactly as "a run is going, watch it".
+      res.status(200).json({
+        status: 'success',
+        runId: result.run.runId,
+        queued: false,
+        replayed: true,
+      });
       return;
 
     case 'QUEUED':

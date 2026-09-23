@@ -327,6 +327,19 @@ export const mirageCatalogPublishProcessor: JobProcessor = async (job) => {
     const context = buildContext(publishRunId, run.userId.toHexString(), mode, snapshot);
     const tally = { synced: 0, failed: 0, skipped: 0 };
 
+    /**
+     * The step failure that EXPLAINS the run, kept for `finalizeRun`.
+     *
+     * The FIRST one, never overwritten by a later one: for a RESTAURANT abort
+     * it is the only failure there will be, and for a CATEGORY that took its
+     * products down with it, the category is the reason and the products are
+     * the symptom. Without this the run's stored error was a hardcoded
+     * RESTAURANT_UNAVAILABLE, which threw away a real `CATALOG_NAME_TAKEN` (and
+     * its suggested name) and left the user with a run that failed for reasons
+     * nobody recorded.
+     */
+    let firstFailure: { code: string; message: string; suggestedName?: string } | undefined;
+
     // Wake Mirage on a READ before the walk's first WRITE. A write that times
     // out against a still-booting instance cannot be retried in place (the
     // request may be executing on Mirage's side) and costs this run a whole
@@ -354,6 +367,11 @@ export const mirageCatalogPublishProcessor: JobProcessor = async (job) => {
 
       if (result.outcome === 'FAILED') {
         tally.failed += 1;
+        firstFailure ??= {
+          code: result.code ?? PublishErrorCode.STEP_FAILED,
+          message: result.message ?? 'Publishing this item failed.',
+          ...(result.suggestedName ? { suggestedName: result.suggestedName } : {}),
+        };
         await recordRowFailure(step, result);
         track(AnalyticsEvent.CATALOG_PUBLISH_TARGET_FAILED, {
           user_id_hash: userIdHash,
@@ -384,14 +402,20 @@ export const mirageCatalogPublishProcessor: JobProcessor = async (job) => {
     }
 
     const state = resolveRunState(tally);
+    // PARTIAL AND SUCCEEDED CARRY NO RUN ERROR, unchanged: `resolveRunState`
+    // only answers FAILED when `synced === 0`, so a run where eight of ten
+    // products went live still finalises clean and still renders the per-row
+    // failure list. The fallback sentence deliberately drops "See the item
+    // list for details" — that is a lie precisely when it matters, because a
+    // RESTAURANT abort marks no product row at all and the list is empty.
     await finalizeRun(
       runId,
       state,
       state === 'FAILED'
-        ? {
+        ? (firstFailure ?? {
             code: PublishErrorCode.RESTAURANT_UNAVAILABLE,
-            message: 'Nothing could be published this time. See the item list for details.',
-          }
+            message: 'Nothing could be published this time.',
+          })
         : undefined
     );
     await finalizeCatalogAfterRun({

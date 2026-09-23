@@ -43,6 +43,10 @@ import {
 } from '@/services/catalogProvisioningService';
 import type { PublishStepExecutor } from '@/services/catalog/publishExecutors';
 import { pruneRunHistory } from '@/services/catalogActivityService';
+// The house duplicate-key predicate. Imported rather than re-written: a third
+// hand-rolled `code === 11000` check is a third place to get the `no-explicit-any`
+// dance wrong. `catalogService` does not import this file, so no cycle.
+import { isDuplicateKeyError } from '@/services/catalogService';
 import { hasActiveRun, releaseAbandonedRun } from '@/services/catalog/publishRunState';
 // Lifted into their own pure module so the subscription layer can count the
 // same list without a require cycle; re-exported below for existing importers.
@@ -532,6 +536,11 @@ export const restaurantExecutor: PublishStepExecutor = async (step, context) => 
           outcome: 'FAILED',
           code: CATALOG_NAME_TAKEN,
           message: `That catalog name is already taken online. Try "${result.suggestedName}".`,
+          // Carried to the run document so a collision found HERE — inside the
+          // run, where `requestPublish` deferred provisioning because Mirage
+          // was unreachable — offers the same one-tap rename the synchronous
+          // 409 does, instead of a dead end.
+          suggestedName: result.suggestedName,
         };
       case 'CATALOG_GONE':
         return {
@@ -553,6 +562,7 @@ export const restaurantExecutor: PublishStepExecutor = async (step, context) => 
         outcome: 'FAILED',
         code: CATALOG_NAME_TAKEN,
         message: `Your catalog could not be renamed online. Try "${branding.suggestedName}".`,
+        suggestedName: branding.suggestedName,
       };
     case 'NOT_PROVISIONED':
     case 'CATALOG_GONE':
@@ -592,7 +602,13 @@ export type RequestPublishResult =
   | { outcome: 'BLOCKED'; gates: PublishGate[] }
   | { outcome: 'IN_PROGRESS'; runId: string }
   | { outcome: 'NAME_TAKEN'; code: typeof CATALOG_NAME_TAKEN; suggestedName: string }
-  | { outcome: 'NOTHING_TO_RETRY'; run: PublishRunDto };
+  | { outcome: 'NOTHING_TO_RETRY'; run: PublishRunDto }
+  /**
+   * This Idempotency-Key has already made a run. NOTHING WAS QUEUED by this
+   * request — the answer is the run the key already owns, which is why the
+   * route answers 200 rather than 202.
+   */
+  | { outcome: 'REPLAYED'; run: PublishRunDto; publicUrl: string | null };
 
 interface RequestPublishOptions {
   mode: PublishMode;
@@ -619,20 +635,53 @@ async function openRun(
 ): Promise<RequestPublishResult> {
   const catalogId = catalog._id as Types.ObjectId;
 
-  const run = await CatalogPublishRun.create({
-    catalogId,
-    userId: catalog.userId,
-    // Replaced immediately below. The field is required and the job does not
-    // exist yet — a chicken-and-egg the model resolves by being written twice.
-    jobId: new Types.ObjectId(),
-    // READ NOW, NOT AT ENQUEUE TIME. This is the revision the run publishes and
-    // the one `publishedRevision` becomes on success, so an edit made while the
-    // job waits in the queue correctly reads as "not yet live".
-    snapshotRevision: catalog.draftRevision,
-    mode: options.mode,
-    state: 'QUEUED',
-    ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
-  });
+  let run: ICatalogPublishRun;
+  try {
+    run = await CatalogPublishRun.create({
+      catalogId,
+      userId: catalog.userId,
+      // Replaced immediately below. The field is required and the job does not
+      // exist yet — a chicken-and-egg the model resolves by being written twice.
+      jobId: new Types.ObjectId(),
+      // READ NOW, NOT AT ENQUEUE TIME. This is the revision the run publishes and
+      // the one `publishedRevision` becomes on success, so an edit made while the
+      // job waits in the queue correctly reads as "not yet live".
+      snapshotRevision: catalog.draftRevision,
+      mode: options.mode,
+      state: 'QUEUED',
+      ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+    });
+  } catch (err) {
+    if (!isDuplicateKeyError(err) || !options.idempotencyKey) throw err;
+    // THE UNIQUE INDEX'S PROMISE, KEPT. `{userId, idempotencyKey}` is the race
+    // authority; until now nothing resolved the loser's E11000, so a replayed
+    // key — a double-tap, or a press after the first run had already finished —
+    // fell out of this service as an unhandled write error and reached the
+    // client as a 500 it then kept its poisoned key across. Replaying the run
+    // the key already owns is the only safe answer: a second run would race
+    // Mirage's non-idempotent creates with the first one's worker.
+    const existing = await CatalogPublishRun.findOne({
+      userId: catalog.userId,
+      idempotencyKey: options.idempotencyKey,
+    })
+      .lean()
+      .exec();
+    // Lost to a prune or a delete. The index still holds the key, so there is
+    // genuinely nothing to replay AND nothing new can be created under it —
+    // the one honest 500 left on this path. The client's escape is a
+    // pull-to-refresh, which retires the key.
+    if (!existing) throw err;
+    return {
+      outcome: 'REPLAYED',
+      run: {
+        runId: String(existing._id),
+        state: existing.state,
+        mode: existing.mode,
+        snapshotRevision: existing.snapshotRevision,
+      },
+      publicUrl: customerUrl(catalog),
+    };
+  }
   const runId = run._id as Types.ObjectId;
 
   const job = await Job.create({
@@ -846,11 +895,15 @@ export async function requestUnpublish(userId: string): Promise<UnpublishResult>
     return { outcome: 'IN_PROGRESS', runId: active.runId };
   }
 
+  // What to put back if no run ends up doing the substantive half.
+  const previousStatus = catalog.status;
+  const mirageRestaurantId = catalog.mirageRestaurantId;
+
   // The soft switch first, so the page goes dark immediately rather than after
   // however long the item deletes take. A Mirage that refuses it is not fatal:
   // the run still removes the items, which is the substantive half.
   try {
-    await getMirageClient().updateRestaurant(catalog.mirageRestaurantId, { isPublished: false });
+    await getMirageClient().updateRestaurant(mirageRestaurantId, { isPublished: false });
   } catch (err) {
     if (!(err instanceof MirageError)) throw err;
     console.warn(
@@ -864,9 +917,44 @@ export async function requestUnpublish(userId: string): Promise<UnpublishResult>
     { timestamps: false }
   ).exec();
 
+  /**
+   * Undoes the destructive half when no run was queued to finish the job.
+   *
+   * THE ORDER STAYS AS IT IS — the page going dark immediately is the point of
+   * this endpoint — so the answer to "the run never started" is to compensate,
+   * not to reorder. A page left dark with no run to remove the items is the one
+   * state nothing else in the system repairs: the catalog reads UNPUBLISHED, so
+   * the next publish is what a user would have to think of, and meanwhile the
+   * items are still over there.
+   *
+   * The Mirage restore is BEST-EFFORT and logged. A Mirage that refuses it
+   * leaves the page dark, which is recoverable by publishing; throwing here
+   * would leave the caller with no answer at all.
+   */
+  const restore = async (): Promise<void> => {
+    await Catalog.updateOne(
+      { _id: catalogId },
+      { $set: { status: previousStatus } },
+      { timestamps: false }
+    ).exec();
+    await getMirageClient()
+      .updateRestaurant(mirageRestaurantId, { isPublished: true })
+      .catch((err: unknown) => {
+        console.warn('[catalog] unpublish rollback could not restore isPublished', err);
+      });
+  };
+
   const queued = await openRun(catalog, { mode: 'UNPUBLISH' });
   if (queued.outcome === 'QUEUED') return { outcome: 'QUEUED', run: queued.run };
-  if (queued.outcome === 'IN_PROGRESS') return queued;
+
+  if (queued.outcome === 'IN_PROGRESS') {
+    // Someone else's run holds the catalog. Ours never started.
+    await restore();
+    return queued;
+  }
+
+  // openRun could not queue and could not name a winner. Same compensation.
+  await restore();
   return { outcome: 'NOT_FOUND' };
 }
 
@@ -909,7 +997,7 @@ export interface PublishStatusDto {
     counts: ICatalogPublishRun['counts'];
     startedAt: string | null;
     finishedAt: string | null;
-    error?: { code: string; message: string };
+    error?: { code: string; message: string; suggestedName?: string };
   } | null;
   products: PublishProductStatusDto[];
   /** What would block a publish right now — the same set POST /publish uses. */
@@ -973,7 +1061,21 @@ export async function getPublishStatus(
             counts: run.counts,
             startedAt: run.startedAt?.toISOString() ?? null,
             finishedAt: run.finishedAt?.toISOString() ?? null,
-            ...(run.error ? { error: { code: run.error.code, message: run.error.message } } : {}),
+            // Field by field, never a spread — the same rule the product
+            // projection below states. An absent suggestion omits the KEY
+            // rather than sending null, so the client's "is there a rename to
+            // offer" test is one non-empty check.
+            ...(run.error
+              ? {
+                  error: {
+                    code: run.error.code,
+                    message: run.error.message,
+                    ...(run.error.suggestedName
+                      ? { suggestedName: run.error.suggestedName }
+                      : {}),
+                  },
+                }
+              : {}),
           }
         : null,
       // Field by field, never a spread — `syncError.at` and every mapping field

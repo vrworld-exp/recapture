@@ -867,7 +867,60 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   active run only) so both screens can say "your latest changes are not in this
   publish" mid-run. RUN-level codes (`PublishErrorCode.*`, `PUBLISH_ABANDONED`)
   have copy in `sync_error_copy.dart`; the enumerating test does not scan the
-  processor, so add copy by hand when adding a run-level code.
+  processor, so add copy by hand when adding a run-level code. A run-level code
+  can ALSO be an envelope code now (`CATALOG_NAME_TAKEN`), so `PublishRun.
+  errorCopy` resolves through `catalogErrorCopy` — the total function — and not
+  through `syncErrorCopy`, which only knows `PUBLISH_*`.
+- **A run that failed has to SAY so, and the run document is the only witness.**
+  A FAILED `RESTAURANT` step aborts the walk and marks NO product row
+  (`recordRowFailure` returns early — the restaurant has no row, and faking one
+  would make "Retry failed" re-run products nothing attempted), so the
+  per-product failure list is empty and neither the failure card nor the success
+  card applies. Three things make that visible instead of silent: the processor
+  finalises with the FIRST failed step's own `{code, message, suggestedName}`
+  rather than a hardcoded `RESTAURANT_UNAVAILABLE`; the status endpoint projects
+  `run.error.suggestedName` field by field; and `PublishBody` renders
+  `_RunFailureCard` (Try again → **publish**, never retry — `requestRetry` would
+  answer `NOTHING_TO_RETRY`) or, when the code is `CATALOG_NAME_TAKEN` with a
+  suggestion, the existing `_NameTakenCard`. The three cards are mutually
+  exclusive and PARTIAL runs are untouched: `resolveRunState` only answers FAILED
+  when `synced === 0`, so eight-of-ten still finalises with no run error.
+- **The publish screen's toast counts ROWS, not plan steps.** `run.counts`
+  include the RESTAURANT and CATEGORY steps, so "1 of 12 could not be published"
+  was describing a twelve-step plan over ten products — and pointing at a retry
+  list that a run-level failure does not render.
+- **A replayed Idempotency-Key is answered, not 500'd.** `openRun` catches the
+  `{userId, idempotencyKey}` index's E11000 (through the house
+  `isDuplicateKeyError`) and returns `REPLAYED` — **200**, `{runId, queued:
+  false, replayed: true}`, not 202, because that request queued nothing. Both
+  doors answer it identically and the client maps `replayed` (not the status
+  code) onto `PublishAlreadyRunning`. `PublishFlow` keeps its key only where the
+  request could still be unanswered — transport, 5xx, 408, 429 — and clears it
+  on any other 4xx and on `refresh()`, which is the one gesture that recovers a
+  wedged screen.
+- **A failed POLL is not a failed PUBLISH.** `PublishScreenState.pollFailure` is
+  separate from `actionFailure` and is rendered INLINE (`publish_poll_stale_note`
+  / `publish_poll_stopped_note`), never toasted — a dropped request during a
+  healthy run used to announce "Your catalog could not be published" over a
+  progress bar that was still moving. The loop stops on a 401/403/404 (a fact
+  about this catalog and session, not about the moment) and after
+  `_runPollFailureCap` consecutive failures; only a successful read or an
+  explicit `refresh()` resets that counter — never the lifecycle listener, or a
+  hidden browser tab would hand a dead server a fresh budget.
+- **The auto-start intent survives a gate that clears ITSELF.**
+  `publishAutoStartSettled` (one helper, both screens) leaves `?start=1` ARMED
+  while the subscription verdict is unsettled or blocking (the pay-then-publish
+  continuation) AND while `isWaitingOnGates` — a preview rendering, a model
+  generating. Every other gate is fixed on another screen and spends the intent.
+  Nothing bounds the wait explicitly: the gate poll stops at `_gatePollCap`, and
+  once it stops the gates cannot clear, so the intent expires with the loop.
+- **Unpublish COMPENSATES; it does not reorder.** The Mirage `isPublished: false`
+  flip stays first (the page going dark immediately is the point), so when
+  `openRun` fails to queue, `requestUnpublish` restores the previous `status` and
+  re-sends `isPublished: true`. The Mirage half is best-effort and logged — a
+  page left dark is recoverable by publishing, whereas throwing would leave the
+  caller with no answer. A page dark with no run to remove the items is the one
+  state nothing else repairs.
 - **The rep arranges the menu with the OWNER's tools, delegated — a category
   manager and a dish reorder, both copies, not parameterisations.**
   `/rep/catalogs/:id/categories` (`RepCategoryManagerScreen`) is the owner's

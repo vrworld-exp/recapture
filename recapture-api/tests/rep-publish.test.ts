@@ -62,6 +62,9 @@ beforeAll(async () => {
   await QrCode.syncIndexes();
   await Catalog.syncIndexes();
   await CatalogDelegation.syncIndexes();
+  // The unique partial index on {userId, idempotencyKey}. Without it the
+  // replayed-key case below creates a second run and proves nothing.
+  await CatalogPublishRun.syncIndexes();
 });
 
 afterAll(async () => {
@@ -362,6 +365,71 @@ describe('the rep and the owner are told the same thing', () => {
     expect(repRes.body.publish.run.error.code).toBe('PUBLISH_RESTAURANT_UNAVAILABLE');
     // The same payload through both doors.
     expect(repRes.body).toEqual(ownerRes.body);
+  });
+
+  it('carries a run error’s suggested name through both doors identically', async () => {
+    const { rep, catalogId, owner } = await activated('BBBB8888', '+919876500038', 'Cobalt Cafe');
+    await addPhotoDish(rep, catalogId);
+    await request(app).post(`/rep/catalogs/${catalogId}/publish`).set(rep.auth).expect(202);
+    const run = await CatalogPublishRun.findOne({ catalogId }).exec();
+    await CatalogPublishRun.updateOne(
+      { _id: run!._id },
+      {
+        $set: {
+          state: 'FAILED',
+          finishedAt: new Date(),
+          error: {
+            code: 'CATALOG_NAME_TAKEN',
+            message: 'That name is already taken online. Try "cobalt_cafe_2".',
+            suggestedName: 'cobalt_cafe_2',
+          },
+        },
+      }
+    ).exec();
+    await Catalog.updateOne({ _id: catalogId }, { $set: { activePublishRunId: null } }).exec();
+
+    const repRes = await request(app)
+      .get(`/rep/catalogs/${catalogId}/publish/status`)
+      .set(rep.auth);
+    const ownerRes = await request(app).get('/catalog/publish/status').set(owner.auth);
+
+    // The rename card is the rep's way out as much as the owner's — a rep
+    // standing at the table is exactly who needs it.
+    expect(repRes.body.publish.run.error.suggestedName).toBe('cobalt_cafe_2');
+    expect(repRes.body).toEqual(ownerRes.body);
+  });
+
+  it('answers a replayed Idempotency-Key exactly as the owner’s door does', async () => {
+    const { rep, catalogId } = await activated('BBBB9999', '+919876500039', 'Amber Grill');
+    await addPhotoDish(rep, catalogId);
+
+    const first = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish`)
+      .set(rep.auth)
+      .set('Idempotency-Key', 'rep-replay-1');
+    expect(first.status).toBe(202);
+
+    // Finish the run and drop the lock, so the second press reaches `create`
+    // rather than the in-progress check.
+    await CatalogPublishRun.updateOne(
+      { _id: first.body.runId },
+      { $set: { state: 'SUCCEEDED', finishedAt: new Date() } }
+    ).exec();
+    await Catalog.updateOne({ _id: catalogId }, { $set: { activePublishRunId: null } }).exec();
+
+    const replay = await request(app)
+      .post(`/rep/catalogs/${catalogId}/publish`)
+      .set(rep.auth)
+      .set('Idempotency-Key', 'rep-replay-1');
+
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual({
+      status: 'success',
+      runId: first.body.runId,
+      queued: false,
+      replayed: true,
+    });
+    expect(await CatalogPublishRun.countDocuments({ idempotencyKey: 'rep-replay-1' })).toBe(1);
   });
 
   it('retries only the failed rows through the rep door, like the owner', async () => {

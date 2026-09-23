@@ -24,6 +24,16 @@ abstract final class CatalogErrorCodes {
   /// duplicate here rather than letting publish fail later.
   static const duplicateName = 'DUPLICATE_NAME';
 
+  /// Another business already holds this catalog's name on Mirage. Arrives two
+  /// ways — a synchronous 409 from `POST /catalog/publish`, and (since the run
+  /// carries its real error) as a RUN-level error code on the publish status —
+  /// and both offer the same one-tap rename.
+  static const catalogNameTaken = 'CATALOG_NAME_TAKEN';
+
+  /// Too many requests in the window. The envelope carries `retryAfter` and the
+  /// response a `Retry-After` header; see [CatalogFailure.retryAfterSeconds].
+  static const rateLimited = 'RATE_LIMITED';
+
   /// The client's id set no longer matches the server's — reload and retry.
   static const idSetMismatch = 'ID_SET_MISMATCH';
 
@@ -55,6 +65,7 @@ class CatalogFailure implements Exception {
     required this.message,
     this.statusCode,
     this.isOffline = false,
+    this.retryAfterSeconds,
   });
 
   /// The envelope's `code`, or a local sentinel when the request never got an
@@ -69,6 +80,14 @@ class CatalogFailure implements Exception {
   /// Transport failure — no connection, DNS, or a timeout. Worth its own flag
   /// because the retry affordance differs: nothing the user typed was wrong.
   final bool isOffline;
+
+  /// How long to wait before trying again, in seconds, from a 429.
+  ///
+  /// Null when the server did not say, or said it in a shape we do not read.
+  /// The copy layer treats null as "we do not know" and falls back to the
+  /// generic `RATE_LIMITED` sentence rather than inventing a number — see
+  /// `retryAfterAction`.
+  final int? retryAfterSeconds;
 
   bool get isNoCatalog => code == CatalogErrorCodes.noCatalog;
   bool get isAnalyticsUnavailable =>
@@ -95,6 +114,7 @@ class CatalogFailure implements Exception {
   factory CatalogFailure.fromDio(DioException error) {
     final response = error.response;
     final body = response?.data;
+    final retryAfter = _retryAfterFrom(error);
 
     if (body is Map) {
       final code = body['code'];
@@ -106,6 +126,7 @@ class CatalogFailure implements Exception {
               ? message.trim()
               : _fallbackMessage,
           statusCode: response?.statusCode,
+          retryAfterSeconds: retryAfter,
         );
       }
     }
@@ -126,7 +147,37 @@ class CatalogFailure implements Exception {
           : _fallbackMessage,
       statusCode: response?.statusCode,
       isOffline: offline,
+      retryAfterSeconds: retryAfter,
     );
+  }
+
+  /// The wait a 429 asked for, in seconds.
+  ///
+  /// TWO SOURCES, HEADER FIRST. `Retry-After` is the standard one and survives
+  /// anything in the path that speaks HTTP but not our envelope; the envelope's
+  /// own `retryAfter` is what this API has sent all along and is the fallback.
+  /// An HTTP-date is legal in the header and is deliberately NOT parsed — we
+  /// take an integer or nothing, because a half-understood date would put a
+  /// wrong number in a sentence, which is worse than the generic one.
+  static int? _retryAfterFrom(DioException error) {
+    final response = error.response;
+    if (response == null) return null;
+
+    final header = response.headers.value('retry-after');
+    final fromHeader = header == null ? null : int.tryParse(header.trim());
+    if (fromHeader != null && fromHeader > 0) return fromHeader;
+
+    final body = response.data;
+    if (body is Map) {
+      final value = body['retryAfter'];
+      if (value is int && value > 0) return value;
+      if (value is num && value > 0) return value.round();
+      if (value is String) {
+        final parsed = int.tryParse(value.trim());
+        if (parsed != null && parsed > 0) return parsed;
+      }
+    }
+    return null;
   }
 
   static const _fallbackMessage = 'Something went wrong. Please try again.';

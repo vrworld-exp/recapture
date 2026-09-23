@@ -44,6 +44,14 @@ Future<PublishRequestResult> postPublishRequest(
       // outcome the user asked for, so it is not a broken contract.
       return const PublishNothingToRetry();
     }
+    if (body?['replayed'] == true) {
+      // 200 with a run id: this Idempotency-Key had already made that run, and
+      // nothing was queued by this press. Identical to a 409 in every way that
+      // matters to a screen — a run exists, go and watch it — so it reuses that
+      // result rather than growing a fourth one, which also means the key is
+      // retired on the existing path.
+      return PublishAlreadyRunning(runId);
+    }
     return PublishQueued(
       runId: runId,
       publicUrl: catalogText(body?['publicUrl']),

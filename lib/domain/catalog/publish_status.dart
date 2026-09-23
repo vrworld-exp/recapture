@@ -19,6 +19,7 @@ import '../entities/catalog_json.dart';
 import '../entities/catalog_status.dart';
 import '../entities/product_sync_status.dart';
 import '../entities/product_type.dart';
+import 'catalog_error_copy.dart';
 import 'publish_gate.dart';
 import 'sync_error_copy.dart';
 
@@ -147,6 +148,7 @@ class PublishRun {
     this.startedAt,
     this.finishedAt,
     this.errorCode,
+    this.suggestedName,
   });
 
   final String id;
@@ -160,10 +162,24 @@ class PublishRun {
   /// from [errorCopy]; the payload's own `message` is never read.
   final String? errorCode;
 
+  /// On `CATALOG_NAME_TAKEN` only: the name the server says Mirage will accept.
+  ///
+  /// A NAME, NOT PROSE — the one thing that crosses from the run's error
+  /// besides the code, and only because the rename card has to put it in the
+  /// button. Absent on every run written before the field existed.
+  final String? suggestedName;
+
   bool get hasError => errorCode != null;
 
   /// OUR sentence for a run-level failure.
-  SyncErrorCopy get errorCopy => syncErrorCopy(errorCode);
+  ///
+  /// [catalogErrorCopy], not [syncErrorCopy]: a RUN-level code can be an
+  /// ENVELOPE code (`CATALOG_NAME_TAKEN`, now that a collision found mid-run
+  /// reaches the run document) as well as a per-item `PUBLISH_*` one, and only
+  /// the envelope table knows the first kind. That function is total and falls
+  /// through to the sync table for `PUBLISH_*`, so nothing that resolved before
+  /// stops resolving.
+  CatalogErrorCopy get errorCopy => catalogErrorCopy(errorCode);
 
   factory PublishRun.fromMap(Map<String, dynamic> map) {
     final error = map['error'];
@@ -176,9 +192,13 @@ class PublishRun {
           : const PublishRunCounts(),
       startedAt: catalogDate(map['startedAt']),
       finishedAt: catalogDate(map['finishedAt']),
-      // The code, and ONLY the code — see this file's header.
+      // The code, and ONLY the code — see this file's header. `suggestedName`
+      // is the documented exception and is a name, not a sentence.
       errorCode: error is Map<String, dynamic>
           ? catalogText(error['code'])
+          : null,
+      suggestedName: error is Map<String, dynamic>
+          ? catalogText(error['suggestedName'])
           : null,
     );
   }
