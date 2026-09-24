@@ -143,6 +143,12 @@ do not remove it).
     mask**. Below ADMIN the field is **absent** and the opaque `ownerId` is all
     staff get. Absent is also what an owner id that no longer resolves produces,
     so the client falls back to the opaque line rather than rendering a blank.
+    The same list-safe summary (never contact) also rides on the ADMIN-only
+    subscription surfaces: `owner` on `GET /admin/subscriptions` rows and on
+    `GET /admin/catalogs/:id/subscription`, and `owner` / `initiatedBy` /
+    the resolver on every payment-journal entry. The owner-name search there
+    (`q`) matches `displayName` only. Contact stays one tap further, behind the
+    route below.
   - `GET /admin/users/:id` (`requireRole('ADMIN')`, `services/adminUsersService.ts`)
     answers with a **RAW phone/email**. It was the only route in this API that
     did; the rep `accountPhone` below is the second, and there are no others. It
@@ -1060,8 +1066,11 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   - **The ledger is append-only.** Post-insert writes on a `PaymentRecord` are
     exactly: a MANUAL row's verification fields (once, conditional), a PAID
     row's `appliedAt` (once, conditional), a CHECKOUT_CREATED row's `expiresAt`
-    (closing it), and a REFUNDED row's `note` when Razorpay reports the refund's
-    fate. There is no generic update helper; do not add one. The unique index
+    (closing it), a REFUNDED row's `note` when Razorpay reports the refund's
+    fate, and a PAID row's `adminResolution` (once, conditional on its absence —
+    the journal's "Apply to catalog"; the original refusal `note` is kept beside
+    it). `recordedVia` is written at insert only. There is no generic update
+    helper; do not add one. The unique index
     on `providerOrderId` is scoped by `kind` so a checkout row and its PAID row
     may share an order id. `subscriptionId` is optional — an owner may pay
     before any subscription row exists.
@@ -1079,6 +1088,28 @@ the owner's `modelCount`, their models list and the project detail's viewer with
     never `ALL`) plus a `console.error`; it never throws. Used for amount
     mismatch, unknown order, orphan payment, duplicate, external refund, failed
     refund and silent webhooks.
+  - **The payment journal (`paymentJournalService.ts`, ADMIN-only, Sept 2026)**
+    is where those alerts get FIXED without leaving the app. One entry per
+    Razorpay order, keyed on the order id, with five server-computed steps
+    (STARTED → PROVIDER → RECORDED → APPLIED → CATALOG) and a stage; the client
+    only draws them. The CATALOG step is an exact check, not a stored flag:
+    `applyRecordedPayment` passes the same `now` as `paidAt` (= `periodStart`)
+    and as `appliedAt`, so a row whose `periodStart` is EARLIER than the
+    payment's apply time is money that never reached the catalog
+    (`NOT_REFLECTED`). Routes: `GET /admin/subscriptions/payments?filter=
+    ATTENTION|ALL|SUCCEEDED|NOT_COMPLETED`, `GET …/:orderId`, and two fixes —
+    `POST …/:orderId/sync` ("Check with Razorpay": asks Razorpay and runs the
+    webhook's own record/apply; never activates what Razorpay has not captured;
+    idempotent; metered per admin; works on orders past the reconciler's 48 h
+    window) and `POST …/:orderId/apply` ("Apply to catalog": flagged or
+    unreflected payments only, a ≥20-char note, exactly once, period starts
+    now). **The override's claim-and-apply is `webhookService.applyPaymentByAdmin`,
+    not code in the journal** — every activation of an ONLINE payment stays in
+    `webhookService`, and the `applyPaidPeriod` caller grep in
+    `tests/subscription-admin-actions.test.ts` still lists exactly three files.
+    "Start plan" in the app is the existing `CREATE_AND_VERIFY`. Guardrails:
+    `tests/subscription-payment-journal.test.ts`,
+    `test/admin/admin_payment_journal_test.dart`.
 - **The rep's "Notify owner to pay" nudge is a MESSAGE, never a payment
   (Stage 4, `docs/subscription/stage-04-rep-tools.md`).** `POST
   /rep/catalogs/:id/subscription/notify-owner` (delegated, NO body) →

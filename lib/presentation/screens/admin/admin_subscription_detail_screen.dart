@@ -1,7 +1,10 @@
 // lib/presentation/screens/admin/admin_subscription_detail_screen.dart
 //
-// One restaurant's subscription, for an admin: the status card, the cash
-// requests waiting for a decision, the actions, and the ledger.
+// One restaurant's subscription, for an admin: the status card, who the
+// restaurant and its owner are (a name; "Contact" opens the audited sheet),
+// the cash requests waiting for a decision, the actions (start a plan or a
+// trial, comp, grace, resyncs, standees), every online payment attempt, and
+// the ledger.
 //
 // EVERY ACTION IS A DIALOG WITH A NOTE, and the two that move money or
 // entitlement in the owner's favour say the AC-5.2 sentence again — an admin
@@ -11,7 +14,9 @@
 // flagged duplicate (E5's escape hatch). Nothing here is a one-tap.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/admin/admin_subscriptions_notifier.dart';
@@ -26,6 +31,8 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../catalog/subscription_screen.dart' show PaymentHistoryRow;
+import '../projects/project_owner_sheet.dart';
+import 'admin_payment_widgets.dart';
 
 class AdminSubscriptionDetailScreen extends ConsumerStatefulWidget {
   const AdminSubscriptionDetailScreen({super.key, required this.catalogId});
@@ -148,6 +155,57 @@ class _AdminSubscriptionDetailScreenState
     );
   }
 
+  /// "Start plan" — the admin collected the money (cash, UPI, or a Razorpay
+  /// payment that reached no order). One CREATE_AND_VERIFY call.
+  Future<void> _startPlan(CatalogSubscription subscription) async {
+    final result = await showDialog<_StartPlanInput>(
+      context: context,
+      builder: (_) => _StartPlanDialog(subscription: subscription),
+    );
+    if (result == null || !mounted) return;
+    await _run(
+      () => _notifier.startPlan(result.request, override: result.override),
+      done: 'Plan started — ${result.request.planId.apiValue} '
+          '${result.request.interval.apiValue.toLowerCase()} is active.',
+      subject: 'The plan could not be started',
+    );
+  }
+
+  Future<void> _startTrial(CatalogSubscription subscription) async {
+    final plans = subscription.plans;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface1,
+        title: const Text('Start the free trial?'),
+        content: Text(
+          '${plans.trialDays} days, up to ${plans.trialThreeDCap} 3D dishes. '
+          'A restaurant gets one trial, ever.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const ValueKey('admin_start_trial_confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Start trial'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _run(
+      () => _notifier.startTrial(),
+      done: 'Trial started.',
+      subject: 'The trial could not be started',
+    );
+  }
+
+  void _openAttempt(String orderId) => context.push(
+      '${AppRoutes.adminPayments}/${Uri.encodeComponent(orderId)}');
+
   Future<void> _refund(PaymentRecordSummary row) async {
     final result = await showDialog<_RefundInput>(
       context: context,
@@ -215,6 +273,10 @@ class _AdminSubscriptionDetailScreenState
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         _StatusCard(detail: detail),
+        if (detail.owner != null || detail.catalogInfo != null) ...[
+          const SizedBox(height: AppSpacing.md),
+          _OwnerCatalogCard(detail: detail),
+        ],
         if (pending.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.md),
           Text('Awaiting verification', style: textTheme.titleSmall),
@@ -236,6 +298,25 @@ class _AdminSubscriptionDetailScreenState
             spacing: AppSpacing.sm,
             runSpacing: AppSpacing.sm,
             children: [
+              // The admin's door to a paid plan without the owner's checkout:
+              // cash in hand, a UPI transfer, or a Razorpay payment that
+              // never matched an order.
+              if (subscription != null)
+                AppButton(
+                  key: const ValueKey('admin_start_plan'),
+                  label: 'Start plan…',
+                  icon: Icons.add_card_outlined,
+                  isFullWidth: false,
+                  onPressed: _acting ? null : () => _startPlan(subscription),
+                ),
+              if (subscription != null && subscription.trialAvailable)
+                AppButton.secondary(
+                  key: const ValueKey('admin_start_trial'),
+                  label: 'Start trial',
+                  icon: Icons.hourglass_top_outlined,
+                  isFullWidth: false,
+                  onPressed: _acting ? null : () => _startTrial(subscription),
+                ),
               AppButton.secondary(
                 key: const ValueKey('admin_comp'),
                 label: 'Comp until…',
@@ -284,6 +365,25 @@ class _AdminSubscriptionDetailScreenState
                 ),
             ],
           ),
+        const SizedBox(height: AppSpacing.xxl),
+        Text('Online payments', style: textTheme.titleMedium),
+        const SizedBox(height: AppSpacing.sm),
+        if (detail.attempts.isEmpty)
+          Text(
+            'Nobody has started an online payment for this restaurant.',
+            key: const ValueKey('admin_no_attempts'),
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          )
+        else
+          for (final attempt in detail.attempts)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: PaymentAttemptTile(
+                attempt: attempt,
+                showCatalog: false,
+                onTap: () => _openAttempt(attempt.orderId),
+              ),
+            ),
         const SizedBox(height: AppSpacing.xxl),
         Text('Ledger', style: textTheme.titleMedium),
         const SizedBox(height: AppSpacing.sm),
@@ -405,6 +505,72 @@ class _StatusCard extends StatelessWidget {
                   : AppColors.textMuted,
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Who the restaurant is: the owner (a name; "Contact" opens the audited
+/// sheet with the raw phone/email) and the catalog's own facts.
+class _OwnerCatalogCard extends StatelessWidget {
+  const _OwnerCatalogCard({required this.detail});
+
+  final AdminSubscriptionDetail detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final owner = detail.owner;
+    final info = detail.catalogInfo;
+    final muted = textTheme.bodySmall?.copyWith(color: AppColors.textSecondary);
+    return AppCard(
+      key: const ValueKey('admin_owner_catalog'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (owner != null)
+            Row(
+              children: [
+                const Icon(Icons.person_outline,
+                    size: 20, color: AppColors.textMuted),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Owner: ${owner.displayLabel}',
+                    key: const ValueKey('admin_owner_name'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.bodyMedium,
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey('admin_owner_contact'),
+                  onPressed: () => showProjectOwnerSheet(context, owner: owner),
+                  child: const Text('Contact'),
+                ),
+              ],
+            ),
+          if (info != null) ...[
+            if (info.businessName != null)
+              Text('Business: ${info.businessName}', style: muted),
+            Text(
+              [
+                if (info.status != null) 'Menu ${info.status!.toLowerCase()}',
+                if (info.lastPublishedAt != null)
+                  'published ${formatSubscriptionDate(info.lastPublishedAt!)}',
+                info.onMirage ? 'on Mirage' : 'not on Mirage yet',
+                if (info.createdAt != null)
+                  'created ${formatSubscriptionDate(info.createdAt!)}',
+              ].join(' · '),
+              style: muted,
+            ),
+            if (info.publicUrl != null)
+              SelectableText(
+                info.publicUrl!,
+                style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+              ),
+          ],
         ],
       ),
     );
@@ -939,6 +1105,259 @@ class _StandeesDialogState extends State<_StandeesDialog> {
                     _note.text.trim().isEmpty ? null : _note.text.trim(),
                   )),
           child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StartPlanInput {
+  const _StartPlanInput(this.request, this.override);
+  final ManualPaymentRequest request;
+  final bool override;
+}
+
+/// "Start plan" — the plan, the period, how the money came in, and its
+/// reference. The amount starts at the plan price; a different amount needs
+/// the same override and 20-character reason as a mismatched cash VERIFY
+/// (E12), because it IS one. Says the A2 rule out loud when a period is
+/// running, and carries the AC-5.2 notice like every entitlement decision.
+class _StartPlanDialog extends StatefulWidget {
+  const _StartPlanDialog({required this.subscription});
+
+  final CatalogSubscription subscription;
+
+  @override
+  State<_StartPlanDialog> createState() => _StartPlanDialogState();
+}
+
+class _StartPlanDialogState extends State<_StartPlanDialog> {
+  late PlanDefinition? _plan = widget.subscription.planId == null
+      ? (widget.subscription.plans.plans.isEmpty
+          ? null
+          : widget.subscription.plans.plans.first)
+      : widget.subscription.plans.byId(widget.subscription.planId!) ??
+          (widget.subscription.plans.plans.isEmpty
+              ? null
+              : widget.subscription.plans.plans.first);
+  BillingInterval _interval = BillingInterval.monthly;
+  ManualMethod _method = ManualMethod.upi;
+  final _amount = TextEditingController();
+  final _reference = TextEditingController();
+  final _note = TextEditingController();
+  bool _override = false;
+
+  /// Until the admin types an amount, it follows the plan and interval.
+  bool _amountEdited = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncAmount();
+  }
+
+  @override
+  void dispose() {
+    _amount.dispose();
+    _reference.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  int? get _quote {
+    final plan = _plan;
+    if (plan == null) return null;
+    return _interval == BillingInterval.yearly
+        ? plan.yearlyPricePaise
+        : plan.priceMonthlyPaise;
+  }
+
+  void _syncAmount() {
+    if (_amountEdited) return;
+    final quote = _quote;
+    if (quote == null) return;
+    _amount.text = quote % 100 == 0
+        ? '${quote ~/ 100}'
+        : (quote / 100).toStringAsFixed(2);
+  }
+
+  bool get _running => switch (widget.subscription.status) {
+        SubscriptionStatus.active ||
+        SubscriptionStatus.trial ||
+        SubscriptionStatus.comped ||
+        SubscriptionStatus.grace =>
+          true,
+        _ => false,
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final plans = widget.subscription.plans.plans;
+    final amount = parseRupeesToPaise(_amount.text);
+    final quote = _quote;
+    final mismatch = amount != null && quote != null && amount != quote;
+    final canSubmit = _plan != null &&
+        amount != null &&
+        _reference.text.trim().isNotEmpty &&
+        (!mismatch || (_override && _note.text.trim().length >= 20));
+    return AlertDialog(
+      backgroundColor: AppColors.surface1,
+      title: const Text('Start a plan'),
+      content: SingleChildScrollView(
+        child: Column(
+          key: const ValueKey('admin_start_plan_dialog'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Use this when you have the money in hand — cash, a UPI or bank '
+              'transfer, or a Razorpay payment that never reached an order.',
+              style:
+                  textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            Text('Plan', style: textTheme.labelLarge),
+            const SizedBox(height: AppSpacing.xs),
+            Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.sm,
+              children: [
+                for (final plan in plans)
+                  ChoiceChip(
+                    key: ValueKey('admin_start_plan_${plan.planId.apiValue}'),
+                    label: Text(plan.displayName),
+                    selected: _plan?.planId == plan.planId,
+                    showCheckmark: false,
+                    onSelected: (_) => setState(() {
+                      _plan = plan;
+                      _syncAmount();
+                    }),
+                  ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Wrap(
+              spacing: AppSpacing.sm,
+              children: [
+                for (final interval in BillingInterval.values)
+                  ChoiceChip(
+                    key: ValueKey('admin_start_interval_${interval.apiValue}'),
+                    label: Text(interval == BillingInterval.yearly
+                        ? 'Yearly'
+                        : 'Monthly'),
+                    selected: _interval == interval,
+                    showCheckmark: false,
+                    onSelected: (_) => setState(() {
+                      _interval = interval;
+                      _syncAmount();
+                    }),
+                  ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            DropdownButtonFormField<ManualMethod>(
+              key: const ValueKey('admin_start_method'),
+              initialValue: _method,
+              decoration: const InputDecoration(labelText: 'Paid by'),
+              items: [
+                for (final method in ManualMethod.values)
+                  DropdownMenuItem(value: method, child: Text(method.label)),
+              ],
+              onChanged: (m) => setState(() => _method = m ?? _method),
+            ),
+            TextField(
+              key: const ValueKey('admin_start_amount'),
+              controller: _amount,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: 'Amount received (₹)',
+                helperText:
+                    quote == null ? null : 'Plan price ${formatPaise(quote)}',
+                errorText: _amount.text.trim().isNotEmpty && amount == null
+                    ? 'Rupees, at most two decimals'
+                    : null,
+              ),
+              onChanged: (_) => setState(() => _amountEdited = true),
+            ),
+            TextField(
+              key: const ValueKey('admin_start_reference'),
+              controller: _reference,
+              maxLength: 200,
+              decoration: const InputDecoration(
+                labelText: 'Reference',
+                helperText: 'UPI txn id, Razorpay pay_… id, receipt number.',
+                counterText: '',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            if (mismatch)
+              CheckboxListTile(
+                key: const ValueKey('admin_start_override'),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: _override,
+                onChanged: (v) => setState(() => _override = v ?? false),
+                title: Text(
+                  'The amount differs from the plan price — start anyway',
+                  style: textTheme.bodyMedium,
+                ),
+              ),
+            TextField(
+              key: const ValueKey('admin_start_note'),
+              controller: _note,
+              maxLines: 2,
+              maxLength: 1000,
+              decoration: InputDecoration(
+                labelText: 'Note',
+                helperText: mismatch
+                    ? 'Required: why the amount differs (20+ characters).'
+                    : 'Optional.',
+                counterText: '',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            if (_running) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'A period is running. The new one starts today; unused days '
+                'on the current one are not carried over.',
+                key: const ValueKey('admin_start_forfeit'),
+                style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
+              ),
+            ],
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              kPaymentConsentLine,
+              style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const ValueKey('admin_start_plan_confirm'),
+          onPressed: canSubmit
+              ? () => Navigator.of(context).pop(_StartPlanInput(
+                    ManualPaymentRequest(
+                      planId: _plan!.planId,
+                      interval: _interval,
+                      amountPaise: amount,
+                      method: _method,
+                      reference: _reference.text.trim(),
+                      note: _note.text.trim().isEmpty
+                          ? null
+                          : _note.text.trim(),
+                    ),
+                    mismatch && _override,
+                  ))
+              : null,
+          child: const Text('Start plan'),
         ),
       ],
     );

@@ -153,6 +153,10 @@ export const AnalyticsEvent = {
   SUBSCRIPTION_MANUAL_PAYMENT_DECIDED: 'subscription_manual_payment_decided',
   SUBSCRIPTION_REFUND_ISSUED: 'subscription_refund_issued',
   SUBSCRIPTION_GRACE_EXTENDED: 'subscription_grace_extended',
+  // An admin fixed an online payment from the payment journal: `SYNC` asked
+  // Razorpay and ran the same record/apply the webhook would; `FORCE_APPLY`
+  // applied a flagged or unreflected payment's plan by hand, with a note.
+  SUBSCRIPTION_ADMIN_PAYMENT_FIXED: 'subscription_admin_payment_fixed',
   // A paid period applied onto a menu that already carries more 3D dishes
   // than the plan covers (E11). Activation is never blocked; this is the
   // admin-side record of the nudge the owner received.
@@ -1113,6 +1117,15 @@ const subscriptionGraceExtendedProps = z
   })
   .strict();
 
+const subscriptionAdminPaymentFixedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    admin_id_hash: z.string().min(1),
+    action: z.enum(['SYNC', 'FORCE_APPLY']),
+    outcome: z.string().min(1).max(40),
+  })
+  .strict();
+
 const subscriptionOverCapOnActivateProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1477,6 +1490,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_MANUAL_PAYMENT_DECIDED]: subscriptionManualPaymentDecidedProps,
   [AnalyticsEvent.SUBSCRIPTION_REFUND_ISSUED]: subscriptionRefundIssuedProps,
   [AnalyticsEvent.SUBSCRIPTION_GRACE_EXTENDED]: subscriptionGraceExtendedProps,
+  [AnalyticsEvent.SUBSCRIPTION_ADMIN_PAYMENT_FIXED]: subscriptionAdminPaymentFixedProps,
   [AnalyticsEvent.SUBSCRIPTION_OVER_CAP_ON_ACTIVATE]: subscriptionOverCapOnActivateProps,
   [AnalyticsEvent.RAZORPAY_WEBHOOK_REJECTED]: razorpayWebhookRejectedProps,
   [AnalyticsEvent.ADMIN_ALERT_SENT]: adminAlertSentProps,

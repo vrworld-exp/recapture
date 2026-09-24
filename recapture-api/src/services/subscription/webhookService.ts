@@ -28,6 +28,7 @@ import { PaymentRecord, type IPaymentRecord, type PaymentQuote } from '@/models/
 import {
   BILLING_INTERVALS,
   PLAN_IDS,
+  type Actor,
   type BillingInterval,
   type PlanId,
   type SubscriptionStatus,
@@ -64,7 +65,7 @@ export interface OnlinePaymentInput {
   amountPaise: number;
   /** The order's `notes` as Razorpay echoes them — our own breadcrumb (E3). */
   notes?: Record<string, unknown> | null;
-  via: Extract<ApplyVia, 'WEBHOOK' | 'RECONCILE' | 'CLIENT'>;
+  via: ApplyVia;
   now?: Date;
 }
 
@@ -187,6 +188,7 @@ async function recordPaidRow(
       providerPaymentId: input.paymentId,
       idempotencyKey,
       initiatedBy: { userId: ctx.ownerUserId, role: 'USER' },
+      recordedVia: input.via,
       appliedAt: null,
     });
     return { row, inserted: true };
@@ -220,7 +222,7 @@ async function recordPaidRow(
  */
 export async function applyRecordedPayment(
   paid: IPaymentRecord,
-  via: Extract<ApplyVia, 'WEBHOOK' | 'RECONCILE' | 'CLIENT'>,
+  via: ApplyVia,
   now: Date = new Date()
 ): Promise<OnlinePaymentOutcome> {
   if (paid.appliedAt) return 'ALREADY_APPLIED';
@@ -325,6 +327,60 @@ export async function applyRecordedPayment(
   }
 
   return note ?? 'APPLIED';
+}
+
+/**
+ * The admin's override for ONE recorded PAID row — "Apply to catalog" in the
+ * payment journal. `paymentJournalService.forceApplyPayment` decides WHETHER
+ * (flagged, or applied yet missing from the subscription row); this does it,
+ * here, so every activation of an online payment stays in this file.
+ *
+ * Claimed first, applied second: the `adminResolution` write is guarded on
+ * its absence, so two admins pressing at once apply once. The period starts
+ * at `now` (AC-3.5) with the frozen quote, exactly as a payment arriving now
+ * would. If the apply throws, the claim is released so the button works again.
+ *
+ * Returns false when another admin claimed the row first.
+ */
+export async function applyPaymentByAdmin(
+  paid: IPaymentRecord,
+  ownerUserId: Types.ObjectId,
+  admin: Actor,
+  note: string,
+  now: Date = new Date()
+): Promise<boolean> {
+  const quote = paid.quote;
+  if (!quote) throw new Error('applyPaymentByAdmin: a PAID row with no quote');
+  const paymentRecordId = paid._id as Types.ObjectId;
+  const claimed = await PaymentRecord.findOneAndUpdate(
+    { _id: paymentRecordId, kind: 'PAID', adminResolution: null },
+    { $set: { adminResolution: { action: 'APPLIED', by: admin, at: now, note } } },
+    { new: true }
+  ).exec();
+  if (!claimed) return false;
+
+  try {
+    await applyPaidPeriod({
+      catalogId: paid.catalogId,
+      ownerUserId,
+      planId: quote.planId,
+      interval: quote.interval,
+      source: 'ONLINE',
+      paidAt: now,
+      planSnapshot: quote.planSnapshot,
+      standeeIncluded: quote.planSnapshot.includedStandeeCount,
+      amountPaise: paid.amountPaise,
+      paymentRecordId,
+      via: 'ADMIN',
+    });
+  } catch (err) {
+    await PaymentRecord.updateOne(
+      { _id: paymentRecordId },
+      { $unset: { adminResolution: 1 } }
+    ).exec();
+    throw err;
+  }
+  return true;
 }
 
 /**

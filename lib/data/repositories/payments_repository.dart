@@ -16,6 +16,7 @@ import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../application/catalog/qr_download_file.dart';
+import '../../domain/entities/admin_payment_attempt.dart';
 import '../../domain/entities/catalog_subscription.dart';
 import '../../domain/entities/subscription_payment.dart';
 import '../remote/api_client.dart';
@@ -106,12 +107,55 @@ abstract interface class PaymentsRepository {
     VerificationStatus status = VerificationStatus.pending,
   });
 
+  /// `GET /admin/subscriptions?state=`. [query] narrows by restaurant or owner
+  /// name (server-side, case-insensitive).
   Future<AdminSubscriptionPage> subscriptions({
     required AdminSubscriptionFilter filter,
     String? cursor,
+    String? query,
   });
 
   Future<AdminSubscriptionDetail> subscriptionDetail(String catalogId);
+
+  // ── The payment journal ──────────────────────────────────────────────────
+
+  /// `GET /admin/subscriptions/payments?filter=` — every online payment
+  /// attempt with its pipeline, newest first.
+  Future<PaymentAttemptPage> paymentAttempts({
+    required AdminPaymentFilter filter,
+    String? cursor,
+  });
+
+  /// `GET /admin/subscriptions/payments/:orderId` — one attempt.
+  Future<PaymentAttempt> paymentAttempt(String orderId);
+
+  /// `POST …/:orderId/sync` — "Check with Razorpay". Records a captured
+  /// payment the webhook missed, finishes a half-applied one; never
+  /// activates what Razorpay does not confirm. 503 →
+  /// [PaymentErrorCodes.paymentsUnavailable].
+  Future<PaymentSyncResult> syncPaymentAttempt(String orderId);
+
+  /// `POST …/:orderId/apply` — "Apply to catalog", the human override for a
+  /// flagged payment or one the catalog does not show. [note] ≥ 20 chars.
+  Future<PaymentAttempt> forceApplyPaymentAttempt(
+    String orderId, {
+    required String note,
+  });
+
+  /// The admin collected the money themselves (or it reached Razorpay outside
+  /// any order): `CREATE_AND_VERIFY` — one call writes the MANUAL row and
+  /// verifies it, starting the plan. An amount that differs from the plan
+  /// price needs [override] and a 20-character note (E12).
+  Future<ManualPaymentRecord> startPlan(
+    String catalogId,
+    ManualPaymentRequest request, {
+    bool override = false,
+  });
+
+  /// `POST /admin/catalogs/:id/subscription/trial` — the same trial a rep can
+  /// start; 409 `TRIAL_ALREADY_USED` / `SUBSCRIPTION_ACTIVE` /
+  /// `TRIAL_NOT_ELIGIBLE` otherwise.
+  Future<CatalogSubscription> startTrial(String catalogId);
 
   /// VERIFY or REJECT one request. A reject needs a [note]; a verify of an
   /// amount that differs from the quote needs [override] plus a note of at
@@ -303,6 +347,7 @@ class RemotePaymentsRepository implements PaymentsRepository {
   Future<AdminSubscriptionPage> subscriptions({
     required AdminSubscriptionFilter filter,
     String? cursor,
+    String? query,
   }) =>
       mapCatalogErrors(() async {
         final state = filter.stateApiValue;
@@ -312,11 +357,13 @@ class RemotePaymentsRepository implements PaymentsRepository {
             message: 'The pending queue is read through manualPaymentQueue.',
           );
         }
+        final q = query?.trim() ?? '';
         final res = await _dio.get<Map<String, dynamic>>(
           '/admin/subscriptions',
           queryParameters: {
             'state': state,
-            if (cursor != null) 'cursor': cursor
+            if (cursor != null) 'cursor': cursor,
+            if (q.isNotEmpty) 'q': q.length > 60 ? q.substring(0, 60) : q,
           },
         );
         final raw = res.data?['items'];
@@ -342,6 +389,90 @@ class RemotePaymentsRepository implements PaymentsRepository {
           '/admin/catalogs/$catalogId/subscription',
         );
         return AdminSubscriptionDetail.fromMap(_object(res.data));
+      });
+
+  @override
+  Future<PaymentAttemptPage> paymentAttempts({
+    required AdminPaymentFilter filter,
+    String? cursor,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/admin/subscriptions/payments',
+          queryParameters: {
+            'filter': filter.apiValue,
+            if (cursor != null) 'cursor': cursor,
+          },
+        );
+        return PaymentAttemptPage(
+          items: PaymentAttempt.listFrom(res.data?['items']),
+          nextCursor: res.data?['nextCursor'] is String
+              ? res.data!['nextCursor'] as String
+              : null,
+        );
+      });
+
+  @override
+  Future<PaymentAttempt> paymentAttempt(String orderId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/admin/subscriptions/payments/${Uri.encodeComponent(orderId)}',
+        );
+        return PaymentAttempt.fromMap(_object(res.data?['attempt']));
+      });
+
+  @override
+  Future<PaymentSyncResult> syncPaymentAttempt(String orderId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/subscriptions/payments/${Uri.encodeComponent(orderId)}/sync',
+          data: const <String, dynamic>{},
+        );
+        return PaymentSyncResult(
+          outcome: PaymentSyncOutcomeX.fromApiValue(res.data?['result']),
+          provider: ProviderSnapshot.tryFrom(res.data?['provider']),
+          attempt: PaymentAttempt.fromMap(_object(res.data?['attempt'])),
+        );
+      });
+
+  @override
+  Future<PaymentAttempt> forceApplyPaymentAttempt(
+    String orderId, {
+    required String note,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/subscriptions/payments/${Uri.encodeComponent(orderId)}/apply',
+          data: {'note': note.trim()},
+        );
+        return PaymentAttempt.fromMap(_object(res.data?['attempt']));
+      });
+
+  @override
+  Future<ManualPaymentRecord> startPlan(
+    String catalogId,
+    ManualPaymentRequest request, {
+    bool override = false,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/catalogs/$catalogId/subscription/manual-payment',
+          data: {
+            'action': 'CREATE_AND_VERIFY',
+            ...request.toBody(),
+            if (override) 'override': true,
+          },
+        );
+        return ManualPaymentRecord.fromMap(_object(res.data?['paymentRecord']));
+      });
+
+  @override
+  Future<CatalogSubscription> startTrial(String catalogId) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/catalogs/$catalogId/subscription/trial',
+        );
+        return CatalogSubscription.fromMap(_object(res.data?['subscription']));
       });
 
   @override

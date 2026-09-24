@@ -9,6 +9,7 @@ import 'package:recapture/application/catalog/checkout_adapter.dart';
 import 'package:recapture/application/catalog/qr_download_file.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/payments_repository.dart';
+import 'package:recapture/domain/entities/admin_payment_attempt.dart';
 import 'package:recapture/domain/entities/catalog_subscription.dart';
 import 'package:recapture/domain/entities/subscription_payment.dart';
 
@@ -133,6 +134,19 @@ class FakePaymentsRepository implements PaymentsRepository {
   List<Map<String, Object?>> standeesSet = [];
   CatalogFailure? standeesFailure;
 
+  /// The journal, by filter; an unscripted filter answers an empty page.
+  Map<AdminPaymentFilter, PaymentAttemptPage> attemptPages = const {};
+
+  /// One attempt by order id — what the detail read answers.
+  Map<String, PaymentAttempt> attempts = {};
+  PaymentSyncResult Function(String orderId)? onSync;
+  CatalogFailure? syncFailure;
+  PaymentAttempt Function(String orderId, String note)? onForceApply;
+  CatalogFailure? forceApplyFailure;
+  List<Map<String, Object?>> plansStarted = [];
+  CatalogFailure? startPlanFailure;
+  CatalogFailure? startTrialFailure;
+
   @override
   Future<CheckoutOrder> createOrder({
     required PlanId planId,
@@ -214,10 +228,97 @@ class FakePaymentsRepository implements PaymentsRepository {
   Future<AdminSubscriptionPage> subscriptions({
     required AdminSubscriptionFilter filter,
     String? cursor,
+    String? query,
   }) async {
-    calls.add('subscriptions:${filter.name}:${cursor ?? ''}');
+    calls.add('subscriptions:${filter.name}:${cursor ?? ''}'
+        '${query == null || query.isEmpty ? '' : ':q=$query'}');
     return pages[filter] ??
         const AdminSubscriptionPage(items: [], nextCursor: null);
+  }
+
+  @override
+  Future<PaymentAttemptPage> paymentAttempts({
+    required AdminPaymentFilter filter,
+    String? cursor,
+  }) async {
+    calls.add('attempts:${filter.name}:${cursor ?? ''}');
+    return attemptPages[filter] ??
+        const PaymentAttemptPage(items: [], nextCursor: null);
+  }
+
+  @override
+  Future<PaymentAttempt> paymentAttempt(String orderId) async {
+    calls.add('attempt:$orderId');
+    final found = attempts[orderId];
+    if (found == null) {
+      throw const CatalogFailure(
+        code: PaymentErrorCodes.paymentNotFound,
+        message: 'not scripted',
+        statusCode: 404,
+      );
+    }
+    return found;
+  }
+
+  @override
+  Future<PaymentSyncResult> syncPaymentAttempt(String orderId) async {
+    calls.add('sync:$orderId');
+    final failure = syncFailure;
+    if (failure != null) throw failure;
+    final make = onSync;
+    if (make == null) throw UnimplementedError('sync not scripted');
+    final result = make(orderId);
+    attempts[orderId] = result.attempt;
+    return result;
+  }
+
+  @override
+  Future<PaymentAttempt> forceApplyPaymentAttempt(
+    String orderId, {
+    required String note,
+  }) async {
+    calls.add('forceApply:$orderId');
+    final failure = forceApplyFailure;
+    if (failure != null) throw failure;
+    final make = onForceApply;
+    if (make == null) throw UnimplementedError('forceApply not scripted');
+    final attempt = make(orderId, note);
+    attempts[orderId] = attempt;
+    return attempt;
+  }
+
+  @override
+  Future<ManualPaymentRecord> startPlan(
+    String catalogId,
+    ManualPaymentRequest request, {
+    bool override = false,
+  }) async {
+    calls.add('startPlan:$catalogId');
+    plansStarted.add({
+      'planId': request.planId.apiValue,
+      'interval': request.interval.apiValue,
+      'amountPaise': request.amountPaise,
+      'method': request.method.apiValue,
+      'reference': request.reference,
+      'note': request.note,
+      'override': override,
+    });
+    final failure = startPlanFailure;
+    if (failure != null) throw failure;
+    return ManualPaymentRecord.fromMap(manualPaymentPayload(
+      catalogId: catalogId,
+      amountPaise: request.amountPaise,
+      status: 'VERIFIED',
+      method: request.method.apiValue,
+    ));
+  }
+
+  @override
+  Future<CatalogSubscription> startTrial(String catalogId) async {
+    calls.add('startTrial:$catalogId');
+    final failure = startTrialFailure;
+    if (failure != null) throw failure;
+    return detail!.subscription!;
   }
 
   @override

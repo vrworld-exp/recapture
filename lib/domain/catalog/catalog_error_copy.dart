@@ -200,6 +200,16 @@ const Map<String, CatalogErrorCopy> _copy = {
     "Couldn't reach the payment service.",
     'Try again in a minute.',
   ),
+  // POST /catalog/subscription/verify. Only ever after the sheet said
+  // success, so never "unpaid": the server still settles the order itself.
+  'INVALID_PAYMENT_SIGNATURE': CatalogErrorCopy(
+    "We couldn't confirm this payment from the app.",
+    'Your plan will update here once the payment is confirmed.',
+  ),
+  'ORDER_NOT_FOUND': CatalogErrorCopy(
+    "We couldn't find this payment's order.",
+    'Your plan will update here once the payment is confirmed.',
+  ),
   'ALREADY_DECIDED': CatalogErrorCopy(
     'This payment request has already been verified or rejected.',
     'The list will refresh with the decision.',
@@ -235,6 +245,24 @@ const Map<String, CatalogErrorCopy> _copy = {
   'COLLECTOR_NOT_FOUND': CatalogErrorCopy(
     'That collector account was not found.',
     null,
+  ),
+
+  // ── The admin payment journal ─────────────────────────────────────────────
+  'ALREADY_RESOLVED': CatalogErrorCopy(
+    'An admin has already applied this payment to its catalog.',
+    'The entry will refresh with what was done.',
+  ),
+  'NOT_APPLIED_YET': CatalogErrorCopy(
+    'This payment has not been through the apply step yet.',
+    'Press "Check with Razorpay" to finish it instead.',
+  ),
+  'NO_QUOTE': CatalogErrorCopy(
+    'This payment carries no plan to apply.',
+    'Start the plan from the restaurant panel instead.',
+  ),
+  'NOT_NEEDED': CatalogErrorCopy(
+    'This payment was applied and the catalog already shows it.',
+    'Nothing to fix here.',
   ),
 
   // ── Request-level ─────────────────────────────────────────────────────────

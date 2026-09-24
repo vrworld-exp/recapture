@@ -17,8 +17,15 @@ import {
 } from '@/models/CatalogSubscription';
 import { PaymentRecord, type IPaymentRecord } from '@/models/PaymentRecord';
 import type { ProductModelStatus } from '@/models/types/catalog.types';
-import type { Actor, PlanId, SubscriptionStatus } from '@/models/types/subscription.types';
+import { User } from '@/models/User';
+import type {
+  Actor,
+  BillingInterval,
+  PlanId,
+  SubscriptionStatus,
+} from '@/models/types/subscription.types';
 import { getRazorpayClient, isRazorpayConfigured } from '@/providers/razorpay';
+import { summarizeOwners, type AdminOwnerSummary } from '@/services/adminUsersService';
 import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { enqueueArEntitlementJob } from '@/services/subscription/arEntitlementJobs';
 import {
@@ -438,7 +445,13 @@ export async function resyncPageState(
 export interface AdminSubscriptionListItem {
   catalogId: string;
   catalogName: string;
+  /**
+   * The catalog's owner, list-safe (a name, never contact) — the same shape
+   * the Live-projects "Created by" label uses. Null when the account is gone.
+   */
+  owner: AdminOwnerSummary | null;
   status: SubscriptionStatus;
+  billingInterval: BillingInterval | null;
   /** ISO. */
   periodEnd: string;
   graceEndsAt: string | null;
@@ -461,6 +474,8 @@ type ListRow = Pick<
   ICatalogSubscription,
   | '_id'
   | 'catalogId'
+  | 'userId'
+  | 'updatedAt'
   | 'status'
   | 'planId'
   | 'planSnapshot'
@@ -479,6 +494,8 @@ export const PAUSED_FOLLOW_UP_DAYS = 90;
 
 function stateFilter(state: AdminSubscriptionState, now: Date): Record<string, unknown> {
   switch (state) {
+    case 'ALL':
+      return {};
     case 'EXPIRING_7D':
       // Anything about to lapse into grace, whatever kind of period it is.
       return {
@@ -499,9 +516,54 @@ function stateFilter(state: AdminSubscriptionState, now: Date): Record<string, u
   }
 }
 
-/** The date each segment is ordered on: when the pause began, or the period's end. */
-function sortKeyFor(state: AdminSubscriptionState): 'pausedAt' | 'periodEnd' {
-  return state === 'PAUSED_90D' ? 'pausedAt' : 'periodEnd';
+/**
+ * The date each segment is ordered on, and which way: when the pause began,
+ * the period's end, or — for ALL — the last change, newest first.
+ */
+function sortFor(state: AdminSubscriptionState): {
+  key: 'pausedAt' | 'periodEnd' | 'updatedAt';
+  dir: 1 | -1;
+} {
+  if (state === 'ALL') return { key: 'updatedAt', dir: -1 };
+  return { key: state === 'PAUSED_90D' ? 'pausedAt' : 'periodEnd', dir: 1 };
+}
+
+/** Most catalogs a search can narrow to — a search is a lookup, not an export. */
+const SEARCH_MAX_CATALOGS = 500;
+
+/** `blue cafe` also finds the slug `blue_cafe`; everything else is literal. */
+function searchPattern(q: string): RegExp {
+  const words = q
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(words.join('[\\s_-]+'), 'i');
+}
+
+/**
+ * The catalog ids a search names: by restaurant name (the slug or the
+ * business name) or by the owner's display name. Soft-deleted catalogs are
+ * included — their subscription rows still exist and are still listed.
+ */
+async function catalogIdsMatching(q: string): Promise<Types.ObjectId[]> {
+  const pattern = searchPattern(q);
+  const owners = await User.find({ displayName: pattern })
+    .select({ _id: 1 })
+    .limit(SEARCH_MAX_CATALOGS)
+    .lean<{ _id: Types.ObjectId }[]>()
+    .exec();
+  const catalogs = await Catalog.find({
+    $or: [
+      { name: pattern },
+      { businessName: pattern },
+      ...(owners.length ? [{ userId: { $in: owners.map((o) => o._id) } }] : []),
+    ],
+  })
+    .select({ _id: 1 })
+    .limit(SEARCH_MAX_CATALOGS)
+    .lean<{ _id: Types.ObjectId }[]>()
+    .exec();
+  return catalogs.map((c) => c._id);
 }
 
 /**
@@ -509,27 +571,35 @@ function sortKeyFor(state: AdminSubscriptionState): 'pausedAt' | 'periodEnd' {
  * keyset-paginated on `(periodEnd, _id)` with the shared cursor codec (its
  * `updatedAt` slot carries `periodEnd` here; the client only echoes it).
  * `PAUSED_90D` sorts and paginates on `pausedAt` instead — the oldest pause
- * is the one most overdue for a call.
+ * is the one most overdue for a call. `ALL` is every row, most recently
+ * changed first. `q` narrows any segment to a restaurant or owner name.
  */
 export async function listSubscriptionsByState(
   state: AdminSubscriptionState,
   cursor: string | undefined,
   limit: number,
-  now: Date = new Date()
+  now: Date = new Date(),
+  q?: string
 ): Promise<ListSubscriptionsResult> {
-  const sortKey = sortKeyFor(state);
+  const { key: sortKey, dir } = sortFor(state);
   const filter: Record<string, unknown> = { ...stateFilter(state, now) };
   if (cursor) {
     const decoded = decodeCursor(cursor);
     if (!decoded) return { outcome: 'INVALID_CURSOR' };
+    const past = dir === 1 ? '$gt' : '$lt';
     filter.$or = [
-      { [sortKey]: { $gt: decoded.updatedAt } },
-      { [sortKey]: decoded.updatedAt, _id: { $gt: new Types.ObjectId(decoded.id) } },
+      { [sortKey]: { [past]: decoded.updatedAt } },
+      { [sortKey]: decoded.updatedAt, _id: { [past]: new Types.ObjectId(decoded.id) } },
     ];
+  }
+  if (q) {
+    const ids = await catalogIdsMatching(q);
+    if (ids.length === 0) return { outcome: 'OK', items: [], nextCursor: null };
+    filter.catalogId = { $in: ids };
   }
 
   const rows = await CatalogSubscription.find(filter)
-    .sort({ [sortKey]: 1, _id: 1 })
+    .sort({ [sortKey]: dir, _id: dir })
     .limit(limit + 1)
     .lean<ListRow[]>()
     .exec();
@@ -544,19 +614,28 @@ export async function listSubscriptionsByState(
   const catalogs =
     page.length > 0
       ? await Catalog.find({ _id: { $in: page.map((r) => r.catalogId) } })
-          .select({ name: 1 })
-          .lean<{ _id: Types.ObjectId; name: string }[]>()
+          .select({ name: 1, userId: 1 })
+          .lean<{ _id: Types.ObjectId; name: string; userId: Types.ObjectId }[]>()
           .exec()
       : [];
-  const names = new Map(catalogs.map((c) => [String(c._id), toDisplayName(c.name)]));
-  const coverage = await photoCoverageFor(page.map((r) => r.catalogId));
+  const byId = new Map(catalogs.map((c) => [String(c._id), c]));
+  const ownerIdOf = (row: ListRow) =>
+    String(byId.get(String(row.catalogId))?.userId ?? row.userId);
+  const [coverage, owners] = await Promise.all([
+    photoCoverageFor(page.map((r) => r.catalogId)),
+    summarizeOwners(page.map(ownerIdOf)),
+  ]);
 
   return {
     outcome: 'OK',
     items: page.map((row) => ({
       catalogId: String(row.catalogId),
-      catalogName: names.get(String(row.catalogId)) ?? '',
+      catalogName: byId.has(String(row.catalogId))
+        ? toDisplayName(byId.get(String(row.catalogId))!.name)
+        : '',
+      owner: owners.get(ownerIdOf(row)) ?? null,
       status: row.status,
+      billingInterval: row.billingInterval ?? null,
       periodEnd: row.periodEnd.toISOString(),
       graceEndsAt: row.graceEndsAt?.toISOString() ?? null,
       daysLeft: daysLeftFor(row, now),

@@ -27,6 +27,7 @@ import {
   UNCAPPED_THREE_D,
   type Actor,
   type BillingInterval,
+  type PaymentVia,
   type PlanCatalog,
   type PlanDefinition,
   type PlanId,
@@ -628,7 +629,7 @@ export async function startTrial(
 
 /** Which path is applying the period — an analytics dimension, not an authority. */
 /** CLIENT: the app's signed checkout response, verified server-side (clientVerifyService). */
-export type ApplyVia = 'WEBHOOK' | 'RECONCILE' | 'CLIENT' | 'ADMIN';
+export type ApplyVia = PaymentVia;
 
 export interface ApplyPaidPeriodInput {
   catalogId: Types.ObjectId;

@@ -7,7 +7,11 @@
 //     (PENDING_VERIFICATION → VERIFIED | REJECTED);
 //   • a PAID row's `appliedAt`, set once when its period has been applied;
 //   • a CHECKOUT_CREATED row's `expiresAt`, pulled forward to close the order;
-//   • a REFUNDED row's `note`, when Razorpay reports the refund's outcome.
+//   • a REFUNDED row's `note`, when Razorpay reports the refund's outcome;
+//   • a PAID row's `adminResolution`, set ONCE when an admin applies a
+//     flagged or unreflected payment to its catalog by hand
+//     (paymentJournalService.forceApplyPayment). The original `note` stays —
+//     the ledger keeps what the machine decided beside what the human did.
 //
 // Immutability is a SERVICE rule (Stage 3), not a schema hook: a `pre('save')`
 // that refuses updates would also refuse the verification transition, and a
@@ -20,12 +24,14 @@ import {
   BILLING_INTERVALS,
   MANUAL_METHODS,
   PAYMENT_KINDS,
+  PAYMENT_VIAS,
   PLAN_IDS,
   VERIFICATION_STATUSES,
   type Actor,
   type BillingInterval,
   type ManualMethod,
   type PaymentKind,
+  type PaymentVia,
   type PlanDefinition,
   type PlanId,
   type VerificationStatus,
@@ -91,8 +97,29 @@ export interface IPaymentRecord extends Document {
    * reconciler converge on ONE activation (B2).
    */
   appliedAt?: Date | null;
+  /**
+   * PAID only, written at insert: which path recorded the payment (webhook,
+   * reconciler, the app's signed response, or an admin's provider check).
+   * Absent on rows recorded before the field existed.
+   */
+  recordedVia?: PaymentVia;
+  /**
+   * PAID only: an admin applied this payment's plan to the catalog by hand,
+   * because the machine flagged it (AMOUNT_MISMATCH / DUPLICATE_SUSPECTED /
+   * ORPHAN_PAYMENT on a restored catalog) or its period never reached the
+   * subscription row. Written once, guarded on its absence.
+   */
+  adminResolution?: PaymentAdminResolution;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface PaymentAdminResolution {
+  action: 'APPLIED';
+  by: Actor;
+  /** The `paidAt` the period was applied with — equal to its `periodStart`. */
+  at: Date;
+  note: string;
 }
 
 const PaymentQuoteSchema = new Schema<PaymentQuote>(
@@ -101,6 +128,16 @@ const PaymentQuoteSchema = new Schema<PaymentQuote>(
     planSnapshot: { type: PlanSnapshotSchema, required: true },
     interval: { type: String, enum: BILLING_INTERVALS, required: true },
     totalPaise: { type: Number, required: true, min: 0, validate: Number.isInteger },
+  },
+  { _id: false }
+);
+
+const PaymentAdminResolutionSchema = new Schema<PaymentAdminResolution>(
+  {
+    action: { type: String, enum: ['APPLIED'], required: true },
+    by: { type: ActorSchema, required: true },
+    at: { type: Date, required: true },
+    note: { type: String, trim: true, required: true, maxlength: 1000 },
   },
   { _id: false }
 );
@@ -129,6 +166,8 @@ const PaymentRecordSchema = new Schema<IPaymentRecord>(
     note: { type: String, trim: true, maxlength: 1000 },
     expiresAt: { type: Date },
     appliedAt: { type: Date, default: null },
+    recordedVia: { type: String, enum: PAYMENT_VIAS },
+    adminResolution: { type: PaymentAdminResolutionSchema, default: undefined },
   },
   { timestamps: true }
 );
@@ -173,5 +212,9 @@ PaymentRecordSchema.index({ kind: 1, appliedAt: 1, createdAt: 1 });
 
 // The owner's open order, the checkout's create-or-return read.
 PaymentRecordSchema.index({ catalogId: 1, kind: 1, expiresAt: 1 });
+
+// The admin payment journal: one kind (orders or payments), newest first,
+// keyset-paginated on `(createdAt, _id)`.
+PaymentRecordSchema.index({ kind: 1, createdAt: -1, _id: -1 });
 
 export const PaymentRecord = model<IPaymentRecord>('PaymentRecord', PaymentRecordSchema);

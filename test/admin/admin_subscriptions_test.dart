@@ -81,7 +81,7 @@ Future<void> _tall(WidgetTester tester) async {
 
 void main() {
   group('the list screen', () {
-    testWidgets('Pending shows the queue; another segment shows the state list',
+    testWidgets('Cash shows the queue; Plans shows the state list',
         (tester) async {
       final repo = FakePaymentsRepository()
         ..queue = [
@@ -107,10 +107,16 @@ void main() {
       await tester.pumpWidget(_harness(repo));
       await tester.pumpAndSettle();
 
+      await tester.tap(find.byKey(const ValueKey('admin_tab_cash')));
+      await tester.pumpAndSettle();
       expect(find.textContaining('blue cafe'), findsOneWidget);
       expect(find.text('Pending cash'), findsOneWidget);
       expect(find.textContaining('amount differs'), findsOneWidget);
 
+      await tester.tap(find.byKey(const ValueKey('admin_tab_plans')));
+      await tester.pumpAndSettle();
+      // Plans opens on All.
+      expect(repo.calls, contains('subscriptions:all:'));
       await tester.tap(find.text('In grace'));
       await tester.pumpAndSettle();
       expect(find.textContaining('grace cafe'), findsOneWidget);
@@ -159,6 +165,8 @@ void main() {
       await tester.pumpWidget(_harness(repo));
       await tester.pumpAndSettle();
 
+      await tester.tap(find.byKey(const ValueKey('admin_tab_plans')));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Paused'));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('admin_subscription_photos_p1')),
@@ -188,6 +196,8 @@ void main() {
           )),
         ]);
       await tester.pumpWidget(_harness(repo));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('admin_tab_cash')));
       await tester.pumpAndSettle();
       await tester.tap(
           find.byKey(const ValueKey('admin_queue_66f0000000000000000000c1')));
@@ -533,6 +543,8 @@ void main() {
       for (final location in [
         AppRoutes.adminSubscriptions,
         '${AppRoutes.adminSubscriptions}/c1',
+        // The payment journal rides under the same prefix.
+        '${AppRoutes.adminPayments}/order_abc123',
       ]) {
         expect(
           adminStandeesRedirectFor(location,

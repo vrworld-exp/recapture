@@ -193,6 +193,9 @@ export type StandeesIssuedInput = z.infer<typeof standeesIssuedSchema>;
  * has gone quiet, kept for a call, never purged.
  */
 export const ADMIN_SUBSCRIPTION_STATES = [
+  // Every subscription row, most recently changed first — the "see them all"
+  // view. The other five are collections segments ordered by urgency.
+  'ALL',
   'EXPIRING_7D',
   'GRACE',
   'PAUSED',
@@ -207,6 +210,47 @@ export const adminSubscriptionsQuerySchema = z
     state: z.enum(ADMIN_SUBSCRIPTION_STATES),
     cursor: z.string().min(1).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
+    /** Restaurant name, business name or owner display name — a substring, case-insensitive. */
+    q: z.string().trim().min(1).max(60).optional(),
   })
   .strict();
 export type AdminSubscriptionsQuery = z.infer<typeof adminSubscriptionsQuerySchema>;
+
+// ── The admin payment journal ───────────────────────────────────────────────
+
+/**
+ * GET /admin/subscriptions/payments `filter`:
+ *   ATTENTION     — money on the ledger that did not become a plan (not yet
+ *                   applied, flagged, or missing from the subscription row);
+ *   ALL           — every order anyone opened, newest first;
+ *   SUCCEEDED     — every payment Razorpay captured;
+ *   NOT_COMPLETED — orders with no payment on the ledger (open or expired).
+ */
+export const PAYMENT_JOURNAL_FILTERS = ['ATTENTION', 'ALL', 'SUCCEEDED', 'NOT_COMPLETED'] as const;
+export type PaymentJournalFilter = (typeof PAYMENT_JOURNAL_FILTERS)[number];
+
+export const adminPaymentJournalQuerySchema = z
+  .object({
+    filter: z.enum(PAYMENT_JOURNAL_FILTERS).default('ATTENTION'),
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(30),
+  })
+  .strict();
+
+/** A Razorpay order id as it rides in a path (`order_…`). Shape only; existence is the service's. */
+export const PROVIDER_ORDER_ID_RE = /^[A-Za-z0-9_]{1,64}$/;
+
+/** No body: the sync asks Razorpay and runs the webhook's own functions. */
+export const syncPaymentSchema = z.object({}).strict().optional();
+
+/**
+ * POST /admin/subscriptions/payments/:orderId/apply — the human override.
+ * Same 20-character floor as a mismatched cash VERIFY (E12): it is the same
+ * kind of decision, made against what the machine concluded.
+ */
+export const forceApplyPaymentSchema = z
+  .object({
+    note: z.string().trim().min(20).max(1000),
+  })
+  .strict();
+export type ForceApplyPaymentInput = z.infer<typeof forceApplyPaymentSchema>;

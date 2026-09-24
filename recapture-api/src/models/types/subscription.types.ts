@@ -101,6 +101,15 @@ export const PAYMENT_KINDS = [
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
 
+/**
+ * Which path recorded or applied an online payment: Razorpay's webhook, the
+ * reconciler's provider check, the app's signed checkout response, or an
+ * admin pressing "Check with Razorpay" / "Apply to catalog". Stored on the PAID
+ * row as `recordedVia` so the admin journal can say HOW the money got in.
+ */
+export const PAYMENT_VIAS = ['WEBHOOK', 'RECONCILE', 'CLIENT', 'ADMIN'] as const;
+export type PaymentVia = (typeof PAYMENT_VIAS)[number];
+
 /** MANUAL entries only — the one field on the ledger that transitions (§10). */
 export const VERIFICATION_STATUSES = ['PENDING_VERIFICATION', 'VERIFIED', 'REJECTED'] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];

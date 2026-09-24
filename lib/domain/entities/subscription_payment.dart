@@ -9,8 +9,10 @@
 // MONEY IS INTEGER PAISE, exactly as the wire carries it. [formatPaise] is the
 // one place paise become a string, and it is a display decision — nothing here
 // rounds, converts or adds anything up.
+import 'admin_payment_attempt.dart';
 import 'catalog_json.dart';
 import 'catalog_subscription.dart';
+import 'project_owner.dart';
 
 /// "₹1,199" for whole rupees, "₹1,199.50" otherwise — the Stage 3 display
 /// rule, on top of the Indian grouping `formatRupees` already does.
@@ -418,10 +420,12 @@ class ManualPaymentSubmission {
 // ── Admin ───────────────────────────────────────────────────────────────────
 
 /// The collections list's filter — `ADMIN_SUBSCRIPTION_STATES` plus the
-/// manual-payment queue, which the screen shows as its own segment.
+/// manual-payment queue, which the screen shows as its own tab.
 /// `paused90d` (E23) is the follow-up list: paused 90+ days, oldest first.
+/// `all` is every subscription row, most recently changed first.
 enum AdminSubscriptionFilter {
   pending,
+  all,
   expiring7d,
   grace,
   paused,
@@ -433,6 +437,7 @@ extension AdminSubscriptionFilterX on AdminSubscriptionFilter {
   /// The `?state=` value, or null for the queue (a different route).
   String? get stateApiValue => switch (this) {
         AdminSubscriptionFilter.pending => null,
+        AdminSubscriptionFilter.all => 'ALL',
         AdminSubscriptionFilter.expiring7d => 'EXPIRING_7D',
         AdminSubscriptionFilter.grace => 'GRACE',
         AdminSubscriptionFilter.paused => 'PAUSED',
@@ -442,6 +447,7 @@ extension AdminSubscriptionFilterX on AdminSubscriptionFilter {
 
   String get label => switch (this) {
         AdminSubscriptionFilter.pending => 'Pending',
+        AdminSubscriptionFilter.all => 'All',
         AdminSubscriptionFilter.expiring7d => 'Expiring 7d',
         AdminSubscriptionFilter.grace => 'In grace',
         AdminSubscriptionFilter.paused => 'Paused',
@@ -461,10 +467,17 @@ class AdminSubscriptionListItem {
     required this.daysLeft,
     required this.planId,
     this.photoCoverage,
+    this.owner,
+    this.billingInterval,
   });
 
   final String catalogId;
   final String catalogName;
+
+  /// The restaurant's account — a name, never contact. Null on an older
+  /// server or when the account is gone.
+  final ProjectOwnerSummary? owner;
+  final BillingInterval? billingInterval;
   final SubscriptionStatus status;
   final DateTime? periodEnd;
   final DateTime? graceEndsAt;
@@ -490,6 +503,10 @@ class AdminSubscriptionListItem {
         photoCoverage: map['photoCoverage'] is num
             ? (map['photoCoverage'] as num).toInt()
             : null,
+        owner: ProjectOwnerSummary.tryFrom(map['owner']),
+        billingInterval: map['billingInterval'] is String
+            ? BillingIntervalX.fromApiValue(map['billingInterval'] as String)
+            : null,
       );
 }
 
@@ -510,11 +527,24 @@ class AdminSubscriptionDetail {
     required this.subscription,
     required this.payments,
     this.arEntitlementSyncedAt,
+    this.owner,
+    this.catalogInfo,
+    this.attempts = const [],
   });
 
   final String catalogId;
   final String catalogName;
   final bool catalogDeleted;
+
+  /// The restaurant's account, list-safe. The contact is one tap further
+  /// (`showProjectOwnerSheet`, the audited `GET /admin/users/:id`).
+  final ProjectOwnerSummary? owner;
+
+  /// What the restaurant is, beyond its name; null on an older server.
+  final AdminCatalogInfo? catalogInfo;
+
+  /// Every online payment attempt on this catalog, newest first.
+  final List<PaymentAttempt> attempts;
 
   /// Null when the catalog is gone — its ledger is still worth reading.
   final CatalogSubscription? subscription;
@@ -540,6 +570,42 @@ class AdminSubscriptionDetail {
           : null,
       payments: PaymentRecordSummary.listFrom(map['payments']),
       arEntitlementSyncedAt: catalogDate(map['arEntitlementSyncedAt']),
+      owner: ProjectOwnerSummary.tryFrom(map['owner']),
+      catalogInfo:
+          catalog.containsKey('status') ? AdminCatalogInfo.fromMap(catalog) : null,
+      attempts: PaymentAttempt.listFrom(map['attempts']),
     );
   }
+}
+
+/// The catalog facts the admin panel shows beside the subscription.
+class AdminCatalogInfo {
+  const AdminCatalogInfo({
+    required this.businessName,
+    required this.status,
+    required this.publicUrl,
+    required this.lastPublishedAt,
+    required this.onMirage,
+    required this.createdAt,
+  });
+
+  final String? businessName;
+
+  /// `DRAFT` / `PUBLISHED` … as the server names it.
+  final String? status;
+  final String? publicUrl;
+  final DateTime? lastPublishedAt;
+
+  /// Whether the restaurant exists on Mirage (it has been provisioned).
+  final bool onMirage;
+  final DateTime? createdAt;
+
+  factory AdminCatalogInfo.fromMap(Map<String, dynamic> map) => AdminCatalogInfo(
+        businessName: catalogText(map['businessName']),
+        status: catalogText(map['status']),
+        publicUrl: catalogText(map['publicUrl']),
+        lastPublishedAt: catalogDate(map['lastPublishedAt']),
+        onMirage: map['onMirage'] == true,
+        createdAt: catalogDate(map['createdAt']),
+      );
 }

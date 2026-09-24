@@ -27,7 +27,11 @@ import {
   type AdminSubmitModelBody,
 } from '@/validation/adminSchemas';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
-import { getAdminUserDetail, readUserAvatarBytes } from '@/services/adminUsersService';
+import {
+  getAdminUserDetail,
+  readUserAvatarBytes,
+  summarizeOwners,
+} from '@/services/adminUsersService';
 import {
   listAllCapturedProjects,
   getAdminProjectDetail,
@@ -121,18 +125,30 @@ import { CatalogSubscription } from '@/models/CatalogSubscription';
 import {
   adminManualPaymentSchema,
   adminManualPaymentsQuerySchema,
+  adminPaymentJournalQuerySchema,
   adminSubscriptionsQuerySchema,
   compSchema,
   extendGraceSchema,
+  forceApplyPaymentSchema,
+  PROVIDER_ORDER_ID_RE,
   refundSchema,
   standeesIssuedSchema,
   startTrialSchema,
+  syncPaymentSchema,
   type AdminManualPaymentInput,
   type CompInput,
   type ExtendGraceInput,
+  type ForceApplyPaymentInput,
   type RefundInput,
   type StandeesIssuedInput,
 } from '@/validation/subscriptionSchemas';
+import {
+  forceApplyPayment,
+  getPaymentAttempt,
+  listAttemptsForCatalog,
+  listPaymentAttempts,
+  syncPaymentWithProvider,
+} from '@/services/subscription/paymentJournalService';
 import {
   applyComp,
   getSubscriptionStatus,
@@ -2765,10 +2781,182 @@ router.get(
   })
 );
 
+// ── The payment journal ────────────────────────────────────────────────────
+//
+// Every online payment attempt with its pipeline spelled out, and the two
+// fixes (paymentJournalService.ts). Keyed on the Razorpay ORDER id — the one
+// id every attempt has, including an order whose checkout row never landed.
+
+/** The `:orderId` path param, shape-checked; anything else is the same 404. */
+function orderIdParam(res: Response, raw: string): string | null {
+  if (PROVIDER_ORDER_ID_RE.test(raw)) return raw;
+  subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+  return null;
+}
+
 /**
- * GET /admin/subscriptions?state=EXPIRING_7D|GRACE|PAUSED|PAUSED_90D|TRIAL —
- * the collections list: who needs chasing, soonest first, cursor-paginated.
+ * GET /admin/subscriptions/payments?filter=ATTENTION|ALL|SUCCEEDED|NOT_COMPLETED
+ * — the journal, newest first, cursor-paginated. ATTENTION (the default) is
+ * money on the ledger that did not become a plan.
+ */
+router.get(
+  '/subscriptions/payments',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const query = adminPaymentJournalQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      return subscriptionFail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        query.error.issues[0]?.message ?? 'Invalid query'
+      );
+    }
+    const result = await listPaymentAttempts(
+      query.data.filter,
+      query.data.cursor,
+      query.data.limit
+    );
+    if (result.outcome === 'INVALID_CURSOR') {
+      return subscriptionFail(res, 400, 'INVALID_CURSOR', 'That cursor is not valid.');
+    }
+    res.status(200).json({ status: 'success', items: result.items, nextCursor: result.nextCursor });
+  })
+);
+
+/** GET /admin/subscriptions/payments/:orderId — one attempt, every step. */
+router.get(
+  '/subscriptions/payments/:orderId',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const orderId = orderIdParam(res, req.params.orderId);
+    if (!orderId) return;
+    const attempt = await getPaymentAttempt(orderId);
+    if (!attempt) {
+      return subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+    }
+    res.status(200).json({ status: 'success', attempt });
+  })
+);
+
+/**
+ * POST /admin/subscriptions/payments/:orderId/sync — "Check with Razorpay".
+ * Asks Razorpay about this order and runs what the webhook would have:
+ * records a captured payment, finishes a half-applied one. Never activates
+ * anything Razorpay does not confirm; idempotent. Answers the provider's
+ * view beside the refreshed entry, so the admin sees what Razorpay said.
+ */
+router.post(
+  '/subscriptions/payments/:orderId/sync',
+  requireRole('ADMIN'),
+  validateBody(syncPaymentSchema),
+  asyncHandler(async (req, res) => {
+    const orderId = orderIdParam(res, req.params.orderId);
+    if (!orderId) return;
+    const result = await syncPaymentWithProvider(orderId, adminActor(req));
+    switch (result.outcome) {
+      case 'OK':
+        res.status(200).json({
+          status: 'success',
+          result: result.result,
+          provider: result.provider,
+          attempt: result.attempt,
+        });
+        return;
+      case 'NOT_FOUND':
+        return subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+      case 'RATE_LIMITED':
+        res.status(429).json({
+          status: 'error',
+          code: 'RATE_LIMITED',
+          message: 'Too many checks with Razorpay. Try again in a few minutes.',
+          retryAfter: result.retryAfter,
+        });
+        return;
+      case 'UNAVAILABLE':
+        return subscriptionFail(
+          res,
+          503,
+          'PAYMENTS_UNAVAILABLE',
+          "Couldn't reach the payment service. Try again in a minute."
+        );
+    }
+  })
+);
+
+/**
+ * POST /admin/subscriptions/payments/:orderId/apply — "Apply to catalog".
+ * The human override for a payment the machine refused or that never reached
+ * the subscription row. A note of at least 20 characters; applied once
+ * (a second press is 409 ALREADY_RESOLVED). The period starts now.
+ */
+router.post(
+  '/subscriptions/payments/:orderId/apply',
+  requireRole('ADMIN'),
+  validateBody(forceApplyPaymentSchema),
+  asyncHandler(async (req, res) => {
+    const orderId = orderIdParam(res, req.params.orderId);
+    if (!orderId) return;
+    const { note } = req.body as ForceApplyPaymentInput;
+    const result = await forceApplyPayment(orderId, adminActor(req), note);
+    switch (result.outcome) {
+      case 'APPLIED':
+        res.status(200).json({ status: 'success', attempt: result.attempt });
+        return;
+      case 'NOT_FOUND':
+        return subscriptionFail(
+          res,
+          404,
+          'PAYMENT_NOT_FOUND',
+          'No payment is recorded on that order yet. Check with Razorpay first.'
+        );
+      case 'NOT_APPLIED_YET':
+        return subscriptionFail(
+          res,
+          409,
+          'NOT_APPLIED_YET',
+          'This payment has not been through the apply step yet. Check with Razorpay to finish it.'
+        );
+      case 'ALREADY_REFUNDED':
+        return subscriptionFail(res, 409, 'ALREADY_REFUNDED', 'This payment has already been refunded.');
+      case 'ALREADY_RESOLVED':
+        return subscriptionFail(
+          res,
+          409,
+          'ALREADY_RESOLVED',
+          'An admin has already applied this payment to its catalog.'
+        );
+      case 'CATALOG_DELETED':
+        return subscriptionFail(
+          res,
+          409,
+          'CATALOG_DELETED',
+          'That catalog has been deleted, so there is nothing to apply the plan to. Refund it instead.'
+        );
+      case 'NO_QUOTE':
+        return subscriptionFail(
+          res,
+          422,
+          'NO_QUOTE',
+          'This payment carries no plan quote. Start the plan from the catalog panel instead.'
+        );
+      case 'NOT_NEEDED':
+        return subscriptionFail(
+          res,
+          409,
+          'NOT_NEEDED',
+          'This payment was applied and the catalog already shows it.'
+        );
+    }
+  })
+);
+
+/**
+ * GET /admin/subscriptions?state=ALL|EXPIRING_7D|GRACE|PAUSED|PAUSED_90D|TRIAL
+ * — the collections list: who needs chasing, soonest first, cursor-paginated.
  * PAUSED_90D (E23) is the follow-up segment: paused 90+ days, oldest first.
+ * ALL is every row, most recently changed first. `q` searches restaurant and
+ * owner names. Each row carries the owner as a list-safe summary.
  */
 router.get(
   '/subscriptions',
@@ -2786,7 +2974,9 @@ router.get(
     const result = await listSubscriptionsByState(
       query.data.state,
       query.data.cursor,
-      query.data.limit
+      query.data.limit,
+      new Date(),
+      query.data.q
     );
     if (result.outcome === 'INVALID_CURSOR') {
       return subscriptionFail(res, 400, 'INVALID_CURSOR', 'That cursor is not valid.');
@@ -2811,16 +3001,28 @@ router.get(
       return subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
     }
     const catalog = await Catalog.findOne({ _id: catalogId })
-      .select({ userId: 1, name: 1, deletedAt: 1 })
+      .select({
+        userId: 1,
+        name: 1,
+        businessName: 1,
+        status: 1,
+        publicUrl: 1,
+        lastPublishedAt: 1,
+        mirageRestaurantId: 1,
+        createdAt: 1,
+        deletedAt: 1,
+      })
       .exec();
     const live = catalog && !catalog.deletedAt;
-    const [subscription, payments, row] = await Promise.all([
+    const [subscription, payments, row, attempts, owners] = await Promise.all([
       live ? getSubscriptionStatus(catalogId, catalog.userId) : Promise.resolve(null),
       listPaymentsForAdmin(catalogId),
       CatalogSubscription.findOne({ catalogId })
         .select({ arEntitlementSyncedAt: 1 })
         .lean<{ arEntitlementSyncedAt?: Date }>()
         .exec(),
+      listAttemptsForCatalog(catalogId),
+      catalog ? summarizeOwners([String(catalog.userId)]) : Promise.resolve(new Map()),
     ]);
     if (!live && payments.length === 0) {
       return subscriptionFail(res, 404, 'CATALOG_NOT_FOUND', 'That catalog was not found.');
@@ -2831,7 +3033,18 @@ router.get(
         id: catalogId.toHexString(),
         name: catalog ? toDisplayName(catalog.name) : '',
         deleted: !live,
+        businessName: catalog?.businessName ?? null,
+        status: catalog?.status ?? null,
+        publicUrl: catalog?.publicUrl ?? null,
+        lastPublishedAt: catalog?.lastPublishedAt?.toISOString() ?? null,
+        onMirage: Boolean(catalog?.mirageRestaurantId),
+        createdAt: catalog?.createdAt?.toISOString() ?? null,
       },
+      // The restaurant's account, list-safe (a name, never contact); the raw
+      // contact is one tap further, behind GET /admin/users/:id.
+      owner: catalog ? (owners.get(String(catalog.userId)) ?? null) : null,
+      // Every online payment attempt on this catalog, with its pipeline.
+      attempts,
       subscription,
       // BESIDE the owner's DTO, not inside it, so that DTO stays byte-equal
       // across its three routes. When Mirage was last told this row's 3D

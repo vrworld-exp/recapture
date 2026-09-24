@@ -24,6 +24,7 @@ import '../../presentation/screens/admin/admin_batch_detail_screen.dart';
 import '../../presentation/screens/admin/admin_standee_qr_screen.dart';
 import '../../presentation/screens/admin/admin_standees_screen.dart';
 import '../../presentation/screens/admin/admin_subscription_detail_screen.dart';
+import '../../presentation/screens/admin/admin_payment_attempt_screen.dart';
 import '../../presentation/screens/admin/admin_subscriptions_screen.dart';
 import '../../presentation/screens/rep/rep_activation_screen.dart';
 import '../../presentation/screens/rep/rep_published_screen.dart';
@@ -256,6 +257,13 @@ abstract final class AppRoutes {
   /// One restaurant's subscription panel. `:catalogId` = the catalog id.
   static const adminSubscriptionDetail = '/admin/subscriptions/:catalogId';
 
+  /// The payment journal's prefix — under `/admin/subscriptions` on purpose,
+  /// so the ADMIN prefix gate covers it with no new entry.
+  static const adminPayments = '/admin/subscriptions/payments';
+
+  /// One online payment attempt. `:orderId` = the Razorpay order id.
+  static const adminPaymentAttempt = '/admin/subscriptions/payments/:orderId';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -332,6 +340,7 @@ abstract final class AppRouteNames {
   static const adminStandeeQr = 'adminStandeeQr';
   static const adminSubscriptions = 'adminSubscriptions';
   static const adminSubscriptionDetail = 'adminSubscriptionDetail';
+  static const adminPaymentAttempt = 'adminPaymentAttempt';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const submitModel = 'submitModel';
@@ -757,6 +766,15 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.adminSubscriptions,
         name: AppRouteNames.adminSubscriptions,
         builder: (_, __) => const AdminSubscriptionsScreen(),
+      ),
+      // Three segments, so it can never match the two-segment panel below;
+      // declared first anyway, static-prefixed before parameterised.
+      GoRoute(
+        path: AppRoutes.adminPaymentAttempt,
+        name: AppRouteNames.adminPaymentAttempt,
+        builder: (context, state) => AdminPaymentAttemptScreen(
+          orderId: state.pathParameters['orderId'] ?? '',
+        ),
       ),
       GoRoute(
         path: AppRoutes.adminSubscriptionDetail,

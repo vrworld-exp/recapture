@@ -364,7 +364,8 @@ describe('settle on read: the owner read activates a paid order', () => {
     const unpaid = fakeRazorpay();
     setRazorpayClient(unpaid);
     const before = await request(app).get('/catalog').set(owner.auth).expect(200);
-    expect(before.body.catalog.subscription.status).not.toBe('ACTIVE');
+    // No subscription row yet → a null summary ("No plan").
+    expect(before.body.catalog.subscription?.status ?? 'NONE').not.toBe('ACTIVE');
 
     // Paid at Razorpay; the app never called verify, no webhook, no worker —
     // and the process restarted, so its throttle is gone.

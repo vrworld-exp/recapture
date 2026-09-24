@@ -487,9 +487,11 @@ describe('GET /admin/subscriptions', () => {
     ).toBe(403);
     const admin = await makeUser('ADMIN');
     expect((await request(app).get('/admin/subscriptions').set(admin.auth)).status).toBe(400);
-    expect((await request(app).get('/admin/subscriptions?state=ALL').set(admin.auth)).status).toBe(
-      400
-    );
+    // An unknown state is refused. (ALL became a real segment in Sept 2026 —
+    // tests/subscription-payment-journal.test.ts covers it.)
+    expect(
+      (await request(app).get('/admin/subscriptions?state=EVERYTHING').set(admin.auth)).status
+    ).toBe(400);
     expect(
       (await request(app).get('/admin/subscriptions?state=GRACE&cursor=nope').set(admin.auth))
         .status

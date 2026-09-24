@@ -1,16 +1,23 @@
 // lib/presentation/screens/admin/admin_subscriptions_screen.dart
 //
-// Collections: who needs chasing, and the cash requests waiting for a Verify.
+// Everything an admin needs about subscription money, in three tabs:
 //
-// Six segments over two server routes — Pending is the manual-payment queue,
-// the other five are `GET /admin/subscriptions?state=` (Paused 90d+ is the
-// E23 follow-up list: nobody is purged, someone is called). One screen because an
-// admin working payments does both in one sitting: verify the cash that came
-// in, then look at who is about to lapse. Every row opens the same per-catalog
-// panel (`/admin/subscriptions/:catalogId`), where every action lives.
+//   • PAYMENTS — the payment journal: every online payment attempt with its
+//     pipeline (started → Razorpay → recorded → applied → catalog). "Needs
+//     attention" is the default: money Razorpay took that did not become a
+//     plan. A row opens the attempt, where "Check with Razorpay" and "Apply
+//     to catalog" live.
+//   • PLANS — every subscription (All) plus the collections segments, with a
+//     name search. A row opens the restaurant's panel.
+//   • CASH — the cash requests reps submitted, waiting for a Verify.
+//
+// Filters are a WRAP of chips (admin_payment_widgets.dart explains why): the
+// old single-row SegmentedButton was cut off on a phone.
 //
 // ADMIN-ONLY, on both sides: the router gate on this subtree mirrors the
 // backend's `requireRole('ADMIN')` on every one of these routes (E39).
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -20,15 +27,30 @@ import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/admin/admin_subscriptions_notifier.dart';
 import '../../../domain/catalog/subscription_copy.dart';
+import '../../../domain/entities/admin_payment_attempt.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/subscription_payment.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import 'admin_payment_widgets.dart';
+
+/// The Plans tab's segments — every collections state, the queue excluded
+/// (it is its own tab).
+const _planFilters = [
+  AdminSubscriptionFilter.all,
+  AdminSubscriptionFilter.expiring7d,
+  AdminSubscriptionFilter.grace,
+  AdminSubscriptionFilter.paused,
+  AdminSubscriptionFilter.paused90d,
+  AdminSubscriptionFilter.trial,
+];
 
 class AdminSubscriptionsScreen extends ConsumerStatefulWidget {
   const AdminSubscriptionsScreen({super.key, this.initialFilter});
 
+  /// Opens on the Plans tab at this segment, or on Cash for `pending`. Null
+  /// opens on Payments → Needs attention.
   final AdminSubscriptionFilter? initialFilter;
 
   @override
@@ -37,60 +59,274 @@ class AdminSubscriptionsScreen extends ConsumerStatefulWidget {
 }
 
 class _AdminSubscriptionsScreenState
-    extends ConsumerState<AdminSubscriptionsScreen> {
-  late AdminSubscriptionFilter _filter =
-      widget.initialFilter ?? AdminSubscriptionFilter.pending;
+    extends ConsumerState<AdminSubscriptionsScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs = TabController(
+    length: 3,
+    vsync: this,
+    initialIndex: switch (widget.initialFilter) {
+      null => 0,
+      AdminSubscriptionFilter.pending => 2,
+      _ => 1,
+    },
+  );
 
-  void _open(String catalogId) =>
+  AdminPaymentFilter _paymentFilter = AdminPaymentFilter.attention;
+  late AdminSubscriptionFilter _planFilter =
+      _planFilters.contains(widget.initialFilter)
+          ? widget.initialFilter!
+          : AdminSubscriptionFilter.all;
+
+  final _search = TextEditingController();
+  Timer? _debounce;
+  String _query = '';
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _search.dispose();
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  void _onSearch(String text) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 350), () {
+      if (mounted) setState(() => _query = text.trim());
+    });
+  }
+
+  void _openCatalog(String catalogId) =>
       context.push('${AppRoutes.adminSubscriptions}/$catalogId');
+
+  void _openAttempt(String orderId) => context.push(
+      '${AppRoutes.adminPayments}/${Uri.encodeComponent(orderId)}');
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
-      appBar: AppBar(title: const Text('Subscriptions')),
+      appBar: AppBar(
+        title: const Text('Subscriptions'),
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: const [
+            Tab(key: ValueKey('admin_tab_payments'), child: _AttentionTabLabel()),
+            Tab(key: ValueKey('admin_tab_plans'), text: 'Plans'),
+            Tab(key: ValueKey('admin_tab_cash'), text: 'Cash'),
+          ],
+        ),
+      ),
       body: SafeArea(
-        child: Column(
+        child: TabBarView(
+          controller: _tabs,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg,
-                AppSpacing.md,
-                AppSpacing.lg,
-                AppSpacing.sm,
-              ),
-              child: SizedBox(
-                width: double.infinity,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SegmentedButton<AdminSubscriptionFilter>(
-                    key: const ValueKey('admin_subscriptions_filter'),
-                    showSelectedIcon: false,
-                    segments: [
-                      for (final filter in AdminSubscriptionFilter.values)
-                        ButtonSegment(
-                          value: filter,
-                          label: Text(filter.label),
-                        ),
-                    ],
-                    selected: {_filter},
-                    onSelectionChanged: (selection) =>
-                        setState(() => _filter = selection.first),
-                  ),
-                ),
-              ),
-            ),
-            Expanded(
-              child: _filter == AdminSubscriptionFilter.pending
-                  ? _PendingQueue(onOpen: _open)
-                  : _StateList(filter: _filter, onOpen: _open),
-            ),
+            _paymentsTab(),
+            _plansTab(),
+            _PendingQueue(onOpen: _openCatalog),
           ],
         ),
       ),
     );
   }
+
+  Widget _paymentsTab() => Column(
+        children: [
+          _FilterBar(
+            child: AdminFilterChips<AdminPaymentFilter>(
+              key: const ValueKey('admin_payments_filter'),
+              values: AdminPaymentFilter.values,
+              selected: _paymentFilter,
+              labelOf: (f) => f.label,
+              keyOf: (f) => f.name,
+              onSelected: (f) => setState(() => _paymentFilter = f),
+            ),
+          ),
+          Expanded(
+            child: _AttemptList(filter: _paymentFilter, onOpen: _openAttempt),
+          ),
+        ],
+      );
+
+  Widget _plansTab() => Column(
+        children: [
+          _FilterBar(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AdminFilterChips<AdminSubscriptionFilter>(
+                  key: const ValueKey('admin_subscriptions_filter'),
+                  values: _planFilters,
+                  selected: _planFilter,
+                  labelOf: (f) => f.label,
+                  keyOf: (f) => f.name,
+                  onSelected: (f) => setState(() => _planFilter = f),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextField(
+                  key: const ValueKey('admin_subscriptions_search'),
+                  controller: _search,
+                  onChanged: _onSearch,
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search),
+                    hintText: 'Restaurant or owner name',
+                    suffixIcon: _search.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear',
+                            icon: const Icon(Icons.close),
+                            onPressed: () {
+                              _search.clear();
+                              _debounce?.cancel();
+                              setState(() => _query = '');
+                            },
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _StateList(
+              listKey: (filter: _planFilter, query: _query),
+              onOpen: _openCatalog,
+            ),
+          ),
+        ],
+      );
 }
+
+class _FilterBar extends StatelessWidget {
+  const _FilterBar({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          AppSpacing.md,
+          AppSpacing.lg,
+          AppSpacing.sm,
+        ),
+        child: SizedBox(width: double.infinity, child: child),
+      );
+}
+
+/// "Payments" with a count of what needs attention, once it has loaded.
+class _AttentionTabLabel extends ConsumerWidget {
+  const _AttentionTabLabel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final page = ref
+        .watch(adminPaymentAttemptsProvider(AdminPaymentFilter.attention))
+        .valueOrNull;
+    final count = page?.items.length ?? 0;
+    if (count == 0) return const Text('Payments');
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Flexible(
+          child: Text('Payments', overflow: TextOverflow.ellipsis),
+        ),
+        const SizedBox(width: AppSpacing.xs),
+        Container(
+          key: const ValueKey('admin_attention_badge'),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: AppColors.error,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            page!.hasMore ? '$count+' : '$count',
+            style: Theme.of(context)
+                .textTheme
+                .labelSmall
+                ?.copyWith(color: Colors.white),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Payments ────────────────────────────────────────────────────────────────
+
+class _AttemptList extends ConsumerWidget {
+  const _AttemptList({required this.filter, required this.onOpen});
+
+  final AdminPaymentFilter filter;
+  final void Function(String orderId) onOpen;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final provider = adminPaymentAttemptsProvider(filter);
+    final list = ref.watch(provider);
+    return RefreshIndicator(
+      onRefresh: () => ref.read(provider.notifier).refresh(),
+      child: list.when(
+        loading: () => const Center(child: AppLoadingIndicator()),
+        error: (_, __) => CatalogMessage(
+          icon: Icons.cloud_off_outlined,
+          title: "Couldn't load payments.",
+          body: 'Check your connection and try again.',
+          actionLabel: 'Try again',
+          onAction: () => ref.read(provider.notifier).refresh(),
+        ),
+        data: (state) => state.items.isEmpty
+            ? CatalogMessage(
+                icon: filter == AdminPaymentFilter.attention
+                    ? Icons.task_alt
+                    : Icons.inbox_outlined,
+                title: filter == AdminPaymentFilter.attention
+                    ? 'Nothing needs attention.'
+                    : 'Nothing here.',
+                body: filter.emptyBody,
+              )
+            : ListView.separated(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                itemCount: state.items.length + (state.hasMore ? 1 : 0),
+                separatorBuilder: (_, __) =>
+                    const SizedBox(height: AppSpacing.sm),
+                itemBuilder: (_, i) {
+                  if (i == state.items.length) {
+                    return _LoadMore(
+                      loading: state.loadingMore,
+                      onPressed: () => ref.read(provider.notifier).loadMore(),
+                    );
+                  }
+                  final attempt = state.items[i];
+                  return PaymentAttemptTile(
+                    attempt: attempt,
+                    onTap: () => onOpen(attempt.orderId),
+                  );
+                },
+              ),
+      ),
+    );
+  }
+}
+
+class _LoadMore extends StatelessWidget {
+  const _LoadMore({required this.loading, required this.onPressed});
+
+  final bool loading;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: TextButton(
+          key: const ValueKey('admin_subscriptions_more'),
+          onPressed: loading ? null : onPressed,
+          child: Text(loading ? 'Loading…' : 'Load more'),
+        ),
+      );
+}
+
+// ── Cash ────────────────────────────────────────────────────────────────────
 
 class _PendingQueue extends ConsumerWidget {
   const _PendingQueue({required this.onOpen});
@@ -174,7 +410,8 @@ class _QueueTile extends StatelessWidget {
               ],
             ),
           ),
-          const _Chip(label: 'Pending cash', color: AppColors.warning),
+          const SizedBox(width: AppSpacing.sm),
+          const AdminStatusChip(label: 'Pending cash', color: AppColors.warning),
           const SizedBox(width: AppSpacing.sm),
           const Icon(Icons.chevron_right, color: AppColors.textMuted),
         ],
@@ -183,18 +420,20 @@ class _QueueTile extends StatelessWidget {
   }
 }
 
-class _StateList extends ConsumerWidget {
-  const _StateList({required this.filter, required this.onOpen});
+// ── Plans ───────────────────────────────────────────────────────────────────
 
-  final AdminSubscriptionFilter filter;
+class _StateList extends ConsumerWidget {
+  const _StateList({required this.listKey, required this.onOpen});
+
+  final AdminSubscriptionListKey listKey;
   final void Function(String catalogId) onOpen;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final list = ref.watch(adminSubscriptionListProvider(filter));
+    final provider = adminSubscriptionListProvider(listKey);
+    final list = ref.watch(provider);
     return RefreshIndicator(
-      onRefresh: () =>
-          ref.read(adminSubscriptionListProvider(filter).notifier).refresh(),
+      onRefresh: () => ref.read(provider.notifier).refresh(),
       child: list.when(
         loading: () => const Center(child: AppLoadingIndicator()),
         error: (_, __) => CatalogMessage(
@@ -202,25 +441,28 @@ class _StateList extends ConsumerWidget {
           title: "Couldn't load the list.",
           body: 'Check your connection and try again.',
           actionLabel: 'Try again',
-          onAction: () => ref
-              .read(adminSubscriptionListProvider(filter).notifier)
-              .refresh(),
+          onAction: () => ref.read(provider.notifier).refresh(),
         ),
         data: (state) => state.items.isEmpty
             ? CatalogMessage(
                 icon: Icons.inbox_outlined,
                 title: 'Nobody here.',
-                body: switch (filter) {
-                  AdminSubscriptionFilter.expiring7d =>
-                    'No plan ends in the next seven days.',
-                  AdminSubscriptionFilter.grace =>
-                    'No restaurant is in its grace period.',
-                  AdminSubscriptionFilter.paused => 'No 3D menu is paused.',
-                  AdminSubscriptionFilter.paused90d =>
-                    'No 3D menu has been paused for 90 days or more.',
-                  AdminSubscriptionFilter.trial => 'No trial is running.',
-                  AdminSubscriptionFilter.pending => '',
-                },
+                body: listKey.query.isNotEmpty
+                    ? 'No restaurant or owner matches "${listKey.query}".'
+                    : switch (listKey.filter) {
+                        AdminSubscriptionFilter.all =>
+                          'No restaurant has a subscription yet.',
+                        AdminSubscriptionFilter.expiring7d =>
+                          'No plan ends in the next seven days.',
+                        AdminSubscriptionFilter.grace =>
+                          'No restaurant is in its grace period.',
+                        AdminSubscriptionFilter.paused =>
+                          'No 3D menu is paused.',
+                        AdminSubscriptionFilter.paused90d =>
+                          'No 3D menu has been paused for 90 days or more.',
+                        AdminSubscriptionFilter.trial => 'No trial is running.',
+                        AdminSubscriptionFilter.pending => '',
+                      },
               )
             : ListView.separated(
                 padding: const EdgeInsets.all(AppSpacing.lg),
@@ -229,18 +471,9 @@ class _StateList extends ConsumerWidget {
                     const SizedBox(height: AppSpacing.sm),
                 itemBuilder: (_, i) {
                   if (i == state.items.length) {
-                    return Center(
-                      child: TextButton(
-                        key: const ValueKey('admin_subscriptions_more'),
-                        onPressed: state.loadingMore
-                            ? null
-                            : () => ref
-                                .read(adminSubscriptionListProvider(filter)
-                                    .notifier)
-                                .loadMore(),
-                        child:
-                            Text(state.loadingMore ? 'Loading…' : 'Load more'),
-                      ),
+                    return _LoadMore(
+                      loading: state.loadingMore,
+                      onPressed: () => ref.read(provider.notifier).loadMore(),
                     );
                   }
                   final item = state.items[i];
@@ -289,12 +522,16 @@ class _SubscriptionTile extends StatelessWidget {
               children: [
                 Text(
                   item.catalogName.isEmpty ? 'Restaurant' : item.catalogName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: textTheme.bodyLarge,
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
                   [
                     if (item.planId != null) item.planId!.apiValue,
+                    if (item.billingInterval != null)
+                      item.billingInterval!.apiValue.toLowerCase(),
                     if (days != null) '$days day${days == 1 ? '' : 's'} left',
                     if (item.periodEnd != null)
                       'ends ${formatSubscriptionDate(item.periodEnd!)}',
@@ -302,6 +539,15 @@ class _SubscriptionTile extends StatelessWidget {
                   style: textTheme.bodySmall
                       ?.copyWith(color: AppColors.textSecondary),
                 ),
+                if (item.owner != null)
+                  Text(
+                    'Owner: ${item.owner!.displayLabel}',
+                    key: ValueKey('admin_subscription_owner_${item.catalogId}'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.bodySmall
+                        ?.copyWith(color: AppColors.textMuted),
+                  ),
                 if (placeholders) ...[
                   const SizedBox(height: AppSpacing.xs),
                   Text(
@@ -313,34 +559,12 @@ class _SubscriptionTile extends StatelessWidget {
               ],
             ),
           ),
-          _Chip(label: item.status.apiValue, color: color),
+          const SizedBox(width: AppSpacing.sm),
+          AdminStatusChip(label: item.status.apiValue, color: color),
           const SizedBox(width: AppSpacing.sm),
           const Icon(Icons.chevron_right, color: AppColors.textMuted),
         ],
       ),
     );
   }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm,
-          vertical: 2,
-        ),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(AppRadius.xs),
-        ),
-        child: Text(
-          label,
-          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
-        ),
-      );
 }
