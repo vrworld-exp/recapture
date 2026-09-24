@@ -1384,7 +1384,29 @@ router.post(
     if (!catalog) return noCatalog(res);
     const catalogId = catalog._id as Types.ObjectId;
 
+    // BEFORE verifyClientPayment: a limited call never reaches Razorpay. The
+    // app treats the 429 like any other verify failure and keeps polling, and
+    // the poll's GET settles the order on read.
+    const rate = await consumeRateWindow(
+      `subscription-verify:${catalogId.toHexString()}`,
+      env.SUBSCRIPTION_VERIFY_MAX_PER_WINDOW,
+      env.SUBSCRIPTION_VERIFY_WINDOW_SECONDS
+    );
+    if (rate.limited) {
+      track(AnalyticsEvent.SUBSCRIPTION_CLIENT_VERIFY, {
+        catalog_id: catalogId.toHexString(),
+        result: 'RATE_LIMITED',
+        outcome: null,
+      });
+      return rateLimited(res, rate.retryAfter);
+    }
+
     const result = await verifyClientPayment(catalogId, req.body);
+    track(AnalyticsEvent.SUBSCRIPTION_CLIENT_VERIFY, {
+      catalog_id: catalogId.toHexString(),
+      result: result.kind,
+      outcome: result.kind === 'RECORDED' ? result.outcome : null,
+    });
     switch (result.kind) {
       case 'BAD_SIGNATURE':
         return fail(res, 400, 'INVALID_PAYMENT_SIGNATURE', "We couldn't confirm this payment.");

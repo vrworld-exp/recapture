@@ -34,6 +34,10 @@ export default defineConfig({
       RAZORPAY_KEY_ID: 'rzp_test_vitest0000000',
       RAZORPAY_KEY_SECRET: 'test-razorpay-key-secret',
       RAZORPAY_WEBHOOK_SECRET: 'test-razorpay-webhook-secret',
+      // Forced OFF so a developer's local `.env` (dotenv never overrides a var
+      // already set) cannot re-price every quote the suite asserts on. Suites
+      // that exercise testing prices turn them on with a spy on `env`.
+      SUBSCRIPTION_TESTING_PRICES: 'false',
     },
   },
 });

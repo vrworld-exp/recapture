@@ -10,6 +10,11 @@
 //   • Cancelled goes back to idle; 503 is `unavailable`; a failure keeps the
 //     SDK's code but never its prose on screen.
 //   • No `prefill` reaches the adapter — ids, amount, description only.
+//   • "Check again" from confirming is one more pass, never "unpaid"; a
+//     notifier disposed mid-activation (back button, killed activity) never
+//     emits `failed`, and the next subscription read shows the plan.
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/catalog/checkout_adapter.dart';
@@ -354,5 +359,149 @@ void main() {
     expect(c.read(checkoutProvider).phase, CheckoutPhase.done);
     expect(
         events.where((e) => e.$1 == 'checkout_activation_confirmed').length, 1);
+  });
+
+  group('Check again (confirming)', () {
+    Future<ProviderContainer> confirming(List<CatalogSubscription> script) async {
+      final c = container(script, budget: Duration.zero);
+      await c.read(subscriptionProvider.future);
+      adapter.outcome = const CheckoutOutcome.success('pay_c');
+      await c.read(checkoutProvider.notifier).pay(
+            planId: PlanId.taste,
+            interval: BillingInterval.monthly,
+          );
+      await settle();
+      expect(c.read(checkoutProvider).phase, CheckoutPhase.confirming);
+      return c;
+    }
+
+    test('moves to done when the server now says ACTIVE', () async {
+      final c = await confirming([sub('GRACE'), sub('GRACE'), sub('ACTIVE')]);
+
+      await c.read(checkoutProvider.notifier).checkAgain();
+
+      expect(c.read(checkoutProvider).phase, CheckoutPhase.done);
+      expect(c.read(checkoutProvider).failureCode, isNull);
+      expect(
+        events.where((e) => e.$1 == 'checkout_check_again').single.$2,
+        {'surface': 'owner'},
+      );
+    });
+
+    test('still not flipped → back to confirming, never failed', () async {
+      final c = await confirming([sub('GRACE')]);
+
+      await c.read(checkoutProvider.notifier).checkAgain();
+
+      expect(c.read(checkoutProvider).phase, CheckoutPhase.confirming);
+      expect(c.read(checkoutProvider).failureCode, isNull);
+    });
+
+    test('a double tap is one pass', () async {
+      final c = await confirming([sub('GRACE')]);
+      final scripted =
+          c.read(subscriptionProvider.notifier) as _ScriptedSubscription;
+      final readsBefore = scripted.reads;
+
+      final first = c.read(checkoutProvider.notifier).checkAgain();
+      final second = c.read(checkoutProvider.notifier).checkAgain();
+      await Future.wait([first, second]);
+
+      expect(scripted.reads, readsBefore + 1);
+      expect(events.where((e) => e.$1 == 'checkout_check_again'), hasLength(1));
+    });
+
+    test('does nothing outside confirming', () async {
+      final c = container([sub('NONE'), sub('ACTIVE')]);
+      await c.read(subscriptionProvider.future);
+
+      await c.read(checkoutProvider.notifier).checkAgain();
+
+      expect(c.read(checkoutProvider).phase, CheckoutPhase.idle);
+      expect(events.where((e) => e.$1 == 'checkout_check_again'), isEmpty);
+    });
+  });
+
+  test('a rate-limited verify (429) is logged and the poll still activates',
+      () async {
+    final c = container([sub('NONE'), sub('NONE'), sub('ACTIVE')]);
+    await c.read(subscriptionProvider.future);
+    repo.verifyFailure = const CatalogFailure(
+      code: 'RATE_LIMITED',
+      message: 'x',
+      statusCode: 429,
+    );
+    adapter.outcome = const CheckoutOutcome.success(
+      'pay_429',
+      orderId: 'order_test_1',
+      signature: 'sig',
+    );
+
+    await c.read(checkoutProvider.notifier).pay(
+          planId: PlanId.taste,
+          interval: BillingInterval.monthly,
+        );
+    await settle();
+
+    expect(c.read(checkoutProvider).phase, CheckoutPhase.done);
+    expect(
+      events.where((e) => e.$1 == 'checkout_verify_failed').single.$2,
+      {'code': 'RATE_LIMITED'},
+    );
+  });
+
+  test(
+      'disposed mid-activation (back button / killed activity): no failed, '
+      'and the next read shows the plan', () async {
+    final c = ProviderContainer(overrides: [
+      paymentsRepositoryProvider.overrideWithValue(repo),
+      checkoutAdapterProvider.overrideWithValue(adapter),
+      subscriptionProvider
+          .overrideWith(() => _ScriptedSubscription([sub('NONE'), sub('ACTIVE')])),
+      checkoutPollBackoffProvider.overrideWithValue(const [Duration.zero]),
+    ]);
+    addTearDown(c.dispose);
+    c.listen(subscriptionProvider, (_, __) {}, fireImmediately: true);
+    final phases = <CheckoutPhase>[];
+    final screen = c.listen<CheckoutState>(
+      checkoutProvider,
+      (_, next) => phases.add(next.phase),
+      fireImmediately: true,
+    );
+    await c.read(subscriptionProvider.future);
+
+    final gate = Completer<void>();
+    repo
+      ..verifyGate = gate.future
+      ..onVerify = () => (recorded: true, subscription: sub('ACTIVE'));
+    adapter.outcome = const CheckoutOutcome.success(
+      'pay_back',
+      orderId: 'order_test_1',
+      signature: 'sig',
+    );
+
+    final pay = c.read(checkoutProvider.notifier).pay(
+          planId: PlanId.taste,
+          interval: BillingInterval.monthly,
+        );
+    await settle();
+    expect(phases.last, CheckoutPhase.activating);
+
+    // The route pops: the screen stops listening and the notifier goes.
+    screen.close();
+    await settle();
+    gate.complete();
+    await pay; // must not throw on a disposed ref
+    await settle();
+
+    expect(phases, isNot(contains(CheckoutPhase.failed)));
+    expect(phases, isNot(contains(CheckoutPhase.confirming)));
+
+    // Next visit: the Subscription screen's read (which settles on the
+    // server) is the answer, and the checkout starts fresh.
+    await c.read(subscriptionProvider.notifier).refresh();
+    expect(c.read(subscriptionProvider).valueOrNull?.status,
+        SubscriptionStatus.active);
+    expect(c.read(checkoutProvider).phase, CheckoutPhase.idle);
   });
 }

@@ -122,4 +122,37 @@ describe('RAZORPAY_* env rules', () => {
     expect(parsed.data.ADMIN_REFUND_MAX_PER_WINDOW).toBe(5);
     expect(parsed.data.ADMIN_REFUND_WINDOW_SECONDS).toBe(3600);
   });
+
+  it('defaults the client-verify rate window', () => {
+    const parsed = ENV_SCHEMA.safeParse({ ...BASE });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.SUBSCRIPTION_VERIFY_MAX_PER_WINDOW).toBe(20);
+    expect(parsed.data.SUBSCRIPTION_VERIFY_WINDOW_SECONDS).toBe(600);
+  });
+});
+
+describe('SUBSCRIPTION_TESTING_PRICES env rule', () => {
+  it('refuses testing prices in production, naming the variable', () => {
+    const issues = issuesOn({
+      ...BASE,
+      NODE_ENV: 'production',
+      SUBSCRIPTION_TESTING_PRICES: 'true',
+    });
+    expect(issues.SUBSCRIPTION_TESTING_PRICES?.[0]).toMatch(
+      /SUBSCRIPTION_TESTING_PRICES must be false when NODE_ENV=production/
+    );
+  });
+
+  it('allows testing prices in development', () => {
+    expect(
+      issuesOn({ ...BASE, NODE_ENV: 'development', SUBSCRIPTION_TESTING_PRICES: 'true' })
+    ).toEqual({});
+  });
+
+  it('allows production with testing prices off', () => {
+    expect(
+      issuesOn({ ...BASE, NODE_ENV: 'production', SUBSCRIPTION_TESTING_PRICES: 'false' })
+    ).toEqual({});
+  });
 });

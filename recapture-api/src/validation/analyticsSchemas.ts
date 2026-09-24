@@ -145,6 +145,9 @@ export const AnalyticsEvent = {
   SUBSCRIPTION_ORDER_CREATED: 'subscription_order_created',
   SUBSCRIPTION_PAYMENT_RECORDED: 'subscription_payment_recorded',
   SUBSCRIPTION_PAYMENT_FAILED: 'subscription_payment_failed',
+  // One per POST /catalog/subscription/verify response — the instant path's
+  // success rate. Never the order or payment id: `result` and `outcome` only.
+  SUBSCRIPTION_CLIENT_VERIFY: 'subscription_client_verify',
   SUBSCRIPTION_DUPLICATE_PAYMENT_FLAGGED: 'subscription_duplicate_payment_flagged',
   SUBSCRIPTION_MANUAL_PAYMENT_SUBMITTED: 'subscription_manual_payment_submitted',
   SUBSCRIPTION_MANUAL_PAYMENT_DECIDED: 'subscription_manual_payment_decided',
@@ -1216,6 +1219,32 @@ const subscriptionStandeesIssuedProps = z
   })
   .strict();
 
+const subscriptionClientVerifyProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    result: z.enum([
+      'RECORDED',
+      'PENDING',
+      'BAD_SIGNATURE',
+      'UNKNOWN_ORDER',
+      'UNAVAILABLE',
+      'RATE_LIMITED',
+    ]),
+    /** The `OnlinePaymentOutcome` when RECORDED; null otherwise. */
+    outcome: z
+      .enum([
+        'APPLIED',
+        'ALREADY_APPLIED',
+        'RACED',
+        'DUPLICATE_SUSPECTED',
+        'AMOUNT_MISMATCH',
+        'ORPHAN_PAYMENT',
+        'UNKNOWN_ORDER',
+      ])
+      .nullable(),
+  })
+  .strict();
+
 const subscriptionReceiptDownloadedProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1442,6 +1471,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_ORDER_CREATED]: subscriptionOrderCreatedProps,
   [AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED]: subscriptionPaymentRecordedProps,
   [AnalyticsEvent.SUBSCRIPTION_PAYMENT_FAILED]: subscriptionPaymentFailedProps,
+  [AnalyticsEvent.SUBSCRIPTION_CLIENT_VERIFY]: subscriptionClientVerifyProps,
   [AnalyticsEvent.SUBSCRIPTION_DUPLICATE_PAYMENT_FLAGGED]: subscriptionDuplicatePaymentFlaggedProps,
   [AnalyticsEvent.SUBSCRIPTION_MANUAL_PAYMENT_SUBMITTED]: subscriptionManualPaymentSubmittedProps,
   [AnalyticsEvent.SUBSCRIPTION_MANUAL_PAYMENT_DECIDED]: subscriptionManualPaymentDecidedProps,

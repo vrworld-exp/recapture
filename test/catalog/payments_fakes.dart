@@ -113,6 +113,10 @@ class FakePaymentsRepository implements PaymentsRepository {
   /// NOT_SCRIPTED failure — the notifier treats any failure as best-effort).
   ({bool recorded, CatalogSubscription subscription}) Function()? onVerify;
   CatalogFailure? verifyFailure;
+
+  /// When set, verify waits on it before answering — a verify still in
+  /// flight while the screen goes away.
+  Future<void>? verifyGate;
   List<PaymentRecordSummary> ownerLedger = const [];
   ManualPaymentRecord? pending;
   CatalogFailure? submitFailure;
@@ -147,6 +151,8 @@ class FakePaymentsRepository implements PaymentsRepository {
     required String signature,
   }) async {
     calls.add('verify:$orderId:$paymentId:$signature');
+    final gate = verifyGate;
+    if (gate != null) await gate;
     final make = onVerify;
     if (make != null) return make();
     throw verifyFailure ??

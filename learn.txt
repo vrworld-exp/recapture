@@ -83,6 +83,15 @@ thisnking to fix it --------------------->>>
 
 
 
+    5. I have seen a subcriptions tab in ther user role admin, start building this feature including the full flow. first fix the list we are showing on top so i'll not get cut on mobile view. after that build each and every features for this process so admin able to see all subs and handle other edge cases also.
+    who iniciate payment user name and catalog detailes
+    Additionally what i wnat admin should get the status in detailed manner like payment started, razorpay succeeded, backend data updated (catalog get updated) something like this, so admin able to debug each and every payment initiated. for the last thing if razaorpay recived money and not get reflected in catalog (by any reason) give a button to upgrade his/her catalog accordingly ( acc.  to plan he/she payed for.) and admin able to start his/her sub from the app.
+    by implemening this admin no need to leave the app, admin can see and fix right from here.
+    Build carefully for web and apk and backend.
+
+
+
+
 
 
 

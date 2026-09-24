@@ -803,7 +803,11 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
           style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
         ),
         const SizedBox(height: AppSpacing.sm),
-        _CheckoutProgress(checkout: checkout),
+        _CheckoutProgress(
+          checkout: checkout,
+          onCheckAgain: () =>
+              ref.read(checkoutProvider.notifier).checkAgain(),
+        ),
         if (checkout.phase != CheckoutPhase.activating)
           AppButton(
             key: const ValueKey('subscription_pay_button'),
@@ -822,9 +826,13 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
 
 /// What the checkout is doing, in one line under (or instead of) the button.
 class _CheckoutProgress extends StatelessWidget {
-  const _CheckoutProgress({required this.checkout});
+  const _CheckoutProgress({required this.checkout, required this.onCheckAgain});
 
   final CheckoutState checkout;
+
+  /// Only offered while the payment is being confirmed: one more read, which
+  /// is what makes the server settle a paid order it has not heard about.
+  final VoidCallback onCheckAgain;
 
   @override
   Widget build(BuildContext context) {
@@ -883,6 +891,12 @@ class _CheckoutProgress extends StatelessWidget {
             child:
                 Text(text, style: textTheme.bodySmall?.copyWith(color: color)),
           ),
+          if (checkout.phase == CheckoutPhase.confirming)
+            TextButton(
+              key: const ValueKey('subscription_checkout_check_again'),
+              onPressed: onCheckAgain,
+              child: const Text('Check again'),
+            ),
         ],
       ),
     );

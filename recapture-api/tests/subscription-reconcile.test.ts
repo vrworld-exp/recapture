@@ -357,6 +357,29 @@ describe('settle on read: the owner read activates a paid order', () => {
     expect(res.body.catalog.subscription.isEntitledTo3D).toBe(true);
   });
 
+  it('a fresh process (tab reload, killed activity, cold start) activates on its first GET /catalog', async () => {
+    const { owner, catalogId } = await delegated();
+    const orderId = await openOrder(owner.auth);
+    // The read before paying found nothing and armed this process's throttle.
+    const unpaid = fakeRazorpay();
+    setRazorpayClient(unpaid);
+    const before = await request(app).get('/catalog').set(owner.auth).expect(200);
+    expect(before.body.catalog.subscription.status).not.toBe('ACTIVE');
+
+    // Paid at Razorpay; the app never called verify, no webhook, no worker —
+    // and the process restarted, so its throttle is gone.
+    const paid = providerWithPaid({ [orderId]: { paymentId: 'pay_cold', amount: MONTHLY } });
+    setRazorpayClient(paid);
+    resetOnReadSettleState();
+
+    const res = await request(app).get('/catalog').set(owner.auth).expect(200);
+
+    expect(res.body.catalog.subscription.status).toBe('ACTIVE');
+    expect(res.body.catalog.subscription.planId).toBe('TASTE');
+    expect(await PaymentRecord.countDocuments({ kind: 'PAID', catalogId })).toBe(1);
+    expect(await PaymentRecord.countDocuments({ kind: 'CHECKOUT_CREATED', catalogId })).toBe(1);
+  });
+
   it('asks the provider at most once per catalog per throttle window', async () => {
     const { owner } = await delegated();
     await openOrder(owner.auth);

@@ -762,6 +762,17 @@ const envSchema = z.object({
    * instead, so nothing downstream ever multiplies days by a day again.
    */
   SUBSCRIPTION_PENDING_PAYMENT_DAYS: z.coerce.number().int().positive().max(90).default(7),
+
+  /**
+   * Cap on `POST /catalog/subscription/verify` per catalog per window. One
+   * real payment is one call plus a few retries; the cap exists so a looping
+   * client (or a forged-signature spray) cannot turn this route into a
+   * Razorpay API pump. A limited call never reaches Razorpay, and the plan
+   * still activates through settle-on-read, the webhook and the reconciler.
+   */
+  SUBSCRIPTION_VERIFY_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  /** Sliding window for the verify cap (seconds). */
+  SUBSCRIPTION_VERIFY_WINDOW_SECONDS: z.coerce.number().int().positive().default(600),
 });
 
 /** Razorpay issues `rzp_live_…` and `rzp_test_…` key ids; the prefix is the mode. */
@@ -816,6 +827,18 @@ const refinedEnvSchema = envSchema.superRefine((cfg, ctx) => {
       });
     }
   }
+
+  // A real shop selling plans for pocket change is not a warning, it is a
+  // refusal: production never boots with testing prices on.
+  if (cfg.NODE_ENV === 'production' && cfg.SUBSCRIPTION_TESTING_PRICES) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SUBSCRIPTION_TESTING_PRICES'],
+      message:
+        'SUBSCRIPTION_TESTING_PRICES must be false when NODE_ENV=production — ' +
+        'testing prices would charge real shops a few rupees for a paid plan.',
+    });
+  }
 });
 
 /**
@@ -853,20 +876,16 @@ if (
 
 /**
  * Testing prices are never the thing you want to discover from a bank
- * statement, in EITHER direction: on in production means a real shop is selling
- * plans for pocket change, and on anywhere means the quotes this server mints
- * are not the ones on the price list. Both boot loudly.
+ * statement: the quotes this server mints are not the ones on the price list.
+ * Production refuses them outright (the superRefine above); anywhere else they
+ * boot loudly.
  */
 if (env.SUBSCRIPTION_TESTING_PRICES) {
   const rupees = (paise: number): string => `₹${(paise / 100).toFixed(2)}`;
-  const line =
-    `SUBSCRIPTION_TESTING_PRICES=true — plans are quoted and CHARGED at ` +
-    `${rupees(env.SUBSCRIPTION_TESTING_PRICE_TASTE_PAISE)} / ` +
-    `${rupees(env.SUBSCRIPTION_TESTING_PRICE_SIGNATURE_PAISE)} / ` +
-    `${rupees(env.SUBSCRIPTION_TESTING_PRICE_MASTERCHEF_PAISE)} per month, not the real tiers.`;
-  if (env.NODE_ENV === 'production') {
-    console.warn(`🚨 ${line} THIS IS PRODUCTION.`);
-  } else {
-    console.warn(`⚠️  ${line}`);
-  }
+  console.warn(
+    `⚠️  SUBSCRIPTION_TESTING_PRICES=true — plans are quoted and CHARGED at ` +
+      `${rupees(env.SUBSCRIPTION_TESTING_PRICE_TASTE_PAISE)} / ` +
+      `${rupees(env.SUBSCRIPTION_TESTING_PRICE_SIGNATURE_PAISE)} / ` +
+      `${rupees(env.SUBSCRIPTION_TESTING_PRICE_MASTERCHEF_PAISE)} per month, not the real tiers.`
+  );
 }

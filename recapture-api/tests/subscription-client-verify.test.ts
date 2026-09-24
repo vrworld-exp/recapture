@@ -8,6 +8,8 @@
 //   • A forged signature, or another catalog's order, activates nothing.
 //   • Authorized-but-not-captured, or Razorpay down → 202, nothing recorded.
 //   • The webhook arriving afterwards converges on the same PAID row.
+//   • Rate-limited per catalog BEFORE Razorpay is asked; every response is
+//     tracked once as `subscription_client_verify` with its result.
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import mongoose from 'mongoose';
@@ -96,6 +98,14 @@ function providerWith(orderId: string, payment: { id: string; status: string; am
   return fakeRazorpay({
     fetchPaymentsForOrder: vi.fn(async (id: string) => (id === orderId ? [payment] : [])),
   });
+}
+
+/** The `subscription_client_verify` props the console sink echoed, in order. */
+function verifyEvents(): Array<Record<string, unknown>> {
+  return vi
+    .mocked(console.log)
+    .mock.calls.filter((c) => c[0] === '[analytics] subscription_client_verify')
+    .map((c) => JSON.parse(c[1] as string) as Record<string, unknown>);
 }
 
 function body(orderId: string, paymentId: string, signature?: string) {
@@ -248,5 +258,113 @@ describe('POST /catalog/subscription/verify', () => {
       .set(owner.auth)
       .send({ ...body(orderId, 'pay_extra'), amountPaise: 1 })
       .expect(400);
+  });
+});
+
+describe('POST /catalog/subscription/verify — rate limit and analytics', () => {
+  it('the 21st call in the window is 429 and never reaches Razorpay', async () => {
+    const { owner } = await delegated();
+    const { orderId, amount } = await openOrder(owner.auth);
+    // Authorized, not captured: every allowed call asks Razorpay and answers 202.
+    const client = providerWith(orderId, { id: 'pay_spin', status: 'authorized', amount });
+    setRazorpayClient(client);
+
+    for (let i = 0; i < env.SUBSCRIPTION_VERIFY_MAX_PER_WINDOW; i += 1) {
+      await request(app)
+        .post('/catalog/subscription/verify')
+        .set(owner.auth)
+        .send(body(orderId, 'pay_spin'))
+        .expect(202);
+    }
+    expect(client.fetchPaymentsForOrder).toHaveBeenCalledTimes(env.SUBSCRIPTION_VERIFY_MAX_PER_WINDOW);
+
+    const res = await request(app)
+      .post('/catalog/subscription/verify')
+      .set(owner.auth)
+      .send(body(orderId, 'pay_spin'))
+      .expect(429);
+
+    expect(res.body.code).toBe('RATE_LIMITED');
+    expect(res.headers['retry-after']).toMatch(/^\d+$/);
+    expect(client.fetchPaymentsForOrder).toHaveBeenCalledTimes(env.SUBSCRIPTION_VERIFY_MAX_PER_WINDOW);
+    expect(verifyEvents().at(-1)).toMatchObject({ result: 'RATE_LIMITED', outcome: null });
+  });
+
+  it('the limit is per catalog — another owner is unaffected', async () => {
+    const a = await delegated();
+    const b = await delegated();
+    const orderA = await openOrder(a.owner.auth);
+    const orderB = await openOrder(b.owner.auth);
+    setRazorpayClient(
+      fakeRazorpay({
+        fetchPaymentsForOrder: vi.fn(async () => [
+          { id: 'pay_p', status: 'authorized', amount: orderA.amount },
+        ]),
+      })
+    );
+
+    for (let i = 0; i < env.SUBSCRIPTION_VERIFY_MAX_PER_WINDOW; i += 1) {
+      await request(app)
+        .post('/catalog/subscription/verify')
+        .set(a.owner.auth)
+        .send(body(orderA.orderId, 'pay_p'));
+    }
+    await request(app)
+      .post('/catalog/subscription/verify')
+      .set(a.owner.auth)
+      .send(body(orderA.orderId, 'pay_p'))
+      .expect(429);
+    await request(app)
+      .post('/catalog/subscription/verify')
+      .set(b.owner.auth)
+      .send(body(orderB.orderId, 'pay_p'))
+      .expect(202);
+  });
+
+  it('tracks one event per response, with the result and no ids', async () => {
+    const { owner, catalogId } = await delegated();
+    const other = await delegated();
+    const { orderId, amount } = await openOrder(owner.auth);
+    setRazorpayClient(providerWith(orderId, { id: 'pay_evt', status: 'captured', amount }));
+
+    await request(app)
+      .post('/catalog/subscription/verify')
+      .set(owner.auth)
+      .send(body(orderId, 'pay_evt', signCheckoutResponse(orderId, 'pay_evt', 'forged')))
+      .expect(400);
+    await request(app)
+      .post('/catalog/subscription/verify')
+      .set(other.owner.auth)
+      .send(body(orderId, 'pay_evt'))
+      .expect(404);
+    await request(app)
+      .post('/catalog/subscription/verify')
+      .set(owner.auth)
+      .send(body(orderId, 'pay_evt'))
+      .expect(200);
+    await request(app)
+      .post('/catalog/subscription/verify')
+      .set(owner.auth)
+      .send(body(orderId, 'pay_evt'))
+      .expect(200);
+    setRazorpayConfiguredForTests(false);
+    await request(app)
+      .post('/catalog/subscription/verify')
+      .set(owner.auth)
+      .send(body(orderId, 'pay_evt'))
+      .expect(503);
+
+    const events = verifyEvents();
+    expect(events.map((e) => [e.result, e.outcome])).toEqual([
+      ['BAD_SIGNATURE', null],
+      ['UNKNOWN_ORDER', null],
+      ['RECORDED', 'APPLIED'],
+      ['RECORDED', 'ALREADY_APPLIED'],
+      ['UNAVAILABLE', null],
+    ]);
+    expect(events[0].catalog_id).toBe(String(catalogId));
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain(orderId);
+    expect(serialized).not.toContain('pay_evt');
   });
 });

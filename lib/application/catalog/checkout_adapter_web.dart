@@ -45,6 +45,14 @@ const bool kCanCheckoutInApp = true;
 const String kRazorpayCheckoutJsUrl =
     'https://checkout.razorpay.com/v1/checkout.js';
 
+/// How long a checkout.js fetch may take before it counts as blocked. An ad
+/// blocker or an offline tab fails the fetch at once; a black-holed network
+/// never answers at all, and without this the Pay button would spin forever.
+const Duration kCheckoutJsLoadTimeout = Duration(seconds: 8);
+
+String _checkoutJsUrl = kRazorpayCheckoutJsUrl;
+Duration _checkoutJsLoadTimeout = kCheckoutJsLoadTimeout;
+
 CheckoutAdapter createPlatformCheckoutAdapter() {
   // Warm the script while the owner is still reading the plans, so the tap on
   // Pay is not also the download. A failure here is deliberately dropped:
@@ -164,6 +172,15 @@ Future<void> _ensureCheckoutJs() {
 @visibleForTesting
 Future<void> debugEnsureCheckoutJs() => _ensureCheckoutJs();
 
+/// Test seam: point the loader at another script (a URL that fails, or one
+/// that loads without defining the global) and shorten the timeout. Null
+/// restores the real value.
+@visibleForTesting
+void debugOverrideCheckoutJs({String? url, Duration? timeout}) {
+  _checkoutJsUrl = url ?? kRazorpayCheckoutJsUrl;
+  _checkoutJsLoadTimeout = timeout ?? kCheckoutJsLoadTimeout;
+}
+
 Future<void> _injectCheckoutJs() {
   final completer = Completer<void>();
   final parent = web.document.head ?? web.document.body;
@@ -175,28 +192,38 @@ Future<void> _injectCheckoutJs() {
   }
 
   final script = web.HTMLScriptElement()
-    ..src = kRazorpayCheckoutJsUrl
+    ..src = _checkoutJsUrl
     ..async = true;
+  Timer? timeout;
+
+  // First answer wins: a load that lands after the timeout is ignored (the
+  // tag is gone), and the next tap re-injects.
+  void fail(String reason) {
+    timeout?.cancel();
+    script.remove();
+    if (!completer.isCompleted) completer.completeError(StateError(reason));
+  }
+
   script.addEventListener(
     'load',
     ((web.Event _) {
+      if (completer.isCompleted) return;
       if (_isCheckoutJsLoaded) {
+        timeout?.cancel();
         completer.complete();
       } else {
         // Served something that was not checkout.js (a captive portal, say).
-        script.remove();
-        completer.completeError(
-          StateError('checkout.js loaded but did not define window.Razorpay.'),
-        );
+        fail('checkout.js loaded but did not define window.Razorpay.');
       }
     }).toJS,
   );
   script.addEventListener(
     'error',
-    ((web.Event _) {
-      script.remove();
-      completer.completeError(StateError('checkout.js could not be fetched.'));
-    }).toJS,
+    ((web.Event _) => fail('checkout.js could not be fetched.')).toJS,
+  );
+  timeout = Timer(
+    _checkoutJsLoadTimeout,
+    () => fail('checkout.js did not load in time.'),
   );
   parent.append(script);
   return completer.future;

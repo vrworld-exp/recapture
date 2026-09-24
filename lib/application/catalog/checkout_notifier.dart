@@ -5,6 +5,7 @@
 //   idle → quoting → showingSdk → activating → done
 //                 ↘ unavailable         ↘ confirming (timed out — the server
 //                 ↘ failed                 will still reconcile, never "unpaid")
+//                                        ↺ "Check again" → activating
 //
 // THE SDK'S SUCCESS IS NOT THE ANSWER (§7 rule 1). The Razorpay sheet says
 // "paid" to the phone; the subscription is ACTIVE only when the SERVER has
@@ -239,6 +240,19 @@ class CheckoutNotifier extends AutoDisposeNotifier<CheckoutState> {
           failureCode: 'UNSUPPORTED',
         );
     }
+  }
+
+  /// "Check again" on a "being confirmed": one more activation pass with a
+  /// fresh budget. The read it starts with is what makes the server settle a
+  /// paid order the webhook never delivered. Only from [CheckoutPhase.confirming]
+  /// — the phase flips to activating synchronously, so a double tap is one pass.
+  Future<void> checkAgain() async {
+    if (state.phase != CheckoutPhase.confirming) return;
+    Analytics.logEvent('checkout_check_again', {'surface': 'owner'});
+    state = state.copyWith(phase: CheckoutPhase.activating);
+    _pollAttempt = 0;
+    _pollStartedAt = DateTime.now();
+    await _checkOnce();
   }
 
   /// Puts a "being confirmed" or a failure away so the button is a button again.
