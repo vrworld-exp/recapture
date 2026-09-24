@@ -83,8 +83,11 @@ class FilePickerModelFilePicker implements ModelFilePicker {
 
     // `length()` rather than `lengthSync()`: a picker that did not report a
     // size returns null from the sync form, and a zero size would sign the PUT
-    // with a Content-Length the body then contradicts.
+    // with a Content-Length the body then contradicts. `length()` itself is
+    // null when the read to find out failed — no size means no signable PUT,
+    // so that pick is dropped rather than guessed at.
     final size = await file.length();
+    if (size == null) return null;
     return PickedModelFile(
       name: file.name,
       size: size,
