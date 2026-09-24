@@ -130,6 +130,7 @@ import {
   compSchema,
   extendGraceSchema,
   forceApplyPaymentSchema,
+  paymentLookupQuerySchema,
   PROVIDER_ORDER_ID_RE,
   refundSchema,
   standeesIssuedSchema,
@@ -139,15 +140,19 @@ import {
   type CompInput,
   type ExtendGraceInput,
   type ForceApplyPaymentInput,
+  type SyncPaymentInput,
   type RefundInput,
   type StandeesIssuedInput,
 } from '@/validation/subscriptionSchemas';
 import {
+  capturePaymentForOrder,
   forceApplyPayment,
   getPaymentAttempt,
   listAttemptsForCatalog,
   listPaymentAttempts,
+  lookupProviderId,
   syncPaymentWithProvider,
+  type PriceChanged,
 } from '@/services/subscription/paymentJournalService';
 import {
   applyComp,
@@ -2714,6 +2719,24 @@ async function respondToDecision(
       return;
     case 'COLLECTOR_NOT_FOUND':
       return subscriptionFail(res, 422, 'COLLECTOR_NOT_FOUND', 'That collector account was not found.');
+    case 'ALREADY_RECORDED_ONLINE':
+      res.status(409).json({
+        status: 'error',
+        code: 'ALREADY_RECORDED_ONLINE',
+        message:
+          'That Razorpay payment is already on the ledger as an online payment. ' +
+          'Open it in the payment journal instead of starting a second period.',
+        orderId: result.orderId,
+        catalogId: result.catalogId,
+      });
+      return;
+    case 'DUPLICATE_REFERENCE':
+      return subscriptionFail(
+        res,
+        409,
+        'DUPLICATE_REFERENCE',
+        'That reference is already on another cash entry. Check the ledger before recording it again.'
+      );
   }
 }
 
@@ -2824,6 +2847,73 @@ router.get(
   })
 );
 
+/** The 409 every money-moving fix answers when the order's price has moved. */
+function priceChangedFail(res: Response, change: PriceChanged): void {
+  res.status(409).json({
+    status: 'error',
+    code: 'QUOTE_PRICE_CHANGED',
+    message:
+      "This order's price differs from today's price for the same plan. " +
+      'Send acceptQuotedPrice: true to apply the plan for what was paid.',
+    quotedPaise: change.quotedPaise,
+    currentPaise: change.currentPaise,
+  });
+}
+
+function fixRateLimited(res: Response, retryAfter: number): void {
+  res.status(429).json({
+    status: 'error',
+    code: 'RATE_LIMITED',
+    message: 'Too many checks with Razorpay. Try again in a few minutes.',
+    retryAfter,
+  });
+}
+
+function paymentsUnavailable(res: Response): void {
+  subscriptionFail(
+    res,
+    503,
+    'PAYMENTS_UNAVAILABLE',
+    "Couldn't reach the payment service. Try again in a minute."
+  );
+}
+
+/**
+ * GET /admin/subscriptions/payments/lookup?id=order_…|pay_… — "Find a
+ * payment" (edge case #8): where is this Razorpay id? The ledger first, then
+ * Razorpay. Writes nothing. STATIC — declared before `/:orderId`, which would
+ * otherwise read "lookup" as an order id.
+ */
+router.get(
+  '/subscriptions/payments/lookup',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const query = paymentLookupQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      return subscriptionFail(res, 400, 'INVALID_REQUEST', 'Paste an order_… or pay_… id.');
+    }
+    const result = await lookupProviderId(query.data.id, adminActor(req));
+    switch (result.outcome) {
+      case 'ON_LEDGER':
+      case 'CASH_ENTRY':
+      case 'NOT_ON_LEDGER':
+        res.status(200).json({ status: 'success', ...result });
+        return;
+      case 'INVALID_ID':
+        return subscriptionFail(res, 400, 'INVALID_REQUEST', 'Paste an order_… or pay_… id.');
+      case 'RATE_LIMITED':
+        return fixRateLimited(res, result.retryAfter);
+      case 'UNAVAILABLE':
+        return subscriptionFail(
+          res,
+          404,
+          'PAYMENT_NOT_FOUND',
+          'Neither our ledger nor Razorpay could find that id. Check it and try again.'
+        );
+    }
+  })
+);
+
 /** GET /admin/subscriptions/payments/:orderId — one attempt, every step. */
 router.get(
   '/subscriptions/payments/:orderId',
@@ -2853,33 +2943,85 @@ router.post(
   asyncHandler(async (req, res) => {
     const orderId = orderIdParam(res, req.params.orderId);
     if (!orderId) return;
-    const result = await syncPaymentWithProvider(orderId, adminActor(req));
+    const body = (req.body ?? {}) as NonNullable<SyncPaymentInput>;
+    const result = await syncPaymentWithProvider(orderId, adminActor(req), {
+      acceptQuotedPrice: body.acceptQuotedPrice,
+    });
     switch (result.outcome) {
       case 'OK':
         res.status(200).json({
           status: 'success',
           result: result.result,
           provider: result.provider,
+          capturable: result.capturable,
           attempt: result.attempt,
         });
         return;
+      case 'PRICE_CHANGED':
+        return priceChangedFail(res, result);
       case 'NOT_FOUND':
         return subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
       case 'RATE_LIMITED':
-        res.status(429).json({
-          status: 'error',
-          code: 'RATE_LIMITED',
-          message: 'Too many checks with Razorpay. Try again in a few minutes.',
-          retryAfter: result.retryAfter,
-        });
-        return;
+        return fixRateLimited(res, result.retryAfter);
       case 'UNAVAILABLE':
+        return paymentsUnavailable(res);
+    }
+  })
+);
+
+/**
+ * POST /admin/subscriptions/payments/:orderId/capture — edge case #6. The
+ * owner's payment is AUTHORIZED at Razorpay but was never captured; this
+ * captures it for exactly the order's amount and records it through the
+ * webhook's own function. Refused when the authorized amount is not the
+ * order's (it would only be flagged after capture).
+ */
+router.post(
+  '/subscriptions/payments/:orderId/capture',
+  requireRole('ADMIN'),
+  validateBody(syncPaymentSchema),
+  asyncHandler(async (req, res) => {
+    const orderId = orderIdParam(res, req.params.orderId);
+    if (!orderId) return;
+    const body = (req.body ?? {}) as NonNullable<SyncPaymentInput>;
+    const result = await capturePaymentForOrder(orderId, adminActor(req), {
+      acceptQuotedPrice: body.acceptQuotedPrice,
+    });
+    switch (result.outcome) {
+      case 'OK':
+        res.status(200).json({ status: 'success', result: result.result, attempt: result.attempt });
+        return;
+      case 'PRICE_CHANGED':
+        return priceChangedFail(res, result);
+      case 'NOT_FOUND':
+        return subscriptionFail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+      case 'ALREADY_RECORDED':
         return subscriptionFail(
           res,
-          503,
-          'PAYMENTS_UNAVAILABLE',
-          "Couldn't reach the payment service. Try again in a minute."
+          409,
+          'ALREADY_RECORDED',
+          'A payment is already recorded on this order; there is nothing to capture.'
         );
+      case 'NOTHING_TO_CAPTURE':
+        return subscriptionFail(
+          res,
+          409,
+          'NOTHING_TO_CAPTURE',
+          'Razorpay holds no authorized payment on this order.'
+        );
+      case 'CAPTURE_AMOUNT_MISMATCH':
+        res.status(409).json({
+          status: 'error',
+          code: 'CAPTURE_AMOUNT_MISMATCH',
+          message: 'The authorized amount is not the order amount, so it was not captured.',
+          authorizedPaise: result.authorizedPaise,
+          quotedPaise: result.quotedPaise,
+        });
+        return;
+      case 'RATE_LIMITED':
+        return fixRateLimited(res, result.retryAfter);
+      case 'UNAVAILABLE':
+        return paymentsUnavailable(res);
     }
   })
 );
@@ -2897,12 +3039,14 @@ router.post(
   asyncHandler(async (req, res) => {
     const orderId = orderIdParam(res, req.params.orderId);
     if (!orderId) return;
-    const { note } = req.body as ForceApplyPaymentInput;
-    const result = await forceApplyPayment(orderId, adminActor(req), note);
+    const { note, acceptQuotedPrice } = req.body as ForceApplyPaymentInput;
+    const result = await forceApplyPayment(orderId, adminActor(req), note, { acceptQuotedPrice });
     switch (result.outcome) {
       case 'APPLIED':
         res.status(200).json({ status: 'success', attempt: result.attempt });
         return;
+      case 'PRICE_CHANGED':
+        return priceChangedFail(res, result);
       case 'NOT_FOUND':
         return subscriptionFail(
           res,

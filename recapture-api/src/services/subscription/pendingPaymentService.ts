@@ -27,8 +27,11 @@ import { Types } from 'mongoose';
 
 import { CatalogSubscription, isEntitledTo3D } from '@/models/CatalogSubscription';
 import { hasRoleAtLeast, type UserRole } from '@/models/User';
-import { PaymentRecord } from '@/models/PaymentRecord';
-import type { Actor, SubscriptionStatus } from '@/models/types/subscription.types';
+import { PaymentRecord, purchasedPaymentFilter } from '@/models/PaymentRecord';
+import {
+  type Actor,
+  type SubscriptionStatus,
+} from '@/models/types/subscription.types';
 import { notifyPaymentWindowOpened } from '@/services/subscription/ownerNotifications';
 import { enqueuePageStateJob } from '@/services/subscription/pageStateJobs';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
@@ -81,10 +84,9 @@ async function ownerWindowHistory(
       userId: ownerUserId,
       pendingPaymentUsedAt: { $ne: null },
     }).exec(),
-    PaymentRecord.exists({
-      userId: ownerUserId,
-      $or: [{ kind: 'PAID' }, { kind: 'MANUAL', verificationStatus: 'VERIFIED' }],
-    }).exec(),
+    // A refused, unresolved online payment bought nothing — it does not make
+    // the owner a customer (same rule as the trial, `purchasedPaymentFilter`).
+    PaymentRecord.exists(purchasedPaymentFilter(ownerUserId)).exec(),
   ]);
   return { usedWindow: usedWindow !== null, hasPaid: hasPaid !== null };
 }

@@ -215,7 +215,61 @@ export type DecideManualPaymentResult =
   | { outcome: 'CATALOG_DELETED' }
   /** Amount ≠ quote and no adequate override (E12). */
   | { outcome: 'AMOUNT_MISMATCH'; quotedPaise: number; amountPaise: number }
-  | { outcome: 'COLLECTOR_NOT_FOUND' };
+  | { outcome: 'COLLECTOR_NOT_FOUND' }
+  /**
+   * The reference is a Razorpay payment id our ledger already recorded as an
+   * online payment — activating it again would give two periods for one
+   * payment. `orderId` is where the admin can see (and fix) that payment.
+   */
+  | { outcome: 'ALREADY_RECORDED_ONLINE'; orderId: string | null; catalogId: string }
+  /** The same reference already activated (or awaits) a cash entry. */
+  | { outcome: 'DUPLICATE_REFERENCE' };
+
+/** A Razorpay payment id as an admin would paste it. */
+const RAZORPAY_PAYMENT_ID_RE = /^pay_[A-Za-z0-9]+$/;
+
+/**
+ * Whether `reference` is money that already activated through another door:
+ *   • a `pay_…` id our ledger holds as a PAID row (any catalog) — the owner
+ *     paid online and it was recorded; use the journal, not a second period;
+ *   • a `pay_…` id already on another live cash entry (any catalog) — a
+ *     Razorpay payment is one payment, wherever it was typed in;
+ *   • any other reference already on a live cash entry OF THIS CATALOG —
+ *     receipt-book numbers repeat across reps, so only the same restaurant.
+ * "Live" = PENDING or VERIFIED; a REJECTED entry never took money.
+ */
+async function referenceConflict(
+  catalogId: Types.ObjectId,
+  reference: string,
+  excludeId?: Types.ObjectId
+): Promise<Extract<
+  DecideManualPaymentResult,
+  { outcome: 'ALREADY_RECORDED_ONLINE' | 'DUPLICATE_REFERENCE' }
+> | null> {
+  const ref = reference.trim();
+  const isRazorpay = RAZORPAY_PAYMENT_ID_RE.test(ref);
+  if (isRazorpay) {
+    const online = await PaymentRecord.findOne({ kind: 'PAID', providerPaymentId: ref })
+      .select({ providerOrderId: 1, catalogId: 1 })
+      .lean<{ providerOrderId?: string; catalogId: Types.ObjectId }>()
+      .exec();
+    if (online) {
+      return {
+        outcome: 'ALREADY_RECORDED_ONLINE',
+        orderId: online.providerOrderId ?? null,
+        catalogId: online.catalogId.toHexString(),
+      };
+    }
+  }
+  const manual = await PaymentRecord.exists({
+    kind: 'MANUAL',
+    reference: ref,
+    verificationStatus: { $in: ['PENDING_VERIFICATION', 'VERIFIED'] },
+    ...(isRazorpay ? {} : { catalogId }),
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+  }).exec();
+  return manual ? { outcome: 'DUPLICATE_REFERENCE' } : null;
+}
 
 export interface VerifyInput {
   action: 'VERIFY';
@@ -267,6 +321,13 @@ async function decideOnRow(
   if (!(await catalogIsLive(catalogId))) {
     await transition(row._id as Types.ObjectId, 'REJECTED', admin, 'CATALOG_DELETED', now);
     return { outcome: 'CATALOG_DELETED' };
+  }
+
+  // A VERIFY activates. It must not activate money that already activated
+  // through another door (the admin journal's edge case #2).
+  if (input.action === 'VERIFY' && row.reference) {
+    const conflict = await referenceConflict(catalogId, row.reference, row._id as Types.ObjectId);
+    if (conflict) return conflict;
   }
 
   if (input.action === 'REJECT') {
@@ -369,6 +430,9 @@ export async function createAndVerifyManualPayment(
   now: Date = new Date()
 ): Promise<DecideManualPaymentResult> {
   if (!(await catalogIsLive(catalogId))) return { outcome: 'CATALOG_DELETED' };
+  // Checked BEFORE the insert, so a refused "Start plan" leaves no row behind.
+  const conflict = await referenceConflict(catalogId, input.reference);
+  if (conflict) return conflict;
   const { override, ...request } = input;
   const row = await insertManualRow(catalogId, ownerUserId, admin, request);
   if (row === 'COLLECTOR_NOT_FOUND') return { outcome: 'COLLECTOR_NOT_FOUND' };

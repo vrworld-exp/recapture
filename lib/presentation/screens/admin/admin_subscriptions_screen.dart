@@ -26,12 +26,15 @@ import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/admin/admin_subscriptions_notifier.dart';
+import '../../../data/repositories/catalog_failure.dart';
+import '../../../data/repositories/payments_repository.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/admin_payment_attempt.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/subscription_payment.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/app_loading_indicator.dart';
+import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import 'admin_payment_widgets.dart';
 
@@ -78,6 +81,8 @@ class _AdminSubscriptionsScreenState
           : AdminSubscriptionFilter.all;
 
   final _search = TextEditingController();
+  final _lookupField = TextEditingController();
+  bool _lookingUp = false;
   Timer? _debounce;
   String _query = '';
 
@@ -85,6 +90,7 @@ class _AdminSubscriptionsScreenState
   void dispose() {
     _debounce?.cancel();
     _search.dispose();
+    _lookupField.dispose();
     _tabs.dispose();
     super.dispose();
   }
@@ -130,16 +136,76 @@ class _AdminSubscriptionsScreenState
     );
   }
 
+  /// "Find a payment" (edge case #8): any `order_…` / `pay_…` id, from the
+  /// Razorpay dashboard or an owner's screenshot, to where it lives.
+  Future<void> _lookup() async {
+    final id = _lookupField.text.trim();
+    if (id.isEmpty) return;
+    final messenger = CatalogFeedback.of(context);
+    setState(() => _lookingUp = true);
+    try {
+      final result = await ref.read(paymentsRepositoryProvider).lookupPayment(id);
+      if (!mounted) return;
+      switch (result) {
+        case PaymentLookupOnLedger(:final orderId):
+          _openAttempt(orderId);
+        case PaymentLookupCashEntry(:final catalogId):
+          CatalogFeedback.confirm(
+              messenger, 'Recorded as a manual entry — opening the restaurant.');
+          _openCatalog(catalogId);
+        case final PaymentLookupNotOnLedger found:
+          await showDialog<void>(
+            context: context,
+            builder: (_) => _NotOnLedgerDialog(
+              found: found,
+              onStartPlan: (catalogId) => context.push(
+                '${AppRoutes.adminSubscriptions}/$catalogId'
+                '?ref=${Uri.encodeQueryComponent(found.id)}',
+              ),
+            ),
+          );
+      }
+    } on CatalogFailure catch (failure) {
+      CatalogFeedback.failure(messenger, failure,
+          subject: 'That payment could not be found');
+    } finally {
+      if (mounted) setState(() => _lookingUp = false);
+    }
+  }
+
   Widget _paymentsTab() => Column(
         children: [
           _FilterBar(
-            child: AdminFilterChips<AdminPaymentFilter>(
-              key: const ValueKey('admin_payments_filter'),
-              values: AdminPaymentFilter.values,
-              selected: _paymentFilter,
-              labelOf: (f) => f.label,
-              keyOf: (f) => f.name,
-              onSelected: (f) => setState(() => _paymentFilter = f),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AdminFilterChips<AdminPaymentFilter>(
+                  key: const ValueKey('admin_payments_filter'),
+                  values: AdminPaymentFilter.values,
+                  selected: _paymentFilter,
+                  labelOf: (f) => f.label,
+                  keyOf: (f) => f.name,
+                  onSelected: (f) => setState(() => _paymentFilter = f),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                TextField(
+                  key: const ValueKey('admin_lookup_field'),
+                  controller: _lookupField,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => _lookingUp ? null : _lookup(),
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.manage_search),
+                    hintText: 'Find a payment: order_… or pay_…',
+                    suffixIcon: IconButton(
+                      key: const ValueKey('admin_lookup_go'),
+                      tooltip: 'Find',
+                      icon: const Icon(Icons.arrow_forward),
+                      onPressed: _lookingUp ? null : _lookup,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -171,7 +237,8 @@ class _AdminSubscriptionsScreenState
                   decoration: InputDecoration(
                     isDense: true,
                     prefixIcon: const Icon(Icons.search),
-                    hintText: 'Restaurant or owner name',
+                    // #9: most owners never set a name — phone and email work too.
+                    hintText: 'Restaurant, owner, phone (last 4+) or email',
                     suffixIcon: _search.text.isEmpty
                         ? null
                         : IconButton(
@@ -196,6 +263,64 @@ class _AdminSubscriptionsScreenState
           ),
         ],
       );
+}
+
+/// A Razorpay id our ledger has never seen: what Razorpay says, and — when
+/// its notes name one of our catalogs — a way to record it there.
+class _NotOnLedgerDialog extends StatelessWidget {
+  const _NotOnLedgerDialog({required this.found, required this.onStartPlan});
+
+  final PaymentLookupNotOnLedger found;
+  final void Function(String catalogId) onStartPlan;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final catalogId = found.catalogId;
+    return AlertDialog(
+      backgroundColor: AppColors.surface1,
+      title: const Text('Not on our ledger'),
+      content: Column(
+        key: const ValueKey('admin_lookup_not_on_ledger'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Razorpay: ${found.id} · ${found.status} · '
+            '${formatPaise(found.amountPaise)}',
+            style: textTheme.bodyMedium,
+          ),
+          if (found.orderId != null)
+            Text('Order ${found.orderId}', style: textTheme.bodySmall),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            catalogId != null
+                ? 'Its notes name ${found.catalogName?.isNotEmpty == true ? found.catalogName : 'one of our restaurants'}. '
+                    'If the money is real, record it there with Start plan — '
+                    'the id is filled in for you.'
+                : 'Nothing links it to a restaurant. If you know whose it is, '
+                    'open that restaurant and use Start plan with this id.',
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        if (catalogId != null && found.status == 'captured')
+          FilledButton(
+            key: const ValueKey('admin_lookup_start_plan'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              onStartPlan(catalogId);
+            },
+            child: const Text('Open restaurant'),
+          ),
+      ],
+    );
+  }
 }
 
 class _FilterBar extends StatelessWidget {

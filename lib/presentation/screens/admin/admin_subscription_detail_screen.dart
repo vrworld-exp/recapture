@@ -23,6 +23,7 @@ import '../../../application/admin/admin_subscriptions_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/payments_repository.dart';
 import '../../../domain/catalog/subscription_copy.dart';
+import '../../../domain/entities/admin_payment_attempt.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/subscription_payment.dart';
 import '../../widgets/app_button.dart';
@@ -35,9 +36,17 @@ import '../projects/project_owner_sheet.dart';
 import 'admin_payment_widgets.dart';
 
 class AdminSubscriptionDetailScreen extends ConsumerStatefulWidget {
-  const AdminSubscriptionDetailScreen({super.key, required this.catalogId});
+  const AdminSubscriptionDetailScreen({
+    super.key,
+    required this.catalogId,
+    this.initialReference,
+  });
 
   final String catalogId;
+
+  /// A Razorpay `pay_…` id "Find a payment" sent here to be recorded
+  /// (edge case #8). Shown as a prompt; Start plan opens with it filled in.
+  final String? initialReference;
 
   @override
   ConsumerState<AdminSubscriptionDetailScreen> createState() =>
@@ -157,10 +166,18 @@ class _AdminSubscriptionDetailScreenState
 
   /// "Start plan" — the admin collected the money (cash, UPI, or a Razorpay
   /// payment that reached no order). One CREATE_AND_VERIFY call.
-  Future<void> _startPlan(CatalogSubscription subscription) async {
+  Future<void> _startPlan(
+    CatalogSubscription subscription,
+    List<PaymentAttempt> attempts, {
+    String? reference,
+  }) async {
     final result = await showDialog<_StartPlanInput>(
       context: context,
-      builder: (_) => _StartPlanDialog(subscription: subscription),
+      builder: (_) => _StartPlanDialog(
+        subscription: subscription,
+        initialReference: reference,
+        recentOnline: recentOnlinePayment(attempts, DateTime.now()),
+      ),
     );
     if (result == null || !mounted) return;
     await _run(
@@ -277,6 +294,37 @@ class _AdminSubscriptionDetailScreenState
           const SizedBox(height: AppSpacing.md),
           _OwnerCatalogCard(detail: detail),
         ],
+        if (widget.initialReference != null &&
+            subscription != null &&
+            !detail.catalogDeleted) ...[
+          const SizedBox(height: AppSpacing.md),
+          AppCard(
+            key: const ValueKey('admin_record_reference'),
+            border: const BorderSide(color: AppColors.warning, width: 1),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Razorpay payment ${widget.initialReference} is not on our '
+                    'ledger. Record it here if the money is this restaurant\'s.',
+                    style: textTheme.bodySmall,
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey('admin_record_reference_start'),
+                  onPressed: _acting
+                      ? null
+                      : () => _startPlan(
+                            subscription,
+                            detail.attempts,
+                            reference: widget.initialReference,
+                          ),
+                  child: const Text('Start plan…'),
+                ),
+              ],
+            ),
+          ),
+        ],
         if (pending.isNotEmpty) ...[
           const SizedBox(height: AppSpacing.md),
           Text('Awaiting verification', style: textTheme.titleSmall),
@@ -307,7 +355,9 @@ class _AdminSubscriptionDetailScreenState
                   label: 'Start plan…',
                   icon: Icons.add_card_outlined,
                   isFullWidth: false,
-                  onPressed: _acting ? null : () => _startPlan(subscription),
+                  onPressed: _acting
+                      ? null
+                      : () => _startPlan(subscription, detail.attempts),
                 ),
               if (subscription != null && subscription.trialAvailable)
                 AppButton.secondary(
@@ -1111,6 +1161,22 @@ class _StandeesDialogState extends State<_StandeesDialog> {
   }
 }
 
+/// The newest online payment that bought a period in the last 35 days (a
+/// month and a little) — what "Start plan" could double up on. Null if none.
+PaymentAttempt? recentOnlinePayment(List<PaymentAttempt> attempts, DateTime now) {
+  for (final attempt in attempts) {
+    final applied = attempt.stage == PaymentAttemptStage.completed ||
+        attempt.stage == PaymentAttemptStage.resolved;
+    final started = attempt.startedAt;
+    if (applied &&
+        started != null &&
+        now.difference(started) <= const Duration(days: 35)) {
+      return attempt;
+    }
+  }
+  return null;
+}
+
 class _StartPlanInput {
   const _StartPlanInput(this.request, this.override);
   final ManualPaymentRequest request;
@@ -1123,9 +1189,19 @@ class _StartPlanInput {
 /// (E12), because it IS one. Says the A2 rule out loud when a period is
 /// running, and carries the AC-5.2 notice like every entitlement decision.
 class _StartPlanDialog extends StatefulWidget {
-  const _StartPlanDialog({required this.subscription});
+  const _StartPlanDialog({
+    required this.subscription,
+    this.initialReference,
+    this.recentOnline,
+  });
 
   final CatalogSubscription subscription;
+  final String? initialReference;
+
+  /// An online payment that already bought a period recently — the one
+  /// "Start plan" must not repeat (edge case #2). The server refuses a
+  /// matching `pay_…` id outright; this warns about the rest.
+  final PaymentAttempt? recentOnline;
 
   @override
   State<_StartPlanDialog> createState() => _StartPlanDialogState();
@@ -1143,7 +1219,7 @@ class _StartPlanDialogState extends State<_StartPlanDialog> {
   BillingInterval _interval = BillingInterval.monthly;
   ManualMethod _method = ManualMethod.upi;
   final _amount = TextEditingController();
-  final _reference = TextEditingController();
+  late final _reference = TextEditingController(text: widget.initialReference);
   final _note = TextEditingController();
   bool _override = false;
 
@@ -1216,6 +1292,17 @@ class _StartPlanDialogState extends State<_StartPlanDialog> {
               style:
                   textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
             ),
+            if (widget.recentOnline case final recent?) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'This restaurant already paid ${formatPaise(recent.displayPaise)} '
+                'online'
+                '${recent.startedAt == null ? '' : ' on ${formatSubscriptionDate(recent.startedAt!)}'}'
+                ' and it was applied. Only start a plan for a DIFFERENT payment.',
+                key: const ValueKey('admin_start_recent_online'),
+                style: textTheme.bodySmall?.copyWith(color: AppColors.error),
+              ),
+            ],
             const SizedBox(height: AppSpacing.md),
             Text('Plan', style: textTheme.labelLarge),
             const SizedBox(height: AppSpacing.xs),

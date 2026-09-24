@@ -781,6 +781,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.adminSubscriptionDetail,
         builder: (context, state) => AdminSubscriptionDetailScreen(
           catalogId: state.pathParameters['catalogId'] ?? '',
+          // "Find a payment" → a pay_ id to record here (edge case #8).
+          initialReference: state.uri.queryParameters['ref'],
         ),
       ),
       GoRoute(

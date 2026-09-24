@@ -542,12 +542,25 @@ function searchPattern(q: string): RegExp {
 
 /**
  * The catalog ids a search names: by restaurant name (the slug or the
- * business name) or by the owner's display name. Soft-deleted catalogs are
- * included — their subscription rows still exist and are still listed.
+ * business name), or by the owner — display name, the END of their phone
+ * number (4+ digits, "73" alone would match half the fleet), or part of their
+ * email when the query has an "@". Most owners never set a display name (the
+ * OTP sign-up does not ask), so name-only search found almost nobody — edge
+ * case #9.
+ *
+ * PII: the phone/email are MATCHED here and never returned; the list still
+ * carries only the list-safe owner summary. ADMIN-only route (AGENTS.md).
+ * Soft-deleted catalogs are included — their subscription rows still exist.
  */
 async function catalogIdsMatching(q: string): Promise<Types.ObjectId[]> {
   const pattern = searchPattern(q);
-  const owners = await User.find({ displayName: pattern })
+  const digits = q.replace(/[\s+\-()]/g, '');
+  const ownerMatch: Record<string, unknown>[] = [{ displayName: pattern }];
+  if (/^\d{4,15}$/.test(digits)) ownerMatch.push({ phone: new RegExp(`${digits}$`) });
+  if (q.includes('@')) {
+    ownerMatch.push({ email: new RegExp(q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') });
+  }
+  const owners = await User.find({ $or: ownerMatch })
     .select({ _id: 1 })
     .limit(SEARCH_MAX_CATALOGS)
     .lean<{ _id: Types.ObjectId }[]>()

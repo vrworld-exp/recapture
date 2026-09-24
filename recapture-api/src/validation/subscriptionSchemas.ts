@@ -240,8 +240,21 @@ export const adminPaymentJournalQuerySchema = z
 /** A Razorpay order id as it rides in a path (`order_…`). Shape only; existence is the service's. */
 export const PROVIDER_ORDER_ID_RE = /^[A-Za-z0-9_]{1,64}$/;
 
-/** No body: the sync asks Razorpay and runs the webhook's own functions. */
-export const syncPaymentSchema = z.object({}).strict().optional();
+/**
+ * The sync and the capture take one optional flag: the admin has seen that the
+ * order's price differs from today's (a testing-price order after go-live) and
+ * accepts it. Without it such an order is refused with QUOTE_PRICE_CHANGED.
+ */
+export const syncPaymentSchema = z
+  .object({ acceptQuotedPrice: z.boolean().optional() })
+  .strict()
+  .optional();
+export type SyncPaymentInput = z.infer<typeof syncPaymentSchema>;
+
+/** GET /admin/subscriptions/payments/lookup?id=order_…|pay_… */
+export const paymentLookupQuerySchema = z
+  .object({ id: z.string().trim().min(1).max(64) })
+  .strict();
 
 /**
  * POST /admin/subscriptions/payments/:orderId/apply — the human override.
@@ -251,6 +264,7 @@ export const syncPaymentSchema = z.object({}).strict().optional();
 export const forceApplyPaymentSchema = z
   .object({
     note: z.string().trim().min(20).max(1000),
+    acceptQuotedPrice: z.boolean().optional(),
   })
   .strict();
 export type ForceApplyPaymentInput = z.infer<typeof forceApplyPaymentSchema>;

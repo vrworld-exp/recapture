@@ -8,9 +8,11 @@
 //   • a PAID row's `appliedAt`, set once when its period has been applied;
 //   • a CHECKOUT_CREATED row's `expiresAt`, pulled forward to close the order;
 //   • a REFUNDED row's `note`, when Razorpay reports the refund's outcome;
-//   • a PAID row's `adminResolution`, set ONCE when an admin applies a
-//     flagged or unreflected payment to its catalog by hand
-//     (paymentJournalService.forceApplyPayment). The original `note` stays —
+//   • a PAID row's `adminResolution`, set when an admin applies a flagged or
+//     unreflected payment to its catalog by hand
+//     (paymentJournalService.forceApplyPayment) — once, guarded on its
+//     absence; replaced only when that apply never reached the subscription
+//     row (guarded on the previous value's `at`). The original `note` stays —
 //     the ledger keeps what the machine decided beside what the human did.
 //
 // Immutability is a SERVICE rule (Stage 3), not a schema hook: a `pre('save')`
@@ -18,7 +20,7 @@
 // hook is invisible to `updateOne` anyway. What the schema does enforce is the
 // arithmetic — integer paise, never negative — and the two uniqueness rules an
 // idempotent checkout depends on.
-import { Schema, model, Document, Types } from 'mongoose';
+import { Schema, model, Document, Types, type FilterQuery } from 'mongoose';
 import { ActorSchema, PlanSnapshotSchema } from './CatalogSubscription';
 import {
   BILLING_INTERVALS,
@@ -26,6 +28,7 @@ import {
   PAYMENT_KINDS,
   PAYMENT_VIAS,
   PLAN_IDS,
+  REFUSAL_NOTES,
   VERIFICATION_STATUSES,
   type Actor,
   type BillingInterval,
@@ -107,7 +110,8 @@ export interface IPaymentRecord extends Document {
    * PAID only: an admin applied this payment's plan to the catalog by hand,
    * because the machine flagged it (AMOUNT_MISMATCH / DUPLICATE_SUSPECTED /
    * ORPHAN_PAYMENT on a restored catalog) or its period never reached the
-   * subscription row. Written once, guarded on its absence.
+   * subscription row. Written once, guarded on its absence — or re-written,
+   * guarded on its previous `at`, when that apply never landed.
    */
   adminResolution?: PaymentAdminResolution;
   createdAt: Date;
@@ -218,3 +222,23 @@ PaymentRecordSchema.index({ catalogId: 1, kind: 1, expiresAt: 1 });
 PaymentRecordSchema.index({ kind: 1, createdAt: -1, _id: -1 });
 
 export const PaymentRecord = model<IPaymentRecord>('PaymentRecord', PaymentRecordSchema);
+
+/**
+ * The ledger filter for "this owner has paid FOR something" — trial and
+ * pending-window eligibility: a verified cash payment, or an online payment
+ * that was not refused (or that an admin applied by hand). A refused,
+ * unresolved PAID row is money to refund or decide, not a purchase.
+ * `note: {$nin}` also matches rows with no note at all.
+ */
+export function purchasedPaymentFilter(ownerUserId: Types.ObjectId): FilterQuery<IPaymentRecord> {
+  return {
+    userId: ownerUserId,
+    $or: [
+      { kind: 'MANUAL', verificationStatus: 'VERIFIED' },
+      {
+        kind: 'PAID',
+        $or: [{ note: { $nin: [...REFUSAL_NOTES] } }, { adminResolution: { $ne: null } }],
+      },
+    ],
+  };
+}

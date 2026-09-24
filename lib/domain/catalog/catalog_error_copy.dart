@@ -264,6 +264,30 @@ const Map<String, CatalogErrorCopy> _copy = {
     'This payment was applied and the catalog already shows it.',
     'Nothing to fix here.',
   ),
+  'ALREADY_RECORDED_ONLINE': CatalogErrorCopy(
+    'That Razorpay payment is already on the ledger as an online payment.',
+    'Open it under Payments instead of starting a second plan.',
+  ),
+  'DUPLICATE_REFERENCE': CatalogErrorCopy(
+    'That reference is already on another cash entry for this restaurant.',
+    'Check the ledger before recording it again.',
+  ),
+  'QUOTE_PRICE_CHANGED': CatalogErrorCopy(
+    "This order's price differs from today's price for the same plan.",
+    'Confirm you want the plan applied for what was paid, then try again.',
+  ),
+  'ALREADY_RECORDED': CatalogErrorCopy(
+    'A payment is already recorded on this order.',
+    'Refresh — there is nothing to capture.',
+  ),
+  'NOTHING_TO_CAPTURE': CatalogErrorCopy(
+    'Razorpay holds no authorized payment on this order.',
+    'Press "Check with Razorpay" to see what it has.',
+  ),
+  'CAPTURE_AMOUNT_MISMATCH': CatalogErrorCopy(
+    'The authorized amount is not the order amount, so it was not captured.',
+    'Let Razorpay release it, or record the payment with Start plan.',
+  ),
 
   // ── Request-level ─────────────────────────────────────────────────────────
   'INVALID_REQUEST': CatalogErrorCopy(

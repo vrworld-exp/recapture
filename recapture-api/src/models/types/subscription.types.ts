@@ -110,6 +110,15 @@ export type PaymentKind = (typeof PAYMENT_KINDS)[number];
 export const PAYMENT_VIAS = ['WEBHOOK', 'RECONCILE', 'CLIENT', 'ADMIN'] as const;
 export type PaymentVia = (typeof PAYMENT_VIAS)[number];
 
+/**
+ * The notes `applyRecordedPayment` writes on a PAID row it refused to
+ * activate — "recorded, not activated". A PAID row carrying one of these (and
+ * no `adminResolution`) bought NOTHING, so it must not count as "has paid"
+ * for trial or pending-window eligibility.
+ */
+export const REFUSAL_NOTES = ['AMOUNT_MISMATCH', 'ORPHAN_PAYMENT', 'DUPLICATE_SUSPECTED'] as const;
+export type RefusalNote = (typeof REFUSAL_NOTES)[number];
+
 /** MANUAL entries only — the one field on the ledger that transitions (§10). */
 export const VERIFICATION_STATUSES = ['PENDING_VERIFICATION', 'VERIFIED', 'REJECTED'] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];

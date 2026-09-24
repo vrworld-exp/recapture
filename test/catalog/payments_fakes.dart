@@ -261,8 +261,11 @@ class FakePaymentsRepository implements PaymentsRepository {
   }
 
   @override
-  Future<PaymentSyncResult> syncPaymentAttempt(String orderId) async {
-    calls.add('sync:$orderId');
+  Future<PaymentSyncResult> syncPaymentAttempt(
+    String orderId, {
+    bool acceptQuotedPrice = false,
+  }) async {
+    calls.add('sync:$orderId${acceptQuotedPrice ? ':accept' : ''}');
     final failure = syncFailure;
     if (failure != null) throw failure;
     final make = onSync;
@@ -276,8 +279,9 @@ class FakePaymentsRepository implements PaymentsRepository {
   Future<PaymentAttempt> forceApplyPaymentAttempt(
     String orderId, {
     required String note,
+    bool acceptQuotedPrice = false,
   }) async {
-    calls.add('forceApply:$orderId');
+    calls.add('forceApply:$orderId${acceptQuotedPrice ? ':accept' : ''}');
     final failure = forceApplyFailure;
     if (failure != null) throw failure;
     final make = onForceApply;
@@ -285,6 +289,33 @@ class FakePaymentsRepository implements PaymentsRepository {
     final attempt = make(orderId, note);
     attempts[orderId] = attempt;
     return attempt;
+  }
+
+  PaymentAttempt Function(String orderId)? onCapture;
+  PaymentLookupResult? lookupResult;
+  CatalogFailure? lookupFailure;
+
+  @override
+  Future<PaymentAttempt> capturePaymentAttempt(
+    String orderId, {
+    bool acceptQuotedPrice = false,
+  }) async {
+    calls.add('capture:$orderId${acceptQuotedPrice ? ':accept' : ''}');
+    final make = onCapture;
+    if (make == null) throw UnimplementedError('capture not scripted');
+    final attempt = make(orderId);
+    attempts[orderId] = attempt;
+    return attempt;
+  }
+
+  @override
+  Future<PaymentLookupResult> lookupPayment(String id) async {
+    calls.add('lookup:$id');
+    final failure = lookupFailure;
+    if (failure != null) throw failure;
+    final result = lookupResult;
+    if (result == null) throw UnimplementedError('lookup not scripted');
+    return result;
   }
 
   @override

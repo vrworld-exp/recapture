@@ -24,7 +24,12 @@ import { Types } from 'mongoose';
 
 import { Catalog } from '@/models/Catalog';
 import { CatalogSubscription } from '@/models/CatalogSubscription';
-import { PaymentRecord, type IPaymentRecord, type PaymentQuote } from '@/models/PaymentRecord';
+import {
+  PaymentRecord,
+  type IPaymentRecord,
+  type PaymentAdminResolution,
+  type PaymentQuote,
+} from '@/models/PaymentRecord';
 import {
   BILLING_INTERVALS,
   PLAN_IDS,
@@ -340,6 +345,11 @@ export async function applyRecordedPayment(
  * at `now` (AC-3.5) with the frozen quote, exactly as a payment arriving now
  * would. If the apply throws, the claim is released so the button works again.
  *
+ * `previous` is an earlier admin apply that never reached the subscription
+ * row (the process died between claim and apply — edge case #1). The claim
+ * is then guarded on THAT resolution's time instead of on absence, so a
+ * re-apply is still exactly once; on failure the previous one is restored.
+ *
  * Returns false when another admin claimed the row first.
  */
 export async function applyPaymentByAdmin(
@@ -347,13 +357,18 @@ export async function applyPaymentByAdmin(
   ownerUserId: Types.ObjectId,
   admin: Actor,
   note: string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  previous: PaymentAdminResolution | null = null
 ): Promise<boolean> {
   const quote = paid.quote;
   if (!quote) throw new Error('applyPaymentByAdmin: a PAID row with no quote');
   const paymentRecordId = paid._id as Types.ObjectId;
   const claimed = await PaymentRecord.findOneAndUpdate(
-    { _id: paymentRecordId, kind: 'PAID', adminResolution: null },
+    {
+      _id: paymentRecordId,
+      kind: 'PAID',
+      ...(previous ? { 'adminResolution.at': previous.at } : { adminResolution: null }),
+    },
     { $set: { adminResolution: { action: 'APPLIED', by: admin, at: now, note } } },
     { new: true }
   ).exec();
@@ -376,7 +391,7 @@ export async function applyPaymentByAdmin(
   } catch (err) {
     await PaymentRecord.updateOne(
       { _id: paymentRecordId },
-      { $unset: { adminResolution: 1 } }
+      previous ? { $set: { adminResolution: previous } } : { $unset: { adminResolution: 1 } }
     ).exec();
     throw err;
   }

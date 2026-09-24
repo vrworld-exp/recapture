@@ -20,7 +20,7 @@ import { Types } from 'mongoose';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogSubscription, isEntitledTo3D } from '@/models/CatalogSubscription';
 import { Notification } from '@/models/Notification';
-import { PaymentRecord } from '@/models/PaymentRecord';
+import { PaymentRecord, purchasedPaymentFilter } from '@/models/PaymentRecord';
 import type { ICatalogSubscription } from '@/models/CatalogSubscription';
 import {
   isUncapped,
@@ -239,17 +239,17 @@ function rowAllowsTrial(row: SubscriptionRow | null): boolean {
  *   • one trial ever (D2): a trial on a deleted catalog still counts;
  *   • a trial is for restaurants that have never been customers (E41): an
  *     owner with a PAID or VERIFIED manual payment behind them gets no free
- *     month by deleting and re-creating.
+ *     month by deleting and re-creating. "Paid" means paid FOR something: a
+ *     PAID row the webhook refused (AMOUNT_MISMATCH, ORPHAN_PAYMENT,
+ *     DUPLICATE_SUSPECTED) and no admin applied bought nothing, so it does not
+ *     count — see `purchasedPaymentFilter`.
  */
 async function ownerTrialHistory(
   ownerUserId: Types.ObjectId
 ): Promise<{ usedTrial: boolean; hasPaid: boolean }> {
   const [usedTrial, hasPaid] = await Promise.all([
     CatalogSubscription.exists({ userId: ownerUserId, trialUsedAt: { $ne: null } }).exec(),
-    PaymentRecord.exists({
-      userId: ownerUserId,
-      $or: [{ kind: 'PAID' }, { kind: 'MANUAL', verificationStatus: 'VERIFIED' }],
-    }).exec(),
+    PaymentRecord.exists(purchasedPaymentFilter(ownerUserId)).exec(),
   ]);
   return { usedTrial: usedTrial !== null, hasPaid: hasPaid !== null };
 }

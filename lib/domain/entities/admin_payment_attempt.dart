@@ -270,11 +270,88 @@ class PaymentSyncResult {
     required this.outcome,
     required this.provider,
     required this.attempt,
+    this.capturable,
   });
 
   final PaymentSyncOutcome outcome;
   final ProviderSnapshot? provider;
   final PaymentAttempt attempt;
+
+  /// Edge case #6: the authorized payment "Capture payment" would take —
+  /// only when its amount is exactly the order's.
+  final ({String paymentId, int amountPaise})? capturable;
+
+  static ({String paymentId, int amountPaise})? capturableFrom(Object? raw) {
+    if (raw is! Map) return null;
+    final id = catalogText(raw['paymentId']);
+    if (id == null) return null;
+    return (paymentId: id, amountPaise: catalogCount(raw['amountPaise']));
+  }
+}
+
+/// `GET /admin/subscriptions/payments/lookup` — where a Razorpay id is.
+sealed class PaymentLookupResult {
+  const PaymentLookupResult();
+
+  static PaymentLookupResult fromMap(Map<String, dynamic> map) {
+    switch (map['outcome']) {
+      case 'ON_LEDGER':
+        return PaymentLookupOnLedger(catalogText(map['orderId']) ?? '');
+      case 'CASH_ENTRY':
+        return PaymentLookupCashEntry(
+          catalogId: catalogText(map['catalogId']) ?? '',
+          catalogName: catalogText(map['catalogName']) ?? '',
+        );
+      default:
+        final provider = map['provider'] is Map
+            ? (map['provider'] as Map).cast<String, dynamic>()
+            : const <String, dynamic>{};
+        final catalog = map['catalog'] is Map
+            ? (map['catalog'] as Map).cast<String, dynamic>()
+            : null;
+        return PaymentLookupNotOnLedger(
+          id: catalogText(provider['id']) ?? '',
+          status: catalogText(provider['status']) ?? 'unknown',
+          amountPaise: catalogCount(provider['amountPaise']),
+          orderId: catalogText(provider['orderId']),
+          catalogId: catalog == null ? null : catalogText(catalog['id']),
+          catalogName: catalog == null ? null : catalogText(catalog['name']),
+        );
+    }
+  }
+}
+
+/// The order is on our ledger — open its journal entry.
+class PaymentLookupOnLedger extends PaymentLookupResult {
+  const PaymentLookupOnLedger(this.orderId);
+  final String orderId;
+}
+
+/// This Razorpay payment was recorded as a manual ("Start plan") entry.
+class PaymentLookupCashEntry extends PaymentLookupResult {
+  const PaymentLookupCashEntry({required this.catalogId, required this.catalogName});
+  final String catalogId;
+  final String catalogName;
+}
+
+/// Razorpay knows it; our ledger does not.
+class PaymentLookupNotOnLedger extends PaymentLookupResult {
+  const PaymentLookupNotOnLedger({
+    required this.id,
+    required this.status,
+    required this.amountPaise,
+    required this.orderId,
+    required this.catalogId,
+    required this.catalogName,
+  });
+  final String id;
+  final String status;
+  final int amountPaise;
+  final String? orderId;
+
+  /// The catalog the payment's notes name, when we have it.
+  final String? catalogId;
+  final String? catalogName;
 }
 
 /// One journal entry.
@@ -308,9 +385,30 @@ class PaymentAttempt {
     required this.steps,
     required this.canSync,
     required this.canForceApply,
+    this.paymentRecordId,
+    this.priceChange,
+    this.daysForfeitedOnApply = 0,
+    this.canRefund = false,
+    this.refundNeedsOverride = true,
   });
 
   final String orderId;
+
+  /// The PAID ledger row — what Refund acts on.
+  final String? paymentRecordId;
+
+  /// Edge case #5: the order's price vs today's for the same plan; null when
+  /// equal. When set, every fix asks the admin to accept the quoted price.
+  final ({int quotedPaise, int currentPaise})? priceChange;
+
+  /// Edge case #3: days on the running period that "Apply" would throw away.
+  final int daysForfeitedOnApply;
+  final bool canRefund;
+
+  /// A refund needs the override and 30 characters (a flagged duplicate does not).
+  final bool refundNeedsOverride;
+
+  bool get isDuplicate => outcomeNote == 'DUPLICATE_SUSPECTED';
   final String catalogId;
   final String catalogName;
   final bool catalogDeleted;
@@ -392,6 +490,18 @@ class PaymentAttempt {
           : const [],
       canSync: map['canSync'] == true,
       canForceApply: map['canForceApply'] == true,
+      paymentRecordId: catalogText(map['paymentRecordId']),
+      priceChange: map['priceChange'] is Map
+          ? (
+              quotedPaise: catalogCount((map['priceChange'] as Map)['quotedPaise']),
+              currentPaise:
+                  catalogCount((map['priceChange'] as Map)['currentPaise']),
+            )
+          : null,
+      daysForfeitedOnApply: catalogCount(map['daysForfeitedOnApply']),
+      canRefund: map['canRefund'] == true,
+      // Absent on an older server: assume the stricter rule.
+      refundNeedsOverride: map['refundNeedsOverride'] != false,
     );
   }
 

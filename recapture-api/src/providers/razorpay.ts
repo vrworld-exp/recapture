@@ -35,6 +35,16 @@ export interface RazorpayClient {
     paymentId: string,
     input: { amountPaise: number; notes: Record<string, string> }
   ): Promise<{ id: string; status: string }>;
+  /** One payment by id — the admin journal's lookup of a `pay_…` it has never seen. */
+  fetchPayment(paymentId: string): Promise<{
+    id: string;
+    status: string;
+    amount: number;
+    orderId: string | null;
+    notes: Record<string, string>;
+  }>;
+  /** Capture an AUTHORIZED payment for exactly `amountPaise` (the admin journal's capture). */
+  capturePayment(paymentId: string, amountPaise: number): Promise<{ id: string; status: string }>;
 }
 
 /**
@@ -134,6 +144,32 @@ export const razorpayClient: RazorpayClient = {
         notes: input.notes,
       });
       return { id: refund.id, status: String(refund.status) };
+    });
+  },
+
+  async fetchPayment(paymentId) {
+    return guarded('fetch payment', async () => {
+      const p = await instance().payments.fetch(paymentId);
+      const notes: Record<string, string> = {};
+      if (p.notes && typeof p.notes === 'object') {
+        for (const [k, v] of Object.entries(p.notes)) {
+          if (typeof v === 'string' || typeof v === 'number') notes[k] = String(v);
+        }
+      }
+      return {
+        id: p.id,
+        status: String(p.status),
+        amount: Number(p.amount),
+        orderId: typeof p.order_id === 'string' && p.order_id ? p.order_id : null,
+        notes,
+      };
+    });
+  },
+
+  async capturePayment(paymentId, amountPaise) {
+    return guarded('capture payment', async () => {
+      const p = await instance().payments.capture(paymentId, amountPaise, 'INR');
+      return { id: p.id, status: String(p.status) };
     });
   },
 };

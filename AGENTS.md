@@ -146,9 +146,12 @@ do not remove it).
     The same list-safe summary (never contact) also rides on the ADMIN-only
     subscription surfaces: `owner` on `GET /admin/subscriptions` rows and on
     `GET /admin/catalogs/:id/subscription`, and `owner` / `initiatedBy` /
-    the resolver on every payment-journal entry. The owner-name search there
-    (`q`) matches `displayName` only. Contact stays one tap further, behind the
-    route below.
+    the resolver on every payment-journal entry. The search there (`q`,
+    ADMIN-only) matches the owner's `displayName`, the END of their phone
+    number (4+ digits) and, when the query has an "@", part of their email —
+    **matched server-side, never returned**: results carry only the summary.
+    (Decided Sept 2026 because most owners never set a name.) Contact stays one
+    tap further, behind the route below.
   - `GET /admin/users/:id` (`requireRole('ADMIN')`, `services/adminUsersService.ts`)
     answers with a **RAW phone/email**. It was the only route in this API that
     did; the rep `accountPhone` below is the second, and there are no others. It
@@ -1067,9 +1070,10 @@ the owner's `modelCount`, their models list and the project detail's viewer with
     exactly: a MANUAL row's verification fields (once, conditional), a PAID
     row's `appliedAt` (once, conditional), a CHECKOUT_CREATED row's `expiresAt`
     (closing it), a REFUNDED row's `note` when Razorpay reports the refund's
-    fate, and a PAID row's `adminResolution` (once, conditional on its absence —
-    the journal's "Apply to catalog"; the original refusal `note` is kept beside
-    it). `recordedVia` is written at insert only. There is no generic update
+    fate, and a PAID row's `adminResolution` (the journal's "Apply to catalog":
+    conditional on its absence, or — only when that apply never reached the
+    subscription row — on the previous value's `at`; the original refusal
+    `note` is kept beside it). `recordedVia` is written at insert only. There is no generic update
     helper; do not add one. The unique index
     on `providerOrderId` is scoped by `kind` so a checkout row and its PAID row
     may share an order id. `subscriptionId` is optional — an owner may pay
@@ -1107,8 +1111,28 @@ the owner's `modelCount`, their models list and the project detail's viewer with
     not code in the journal** — every activation of an ONLINE payment stays in
     `webhookService`, and the `applyPaidPeriod` caller grep in
     `tests/subscription-admin-actions.test.ts` still lists exactly three files.
-    "Start plan" in the app is the existing `CREATE_AND_VERIFY`. Guardrails:
-    `tests/subscription-payment-journal.test.ts`,
+    "Start plan" in the app is the existing `CREATE_AND_VERIFY`. Edge-case
+    rules (Sept 2026 review, `tests/subscription-payment-journal-edges.test.ts`):
+    - **A refused, unresolved PAID row is not a purchase.** Trial and
+      pending-window eligibility use `purchasedPaymentFilter`
+      (`models/PaymentRecord.ts`), never a bare `kind: 'PAID'`.
+    - **A payment activates once, whatever the door.** A cash VERIFY /
+      `CREATE_AND_VERIFY` whose `reference` is a `pay_…` already on a PAID row
+      is 409 `ALREADY_RECORDED_ONLINE`; a reference already on a live cash
+      entry (any catalog for `pay_…`, same catalog otherwise) is 409
+      `DUPLICATE_REFERENCE`.
+    - **An order priced differently from today** (a testing-price order found
+      after go-live, or before a re-price) is 409 `QUOTE_PRICE_CHANGED` on
+      sync / apply / capture until the body says `acceptQuotedPrice: true`.
+      The webhook and reconciler are unchanged — they honour the quote.
+    - `POST …/:orderId/capture` captures an AUTHORIZED payment at Razorpay for
+      exactly the order amount, then records it via the webhook's function.
+    - `GET /admin/subscriptions/payments/lookup?id=order_…|pay_…` (declared
+      before `/:orderId`) finds any Razorpay id: ledger first, then Razorpay;
+      writes nothing.
+    - Journal sentences name dates in `Asia/Kolkata`.
+    Guardrails: `tests/subscription-payment-journal.test.ts`,
+    `tests/subscription-payment-journal-edges.test.ts`,
     `test/admin/admin_payment_journal_test.dart`.
 - **The rep's "Notify owner to pay" nudge is a MESSAGE, never a payment
   (Stage 4, `docs/subscription/stage-04-rep-tools.md`).** `POST

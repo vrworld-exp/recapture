@@ -234,11 +234,20 @@ class AdminPaymentAttemptNotifier
     }
   }
 
-  /// "Check with Razorpay".
-  Future<PaymentSyncResult> sync() => _act(
+  /// Edge case #6: what the last "Check" said "Capture payment" would take;
+  /// null when there is nothing to capture.
+  ({String paymentId, int amountPaise})? lastCapturable;
+
+  /// "Check with Razorpay". [acceptQuotedPrice] after the admin confirmed
+  /// an order priced differently from today (#5).
+  Future<PaymentSyncResult> sync({bool acceptQuotedPrice = false}) => _act(
         () async {
-          final result = await _repo.syncPaymentAttempt(arg);
+          final result = await _repo.syncPaymentAttempt(
+            arg,
+            acceptQuotedPrice: acceptQuotedPrice,
+          );
           lastProvider = result.provider;
+          lastCapturable = result.capturable;
           Analytics.logEvent('admin_payment_checked', {
             'outcome': result.outcome.name,
           });
@@ -248,14 +257,57 @@ class AdminPaymentAttemptNotifier
       );
 
   /// "Apply to catalog", with the reason.
-  Future<PaymentAttempt> forceApply(String note) => _act(
+  Future<PaymentAttempt> forceApply(
+    String note, {
+    bool acceptQuotedPrice = false,
+  }) =>
+      _act(
         () async {
-          final attempt = await _repo.forceApplyPaymentAttempt(arg, note: note);
+          final attempt = await _repo.forceApplyPaymentAttempt(
+            arg,
+            note: note,
+            acceptQuotedPrice: acceptQuotedPrice,
+          );
           Analytics.logEvent('admin_payment_force_applied', const {});
           return attempt;
         },
         (attempt) => attempt,
       );
+
+  /// "Capture payment" (#6) — only offered after a Check found one.
+  Future<PaymentAttempt> capture({bool acceptQuotedPrice = false}) => _act(
+        () async {
+          final attempt = await _repo.capturePaymentAttempt(
+            arg,
+            acceptQuotedPrice: acceptQuotedPrice,
+          );
+          lastCapturable = null;
+          Analytics.logEvent('admin_payment_captured', const {});
+          return attempt;
+        },
+        (attempt) => attempt,
+      );
+
+  /// Refund this payment in full (#3 — the right answer for a duplicate).
+  /// The existing refund route; the entry is re-read afterwards.
+  Future<void> refund({required String note, required bool override}) async {
+    final attempt = state.valueOrNull;
+    final paymentId = attempt?.paymentRecordId;
+    if (attempt == null || paymentId == null) return;
+    await _act(
+      () async {
+        await _repo.refund(
+          attempt.catalogId,
+          refundsPaymentId: paymentId,
+          note: note,
+          override: override,
+        );
+        Analytics.logEvent('admin_refund_issued', const {});
+        return _repo.paymentAttempt(arg);
+      },
+      (fresh) => fresh,
+    );
+  }
 }
 
 final adminPaymentAttemptProvider = AsyncNotifierProvider.autoDispose

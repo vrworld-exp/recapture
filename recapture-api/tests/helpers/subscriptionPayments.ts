@@ -101,6 +101,14 @@ export function fakeRazorpay(overrides: Partial<RazorpayClient> = {}) {
     })),
     fetchPaymentsForOrder: vi.fn(async () => []),
     createRefund: vi.fn(async () => ({ id: `rfnd_test_${++mintedIds}`, status: 'processed' })),
+    fetchPayment: vi.fn(async (paymentId: string) => ({
+      id: paymentId,
+      status: 'created',
+      amount: 0,
+      orderId: null as string | null,
+      notes: {} as Record<string, string>,
+    })),
+    capturePayment: vi.fn(async (paymentId: string) => ({ id: paymentId, status: 'captured' })),
     ...overrides,
   };
   return client as typeof client & RazorpayClient;

@@ -13,7 +13,16 @@
 //   • "Apply to catalog…" — A DIALOG WITH A REASON (20+ characters) and the
 //     AC-5.2 notice: it moves entitlement in the owner's favour against what
 //     the machine concluded, so it is never a one-tap. Offered only where the
-//     server says it is allowed (flagged, or not on the catalog).
+//     server says it is allowed (flagged, or not on the catalog). It says how
+//     many days on the running period it throws away.
+//   • "Capture …" — after a Check found an AUTHORIZED payment for exactly the
+//     order amount: capture it at Razorpay and apply the plan.
+//   • "Refund…" — on a held-back payment; for a likely DUPLICATE it is the
+//     filled button and Apply steps back, because refunding is almost always
+//     right there.
+//
+// When the order's price differs from today's (a testing-price order after
+// go-live), every fix first asks the admin to confirm the old price.
 //
 // Everything on this page is the server's: the stage, each step's state and
 // sentence, and whether each fix is allowed. Nothing is decided here.
@@ -57,21 +66,74 @@ class _AdminPaymentAttemptScreenState
   AdminPaymentAttemptNotifier get _notifier =>
       ref.read(adminPaymentAttemptProvider(widget.orderId).notifier);
 
-  Future<void> _sync() async {
+  /// Edge case #5. Null = the admin backed out; true = they accepted an
+  /// order priced differently from today; false = the price did not move.
+  Future<bool?> _acceptPrice(PaymentAttempt attempt) async {
+    final change = attempt.priceChange;
+    if (change == null) return false;
+    final accepted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface1,
+        title: const Text('The price has changed'),
+        content: Text(
+          'This order was priced ${formatPaise(change.quotedPaise)}; the same '
+          'plan costs ${formatPaise(change.currentPaise)} today. Continuing '
+          'applies the plan for what was paid.',
+          key: const ValueKey('admin_price_dialog'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const ValueKey('admin_price_accept'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+    return accepted == true ? true : null;
+  }
+
+  /// Runs one fix with the busy flag and the toast.
+  Future<void> _run(
+    Future<String> Function() action, {
+    required String subject,
+  }) async {
     final messenger = CatalogFeedback.of(context);
     setState(() => _acting = true);
     try {
-      final result = await _notifier.sync();
-      CatalogFeedback.confirm(messenger, result.outcome.sentence);
+      CatalogFeedback.confirm(messenger, await action());
     } on CatalogFailure catch (failure) {
-      CatalogFeedback.failure(
-        messenger,
-        failure,
-        subject: 'Razorpay could not be checked',
-      );
+      CatalogFeedback.failure(messenger, failure, subject: subject);
     } finally {
       if (mounted) setState(() => _acting = false);
     }
+  }
+
+  Future<void> _sync(PaymentAttempt attempt) async {
+    final accept = await _acceptPrice(attempt);
+    if (accept == null || !mounted) return;
+    await _run(
+      () async =>
+          (await _notifier.sync(acceptQuotedPrice: accept)).outcome.sentence,
+      subject: 'Razorpay could not be checked',
+    );
+  }
+
+  Future<void> _capture(PaymentAttempt attempt) async {
+    final accept = await _acceptPrice(attempt);
+    if (accept == null || !mounted) return;
+    await _run(
+      () async {
+        await _notifier.capture(acceptQuotedPrice: accept);
+        return 'Captured at Razorpay — the plan is applied.';
+      },
+      subject: 'The payment could not be captured',
+    );
   }
 
   Future<void> _forceApply(PaymentAttempt attempt) async {
@@ -80,23 +142,30 @@ class _AdminPaymentAttemptScreenState
       builder: (_) => _ForceApplyDialog(attempt: attempt),
     );
     if (note == null || !mounted) return;
-    final messenger = CatalogFeedback.of(context);
-    setState(() => _acting = true);
-    try {
-      await _notifier.forceApply(note);
-      CatalogFeedback.confirm(
-        messenger,
-        'Applied — the plan is active on the catalog.',
-      );
-    } on CatalogFailure catch (failure) {
-      CatalogFeedback.failure(
-        messenger,
-        failure,
-        subject: 'The payment could not be applied',
-      );
-    } finally {
-      if (mounted) setState(() => _acting = false);
-    }
+    final accept = await _acceptPrice(attempt);
+    if (accept == null || !mounted) return;
+    await _run(
+      () async {
+        await _notifier.forceApply(note, acceptQuotedPrice: accept);
+        return 'Applied — the plan is active on the catalog.';
+      },
+      subject: 'The payment could not be applied',
+    );
+  }
+
+  Future<void> _refund(PaymentAttempt attempt) async {
+    final input = await showDialog<({String note, bool override})>(
+      context: context,
+      builder: (_) => _AttemptRefundDialog(attempt: attempt),
+    );
+    if (input == null || !mounted) return;
+    await _run(
+      () async {
+        await _notifier.refund(note: input.note, override: input.override);
+        return 'Refund of ${formatPaise(attempt.displayPaise)} issued.';
+      },
+      subject: 'The refund could not be issued',
+    );
   }
 
   @override
@@ -136,15 +205,37 @@ class _AdminPaymentAttemptScreenState
   Widget _body(BuildContext context, PaymentAttempt attempt) {
     final textTheme = Theme.of(context).textTheme;
     final provider = _notifier.lastProvider;
+    final capturable = _notifier.lastCapturable;
+    // Refund from here only where it is a real choice: money the machine
+    // held back. A clean payment is refunded from the panel's ledger.
+    final offerRefund =
+        attempt.canRefund && attempt.stage == PaymentAttemptStage.flagged;
+    // #3: for a likely duplicate the right answer is almost always Refund, so
+    // it is the filled button and Apply steps back.
+    final refundFirst = offerRefund && attempt.isDuplicate;
+    final change = attempt.priceChange;
     return ListView(
       key: const ValueKey('admin_attempt_detail'),
       padding: const EdgeInsets.all(AppSpacing.lg),
       children: [
         _SummaryCard(attempt: attempt),
+        if (change != null) ...[
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Priced ${formatPaise(change.quotedPaise)} when ordered; the same '
+            'plan costs ${formatPaise(change.currentPaise)} today. Any fix '
+            'will ask you to confirm the old price.',
+            key: const ValueKey('admin_attempt_price_change'),
+            style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
+          ),
+        ],
         const SizedBox(height: AppSpacing.md),
         _WhoCard(attempt: attempt),
         const SizedBox(height: AppSpacing.md),
-        if (attempt.canSync || attempt.canForceApply || !attempt.catalogDeleted)
+        if (attempt.canSync ||
+            attempt.canForceApply ||
+            offerRefund ||
+            !attempt.catalogDeleted)
           Wrap(
             spacing: AppSpacing.sm,
             runSpacing: AppSpacing.sm,
@@ -155,15 +246,47 @@ class _AdminPaymentAttemptScreenState
                   label: 'Check with Razorpay',
                   icon: Icons.sync,
                   isFullWidth: false,
-                  onPressed: _acting ? null : _sync,
+                  onPressed: _acting ? null : () => _sync(attempt),
+                ),
+              if (capturable != null && attempt.canSync)
+                AppButton(
+                  key: const ValueKey('admin_attempt_capture'),
+                  label: 'Capture ${formatPaise(capturable.amountPaise)}',
+                  icon: Icons.price_check,
+                  isFullWidth: false,
+                  onPressed: _acting ? null : () => _capture(attempt),
+                ),
+              if (offerRefund && refundFirst)
+                AppButton(
+                  key: const ValueKey('admin_attempt_refund'),
+                  label: 'Refund duplicate…',
+                  icon: Icons.undo,
+                  isFullWidth: false,
+                  onPressed: _acting ? null : () => _refund(attempt),
                 ),
               if (attempt.canForceApply)
-                AppButton(
-                  key: const ValueKey('admin_attempt_apply'),
-                  label: 'Apply to catalog…',
-                  icon: Icons.playlist_add_check,
+                refundFirst
+                    ? AppButton.secondary(
+                        key: const ValueKey('admin_attempt_apply'),
+                        label: 'Apply anyway…',
+                        icon: Icons.playlist_add_check,
+                        isFullWidth: false,
+                        onPressed: _acting ? null : () => _forceApply(attempt),
+                      )
+                    : AppButton(
+                        key: const ValueKey('admin_attempt_apply'),
+                        label: 'Apply to catalog…',
+                        icon: Icons.playlist_add_check,
+                        isFullWidth: false,
+                        onPressed: _acting ? null : () => _forceApply(attempt),
+                      ),
+              if (offerRefund && !refundFirst)
+                AppButton.secondary(
+                  key: const ValueKey('admin_attempt_refund'),
+                  label: 'Refund…',
+                  icon: Icons.undo,
                   isFullWidth: false,
-                  onPressed: _acting ? null : () => _forceApply(attempt),
+                  onPressed: _acting ? null : () => _refund(attempt),
                 ),
               if (!attempt.catalogDeleted && attempt.catalogId.isNotEmpty)
                 AppButton.secondary(
@@ -176,14 +299,11 @@ class _AdminPaymentAttemptScreenState
                 ),
             ],
           ),
-        if (attempt.refunded || attempt.stage == PaymentAttemptStage.flagged)
+        if (attempt.refunded)
           Padding(
             padding: const EdgeInsets.only(top: AppSpacing.sm),
             child: Text(
-              attempt.refunded
-                  ? 'Refunds are listed in the restaurant panel\'s ledger.'
-                  : 'To refund instead, open the restaurant panel and use '
-                      'Refund on this payment in the ledger.',
+              "Refunds are listed in the restaurant panel's ledger.",
               style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
             ),
           ),
@@ -547,6 +667,19 @@ class _ForceApplyDialogState extends State<_ForceApplyDialog> {
                 style: textTheme.bodySmall?.copyWith(color: AppColors.warning),
               ),
             ],
+            // #3: say what is thrown away, in days, before anyone presses it.
+            if (attempt.daysForfeitedOnApply > 0) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                '${attempt.daysForfeitedOnApply} day'
+                '${attempt.daysForfeitedOnApply == 1 ? '' : 's'} left on the '
+                'current period will be lost.'
+                '${attempt.isDuplicate ? ' For a double payment, a refund is '
+                    'usually right instead.' : ''}',
+                key: const ValueKey('admin_apply_forfeit'),
+                style: textTheme.bodySmall?.copyWith(color: AppColors.error),
+              ),
+            ],
             const SizedBox(height: AppSpacing.sm),
             TextField(
               key: const ValueKey('admin_apply_note'),
@@ -579,6 +712,108 @@ class _ForceApplyDialogState extends State<_ForceApplyDialog> {
               ? () => Navigator.of(context).pop(_note.text.trim())
               : null,
           child: const Text('Apply'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Refund this payment in full. A flagged duplicate needs a 10-character
+/// reason; anything else needs the override and 30 (the server's rule, E5).
+/// Says out loud that a refund never ends a period (#7).
+class _AttemptRefundDialog extends StatefulWidget {
+  const _AttemptRefundDialog({required this.attempt});
+
+  final PaymentAttempt attempt;
+
+  @override
+  State<_AttemptRefundDialog> createState() => _AttemptRefundDialogState();
+}
+
+class _AttemptRefundDialogState extends State<_AttemptRefundDialog> {
+  final _note = TextEditingController();
+  bool _override = false;
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  bool get _needsOverride => widget.attempt.refundNeedsOverride;
+
+  bool get _canSubmit {
+    final length = _note.text.trim().length;
+    return _needsOverride ? _override && length >= 30 : length >= 10;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final attempt = widget.attempt;
+    return AlertDialog(
+      backgroundColor: AppColors.surface1,
+      title: const Text('Refund this payment?'),
+      content: SingleChildScrollView(
+        child: Column(
+          key: const ValueKey('admin_attempt_refund_dialog'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${formatPaise(attempt.displayPaise)} back to the owner through '
+              'Razorpay, in full.',
+              style: textTheme.bodyMedium,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'A refund never changes the subscription period.',
+              style:
+                  textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+            ),
+            if (_needsOverride)
+              CheckboxListTile(
+                key: const ValueKey('admin_attempt_refund_override'),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: _override,
+                onChanged: (v) => setState(() => _override = v ?? false),
+                title: Text('Refund anyway', style: textTheme.bodyMedium),
+                subtitle: Text(
+                  'Not flagged as a duplicate — explain why (30+ characters).',
+                  style: textTheme.bodySmall,
+                ),
+              ),
+            TextField(
+              key: const ValueKey('admin_attempt_refund_note'),
+              controller: _note,
+              maxLines: 2,
+              maxLength: 1000,
+              decoration: InputDecoration(
+                labelText: 'Reason',
+                helperText: _needsOverride
+                    ? 'At least 30 characters.'
+                    : 'At least 10 characters.',
+                counterText: '',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const ValueKey('admin_attempt_refund_confirm'),
+          onPressed: _canSubmit
+              ? () => Navigator.of(context).pop(
+                    (note: _note.text.trim(), override: _needsOverride),
+                  )
+              : null,
+          child: const Text('Refund'),
         ),
       ],
     );

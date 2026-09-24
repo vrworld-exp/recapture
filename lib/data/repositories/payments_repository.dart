@@ -133,14 +133,33 @@ abstract interface class PaymentsRepository {
   /// payment the webhook missed, finishes a half-applied one; never
   /// activates what Razorpay does not confirm. 503 →
   /// [PaymentErrorCodes.paymentsUnavailable].
-  Future<PaymentSyncResult> syncPaymentAttempt(String orderId);
+  ///
+  /// [acceptQuotedPrice]: the admin has seen that the order's price differs
+  /// from today's (edge case #5); without it such an order is 409
+  /// `QUOTE_PRICE_CHANGED`. The same flag rides on apply and capture.
+  Future<PaymentSyncResult> syncPaymentAttempt(
+    String orderId, {
+    bool acceptQuotedPrice = false,
+  });
 
   /// `POST …/:orderId/apply` — "Apply to catalog", the human override for a
   /// flagged payment or one the catalog does not show. [note] ≥ 20 chars.
   Future<PaymentAttempt> forceApplyPaymentAttempt(
     String orderId, {
     required String note,
+    bool acceptQuotedPrice = false,
   });
+
+  /// `POST …/:orderId/capture` — edge case #6: capture the owner's
+  /// AUTHORIZED payment at Razorpay for exactly the order amount, then record
+  /// and apply it.
+  Future<PaymentAttempt> capturePaymentAttempt(
+    String orderId, {
+    bool acceptQuotedPrice = false,
+  });
+
+  /// `GET …/lookup?id=` — edge case #8: where is this `order_…` / `pay_…`?
+  Future<PaymentLookupResult> lookupPayment(String id);
 
   /// The admin collected the money themselves (or it reached Razorpay outside
   /// any order): `CREATE_AND_VERIFY` — one call writes the MANUAL row and
@@ -422,15 +441,19 @@ class RemotePaymentsRepository implements PaymentsRepository {
       });
 
   @override
-  Future<PaymentSyncResult> syncPaymentAttempt(String orderId) =>
+  Future<PaymentSyncResult> syncPaymentAttempt(
+    String orderId, {
+    bool acceptQuotedPrice = false,
+  }) =>
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/admin/subscriptions/payments/${Uri.encodeComponent(orderId)}/sync',
-          data: const <String, dynamic>{},
+          data: {if (acceptQuotedPrice) 'acceptQuotedPrice': true},
         );
         return PaymentSyncResult(
           outcome: PaymentSyncOutcomeX.fromApiValue(res.data?['result']),
           provider: ProviderSnapshot.tryFrom(res.data?['provider']),
+          capturable: PaymentSyncResult.capturableFrom(res.data?['capturable']),
           attempt: PaymentAttempt.fromMap(_object(res.data?['attempt'])),
         );
       });
@@ -439,13 +462,40 @@ class RemotePaymentsRepository implements PaymentsRepository {
   Future<PaymentAttempt> forceApplyPaymentAttempt(
     String orderId, {
     required String note,
+    bool acceptQuotedPrice = false,
   }) =>
       mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/admin/subscriptions/payments/${Uri.encodeComponent(orderId)}/apply',
-          data: {'note': note.trim()},
+          data: {
+            'note': note.trim(),
+            if (acceptQuotedPrice) 'acceptQuotedPrice': true,
+          },
         );
         return PaymentAttempt.fromMap(_object(res.data?['attempt']));
+      });
+
+  @override
+  Future<PaymentAttempt> capturePaymentAttempt(
+    String orderId, {
+    bool acceptQuotedPrice = false,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/admin/subscriptions/payments/${Uri.encodeComponent(orderId)}/capture',
+          data: {if (acceptQuotedPrice) 'acceptQuotedPrice': true},
+        );
+        return PaymentAttempt.fromMap(_object(res.data?['attempt']));
+      });
+
+  @override
+  Future<PaymentLookupResult> lookupPayment(String id) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.get<Map<String, dynamic>>(
+          '/admin/subscriptions/payments/lookup',
+          queryParameters: {'id': id.trim()},
+        );
+        return PaymentLookupResult.fromMap(_object(res.data));
       });
 
   @override

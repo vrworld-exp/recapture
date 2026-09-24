@@ -47,8 +47,18 @@ Map<String, dynamic> attemptPayload({
   int? paidPaise,
   String? outcomeNote,
   List<Map<String, dynamic>>? steps,
+  String startedAt = '2026-09-24T08:30:00.000Z',
+  Map<String, int>? priceChange,
+  int daysForfeitedOnApply = 0,
+  bool canRefund = false,
+  bool refundNeedsOverride = true,
 }) =>
     {
+      'paymentRecordId': paidPaise == null ? null : '66f0000000000000000000p1',
+      'priceChange': priceChange,
+      'daysForfeitedOnApply': daysForfeitedOnApply,
+      'canRefund': canRefund,
+      'refundNeedsOverride': refundNeedsOverride,
       'orderId': orderId,
       'catalog': {'id': 'c1', 'name': 'blue cafe', 'deleted': false},
       'owner': {'id': 'u1', 'displayName': 'Asha Rao', 'hasAvatar': false},
@@ -59,9 +69,8 @@ Map<String, dynamic> attemptPayload({
       'quotedPaise': 119900,
       'paidPaise': paidPaise,
       'providerPaymentId': paidPaise == null ? null : 'pay_x1',
-      'startedAt': '2026-09-24T08:30:00.000Z',
+      'startedAt': startedAt,
       'expiresAt': '2026-09-25T08:30:00.000Z',
-      'paymentRecordId': null,
       'recordedAt': null,
       'recordedVia': null,
       'appliedAt': null,
@@ -92,6 +101,10 @@ PaymentAttempt _attempt({
   int? paidPaise,
   String? outcomeNote,
   List<Map<String, dynamic>>? steps,
+  Map<String, int>? priceChange,
+  int daysForfeitedOnApply = 0,
+  bool canRefund = false,
+  bool refundNeedsOverride = true,
 }) =>
     PaymentAttempt.fromMap(attemptPayload(
       stage: stage,
@@ -101,6 +114,10 @@ PaymentAttempt _attempt({
       paidPaise: paidPaise,
       outcomeNote: outcomeNote,
       steps: steps,
+      priceChange: priceChange,
+      daysForfeitedOnApply: daysForfeitedOnApply,
+      canRefund: canRefund,
+      refundNeedsOverride: refundNeedsOverride,
     ));
 
 final _completedSteps = [
@@ -115,6 +132,7 @@ AdminSubscriptionDetail _detail({
   String status = 'ACTIVE',
   bool trialAvailable = false,
   List<PaymentAttempt> attempts = const [],
+  List<Map<String, dynamic>> attemptPayloads = const [],
 }) =>
     AdminSubscriptionDetail.fromMap({
       'catalog': {
@@ -136,7 +154,10 @@ AdminSubscriptionDetail _detail({
         trialAvailable: trialAvailable,
       ),
       'payments': const [],
-      'attempts': [for (final a in attempts) attemptPayload(orderId: a.orderId)],
+      'attempts': [
+        for (final a in attempts) attemptPayload(orderId: a.orderId),
+        ...attemptPayloads,
+      ],
       'arEntitlementSyncedAt': null,
     });
 
@@ -155,6 +176,7 @@ Widget _harness(FakePaymentsRepository repo, {String initial = '/'}) {
         path: AppRoutes.adminSubscriptionDetail,
         builder: (_, state) => AdminSubscriptionDetailScreen(
           catalogId: state.pathParameters['catalogId']!,
+          initialReference: state.uri.queryParameters['ref'],
         ),
       ),
     ],
@@ -492,6 +514,209 @@ void main() {
       await tester.pumpAndSettle();
       expect(repo.calls, contains('startTrial:c1'));
       expect(find.textContaining('Trial started.'), findsOneWidget);
+    });
+  });
+
+  group('edge cases on the attempt screen', () {
+    testWidgets('#3 a duplicate puts Refund first and Apply says what it throws away',
+        (tester) async {
+      _tall(tester);
+      final repo = FakePaymentsRepository()
+        ..attempts = {
+          _order: _attempt(
+            stage: 'FLAGGED',
+            needsAttention: true,
+            canSync: false,
+            canForceApply: true,
+            paidPaise: 119900,
+            outcomeNote: 'DUPLICATE_SUSPECTED',
+            daysForfeitedOnApply: 28,
+            canRefund: true,
+            refundNeedsOverride: false,
+          ),
+        };
+      await tester.pumpWidget(
+          _harness(repo, initial: '${AppRoutes.adminPayments}/$_order'));
+      await tester.pumpAndSettle();
+
+      final refund = find.byKey(const ValueKey('admin_attempt_refund'));
+      expect(find.text('Refund duplicate…'), findsOneWidget);
+      expect(find.text('Apply anyway…'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('admin_attempt_apply')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_apply_forfeit')), findsOneWidget);
+      expect(find.textContaining('28 days left on the current period'),
+          findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(refund);
+      await tester.pumpAndSettle();
+      // A flagged duplicate: no override, 10 characters.
+      expect(find.byKey(const ValueKey('admin_attempt_refund_override')),
+          findsNothing);
+      final confirm = find.byKey(const ValueKey('admin_attempt_refund_confirm'));
+      await tester.enterText(
+          find.byKey(const ValueKey('admin_attempt_refund_note')), 'short');
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(confirm).onPressed, isNull);
+      await tester.enterText(find.byKey(const ValueKey('admin_attempt_refund_note')),
+          'Paid twice on 24 Sep');
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(repo.refunds.single, {
+        'id': '66f0000000000000000000p1',
+        'note': 'Paid twice on 24 Sep',
+        'override': false,
+      });
+    });
+
+    testWidgets('#5 a changed price is shown and must be confirmed before Check',
+        (tester) async {
+      _tall(tester);
+      final repo = FakePaymentsRepository()
+        ..attempts = {
+          _order: _attempt(
+            priceChange: {'quotedPaise': 300, 'currentPaise': 119900},
+          ),
+        }
+        ..onSync = (orderId) => PaymentSyncResult(
+              outcome: PaymentSyncOutcome.applied,
+              provider: null,
+              attempt: _attempt(stage: 'COMPLETED', canSync: false),
+            );
+      await tester.pumpWidget(
+          _harness(repo, initial: '${AppRoutes.adminPayments}/$_order'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_attempt_price_change')),
+          findsOneWidget);
+
+      // Backing out sends nothing.
+      await tester.tap(find.byKey(const ValueKey('admin_attempt_sync')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_price_dialog')), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(repo.calls.where((c) => c.startsWith('sync:')), isEmpty);
+
+      await tester.tap(find.byKey(const ValueKey('admin_attempt_sync')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('admin_price_accept')));
+      await tester.pumpAndSettle();
+      expect(repo.calls, contains('sync:$_order:accept'));
+    });
+
+    testWidgets('#6 a Check that finds an authorized payment offers Capture',
+        (tester) async {
+      _tall(tester);
+      final repo = FakePaymentsRepository()
+        ..attempts = {_order: _attempt()}
+        // Parenthesised: an arrow closure mid-cascade swallows the next `..`.
+        ..onSync = ((orderId) => PaymentSyncResult(
+              outcome: PaymentSyncOutcome.notCaptured,
+              provider: null,
+              capturable: (paymentId: 'pay_auth', amountPaise: 119900),
+              attempt: _attempt(),
+            ))
+        ..onCapture = ((orderId) => _attempt(
+              stage: 'COMPLETED',
+              canSync: false,
+              paidPaise: 119900,
+              steps: _completedSteps,
+            ));
+      await tester.pumpWidget(
+          _harness(repo, initial: '${AppRoutes.adminPayments}/$_order'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_attempt_capture')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('admin_attempt_sync')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('authorized a payment but never captured'),
+          findsOneWidget);
+      expect(find.text('Capture ₹1,199'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('admin_attempt_capture')));
+      await tester.pumpAndSettle();
+      expect(repo.calls, contains('capture:$_order'));
+      expect(find.text('Completed'), findsOneWidget);
+    });
+  });
+
+  group('#8 Find a payment', () {
+    testWidgets('an id on the ledger opens its entry', (tester) async {
+      _tall(tester);
+      final repo = FakePaymentsRepository()
+        ..lookupResult = const PaymentLookupOnLedger(_order)
+        ..attempts = {_order: _attempt()};
+      await tester.pumpWidget(_harness(repo));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.byKey(const ValueKey('admin_lookup_field')), 'pay_known');
+      await tester.tap(find.byKey(const ValueKey('admin_lookup_go')));
+      await tester.pumpAndSettle();
+      expect(repo.calls, contains('lookup:pay_known'));
+      expect(find.byKey(const ValueKey('admin_attempt_detail')), findsOneWidget);
+    });
+
+    testWidgets('a payment we never saw leads to Start plan with the id filled in',
+        (tester) async {
+      _tall(tester);
+      final repo = FakePaymentsRepository()
+        ..lookupResult = const PaymentLookupNotOnLedger(
+          id: 'pay_stranger',
+          status: 'captured',
+          amountPaise: 119900,
+          orderId: 'order_stranger',
+          catalogId: 'c1',
+          catalogName: 'blue cafe',
+        )
+        ..detail = _detail(status: 'PAUSED');
+      await tester.pumpWidget(_harness(repo));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.byKey(const ValueKey('admin_lookup_field')), 'pay_stranger');
+      await tester.tap(find.byKey(const ValueKey('admin_lookup_go')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_lookup_not_on_ledger')),
+          findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('admin_lookup_start_plan')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_record_reference')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('admin_record_reference_start')));
+      await tester.pumpAndSettle();
+      final reference = tester.widget<TextField>(
+          find.byKey(const ValueKey('admin_start_reference')));
+      expect(reference.controller!.text, 'pay_stranger');
+    });
+  });
+
+  group('#2 Start plan warns about a recent online payment', () {
+    testWidgets('an applied payment this month is named in the dialog',
+        (tester) async {
+      _tall(tester);
+      final repo = FakePaymentsRepository()
+        ..detail = _detail(attemptPayloads: [
+          attemptPayload(
+            orderId: 'order_recent',
+            stage: 'COMPLETED',
+            canSync: false,
+            paidPaise: 119900,
+            startedAt: DateTime.now()
+                .subtract(const Duration(days: 3))
+                .toUtc()
+                .toIso8601String(),
+          ),
+        ]);
+      await tester.pumpWidget(
+          _harness(repo, initial: '${AppRoutes.adminSubscriptions}/c1'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('admin_start_plan')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_start_recent_online')),
+          findsOneWidget);
     });
   });
 
