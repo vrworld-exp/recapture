@@ -74,6 +74,13 @@ export interface OnlinePaymentInput {
   now?: Date;
 }
 
+/** The autopay-only fields a charge carries onto its PAID row (see PaymentRecord). */
+interface AutopayChargeFields {
+  providerSubscriptionId: string;
+  providerInvoiceId: string;
+  billingPeriodEnd: Date | null;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function isDuplicateKey(err: unknown): boolean {
@@ -177,7 +184,8 @@ async function resolveOrderContext(
  */
 async function recordPaidRow(
   ctx: Extract<OrderContext, { kind: 'KNOWN' }>,
-  input: OnlinePaymentInput
+  input: OnlinePaymentInput,
+  autopay: AutopayChargeFields | null = null
 ): Promise<{ row: IPaymentRecord; inserted: boolean } | null> {
   const idempotencyKey = `payment:${input.paymentId}`;
   let duplicateKeyError: unknown;
@@ -196,6 +204,13 @@ async function recordPaidRow(
       initiatedBy: { userId: ctx.ownerUserId, role: 'USER' },
       recordedVia: input.via,
       appliedAt: null,
+      ...(autopay
+        ? {
+            providerSubscriptionId: autopay.providerSubscriptionId,
+            providerInvoiceId: autopay.providerInvoiceId,
+            ...(autopay.billingPeriodEnd ? { billingPeriodEnd: autopay.billingPeriodEnd } : {}),
+          }
+        : {}),
     });
     return { row, inserted: true };
   } catch (err) {
@@ -224,6 +239,21 @@ async function recordPaidRow(
       `which is already settled by payment ${other.providerPaymentId ?? '?'}. Not recorded.`,
   });
   return null;
+}
+
+/**
+ * An autopay charge's period ends at Razorpay's next charge date, not at
+ * `paidAt + 30/365 days` — see `ApplyPaidPeriodInput.periodEnd`. Empty for a
+ * one-time payment, which keeps the old arithmetic exactly.
+ */
+function autopayPeriodOf(
+  paid: Pick<IPaymentRecord, 'providerSubscriptionId' | 'billingPeriodEnd'>
+): { periodEnd?: Date; autopay?: boolean } {
+  if (!paid.providerSubscriptionId) return {};
+  return {
+    autopay: true,
+    ...(paid.billingPeriodEnd ? { periodEnd: paid.billingPeriodEnd } : {}),
+  };
 }
 
 // ── Phase 2: apply ──────────────────────────────────────────────────────────
@@ -279,6 +309,7 @@ export async function applyRecordedPayment(
       amountPaise: paid.amountPaise,
       paymentRecordId: paid._id as Types.ObjectId,
       via,
+      ...autopayPeriodOf(paid),
     });
   }
 
@@ -395,6 +426,7 @@ export async function applyPaymentByAdmin(
       amountPaise: paid.amountPaise,
       paymentRecordId,
       via: 'ADMIN',
+      ...autopayPeriodOf(paid),
     });
   } catch (err) {
     await PaymentRecord.updateOne(
@@ -431,6 +463,66 @@ export async function recordOnlinePayment(
   const paid = await recordPaidRow(ctx, input);
   if (!paid) return { outcome: 'DUPLICATE_SUSPECTED', paidRowId: null, recorded: false };
 
+  const outcome = await applyRecordedPayment(paid.row, input.via, now);
+  return { outcome, paidRowId: String(paid.row._id), recorded: paid.inserted };
+}
+
+/**
+ * One AUTOPAY charge — an invoice Razorpay marked paid on a mandate — through
+ * the same two phases as any online payment: the PAID row keyed on
+ * `payment:<id>` (so the webhook, the app's verify, the reconciler and an
+ * admin's sync all converge on one row), then the one conditional apply.
+ *
+ * The context comes from the MANDATE, not from a checkout row: an autopay
+ * charge has no CHECKOUT_CREATED order of ours — Razorpay raises the invoice
+ * (and its order) itself on every cycle. `autopayService.syncMandate` is the
+ * only caller.
+ */
+export async function recordAutopayCharge(input: {
+  catalogId: Types.ObjectId;
+  ownerUserId: Types.ObjectId;
+  quote: PaymentQuote;
+  providerSubscriptionId: string;
+  providerInvoiceId: string;
+  /** The invoice's order. Absent only on an invoice Razorpay raised without one. */
+  orderId: string | null;
+  paymentId: string;
+  amountPaise: number;
+  billingPeriodEnd: Date | null;
+  via: ApplyVia;
+  now?: Date;
+}): Promise<{ outcome: OnlinePaymentOutcome; paidRowId: string | null; recorded: boolean }> {
+  const now = input.now ?? new Date();
+  const subscription = await CatalogSubscription.findOne({ catalogId: input.catalogId })
+    .select({ _id: 1 })
+    .lean<{ _id: Types.ObjectId }>()
+    .exec();
+  const ctx: Extract<OrderContext, { kind: 'KNOWN' }> = {
+    kind: 'KNOWN',
+    catalogId: input.catalogId,
+    ownerUserId: input.ownerUserId,
+    subscriptionId: subscription?._id ?? null,
+    quote: input.quote,
+    orphanOrder: false,
+  };
+  const paid = await recordPaidRow(
+    ctx,
+    {
+      // recordPaidRow keys the row on the payment; the order id is only the
+      // journal's join. `inv:` keeps a missing one from colliding with nothing.
+      orderId: input.orderId ?? `inv:${input.providerInvoiceId}`,
+      paymentId: input.paymentId,
+      amountPaise: input.amountPaise,
+      via: input.via,
+      now,
+    },
+    {
+      providerSubscriptionId: input.providerSubscriptionId,
+      providerInvoiceId: input.providerInvoiceId,
+      billingPeriodEnd: input.billingPeriodEnd,
+    }
+  );
+  if (!paid) return { outcome: 'DUPLICATE_SUSPECTED', paidRowId: null, recorded: false };
   const outcome = await applyRecordedPayment(paid.row, input.via, now);
   return { outcome, paidRowId: String(paid.row._id), recorded: paid.inserted };
 }
@@ -539,6 +631,14 @@ export async function handleRazorpayEvent(
   switch (name) {
     case 'payment.captured':
     case 'order.paid': {
+      // An AUTOPAY charge: Razorpay raised the invoice (and its order) itself,
+      // so there is no checkout of ours to match. `subscription.charged` —
+      // handled by autopayService from the route — records it against the
+      // mandate, and the reconciler stands behind that. Recording it here
+      // would rebuild it as a one-time payment with the wrong period.
+      if (str(payment?.invoice_id) || str(payment?.subscription_id)) {
+        return { ignored: true };
+      }
       const orderId = str(payment?.order_id) ?? str(order?.id);
       const paymentId = str(payment?.id);
       const amountPaise = int(payment?.amount);

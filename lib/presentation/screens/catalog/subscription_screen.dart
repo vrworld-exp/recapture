@@ -79,7 +79,9 @@ class _SubscriptionScreenState extends ConsumerState<SubscriptionScreen> {
         ref.invalidate(paymentHistoryProvider);
         CatalogFeedback.confirm(
           CatalogFeedback.of(context),
-          'Payment received — your plan is active.',
+          next.isDeferredAutopay
+              ? 'Autopay is on — your plan will renew by itself.'
+              : 'Payment received — your plan is active.',
         );
       }
     });
@@ -190,6 +192,10 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
           const SizedBox(height: AppSpacing.md),
         ],
         _StatusCard(subscription: subscription),
+        if (_AutopayCard.showsFor(subscription)) ...[
+          const SizedBox(height: AppSpacing.md),
+          _AutopayCard(subscription: subscription),
+        ],
         const SizedBox(height: AppSpacing.md),
         _UsageCard(subscription: subscription),
         const SizedBox(height: AppSpacing.xxl),
@@ -380,6 +386,139 @@ class _StatusCard extends StatelessWidget {
                     'to keep your 3D dishes live.',
                     style: textTheme.bodySmall
                         ?.copyWith(color: AppColors.textSecondary),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The owner's autopay: on (with the next charge and a way to turn it off),
+/// failing, stopped — or, over a running paid plan, OFF with a nudge that
+/// the plan will not renew by itself. Hidden when there is nothing to say
+/// (no plan and no autopay: the plan cards below are the whole story).
+class _AutopayCard extends ConsumerStatefulWidget {
+  const _AutopayCard({required this.subscription});
+
+  final CatalogSubscription subscription;
+
+  static bool showsFor(CatalogSubscription subscription) =>
+      subscription.autopay != null ||
+      subscription.status == SubscriptionStatus.active;
+
+  @override
+  ConsumerState<_AutopayCard> createState() => _AutopayCardState();
+}
+
+class _AutopayCardState extends ConsumerState<_AutopayCard> {
+  bool _turningOff = false;
+
+  Future<void> _confirmTurnOff() async {
+    final subscription = widget.subscription;
+    final until = subscription.status == SubscriptionStatus.active
+        ? subscription.periodEnd
+        : null;
+    final agreed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const ValueKey('subscription_autopay_off_dialog'),
+        title: const Text('Turn off autopay?'),
+        content: Text(
+          until == null
+              ? "You won't be charged again. You can turn autopay back on any "
+                  'time.'
+              : "You won't be charged again. Your plan stays active until "
+                  '${formatSubscriptionDate(until)}; after that your 3D menu '
+                  'pauses unless you pay or turn autopay back on.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Keep autopay'),
+          ),
+          TextButton(
+            key: const ValueKey('subscription_autopay_off_confirm'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Turn off'),
+          ),
+        ],
+      ),
+    );
+    if (agreed != true || !mounted) return;
+
+    final messenger = CatalogFeedback.of(context);
+    setState(() => _turningOff = true);
+    try {
+      await ref.read(paymentsRepositoryProvider).cancelAutopay();
+      Analytics.logEvent('autopay_turned_off', {'surface': 'owner'});
+      await ref.read(subscriptionProvider.notifier).refresh();
+      CatalogFeedback.confirm(messenger, "Autopay turned off. You won't be charged again.");
+    } on CatalogFailure catch (failure) {
+      if (failure.code == PaymentErrorCodes.autopayNotOn) {
+        // Already off (another device, or Razorpay ended it) — just catch up.
+        await ref.read(subscriptionProvider.notifier).refresh();
+      } else {
+        CatalogFeedback.failure(
+          messenger,
+          failure,
+          subject: "Couldn't turn off autopay",
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _turningOff = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final autopay = widget.subscription.autopay;
+    final line = autopayStatusLine(autopay) ??
+        "Autopay is off — your plan won't renew by itself. Turn it on below "
+            'to keep your 3D menu live without a break.';
+    final (IconData icon, Color color) = switch (autopay?.status) {
+      null => (Icons.autorenew, AppColors.textSecondary),
+      AutopayStatus.pending => (Icons.sync_problem, AppColors.warning),
+      AutopayStatus.halted => (Icons.error_outline, AppColors.error),
+      _ => (Icons.autorenew, AppColors.success),
+    };
+
+    return AppCard(
+      key: const ValueKey('subscription_autopay_card'),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: color),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  line,
+                  key: const ValueKey('subscription_autopay_line'),
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: autopay == null ? AppColors.textSecondary : color,
+                    fontWeight:
+                        autopay == null ? FontWeight.w400 : FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
+                // Offered while Razorpay could still charge — on, or failing
+                // and retrying. A halted mandate charges nothing more.
+                if (autopay != null && autopay.status.willCharge) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      key: const ValueKey('subscription_autopay_off'),
+                      onPressed: _turningOff ? null : _confirmTurnOff,
+                      child: Text(_turningOff ? 'Turning off…' : 'Turn off autopay'),
+                    ),
                   ),
                 ],
               ],
@@ -693,6 +832,13 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
 
   PlanDefinition? get _plan => widget.subscription.plans.byId(widget.planId);
 
+  /// When autopay for this plan would first charge, when that is not now.
+  DateTime? get _deferredUntil => autopayDeferredUntil(
+        widget.subscription,
+        widget.planId,
+        widget.interval,
+      );
+
   int get _amountPaise {
     final plan = _plan;
     if (plan == null) return 0;
@@ -707,10 +853,13 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
   /// a clock. An older server that sends no `daysForfeited` reads as 0 and
   /// shows nothing — Pay still works.
   String? _forfeitLine() {
-    final order = ref.read(checkoutProvider).order;
-    if (order != null) {
+    // Autopay over a paid period of this same plan charges nothing today, so
+    // nothing is forfeited — the first charge waits for the period to end.
+    if (_deferredUntil != null) return null;
+    final quoted = ref.read(checkoutProvider).daysForfeited;
+    if (quoted != null) {
       return earlyRenewalLine(
-        daysForfeited: order.daysForfeited,
+        daysForfeited: quoted,
         interval: widget.interval,
       );
     }
@@ -723,7 +872,11 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
   Future<void> _confirmAndPay() async {
     final plan = _plan;
     if (plan == null) return;
-    final label = checkoutButtonLabel(widget.subscription, widget.planId);
+    final label = autopayButtonLabel(
+      widget.subscription,
+      widget.planId,
+      widget.interval,
+    );
     final forfeit = _forfeitLine();
     final agreed = await showModalBottomSheet<bool>(
       context: context,
@@ -733,6 +886,7 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
         planName: plan.displayName,
         interval: widget.interval,
         amountPaise: _amountPaise,
+        deferredUntil: _deferredUntil,
         forfeitWarning: forfeit,
         buttonLabel: label,
       ),
@@ -780,9 +934,34 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
 
     final checkout = ref.watch(checkoutProvider);
     final subscription = widget.subscription;
-    final label = checkoutButtonLabel(subscription, widget.planId);
+    final label =
+        autopayButtonLabel(subscription, widget.planId, widget.interval);
     final forfeit = _forfeitLine();
     final plan = _plan;
+
+    // Autopay already charges exactly this plan and interval: there is
+    // nothing for the button to do, and a second mandate would be refused.
+    if (autopayCovers(subscription, widget.planId, widget.interval) &&
+        checkout.phase != CheckoutPhase.activating) {
+      return Column(
+        key: const ValueKey('subscription_checkout_slot'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _CheckoutProgress(
+            checkout: checkout,
+            onCheckAgain: () =>
+                ref.read(checkoutProvider.notifier).checkAgain(),
+          ),
+          Text(
+            'Autopay is on for this plan — it renews by itself. Pick another '
+            'plan above to switch.',
+            key: const ValueKey('subscription_autopay_covers'),
+            textAlign: TextAlign.center,
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          ),
+        ],
+      );
+    }
 
     return Column(
       key: const ValueKey('subscription_checkout_slot'),
@@ -797,7 +976,7 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
           const SizedBox(height: AppSpacing.sm),
         ],
         Text(
-          kPaymentConsentLine,
+          kAutopayConsentLine,
           key: const ValueKey('subscription_consent_line'),
           textAlign: TextAlign.center,
           style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
@@ -815,7 +994,7 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
                 ? label
                 : '$label · ${formatPaise(_amountPaise)}'
                     '${widget.interval == BillingInterval.yearly ? ' / year' : ' / month'}',
-            icon: Icons.lock_outline,
+            icon: Icons.autorenew,
             isLoading: checkout.isBusy,
             onPressed: plan == null || checkout.isBusy ? null : _confirmAndPay,
           ),
@@ -843,11 +1022,19 @@ class _CheckoutProgress extends StatelessWidget {
       CheckoutPhase.showingSdk =>
         (null, AppColors.textMuted, false),
       CheckoutPhase.activating => (
-          'Payment received, activating…',
+          checkout.isDeferredAutopay
+              ? 'Autopay approved, switching it on…'
+              : 'Payment received, activating…',
           AppColors.textSecondary,
           true
         ),
-      CheckoutPhase.done => ('Your plan is active.', AppColors.success, false),
+      CheckoutPhase.done => (
+          checkout.isDeferredAutopay
+              ? 'Autopay is on.'
+              : 'Your plan is active.',
+          AppColors.success,
+          false
+        ),
       CheckoutPhase.confirming => (
           "Payment is being confirmed. You'll see it here shortly.",
           AppColors.textSecondary,
@@ -866,6 +1053,8 @@ class _CheckoutProgress extends StatelessWidget {
             'SDK_UNAVAILABLE' =>
               "Couldn't load the payment window. Check your connection or "
                   'ad blocker and try again.',
+            PaymentErrorCodes.autopayAlreadyOn =>
+              'Autopay is already on for this plan.',
             _ => 'The payment did not go through. Nothing was charged — '
                 'you can try again.',
           },
@@ -910,6 +1099,7 @@ class _PreCheckoutSheet extends StatelessWidget {
     required this.planName,
     required this.interval,
     required this.amountPaise,
+    required this.deferredUntil,
     required this.forfeitWarning,
     required this.buttonLabel,
   });
@@ -917,6 +1107,9 @@ class _PreCheckoutSheet extends StatelessWidget {
   final String planName;
   final BillingInterval interval;
   final int amountPaise;
+
+  /// Autopay's first charge, when it is not today (see autopayDeferredUntil).
+  final DateTime? deferredUntil;
   final String? forfeitWarning;
   final String buttonLabel;
 
@@ -940,19 +1133,29 @@ class _PreCheckoutSheet extends StatelessWidget {
             Text('Confirm your plan', style: textTheme.titleMedium),
             const SizedBox(height: AppSpacing.md),
             Text(
-              '$planName · ${yearly ? 'yearly' : 'monthly'}',
+              '$planName · ${yearly ? 'yearly' : 'monthly'} · autopay',
               style: textTheme.bodyLarge,
             ),
             const SizedBox(height: AppSpacing.xs),
-            // E34: a period is "30 days" / "365 days", never a month or a
-            // year — the server counts days flat, and this is the one place
-            // the owner reads the length before paying.
+            // AUTOPAY: a real calendar month / year now — Razorpay charges on
+            // the same date each cycle, and the period follows its calendar.
             Text(
-              '${formatPaise(amountPaise)} ${yearly ? 'per year' : 'per month'}, '
-              'billed now for ${periodLengthLabel(interval)}.',
+              autopayChargeLine(
+                amountPaise: amountPaise,
+                interval: interval,
+                deferredUntil: deferredUntil,
+              ),
               key: const ValueKey('subscription_precheckout_period'),
               style: textTheme.bodyMedium
                   ?.copyWith(color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'You approve the autopay once with UPI, card or net banking. '
+              'Turn it off any time from this screen.',
+              key: const ValueKey('subscription_precheckout_autopay'),
+              style: textTheme.bodySmall
+                  ?.copyWith(color: AppColors.textMuted, height: 1.4),
             ),
             if (forfeitWarning != null) ...[
               const SizedBox(height: AppSpacing.md),
@@ -964,14 +1167,14 @@ class _PreCheckoutSheet extends StatelessWidget {
             ],
             const SizedBox(height: AppSpacing.md),
             Text(
-              kPaymentConsentLine,
+              kAutopayConsentLine,
               style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
             ),
             const SizedBox(height: AppSpacing.lg),
             AppButton(
               key: const ValueKey('subscription_precheckout_continue'),
               label: 'Continue to $buttonLabel',
-              icon: Icons.lock_outline,
+              icon: Icons.autorenew,
               onPressed: () => Navigator.of(context).pop(true),
             ),
             const SizedBox(height: AppSpacing.sm),

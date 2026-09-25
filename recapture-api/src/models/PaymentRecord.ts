@@ -114,6 +114,21 @@ export interface IPaymentRecord extends Document {
    * guarded on its previous `at`, when that apply never landed.
    */
   adminResolution?: PaymentAdminResolution;
+  /**
+   * PAID only, AUTOPAY charges only (written at insert): the Razorpay
+   * subscription (`sub_…`) and invoice (`inv_…`) this charge settled. Their
+   * presence is what marks a PAID row as an autopay charge rather than a
+   * one-time checkout; `providerOrderId` is then the INVOICE's order.
+   */
+  providerSubscriptionId?: string;
+  providerInvoiceId?: string;
+  /**
+   * PAID autopay charges only: the end of the billing cycle Razorpay charged
+   * for — its NEXT charge date. The period this charge buys ends here, not at
+   * `paidAt + 30 days`, so the catalog's period and Razorpay's schedule never
+   * drift apart (a calendar month is not thirty days).
+   */
+  billingPeriodEnd?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -126,7 +141,7 @@ export interface PaymentAdminResolution {
   note: string;
 }
 
-const PaymentQuoteSchema = new Schema<PaymentQuote>(
+export const PaymentQuoteSchema = new Schema<PaymentQuote>(
   {
     planId: { type: String, enum: PLAN_IDS, required: true },
     planSnapshot: { type: PlanSnapshotSchema, required: true },
@@ -172,6 +187,9 @@ const PaymentRecordSchema = new Schema<IPaymentRecord>(
     appliedAt: { type: Date, default: null },
     recordedVia: { type: String, enum: PAYMENT_VIAS },
     adminResolution: { type: PaymentAdminResolutionSchema, default: undefined },
+    providerSubscriptionId: { type: String, trim: true, maxlength: 128 },
+    providerInvoiceId: { type: String, trim: true, maxlength: 128 },
+    billingPeriodEnd: { type: Date },
   },
   { timestamps: true }
 );
@@ -220,6 +238,12 @@ PaymentRecordSchema.index({ catalogId: 1, kind: 1, expiresAt: 1 });
 // The admin payment journal: one kind (orders or payments), newest first,
 // keyset-paginated on `(createdAt, _id)`.
 PaymentRecordSchema.index({ kind: 1, createdAt: -1, _id: -1 });
+
+// An autopay mandate's charges ("which invoices of sub_X are already recorded").
+PaymentRecordSchema.index(
+  { providerSubscriptionId: 1, createdAt: -1 },
+  { partialFilterExpression: { providerSubscriptionId: { $type: 'string' } } }
+);
 
 export const PaymentRecord = model<IPaymentRecord>('PaymentRecord', PaymentRecordSchema);
 

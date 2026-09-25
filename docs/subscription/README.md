@@ -14,6 +14,10 @@ Stage 6 (later) has no prompt — it is explicitly deferred.
 prompts, interleaved with every manual step (Razorpay, Render, Atlas, Play Console, Mirage
 deploy, marketing site) and the verification gate after each one.
 
+**Autopay (Sept 2026):** [`autopay.md`](autopay.md) — owners pay by a Razorpay SUBSCRIPTION
+that renews monthly/yearly by itself; decisions, the extra Razorpay configuration (Subscriptions
+enabled, `subscription.*` webhook events), the ₹15,000 mandate limit, and how to test it.
+
 **Everything is built — going live:** [`go-live-checklist.md`](go-live-checklist.md) — the
 tick-box list of what to configure on the Razorpay account, Render, Mirage (Railway + cPanel
 deploy and the `arEnabled` probe) and the Flutter build, then the flag flip in the order

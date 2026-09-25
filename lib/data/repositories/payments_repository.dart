@@ -53,6 +53,12 @@ abstract final class PaymentErrorCodes {
   static const paymentNotFound = 'PAYMENT_NOT_FOUND';
 
   static const rateLimited = 'RATE_LIMITED';
+
+  /// Autopay is already on, healthy, for exactly the plan and interval asked.
+  static const autopayAlreadyOn = 'AUTOPAY_ALREADY_ON';
+
+  /// Turn-off asked for with nothing that could charge.
+  static const autopayNotOn = 'AUTOPAY_NOT_ON';
 }
 
 /// What an admin does with a pending cash request.
@@ -79,6 +85,29 @@ abstract interface class PaymentsRepository {
     required String paymentId,
     required String signature,
   });
+
+  /// `POST /catalog/subscription/autopay` — mints (or hands back) an autopay
+  /// mandate for the plan and interval. Charges nothing. 409
+  /// [PaymentErrorCodes.autopayAlreadyOn] when a healthy mandate already
+  /// charges exactly this; 503 [PaymentErrorCodes.paymentsUnavailable].
+  Future<AutopayCheckout> startAutopay({
+    required PlanId planId,
+    required BillingInterval interval,
+  });
+
+  /// `POST /catalog/subscription/autopay/verify` — the sheet's signed success
+  /// for a mandate. [recorded] false (202) means approved but the charge has
+  /// not landed yet (or is deferred): keep polling.
+  Future<({bool recorded, CatalogSubscription subscription})> verifyAutopay({
+    required String subscriptionId,
+    required String paymentId,
+    required String signature,
+  });
+
+  /// `POST /catalog/subscription/autopay/cancel` — autopay off. The paid
+  /// period is untouched; nothing is charged again. 404
+  /// [PaymentErrorCodes.autopayNotOn] when nothing could charge.
+  Future<CatalogSubscription> cancelAutopay();
 
   Future<List<PaymentRecordSummary>> ownerPayments();
 
@@ -283,6 +312,52 @@ class RemotePaymentsRepository implements PaymentsRepository {
           subscription:
               CatalogSubscription.fromMap(_object(res.data?['subscription'])),
         );
+      });
+
+  @override
+  Future<AutopayCheckout> startAutopay({
+    required PlanId planId,
+    required BillingInterval interval,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/subscription/autopay',
+          data: {'planId': planId.apiValue, 'interval': interval.apiValue},
+        );
+        return AutopayCheckout.fromMap(
+          _object(res.data?['autopay']),
+          reused: res.headers.value('x-autopay-reused') == '1' ||
+              res.statusCode == 200,
+        );
+      });
+
+  @override
+  Future<({bool recorded, CatalogSubscription subscription})> verifyAutopay({
+    required String subscriptionId,
+    required String paymentId,
+    required String signature,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.post<Map<String, dynamic>>(
+          '/catalog/subscription/autopay/verify',
+          data: {
+            'subscriptionId': subscriptionId,
+            'paymentId': paymentId,
+            'signature': signature,
+          },
+        );
+        return (
+          recorded: res.data?['recorded'] == true,
+          subscription:
+              CatalogSubscription.fromMap(_object(res.data?['subscription'])),
+        );
+      });
+
+  @override
+  Future<CatalogSubscription> cancelAutopay() => mapCatalogErrors(() async {
+        final res = await _dio
+            .post<Map<String, dynamic>>('/catalog/subscription/autopay/cancel');
+        return CatalogSubscription.fromMap(_object(res.data?['subscription']));
       });
 
   @override

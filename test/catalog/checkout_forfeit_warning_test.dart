@@ -10,9 +10,12 @@
 //   • THE ORDER'S NUMBER WINS. Before an order exists the line reads the
 //     status DTO; once the server has quoted, its `daysForfeited` is the one
 //     on screen (it survives a cancelled SDK sheet).
-//   • PERIODS ARE DAYS. On the pre-checkout sheet "per month" / "per year"
-//     never stands without "30 days" / "365 days" beside it; the E9 line
-//     says "30-day" / "365-day" with the toggle.
+//   • AUTOPAY (docs/subscription/autopay.md). On the SAME plan and interval
+//     nothing is charged today, so nothing is forfeited — the line appears
+//     for a plan or interval CHANGE, which is a purchase now. The sheet says
+//     when the first charge is and that it repeats "every month / every
+//     year" (a real calendar cycle now — the E34 "30 days" wording belonged
+//     to the one-time period and is gone from the sheet).
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -115,7 +118,7 @@ void main() {
   });
 
   group('the checkout section', () {
-    testWidgets('ACTIVE with 12 days left: the amber line above Pay',
+    testWidgets('ACTIVE with 12 days left, switching plan: the amber line above Pay',
         (tester) async {
       await pump(
         tester,
@@ -126,6 +129,10 @@ void main() {
           daysLeft: 12,
         ),
       );
+      await tester.pump();
+      // Same plan and interval: autopay defers, nothing is forfeited.
+      expect(find.byKey(_forfeitKey), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('subscription_plan_MASTERCHEF')));
       await tester.pump();
 
       final line = find.byKey(_forfeitKey);
@@ -192,6 +199,8 @@ void main() {
         ),
       );
       await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('subscription_plan_MASTERCHEF')));
+      await tester.pump();
       expect(find.textContaining('ends in 12 days'), findsOneWidget);
 
       await tester.tap(find.byKey(_payKey));
@@ -203,7 +212,8 @@ void main() {
           .tap(find.byKey(const ValueKey('subscription_precheckout_continue')));
       await tester.pumpAndSettle();
 
-      expect(repo.calls, contains('createOrder:TASTE:MONTHLY'));
+      // No autopay route on this fake server: the one-time fallback.
+      expect(repo.calls, contains('createOrder:MASTERCHEF:MONTHLY'));
       expect(adapter.opened, hasLength(1));
       expect(find.textContaining('ends in 11 days'), findsOneWidget);
       expect(find.textContaining('ends in 12 days'), findsNothing);
@@ -256,6 +266,8 @@ void main() {
         ),
       );
       await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('subscription_plan_MASTERCHEF')));
+      await tester.pump();
       if (yearly) {
         await tester.tap(find.text('Yearly'));
         await tester.pumpAndSettle();
@@ -275,19 +287,13 @@ void main() {
         .map((t) => t.data ?? t.textSpan?.toPlainText() ?? '')
         .join('\n');
 
-    testWidgets('monthly: "per month" only beside "30 days"; the E9 line in amber',
+    testWidgets('monthly: charged now, then every month until turned off; the E9 line in amber',
         (tester) async {
       await openSheet(tester);
       final text = sheetText(tester);
-      expect(text, contains('per month'));
-      expect(text, contains('30 days'));
-      expect(text, isNot(contains('per year')));
-      for (final line in text.split('\n')) {
-        if (line.contains('per month') || line.contains('per year')) {
-          expect(line, anyOf(contains('30 days'), contains('365 days')),
-              reason: 'a period must be named in days: "$line"');
-        }
-      }
+      expect(text, contains('charged now, then automatically every month'));
+      expect(text, contains('until you turn autopay off'));
+      expect(text, isNot(contains('every year')));
       // No bare "a month" / "1 month" promise anywhere on the sheet.
       expect(text, isNot(matches(RegExp(r'\b(a|1|one) (month|year)\b'))));
 
@@ -300,12 +306,11 @@ void main() {
       );
     });
 
-    testWidgets('yearly: "per year" only beside "365 days"', (tester) async {
+    testWidgets('yearly: every year', (tester) async {
       await openSheet(tester, yearly: true);
       final text = sheetText(tester);
-      expect(text, contains('per year'));
-      expect(text, contains('365 days'));
-      expect(text, isNot(contains('per month')));
+      expect(text, contains('every year'));
+      expect(text, isNot(contains('every month')));
       expect(
         tester.widget<Text>(find.byKey(_sheetForfeitKey)).data,
         contains('a new 365-day period today'),

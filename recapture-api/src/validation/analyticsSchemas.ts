@@ -33,6 +33,7 @@ import {
 import { BULK_PRODUCT_ACTIONS } from '@/validation/catalogSchemas';
 // And for the subscription layer's status vocabulary (the gate's "why").
 import {
+  AUTOPAY_STATUSES,
   BILLING_INTERVALS,
   MANUAL_METHODS,
   PLAN_IDS,
@@ -148,6 +149,10 @@ export const AnalyticsEvent = {
   // One per POST /catalog/subscription/verify response — the instant path's
   // success rate. Never the order or payment id: `result` and `outcome` only.
   SUBSCRIPTION_CLIENT_VERIFY: 'subscription_client_verify',
+  // Autopay (Razorpay Subscriptions): one per mandate transition we observe —
+  // created, authorised, charged, failing, stopped. Ids never: the catalog
+  // and the two states only.
+  SUBSCRIPTION_AUTOPAY_CHANGED: 'subscription_autopay_changed',
   SUBSCRIPTION_DUPLICATE_PAYMENT_FLAGGED: 'subscription_duplicate_payment_flagged',
   SUBSCRIPTION_MANUAL_PAYMENT_SUBMITTED: 'subscription_manual_payment_submitted',
   SUBSCRIPTION_MANUAL_PAYMENT_DECIDED: 'subscription_manual_payment_decided',
@@ -1258,6 +1263,19 @@ const subscriptionClientVerifyProps = z
   })
   .strict();
 
+const subscriptionAutopayChangedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    plan_id: z.enum(PLAN_IDS),
+    interval: z.enum(BILLING_INTERVALS),
+    /** 'NONE' when the mandate was just created. */
+    from: z.enum([...AUTOPAY_STATUSES, 'NONE']),
+    to: z.enum(AUTOPAY_STATUSES),
+    /** What observed it. */
+    via: z.enum(['OWNER', 'CLIENT', 'WEBHOOK', 'RECONCILE', 'ADMIN']),
+  })
+  .strict();
+
 const subscriptionReceiptDownloadedProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1280,6 +1298,10 @@ const subscriptionOwnerNotifiedProps = z
       'REFUND_ISSUED',
       'GRACE_EXTENDED',
       'NO_PLAN_YET',
+      'AUTOPAY_ON',
+      'AUTOPAY_CHARGE_FAILED',
+      'AUTOPAY_STOPPED',
+      'AUTOPAY_TURNED_OFF',
     ]),
   })
   .strict();
@@ -1485,6 +1507,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_PAYMENT_RECORDED]: subscriptionPaymentRecordedProps,
   [AnalyticsEvent.SUBSCRIPTION_PAYMENT_FAILED]: subscriptionPaymentFailedProps,
   [AnalyticsEvent.SUBSCRIPTION_CLIENT_VERIFY]: subscriptionClientVerifyProps,
+  [AnalyticsEvent.SUBSCRIPTION_AUTOPAY_CHANGED]: subscriptionAutopayChangedProps,
   [AnalyticsEvent.SUBSCRIPTION_DUPLICATE_PAYMENT_FLAGGED]: subscriptionDuplicatePaymentFlaggedProps,
   [AnalyticsEvent.SUBSCRIPTION_MANUAL_PAYMENT_SUBMITTED]: subscriptionManualPaymentSubmittedProps,
   [AnalyticsEvent.SUBSCRIPTION_MANUAL_PAYMENT_DECIDED]: subscriptionManualPaymentDecidedProps,

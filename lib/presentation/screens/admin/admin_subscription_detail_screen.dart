@@ -528,6 +528,15 @@ class _StatusCard extends StatelessWidget {
                   ?.copyWith(color: AppColors.textSecondary),
             ),
           ],
+          // Autopay, as the owner sees it — or "off", so an admin looking at a
+          // lapsed paid plan knows at once whether Razorpay was meant to renew it.
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            autopayStatusLine(subscription.autopay) ?? 'Autopay is off.',
+            key: const ValueKey('admin_autopay_line'),
+            style:
+                textTheme.bodySmall?.copyWith(color: AppColors.textSecondary),
+          ),
           if (subscription.graceEndsAt != null) ...[
             const SizedBox(height: AppSpacing.xs),
             Text(

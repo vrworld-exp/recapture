@@ -2,6 +2,11 @@
 //
 // The owner's Pay flow, without a Razorpay and without a server.
 //
+// Since autopay, `startAutopay` comes first. Unscripted, the fake answers it
+// the way an OLDER server does (the route is missing) and the notifier falls
+// back to the one-time order — so the tests written before autopay pin that
+// fallback; the `autopay` group at the end pins the mandate path.
+//
 // What this file most exists to pin:
 //   • THE SDK'S SUCCESS IS NOT "PAID". After `success` the notifier is
 //     `activating` and stays there until the subscription READ says ACTIVE;
@@ -114,6 +119,7 @@ void main() {
     expect(adapter.opened.single, {
       'keyId': 'rzp_test_vitest0000000',
       'orderId': 'order_test_1',
+      'subscriptionId': null,
       'amountPaise': 119900,
       'description': 'Taste plan · monthly',
     });
@@ -129,7 +135,7 @@ void main() {
     expect(state.order?.providerOrderId, 'order_test_1');
     expect(c.read(subscriptionProvider).valueOrNull?.status,
         SubscriptionStatus.active);
-    expect(repo.calls, ['createOrder:TASTE:MONTHLY']);
+    expect(repo.calls, ['startAutopay:TASTE:MONTHLY', 'createOrder:TASTE:MONTHLY']);
     expect(events.map((e) => e.$1).toList(), [
       'checkout_opened',
       'checkout_result',
@@ -140,6 +146,7 @@ void main() {
       'interval': 'MONTHLY',
       'amount_paise': 119900,
       'surface': 'owner',
+      'autopay': false,
     });
     expect(events[1].$2, {'result': 'success'});
   });
@@ -174,6 +181,7 @@ void main() {
     await settle();
 
     expect(repo.calls, [
+      'startAutopay:TASTE:MONTHLY',
       'createOrder:TASTE:MONTHLY',
       'verify:order_test_1:pay_v:sig_v',
     ]);
@@ -503,5 +511,145 @@ void main() {
     expect(c.read(subscriptionProvider).valueOrNull?.status,
         SubscriptionStatus.active);
     expect(c.read(checkoutProvider).phase, CheckoutPhase.idle);
+  });
+
+  group('autopay', () {
+    CatalogSubscription withAutopay(String status, String autopayStatus) {
+      final map = subscriptionPayload(
+        status: status,
+        planId: 'TASTE',
+        planName: 'Taste plan',
+      );
+      map['autopay'] = {
+        'status': autopayStatus,
+        'planId': 'TASTE',
+        'planName': 'Taste plan',
+        'interval': 'MONTHLY',
+        'amountPaise': 119900,
+        'nextChargeAt': '2026-10-18T00:00:00.000Z',
+      };
+      return CatalogSubscription.fromMap(map);
+    }
+
+    test('opens the sheet on the MANDATE, verifies it, done on the flip',
+        () async {
+      final c = container([sub('NONE'), sub('ACTIVE')]);
+      await c.read(subscriptionProvider.future);
+      repo
+        ..onStartAutopay = (() => AutopayCheckout.fromMap(autopayPayload()))
+        ..onVerifyAutopay =
+            () => (recorded: true, subscription: sub('ACTIVE'));
+      adapter.outcome = const CheckoutOutcome.success(
+        'pay_a',
+        subscriptionId: 'sub_test_1',
+        signature: 'sig_a',
+      );
+
+      await c.read(checkoutProvider.notifier).pay(
+            planId: PlanId.taste,
+            interval: BillingInterval.monthly,
+          );
+      await settle();
+
+      expect(adapter.opened.single, {
+        'keyId': 'rzp_test_key',
+        'orderId': null,
+        'subscriptionId': 'sub_test_1',
+        'amountPaise': 119900,
+        'description': 'Taste plan · monthly autopay',
+      });
+      expect(repo.calls, [
+        'startAutopay:TASTE:MONTHLY',
+        'verifyAutopay:sub_test_1:pay_a:sig_a',
+      ]);
+      expect(c.read(checkoutProvider).phase, CheckoutPhase.done);
+      expect(c.read(checkoutProvider).isDeferredAutopay, isFalse);
+      expect(events.first.$2['autopay'], true);
+    });
+
+    test('an SDK that omits the subscription id is verified against the one opened',
+        () async {
+      final c = container([sub('NONE'), sub('ACTIVE')]);
+      await c.read(subscriptionProvider.future);
+      repo
+        ..onStartAutopay = (() => AutopayCheckout.fromMap(autopayPayload()))
+        ..onVerifyAutopay =
+            () => (recorded: true, subscription: sub('ACTIVE'));
+      adapter.outcome =
+          const CheckoutOutcome.success('pay_b', signature: 'sig_b');
+
+      await c.read(checkoutProvider.notifier).pay(
+            planId: PlanId.taste,
+            interval: BillingInterval.monthly,
+          );
+      await settle();
+      expect(repo.calls, contains('verifyAutopay:sub_test_1:pay_b:sig_b'));
+    });
+
+    test('a DEFERRED mandate is done when autopay is on — the period never moves',
+        () async {
+      // ACTIVE before and after, same periodEnd: only the autopay block changes.
+      final c = container([
+        sub('ACTIVE'),
+        sub('ACTIVE'),
+        withAutopay('ACTIVE', 'AUTHENTICATED'),
+      ]);
+      await c.read(subscriptionProvider.future);
+      repo.onStartAutopay = () => AutopayCheckout.fromMap(
+            autopayPayload(firstChargeAt: '2026-10-18T00:00:00.000Z'),
+          );
+      adapter.outcome = const CheckoutOutcome.success(
+        'pay_d',
+        subscriptionId: 'sub_test_1',
+        signature: 'sig_d',
+      );
+
+      await c.read(checkoutProvider.notifier).pay(
+            planId: PlanId.taste,
+            interval: BillingInterval.monthly,
+          );
+      await settle();
+      await settle();
+
+      final state = c.read(checkoutProvider);
+      expect(state.isDeferredAutopay, isTrue);
+      expect(state.phase, CheckoutPhase.done);
+      expect(state.daysForfeited, 0);
+    });
+
+    test('AUTOPAY_ALREADY_ON is a failure with its code, and no sheet opens',
+        () async {
+      final c = container([withAutopay('ACTIVE', 'ACTIVE')]);
+      repo.startAutopayFailure = const CatalogFailure(
+        code: PaymentErrorCodes.autopayAlreadyOn,
+        message: 'x',
+        statusCode: 409,
+      );
+      await c.read(checkoutProvider.notifier).pay(
+            planId: PlanId.taste,
+            interval: BillingInterval.monthly,
+          );
+      final state = c.read(checkoutProvider);
+      expect(state.phase, CheckoutPhase.failed);
+      expect(state.failureCode, PaymentErrorCodes.autopayAlreadyOn);
+      expect(adapter.opened, isEmpty);
+      expect(repo.calls, ['startAutopay:TASTE:MONTHLY']);
+    });
+
+    test('a 404 WITH an envelope (no catalog) is not "old server" — no fallback',
+        () async {
+      final c = container([sub('NONE')]);
+      repo.startAutopayFailure = const CatalogFailure(
+        code: 'CATALOG_NOT_FOUND',
+        message: 'x',
+        statusCode: 404,
+      );
+      await c.read(checkoutProvider.notifier).pay(
+            planId: PlanId.taste,
+            interval: BillingInterval.monthly,
+          );
+      expect(c.read(checkoutProvider).phase, CheckoutPhase.failed);
+      expect(repo.calls, ['startAutopay:TASTE:MONTHLY']);
+    });
   });
 }

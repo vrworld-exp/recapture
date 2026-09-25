@@ -100,6 +100,11 @@ import { env } from '@/config/env';
 import { getSubscriptionStatus } from '@/services/subscription/subscriptionService';
 import { settleOpenOrdersOnRead } from '@/services/subscription/reconcileService';
 import { verifyClientPayment } from '@/services/subscription/clientVerifyService';
+import {
+  cancelAutopay,
+  startAutopay,
+  verifyAutopay,
+} from '@/services/subscription/autopayService';
 import { createOrReturnOrder } from '@/services/subscription/checkoutService';
 import { listPaymentsForOwner, receiptNoFor } from '@/services/subscription/paymentLedgerService';
 import {
@@ -108,7 +113,12 @@ import {
   renderReceipt,
 } from '@/services/subscription/receiptPdf';
 import { PaymentRecord } from '@/models/PaymentRecord';
-import { createOrderSchema, verifyPaymentSchema } from '@/validation/subscriptionSchemas';
+import {
+  createOrderSchema,
+  startAutopaySchema,
+  verifyAutopaySchema,
+  verifyPaymentSchema,
+} from '@/validation/subscriptionSchemas';
 import { validateBody } from '@/middleware/validate';
 import type { Response } from 'express';
 import type { ZodError } from 'zod';
@@ -1424,6 +1434,126 @@ router.post(
         const subscription = await getSubscriptionStatus(catalogId, catalog.userId);
         const recorded = result.kind === 'RECORDED';
         res.status(recorded ? 200 : 202).json({ status: 'success', recorded, subscription });
+        return;
+      }
+    }
+  })
+);
+
+/**
+ * POST /catalog/subscription/autopay — turn autopay on. The owner picks a plan
+ * and an interval; the server mints (or hands back) a Razorpay SUBSCRIPTION
+ * for it and answers the ids the checkout sheet needs. Nothing is charged
+ * here — the sheet's approval does that, and /autopay/verify, the webhook and
+ * the reconciler record it (autopayService.ts). OWNER ONLY, like /order.
+ *
+ * 201 fresh, 200 + `X-Autopay-Reused: 1` for an open one. 409 AUTOPAY_ALREADY_ON
+ * when a healthy mandate already charges exactly this plan and interval.
+ */
+router.post(
+  '/subscription/autopay',
+  validateBody(startAutopaySchema),
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+
+    const result = await startAutopay(
+      catalog._id as Types.ObjectId,
+      catalog.userId,
+      { userId: new Types.ObjectId(req.user!.userId), role: req.user!.role ?? 'USER' },
+      req.body
+    );
+    switch (result.outcome) {
+      case 'OK':
+        if (result.reused) res.setHeader('X-Autopay-Reused', '1');
+        res.status(result.reused ? 200 : 201).json({ status: 'success', autopay: result.autopay });
+        return;
+      case 'ALREADY_ON':
+        return fail(res, 409, 'AUTOPAY_ALREADY_ON', 'Autopay is already on for this plan.');
+      case 'RATE_LIMITED':
+        return rateLimited(res, result.retryAfter);
+      case 'UNAVAILABLE':
+        return fail(
+          res,
+          503,
+          'PAYMENTS_UNAVAILABLE',
+          "Couldn't reach the payment service. Try again in a minute."
+        );
+    }
+  })
+);
+
+/**
+ * POST /catalog/subscription/autopay/verify — the sheet's signed success for a
+ * mandate. Checks the signature, then syncs the mandate with Razorpay (which
+ * records the first charge if it has been taken). Answers the subscription
+ * either way: 200 when a charge was recorded, 202 when the mandate is
+ * approved but its charge has not landed yet (the app keeps polling).
+ */
+router.post(
+  '/subscription/autopay/verify',
+  validateBody(verifyAutopaySchema),
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    const catalogId = catalog._id as Types.ObjectId;
+
+    const rate = await consumeRateWindow(
+      `subscription-verify:${catalogId.toHexString()}`,
+      env.SUBSCRIPTION_VERIFY_MAX_PER_WINDOW,
+      env.SUBSCRIPTION_VERIFY_WINDOW_SECONDS
+    );
+    if (rate.limited) return rateLimited(res, rate.retryAfter);
+
+    const result = await verifyAutopay(catalogId, req.body);
+    switch (result.kind) {
+      case 'BAD_SIGNATURE':
+        return fail(res, 400, 'INVALID_PAYMENT_SIGNATURE', "We couldn't confirm this payment.");
+      case 'UNKNOWN_MANDATE':
+        return fail(res, 404, 'AUTOPAY_NOT_FOUND', "We couldn't find this autopay.");
+      case 'UNAVAILABLE':
+        return fail(
+          res,
+          503,
+          'PAYMENTS_UNAVAILABLE',
+          "Couldn't reach the payment service. Try again in a minute."
+        );
+      case 'SYNCED': {
+        const subscription = await getSubscriptionStatus(catalogId, catalog.userId);
+        const recorded = result.recordedCharges > 0;
+        res.status(recorded ? 200 : 202).json({ status: 'success', recorded, subscription });
+        return;
+      }
+    }
+  })
+);
+
+/**
+ * POST /catalog/subscription/autopay/cancel — turn autopay off. Cancelled at
+ * Razorpay now; the period already paid for runs to its end untouched (it is
+ * the catalog's, not Razorpay's). 404 AUTOPAY_NOT_ON when nothing could charge.
+ */
+router.post(
+  '/subscription/autopay/cancel',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    const catalogId = catalog._id as Types.ObjectId;
+
+    const result = await cancelAutopay(catalogId, 'OWNER_CANCELLED');
+    switch (result.outcome) {
+      case 'NOT_ON':
+        return fail(res, 404, 'AUTOPAY_NOT_ON', 'Autopay is not on.');
+      case 'UNAVAILABLE':
+        return fail(
+          res,
+          503,
+          'PAYMENTS_UNAVAILABLE',
+          "Couldn't reach the payment service. Try again in a minute."
+        );
+      case 'CANCELLED': {
+        const subscription = await getSubscriptionStatus(catalogId, catalog.userId);
+        res.status(200).json({ status: 'success', subscription });
         return;
       }
     }

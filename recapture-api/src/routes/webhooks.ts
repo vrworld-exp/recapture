@@ -15,6 +15,7 @@ import { Router } from 'express';
 
 import { verifyWebhookSignature } from '@/providers/razorpay';
 import { handleRazorpayEvent } from '@/services/subscription/webhookService';
+import { subscriptionIdOfEvent, syncMandate } from '@/services/subscription/autopayService';
 import { asyncHandler } from '@/utils/asyncHandler';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 
@@ -48,6 +49,17 @@ router.post(
     }
 
     try {
+      // Autopay: every `subscription.*` event is a cue to SYNC that mandate
+      // with Razorpay — the payload is not trusted for state or money, the
+      // provider's own answer is (autopayService.syncMandate). An id we never
+      // created (a subscription made on the dashboard) is acknowledged.
+      const autopayId = subscriptionIdOfEvent(event);
+      if (autopayId) {
+        const synced = await syncMandate(autopayId, 'WEBHOOK');
+        if (synced.kind === 'UNAVAILABLE') throw new Error('autopay sync: provider unavailable');
+        res.status(200).json({ status: 'success', ...(synced.kind === 'UNKNOWN' ? { ignored: true } : {}) });
+        return;
+      }
       const result = await handleRazorpayEvent(event);
       res.status(200).json({ status: 'success', ...(result.ignored ? { ignored: true } : {}) });
     } catch (err) {

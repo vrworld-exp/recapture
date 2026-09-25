@@ -374,7 +374,9 @@ void main() {
           status: 'ACTIVE',
           planId: 'TASTE',
           planName: 'Taste plan',
-        ): ('Active until', 'Renew'),
+          // Autopay over a paid period of the SAME plan charges nothing
+          // today (docs/subscription/autopay.md A2), so the label says so.
+        ): ('Active until', 'Turn on autopay'),
         subscriptionPayload(status: 'GRACE', planId: 'TASTE', daysLeft: 2): (
           'Payment overdue',
           'Renew'
@@ -424,7 +426,8 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.textContaining('Renew · ₹1,199 / month'), findsOneWidget);
+      expect(find.textContaining('Turn on autopay · ₹1,199 / month'),
+          findsOneWidget);
 
       await tester
           .tap(find.byKey(const ValueKey('subscription_plan_MASTERCHEF')));
@@ -446,7 +449,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('subscription_precheckout_sheet')),
           findsOneWidget);
-      expect(find.text(kPaymentConsentLine), findsNWidgets(2));
+      // Autopay's consent line, which carries the refund rule word for word.
+      expect(find.text(kAutopayConsentLine), findsNWidgets(2));
+      expect(kAutopayConsentLine, contains(kPaymentConsentLine));
       expect(find.textContaining('Continue to Pay'), findsOneWidget);
     });
 

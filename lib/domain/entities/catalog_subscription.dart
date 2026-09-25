@@ -412,6 +412,93 @@ SubscriptionStatus? _graceFromOrNull(dynamic raw) {
 }
 
 /// The whole subscription screen — `SubscriptionStatusDto`.
+/// A Razorpay subscription's state (`AutopayMandate.status` on the server),
+/// as far as the owner's screen cares. Only the states the DTO ever carries
+/// are named; anything else is [unknown] and renders as "on".
+enum AutopayStatus {
+  /// Approved; the first charge is still to come (a deferred start).
+  authenticated,
+
+  /// Charging on schedule.
+  active,
+
+  /// The last renewal failed and Razorpay is retrying.
+  pending,
+
+  /// Razorpay gave up retrying. The owner must turn autopay on again.
+  halted,
+  unknown,
+}
+
+extension AutopayStatusX on AutopayStatus {
+  static AutopayStatus fromApiValue(String value) =>
+      switch (value.toUpperCase()) {
+        'AUTHENTICATED' => AutopayStatus.authenticated,
+        'ACTIVE' => AutopayStatus.active,
+        'PENDING' => AutopayStatus.pending,
+        'HALTED' => AutopayStatus.halted,
+        _ => AutopayStatus.unknown,
+      };
+
+  String get apiValue => switch (this) {
+        AutopayStatus.authenticated => 'AUTHENTICATED',
+        AutopayStatus.active => 'ACTIVE',
+        AutopayStatus.pending => 'PENDING',
+        AutopayStatus.halted => 'HALTED',
+        AutopayStatus.unknown => 'UNKNOWN',
+      };
+
+  /// Razorpay will charge again by itself (possibly after a retry).
+  bool get willCharge => this != AutopayStatus.halted;
+}
+
+/// The owner's autopay — `SubscriptionStatusDto.autopay`. Null on the entity
+/// means autopay is OFF (never set up, turned off, or ended), which is also
+/// what an older server that has no autopay reads as.
+class AutopayInfo {
+  const AutopayInfo({
+    required this.status,
+    required this.planId,
+    required this.planName,
+    required this.interval,
+    required this.amountPaise,
+    this.nextChargeAt,
+  });
+
+  final AutopayStatus status;
+  final PlanId planId;
+  final String planName;
+  final BillingInterval interval;
+
+  /// What each charge takes, in paise.
+  final int amountPaise;
+
+  /// Razorpay's next charge. Null when none is scheduled (HALTED).
+  final DateTime? nextChargeAt;
+
+  /// On and nothing is wrong — the state in which "Turn off" is offered and
+  /// the pay buttons for THIS plan are not.
+  bool get isHealthy =>
+      status == AutopayStatus.authenticated ||
+      status == AutopayStatus.active ||
+      status == AutopayStatus.unknown;
+
+  static AutopayInfo? fromMapOrNull(dynamic raw) {
+    if (raw is! Map) return null;
+    final map = raw.cast<String, dynamic>();
+    final status = map['status'];
+    if (status is! String || status.isEmpty) return null;
+    return AutopayInfo(
+      status: AutopayStatusX.fromApiValue(status),
+      planId: PlanIdX.fromApiValue((map['planId'] ?? '').toString()),
+      planName: catalogText(map['planName']) ?? 'Plan',
+      interval: BillingIntervalX.fromApiValue((map['interval'] ?? '').toString()),
+      amountPaise: catalogCount(map['amountPaise']),
+      nextChargeAt: catalogDate(map['nextChargeAt']),
+    );
+  }
+}
+
 class CatalogSubscription {
   const CatalogSubscription({
     required this.status,
@@ -435,10 +522,16 @@ class CatalogSubscription {
     this.paymentDueAt,
     this.isPageDeactivated = false,
     this.isReported = true,
+    this.autopay,
   });
 
   final SubscriptionStatus status;
   final PlanId? planId;
+
+  /// The owner's autopay, or null when it is off. Independent of [status]: a
+  /// catalog can be ACTIVE with autopay off (a one-time or cash payment), or
+  /// in GRACE with autopay [AutopayStatus.pending] (a renewal failing).
+  final AutopayInfo? autopay;
   final String? planName;
 
   /// See [SubscriptionSummary.graceFrom].
@@ -550,6 +643,7 @@ class CatalogSubscription {
         paymentDueAt: paymentDueAt,
         isPageDeactivated: isPageDeactivated,
         isReported: isReported,
+        autopay: autopay,
       );
 
   /// The compact view of the same row, for a chip that has only this.
@@ -609,6 +703,7 @@ class CatalogSubscription {
       paymentDueAt: catalogDate(map['paymentDueAt']),
       isPageDeactivated: map['isPageDeactivated'] == true,
       isReported: map['status'] != null,
+      autopay: AutopayInfo.fromMapOrNull(map['autopay']),
     );
   }
 }

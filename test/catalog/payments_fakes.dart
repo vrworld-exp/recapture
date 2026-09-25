@@ -103,12 +103,52 @@ Map<String, dynamic> manualPaymentPayload({
       'receiptNo': 'RC-000000C1',
     };
 
+/// `POST /catalog/subscription/autopay`'s `autopay` body.
+Map<String, dynamic> autopayPayload({
+  String subscriptionId = 'sub_test_1',
+  String planId = 'TASTE',
+  String interval = 'MONTHLY',
+  int amountPaise = 119900,
+  String? firstChargeAt,
+  int daysForfeited = 0,
+}) =>
+    {
+      'providerSubscriptionId': subscriptionId,
+      'keyId': 'rzp_test_key',
+      'amountPaise': amountPaise,
+      'quote': {
+        'planId': planId,
+        'interval': interval,
+        'totalPaise': amountPaise,
+        'planSnapshot': {'planId': planId, 'displayName': 'Taste plan'},
+      },
+      'firstChargeAt': firstChargeAt,
+      'expiresAt': '2026-09-26T10:00:00.000Z',
+      'currentPeriodEnd': null,
+      'daysForfeited': daysForfeited,
+    };
+
 /// Every method records its call and answers from a scripted slot; anything
 /// not scripted throws so a test never passes on a silent default.
 class FakePaymentsRepository implements PaymentsRepository {
   final List<String> calls = [];
 
   CheckoutOrder Function()? onCreateOrder;
+
+  /// The autopay mandate `startAutopay` answers. UNSCRIPTED, it answers what
+  /// an OLDER server does — a 404 with no envelope (the route is missing) —
+  /// so the notifier falls back to the one-time order and every test written
+  /// before autopay still exercises that path.
+  AutopayCheckout Function()? onStartAutopay;
+  CatalogFailure? startAutopayFailure;
+
+  /// The autopay verify answer; unscripted → NOT_SCRIPTED (best-effort).
+  ({bool recorded, CatalogSubscription subscription}) Function()?
+      onVerifyAutopay;
+
+  /// The turn-off answer; unscripted → NOT_SCRIPTED.
+  CatalogSubscription Function()? onCancelAutopay;
+  CatalogFailure? cancelAutopayFailure;
 
   /// The verify answer, or null to answer with [verifyFailure] (or a
   /// NOT_SCRIPTED failure — the notifier treats any failure as best-effort).
@@ -171,6 +211,49 @@ class FakePaymentsRepository implements PaymentsRepository {
     if (make != null) return make();
     throw verifyFailure ??
         const CatalogFailure(code: 'NOT_SCRIPTED', message: 'verify not scripted');
+  }
+
+  @override
+  Future<AutopayCheckout> startAutopay({
+    required PlanId planId,
+    required BillingInterval interval,
+  }) async {
+    calls.add('startAutopay:${planId.apiValue}:${interval.apiValue}');
+    final failure = startAutopayFailure;
+    if (failure != null) throw failure;
+    final make = onStartAutopay;
+    if (make == null) {
+      throw const CatalogFailure(
+        code: 'UNKNOWN',
+        message: 'Route not found',
+        statusCode: 404,
+      );
+    }
+    return make();
+  }
+
+  @override
+  Future<({bool recorded, CatalogSubscription subscription})> verifyAutopay({
+    required String subscriptionId,
+    required String paymentId,
+    required String signature,
+  }) async {
+    calls.add('verifyAutopay:$subscriptionId:$paymentId:$signature');
+    final make = onVerifyAutopay;
+    if (make != null) return make();
+    throw const CatalogFailure(
+        code: 'NOT_SCRIPTED', message: 'verifyAutopay not scripted');
+  }
+
+  @override
+  Future<CatalogSubscription> cancelAutopay() async {
+    calls.add('cancelAutopay');
+    final failure = cancelAutopayFailure;
+    if (failure != null) throw failure;
+    final make = onCancelAutopay;
+    if (make != null) return make();
+    throw const CatalogFailure(
+        code: 'NOT_SCRIPTED', message: 'cancelAutopay not scripted');
   }
 
   @override
@@ -457,7 +540,7 @@ class FakeCheckoutAdapter implements CheckoutAdapter {
   /// Answered as soon as [open] is called, when set.
   CheckoutOutcome? outcome;
 
-  final List<Map<String, Object>> opened = [];
+  final List<Map<String, Object?>> opened = [];
   Completer<CheckoutOutcome>? _pending;
 
   @override
@@ -466,13 +549,15 @@ class FakeCheckoutAdapter implements CheckoutAdapter {
   @override
   Future<CheckoutOutcome> open({
     required String keyId,
-    required String orderId,
+    String? orderId,
+    String? subscriptionId,
     required int amountPaise,
     required String description,
   }) {
     opened.add({
       'keyId': keyId,
       'orderId': orderId,
+      'subscriptionId': subscriptionId,
       'amountPaise': amountPaise,
       'description': description,
     });

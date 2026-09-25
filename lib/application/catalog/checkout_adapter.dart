@@ -44,6 +44,7 @@ sealed class CheckoutOutcome {
   const factory CheckoutOutcome.success(
     String paymentId, {
     String? orderId,
+    String? subscriptionId,
     String? signature,
   }) = CheckoutSuccess;
   const factory CheckoutOutcome.cancelled() = CheckoutCancelled;
@@ -56,18 +57,27 @@ sealed class CheckoutOutcome {
 
 /// The SDK says the payment went through. NOT an activation — see the header.
 class CheckoutSuccess extends CheckoutOutcome {
-  const CheckoutSuccess(this.paymentId, {this.orderId, this.signature});
+  const CheckoutSuccess(
+    this.paymentId, {
+    this.orderId,
+    this.subscriptionId,
+    this.signature,
+  });
   final String paymentId;
 
-  /// `razorpay_order_id` and `razorpay_signature` as the SDK returned them —
-  /// passed to the server verbatim for it to verify. Either may be null (an
-  /// SDK that did not send it); the server's other paths still activate.
+  /// `razorpay_order_id` (a one-time order) or `razorpay_subscription_id` (an
+  /// autopay mandate), and `razorpay_signature`, as the SDK returned them —
+  /// passed to the server verbatim for it to verify. Any may be null (an SDK
+  /// that did not send it); the server's other paths still activate.
   final String? orderId;
+  final String? subscriptionId;
   final String? signature;
 
   /// Whether there is anything for the server to verify.
   bool get canVerify =>
-      (orderId?.isNotEmpty ?? false) && (signature?.isNotEmpty ?? false);
+      ((orderId?.isNotEmpty ?? false) ||
+          (subscriptionId?.isNotEmpty ?? false)) &&
+      (signature?.isNotEmpty ?? false);
 }
 
 /// The user closed the sheet. The open order stays open on the server.
@@ -94,12 +104,18 @@ abstract interface class CheckoutAdapter {
   /// "pay from your phone or browser" card and never calls [open].
   bool get isSupported;
 
+  /// Opens the sheet on EITHER a one-time [orderId] or an autopay
+  /// [subscriptionId] — exactly one of them. For a subscription the sheet
+  /// takes no amount (the Razorpay plan carries it); [amountPaise] is then
+  /// only for display and logging.
+  ///
   /// [description] is "`<Plan>` plan · monthly/yearly". Deliberately no
   /// `prefill` argument: the SDK's `prefill.contact` / `prefill.email` are
   /// never sent (PII rule, §7 rule 8).
   Future<CheckoutOutcome> open({
     required String keyId,
-    required String orderId,
+    String? orderId,
+    String? subscriptionId,
     required int amountPaise,
     required String description,
   });
@@ -115,7 +131,8 @@ class UnsupportedCheckoutAdapter implements CheckoutAdapter {
   @override
   Future<CheckoutOutcome> open({
     required String keyId,
-    required String orderId,
+    String? orderId,
+    String? subscriptionId,
     required int amountPaise,
     required String description,
   }) async =>

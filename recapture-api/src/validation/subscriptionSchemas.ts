@@ -57,6 +57,24 @@ export const verifyPaymentSchema = z
   .strict();
 export type VerifyPaymentInput = z.infer<typeof verifyPaymentSchema>;
 
+/** POST /catalog/subscription/autopay — the same two choices as a one-time order. */
+export const startAutopaySchema = createOrderSchema;
+
+/**
+ * POST /catalog/subscription/autopay/verify — what the sheet's success handler
+ * returned for a SUBSCRIPTION checkout (`razorpay_subscription_id` instead of
+ * an order id). No amount and no plan: the charge is read off Razorpay's
+ * invoice, never the body.
+ */
+export const verifyAutopaySchema = z
+  .object({
+    subscriptionId: z.string().min(1).max(64),
+    paymentId: z.string().min(1).max(64),
+    signature: z.string().min(1).max(256),
+  })
+  .strict();
+export type VerifyAutopayInput = z.infer<typeof verifyAutopaySchema>;
+
 // ── Door 3: manual payments ─────────────────────────────────────────────────
 
 const manualPaymentFields = {

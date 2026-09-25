@@ -25,7 +25,8 @@ export type AdminAlertKind =
   | 'EXTERNAL_REFUND'
   | 'WEBHOOKS_SILENT'
   | 'DISPUTE'
-  | 'ENTITLEMENT_FAILED';
+  | 'ENTITLEMENT_FAILED'
+  | 'AUTOPAY_CANCEL_FAILED';
 
 export interface AdminAlertInput {
   kind: AdminAlertKind;

@@ -14,7 +14,12 @@ import { CatalogDelegation } from '@/models/CatalogDelegation';
 import { CatalogSubscription } from '@/models/CatalogSubscription';
 import { User, type UserRole } from '@/models/User';
 import type { SubscriptionStatus } from '@/models/types/subscription.types';
-import { signWebhookBody, type RazorpayClient } from '@/providers/razorpay';
+import {
+  signWebhookBody,
+  type RazorpayClient,
+  type RazorpayInvoiceSnapshot,
+  type RazorpaySubscriptionSnapshot,
+} from '@/providers/razorpay';
 
 export const DAY_MS = 86_400_000;
 
@@ -109,9 +114,115 @@ export function fakeRazorpay(overrides: Partial<RazorpayClient> = {}) {
       notes: {} as Record<string, string>,
     })),
     capturePayment: vi.fn(async (paymentId: string) => ({ id: paymentId, status: 'captured' })),
+    // Autopay. A tiny in-memory Razorpay: `createSubscription` stores a
+    // `created` subscription; a test moves it with `fakeSubscriptions.set` /
+    // `.charge(...)` and the fetches read it back.
+    createPlan: vi.fn(async () => ({ id: `plan_test_${++mintedIds}` })),
+    createSubscription: vi.fn(
+      async (input: { planId: string; startAt?: number }): Promise<RazorpaySubscriptionSnapshot> => {
+        const snap: RazorpaySubscriptionSnapshot = {
+          id: `sub_test_${++mintedIds}`,
+          planId: input.planId,
+          status: 'created',
+          currentStart: null,
+          currentEnd: null,
+          chargeAt: input.startAt ?? null,
+          startAt: input.startAt ?? null,
+          paidCount: 0,
+          endedAt: null,
+        };
+        fakeSubscriptions.subs.set(snap.id, snap);
+        fakeSubscriptions.invoices.set(snap.id, []);
+        return { ...snap };
+      }
+    ),
+    fetchSubscription: vi.fn(async (id: string): Promise<RazorpaySubscriptionSnapshot> => {
+      const snap = fakeSubscriptions.subs.get(id);
+      if (!snap) throw new Error(`fake: no subscription ${id}`);
+      return { ...snap };
+    }),
+    cancelSubscription: vi.fn(async (id: string): Promise<RazorpaySubscriptionSnapshot> => {
+      const snap = fakeSubscriptions.subs.get(id);
+      if (!snap) throw new Error(`fake: no subscription ${id}`);
+      snap.status = 'cancelled';
+      snap.endedAt = Math.floor(Date.now() / 1000);
+      return { ...snap };
+    }),
+    fetchSubscriptionInvoices: vi.fn(async (id: string): Promise<RazorpayInvoiceSnapshot[]> => [
+      ...(fakeSubscriptions.invoices.get(id) ?? []),
+    ]),
     ...overrides,
   };
   return client as typeof client & RazorpayClient;
+}
+
+/**
+ * The fake Razorpay's subscriptions, shared by every fake in the process.
+ * `charge` is Razorpay taking one cycle: a paid invoice for [start, end), the
+ * subscription ACTIVE on that cycle.
+ */
+export const fakeSubscriptions = {
+  subs: new Map<string, RazorpaySubscriptionSnapshot>(),
+  invoices: new Map<string, RazorpayInvoiceSnapshot[]>(),
+  reset(): void {
+    this.subs.clear();
+    this.invoices.clear();
+  },
+  set(id: string, patch: Partial<RazorpaySubscriptionSnapshot>): void {
+    const snap = this.subs.get(id);
+    if (!snap) throw new Error(`fake: no subscription ${id}`);
+    Object.assign(snap, patch);
+  },
+  charge(
+    id: string,
+    input: { amountPaise: number; start: Date; end: Date; paymentId?: string }
+  ): string {
+    const snap = this.subs.get(id);
+    if (!snap) throw new Error(`fake: no subscription ${id}`);
+    const n = ++mintedIds;
+    const paymentId = input.paymentId ?? `pay_auto_${n}`;
+    const secs = (d: Date): number => Math.floor(d.getTime() / 1000);
+    this.invoices.get(id)!.push({
+      id: `inv_test_${n}`,
+      status: 'paid',
+      paymentId,
+      orderId: `order_inv_${n}`,
+      amountPaid: input.amountPaise,
+      paidAt: secs(input.start),
+      billingStart: secs(input.start),
+      billingEnd: secs(input.end),
+    });
+    Object.assign(snap, {
+      status: 'active',
+      currentStart: secs(input.start),
+      currentEnd: secs(input.end),
+      chargeAt: secs(input.end),
+      paidCount: snap.paidCount + 1,
+    });
+    return paymentId;
+  },
+};
+
+/** A `subscription.*` event, as Razorpay shapes it (the id is all the handler reads). */
+export function subscriptionEvent(
+  event: string,
+  subscriptionId: string,
+  paymentId?: string
+): Record<string, unknown> {
+  return {
+    entity: 'event',
+    event,
+    payload: {
+      subscription: { entity: { id: subscriptionId, entity: 'subscription' } },
+      ...(paymentId
+        ? {
+            payment: {
+              entity: { id: paymentId, entity: 'payment', invoice_id: 'inv_x', status: 'captured' },
+            },
+          }
+        : {}),
+    },
+  };
 }
 
 /**

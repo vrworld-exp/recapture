@@ -19,7 +19,13 @@ sequence**, in the order it has to happen. The detailed runbook for the final fl
   - Events (the ones `services/subscription/webhookService.ts` handles):
     `order.paid`, `payment.captured`, `payment.failed`, `refund.processed`, `refund.failed`,
     `payment.dispute.created`, `payment.dispute.won`, `payment.dispute.lost`,
-    `payment.dispute.closed`
+    `payment.dispute.closed` — and for AUTOPAY (`autopay.md`): `subscription.authenticated`,
+    `subscription.activated`, `subscription.charged`, `subscription.pending`,
+    `subscription.halted`, `subscription.cancelled`, `subscription.completed`,
+    `subscription.paused`, `subscription.resumed`, `subscription.updated`
+- [ ] **Enable Subscriptions** on the account (autopay needs it; see `autopay.md`).
+- [ ] **Register the website and the app** (Settings → Website & App) — live payments from an
+      unregistered origin are refused.
 - [ ] Webhooks are **per mode** — create one in Test mode too if you rehearse on staging.
 - [ ] Nothing to register for the Flutter app. The backend returns `keyId` inside the checkout
       response (`checkoutService.ts`), so the key never lives in an app build.

@@ -41,6 +41,10 @@ import {
   notifyPlanActivated,
   notifyTrialStarted,
 } from '@/services/subscription/ownerNotifications';
+import {
+  getAutopaySummary,
+  type AutopaySummaryDto,
+} from '@/services/subscription/autopayReadModel';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { countThreeDDishes, countsAsThreeD } from '@/services/subscription/threeDDishCount';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -118,6 +122,13 @@ export interface SubscriptionStatusDto {
   /** See {@link SubscriptionSummaryDto.isPageDeactivated}. */
   isPageDeactivated: boolean;
   standeeAllocation: { included: number; issued: number } | null;
+  /**
+   * The owner's autopay (Razorpay subscription), or null when it is off.
+   * Independent of `status`: a catalog can be ACTIVE with autopay off (a
+   * one-time or cash payment), or in GRACE with autopay PENDING (a renewal
+   * failing). See autopayReadModel.
+   */
+  autopay: AutopaySummaryDto | null;
   /** So the screen never needs a second call for the plan cards. */
   plans: PlanCatalog;
 }
@@ -364,13 +375,14 @@ export async function getSubscriptionStatus(
   ownerUserId: Types.ObjectId,
   now: Date = new Date()
 ): Promise<SubscriptionStatusDto> {
-  const [row, plans, products] = await Promise.all([
+  const [row, plans, products, autopay] = await Promise.all([
     getOrNull(catalogId),
     getPlanCatalog(),
     CatalogProduct.find({ catalogId, deletedAt: null })
       .select({ deletedAt: 1, archivedAt: 1, modelStatus: 1, 'assets.glbUrl': 1 })
       .lean()
       .exec(),
+    getAutopaySummary(catalogId),
   ]);
 
   const live = publishableProducts(products);
@@ -401,6 +413,7 @@ export async function getSubscriptionStatus(
       paymentDueAt: null,
       isPageDeactivated: false,
       standeeAllocation: null,
+      autopay,
       plans,
     };
   }
@@ -426,6 +439,7 @@ export async function getSubscriptionStatus(
       included: row.standeeAllocation?.included ?? 0,
       issued: row.standeeAllocation?.issued ?? 0,
     },
+    autopay,
     plans,
   };
 }
@@ -654,6 +668,16 @@ export interface ApplyPaidPeriodInput {
    */
   paymentRecordId: Types.ObjectId;
   via: ApplyVia;
+  /**
+   * AUTOPAY charges only: Razorpay's billing-cycle end — its next charge
+   * date. The period still STARTS at `paidAt` (the journal's CATALOG check
+   * depends on it); only its end follows Razorpay's calendar, so a monthly
+   * mandate (calendar months) and the catalog (which would otherwise count 30
+   * days) never drift apart. Ignored unless it is after `paidAt`.
+   */
+  periodEnd?: Date;
+  /** True when a mandate will charge again at `periodEnd` — changes the owner's message. */
+  autopay?: boolean;
 }
 
 export interface ApplyPeriodResult {
@@ -840,7 +864,10 @@ export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<Appl
   const { catalogId, ownerUserId, paidAt, planSnapshot } = input;
   const previous = await previousRowOf(catalogId);
   const previousStatus = previous.status;
-  const periodEnd = new Date(paidAt.getTime() + (input.interval === 'YEARLY' ? 365 : 30) * DAY_MS);
+  const periodEnd =
+    input.periodEnd && input.periodEnd.getTime() > paidAt.getTime()
+      ? input.periodEnd
+      : new Date(paidAt.getTime() + (input.interval === 'YEARLY' ? 365 : 30) * DAY_MS);
 
   const subscription = await upsertSubscriptionRow(catalogId, ownerUserId, {
     $set: {
@@ -900,6 +927,7 @@ export async function applyPaidPeriod(input: ApplyPaidPeriodInput): Promise<Appl
     periodEnd,
     resumedThreeD: needsArResume,
     restoredPage: needsPageRestore,
+    autopay: input.autopay === true,
   });
 
   return { previousStatus, subscription, needsArResume, needsPageRestore };

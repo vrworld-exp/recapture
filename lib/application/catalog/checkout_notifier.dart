@@ -1,6 +1,12 @@
 // lib/application/catalog/checkout_notifier.dart
 //
-// The owner's Pay / Renew / Upgrade, end to end:
+// The owner's Pay / Renew / Upgrade — AUTOPAY since Sept 2026: the button
+// sets up a Razorpay subscription (a mandate that charges every month or
+// year by itself) rather than a one-time order. The one-time order is still
+// here as the FALLBACK for a server that has no autopay route yet (a 404 with
+// no envelope — a deploy skew), so an app released first never loses Pay.
+//
+// End to end:
 //
 //   idle → quoting → showingSdk → activating → done
 //                 ↘ unavailable         ↘ confirming (timed out — the server
@@ -70,15 +76,28 @@ class CheckoutState {
   const CheckoutState({
     this.phase = CheckoutPhase.idle,
     this.order,
+    this.autopay,
     this.failureCode,
     this.secondsToConfirm,
   });
 
   final CheckoutPhase phase;
 
-  /// The last quote the server handed back — the E9 warning reads
-  /// [CheckoutOrder.daysForfeited] off it.
+  /// The last one-time quote the server handed back (the old-server
+  /// fallback only) — the E9 warning reads [CheckoutOrder.daysForfeited].
   final CheckoutOrder? order;
+
+  /// The autopay mandate the sheet opened on. The E9 warning reads its
+  /// [AutopayCheckout.daysForfeited]; a deferred one ([isDeferredAutopay])
+  /// charges nothing today and is "done" when the mandate is approved.
+  final AutopayCheckout? autopay;
+
+  /// The owner turned autopay on over a period they had already paid for:
+  /// nothing is charged now, so "done" means "autopay is on", not "paid".
+  bool get isDeferredAutopay => autopay?.isDeferred ?? false;
+
+  /// The server's forfeit figure for whatever was quoted last; null before.
+  int? get daysForfeited => autopay?.daysForfeited ?? order?.daysForfeited;
 
   /// The envelope code (or the SDK's code) behind a [CheckoutPhase.failed].
   final String? failureCode;
@@ -95,12 +114,16 @@ class CheckoutState {
   CheckoutState copyWith({
     CheckoutPhase? phase,
     Object? order = _unset,
+    Object? autopay = _unset,
     Object? failureCode = _unset,
     Object? secondsToConfirm = _unset,
   }) =>
       CheckoutState(
         phase: phase ?? this.phase,
         order: identical(order, _unset) ? this.order : order as CheckoutOrder?,
+        autopay: identical(autopay, _unset)
+            ? this.autopay
+            : autopay as AutopayCheckout?,
         failureCode: identical(failureCode, _unset)
             ? this.failureCode
             : failureCode as String?,
@@ -180,46 +203,68 @@ class CheckoutNotifier extends AutoDisposeNotifier<CheckoutState> {
       secondsToConfirm: null,
     );
 
-    final CheckoutOrder order;
+    AutopayCheckout? autopay;
+    CheckoutOrder? order;
     try {
-      order = await _repo.createOrder(planId: planId, interval: interval);
+      autopay = await _repo.startAutopay(planId: planId, interval: interval);
     } on CatalogFailure catch (failure) {
       if (_disposed) return;
-      state = state.copyWith(
-        phase: failure.code == PaymentErrorCodes.paymentsUnavailable ||
-                failure.isOffline
-            ? CheckoutPhase.unavailable
-            : CheckoutPhase.failed,
-        failureCode: failure.code,
-      );
-      return;
+      if (!_isRouteMissing(failure)) return _failQuote(failure);
+      // An older server with no autopay route: the one-time order it has.
+      try {
+        order = await _repo.createOrder(planId: planId, interval: interval);
+      } on CatalogFailure catch (fallbackFailure) {
+        if (_disposed) return;
+        return _failQuote(fallbackFailure);
+      }
     }
     if (_disposed) return;
 
+    final keyId = autopay?.keyId ?? order!.keyId;
+    final amountPaise = autopay?.amountPaise ?? order!.amountPaise;
     Analytics.logEvent('checkout_opened', {
-      'plan_id': order.planId.apiValue,
-      'interval': order.interval.apiValue,
-      'amount_paise': order.amountPaise,
+      'plan_id': (autopay?.planId ?? order!.planId).apiValue,
+      'interval': (autopay?.interval ?? order!.interval).apiValue,
+      'amount_paise': amountPaise,
       'surface': 'owner',
+      'autopay': autopay != null,
     });
-    state = state.copyWith(phase: CheckoutPhase.showingSdk, order: order);
+    state = state.copyWith(
+      phase: CheckoutPhase.showingSdk,
+      order: order,
+      autopay: autopay,
+    );
 
     final outcome = await _adapter.open(
-      keyId: order.keyId,
-      orderId: order.providerOrderId,
-      amountPaise: order.amountPaise,
-      description: order.description,
+      keyId: keyId,
+      orderId: order?.providerOrderId,
+      subscriptionId: autopay?.providerSubscriptionId,
+      amountPaise: amountPaise,
+      description: autopay?.description ?? order!.description,
     );
     if (_disposed) return;
     // A UPI app may have taken the user out and the webhook may have landed
     // while they were away — a poll on resume can already have said done.
     if (state.phase == CheckoutPhase.done) return;
 
-    switch (outcome) {
-      case CheckoutSuccess() when outcome.canVerify:
+    // The SDK may omit razorpay_subscription_id; we know which mandate we
+    // opened, and the server checks the signature against it either way.
+    final result = outcome is CheckoutSuccess &&
+            autopay != null &&
+            (outcome.subscriptionId?.isEmpty ?? true)
+        ? CheckoutSuccess(
+            outcome.paymentId,
+            orderId: outcome.orderId,
+            subscriptionId: autopay.providerSubscriptionId,
+            signature: outcome.signature,
+          )
+        : outcome;
+
+    switch (result) {
+      case CheckoutSuccess() when result.canVerify:
         Analytics.logEvent('checkout_result', {'result': 'success'});
         state = state.copyWith(phase: CheckoutPhase.activating);
-        await _verify(outcome);
+        await _verify(result);
         if (_disposed || state.phase != CheckoutPhase.activating) return;
         _startActivationPoll(checkNow: true);
       case CheckoutSuccess():
@@ -267,11 +312,20 @@ class CheckoutNotifier extends AutoDisposeNotifier<CheckoutState> {
   /// follows reads whatever the server decided.
   Future<void> _verify(CheckoutSuccess success) async {
     try {
-      await _repo.verifyPayment(
-        orderId: success.orderId!,
-        paymentId: success.paymentId,
-        signature: success.signature!,
-      );
+      final subscriptionId = success.subscriptionId;
+      if (subscriptionId != null && subscriptionId.isNotEmpty) {
+        await _repo.verifyAutopay(
+          subscriptionId: subscriptionId,
+          paymentId: success.paymentId,
+          signature: success.signature!,
+        );
+      } else {
+        await _repo.verifyPayment(
+          orderId: success.orderId!,
+          paymentId: success.paymentId,
+          signature: success.signature!,
+        );
+      }
     } on CatalogFailure catch (failure) {
       Analytics.logEvent('checkout_verify_failed', {'code': failure.code});
     }
@@ -348,12 +402,37 @@ class CheckoutNotifier extends AutoDisposeNotifier<CheckoutState> {
   /// status that was not ACTIVE before). `periodStart` is not on the DTO, so
   /// `periodEnd` — which a fresh period always moves — is the tell.
   bool _hasFlipped(CatalogSubscription current) {
+    // A deferred mandate charges nothing now: it is done when the server says
+    // autopay is on for it.
+    final autopay = state.autopay;
+    if (autopay != null && autopay.isDeferred) {
+      final on = current.autopay;
+      return on != null &&
+          on.isHealthy &&
+          on.planId == autopay.planId &&
+          on.interval == autopay.interval;
+    }
     if (current.status != SubscriptionStatus.active) return false;
     final before = _baseline;
     if (before == null || before.status != SubscriptionStatus.active) {
       return true;
     }
     return current.periodEnd != before.periodEnd;
+  }
+
+  /// A 404 with no envelope code: the ROUTE is missing (an older server),
+  /// not a missing catalog — which answers with its own code.
+  static bool _isRouteMissing(CatalogFailure failure) =>
+      failure.statusCode == 404 && failure.code == 'UNKNOWN';
+
+  void _failQuote(CatalogFailure failure) {
+    state = state.copyWith(
+      phase: failure.code == PaymentErrorCodes.paymentsUnavailable ||
+              failure.isOffline
+          ? CheckoutPhase.unavailable
+          : CheckoutPhase.failed,
+      failureCode: failure.code,
+    );
   }
 
   void _cancelPoll() {

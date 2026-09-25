@@ -773,6 +773,25 @@ const envSchema = z.object({
   SUBSCRIPTION_VERIFY_MAX_PER_WINDOW: z.coerce.number().int().positive().default(20),
   /** Sliding window for the verify cap (seconds). */
   SUBSCRIPTION_VERIFY_WINDOW_SECONDS: z.coerce.number().int().positive().default(600),
+
+  /**
+   * AUTOPAY (Razorpay Subscriptions). How many charges one mandate is set up
+   * for — Razorpay requires a finite `total_count`. When it runs out the
+   * mandate COMPLETES and the owner is asked to turn autopay on again, like
+   * any lapse. Five years either way by default: long enough that nobody
+   * meets it early, short enough to stay inside what UPI / card mandates
+   * accept.
+   */
+  AUTOPAY_TOTAL_CYCLES_MONTHLY: z.coerce.number().int().positive().max(360).default(60),
+  AUTOPAY_TOTAL_CYCLES_YEARLY: z.coerce.number().int().positive().max(30).default(5),
+  /**
+   * How long past `periodEnd` a catalog with a HEALTHY autopay mandate is held
+   * out of GRACE while Razorpay takes the renewal (hours). A UPI debit is
+   * scheduled with a pre-debit notice and can land hours after the cycle
+   * boundary; without this hold every autopay owner would be told "payment
+   * overdue" once a month for a charge that is merely in flight.
+   */
+  AUTOPAY_RENEWAL_WAIT_HOURS: z.coerce.number().int().min(0).max(240).default(48),
 });
 
 /** Razorpay issues `rzp_live_…` and `rzp_test_…` key ids; the prefix is the mode. */

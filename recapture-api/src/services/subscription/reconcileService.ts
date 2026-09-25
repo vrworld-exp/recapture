@@ -21,6 +21,7 @@ import { PaymentRecord, type IPaymentRecord } from '@/models/PaymentRecord';
 import { getRazorpayClient, isRazorpayConfigured } from '@/providers/razorpay';
 import { alertAdmins } from '@/services/subscription/adminAlerts';
 import { applyRecordedPayment, recordOnlinePayment } from '@/services/subscription/webhookService';
+import { reconcileAutopay, syncCatalogMandatesOnRead } from '@/services/subscription/autopayService';
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -111,8 +112,12 @@ async function settleCatalogOrders(catalogId: Types.ObjectId, now: Date): Promis
     .select({ providerOrderId: 1 })
     .lean<Pick<IPaymentRecord, '_id' | 'providerOrderId'>[]>()
     .exec();
+  // Autopay first: an approved mandate's first charge (or a renewal that is
+  // due) is exactly what the checkout's activation poll is waiting for.
+  let recorded = await syncCatalogMandatesOnRead(catalogId, now);
+
   const orderIds = rows.map((r) => r.providerOrderId!).filter(Boolean);
-  if (orderIds.length === 0) return 0;
+  if (orderIds.length === 0) return recorded;
   const settled = new Set(
     await PaymentRecord.distinct('providerOrderId', {
       kind: 'PAID',
@@ -120,7 +125,6 @@ async function settleCatalogOrders(catalogId: Types.ObjectId, now: Date): Promis
     }).exec()
   );
 
-  let recorded = 0;
   for (const row of rows) {
     if (!row.providerOrderId || settled.has(row.providerOrderId)) continue;
     try {
@@ -244,6 +248,17 @@ export async function reconcileOpenOrders(now: Date = new Date()): Promise<Recon
       report.errors += 1;
       console.error(`[reconcile] provider check failed for order ${row.providerOrderId}`, err);
     }
+  }
+
+  // Autopay mandates: approvals and charges the webhook did not bring.
+  try {
+    const autopay = await reconcileAutopay(now);
+    report.checkedAtProvider += autopay.checked;
+    report.rescuedByReconcile += autopay.recordedCharges;
+    report.errors += autopay.errors;
+  } catch (err) {
+    report.errors += 1;
+    console.error('[reconcile] autopay pass failed', err);
   }
 
   // E4: the webhook being silent looks exactly like this, and like nothing else.

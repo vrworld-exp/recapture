@@ -162,6 +162,7 @@ describe('getSubscriptionStatus — the DTO', () => {
       paymentDueAt: null,
       isPageDeactivated: false,
       standeeAllocation: null,
+      autopay: null,
       plans: DEFAULT_PLAN_CATALOG,
     });
   });

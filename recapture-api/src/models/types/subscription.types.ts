@@ -119,6 +119,47 @@ export type PaymentVia = (typeof PAYMENT_VIAS)[number];
 export const REFUSAL_NOTES = ['AMOUNT_MISMATCH', 'ORPHAN_PAYMENT', 'DUPLICATE_SUSPECTED'] as const;
 export type RefusalNote = (typeof REFUSAL_NOTES)[number];
 
+// ── Autopay ─────────────────────────────────────────────────────────────────
+
+/**
+ * A Razorpay SUBSCRIPTION's state, as Razorpay names it (upper-cased). One
+ * `AutopayMandate` row per Razorpay subscription we create.
+ *   CREATED       — minted, checkout not finished. Nothing authorised yet.
+ *   AUTHENTICATED — the owner approved the mandate; the first charge is due
+ *                   at `startAt` (a deferred start — see autopayService).
+ *   ACTIVE        — charging on schedule.
+ *   PENDING       — a renewal charge failed; Razorpay is retrying.
+ *   HALTED        — Razorpay gave up retrying. No more charges.
+ *   CANCELLED     — stopped (by the owner, by us, or from the payer's bank/UPI app).
+ *   COMPLETED     — every cycle we asked for was charged.
+ *   EXPIRED       — never authenticated before it expired.
+ */
+export const AUTOPAY_STATUSES = [
+  'CREATED',
+  'AUTHENTICATED',
+  'ACTIVE',
+  'PENDING',
+  'HALTED',
+  'CANCELLED',
+  'COMPLETED',
+  'EXPIRED',
+] as const;
+export type AutopayStatus = (typeof AUTOPAY_STATUSES)[number];
+
+/**
+ * A mandate that can still move money. At most ONE per catalog — when a new
+ * one reaches this set, every other one for the catalog is cancelled at
+ * Razorpay (a plan change must never leave two mandates charging).
+ */
+export const LIVE_AUTOPAY_STATUSES: readonly AutopayStatus[] = ['AUTHENTICATED', 'ACTIVE', 'PENDING'];
+
+/** No further transition is possible. */
+export const FINAL_AUTOPAY_STATUSES: readonly AutopayStatus[] = [
+  'CANCELLED',
+  'COMPLETED',
+  'EXPIRED',
+];
+
 /** MANUAL entries only — the one field on the ledger that transitions (§10). */
 export const VERIFICATION_STATUSES = ['PENDING_VERIFICATION', 'VERIFIED', 'REJECTED'] as const;
 export type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];

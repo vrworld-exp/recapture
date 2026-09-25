@@ -21,6 +21,7 @@
 // Period lengths are "30 days" / "365 days" (E34), never "a month" / "a year":
 // the server counts days flat, and the copy must not promise a calendar.
 import '../entities/catalog_subscription.dart';
+import '../entities/subscription_payment.dart' show formatPaise;
 import 'publish_gate.dart';
 
 /// How urgent a status line is — the colour the screen picks, decided here so
@@ -449,6 +450,112 @@ String formatRupees(int paise) {
 const String kPaymentConsentLine =
     'All payments are final, except an accidental duplicate payment, '
     'which will be refunded on review.';
+
+/// The autopay promise, said wherever the owner commits to it: above the
+/// button and on the confirm sheet. The refund rule stays word for word.
+const String kAutopayConsentLine =
+    'Autopay renews your plan automatically until you turn it off. '
+    '$kPaymentConsentLine';
+
+/// Whether turning autopay on for [planId] / [interval] would charge NOTHING
+/// today — the owner is inside a paid ACTIVE period of that very plan, so the
+/// first charge waits for [CatalogSubscription.periodEnd]. Mirrors the
+/// server's `deferredStartFor` (autopayService.ts); the server's answer
+/// ([AutopayCheckout.firstChargeAt]) is what the sheet finally shows.
+DateTime? autopayDeferredUntil(
+  CatalogSubscription subscription,
+  PlanId planId,
+  BillingInterval interval, {
+  DateTime? now,
+}) {
+  if (subscription.status != SubscriptionStatus.active) return null;
+  if (subscription.planId != planId) return null;
+  if (subscription.billingInterval != interval) return null;
+  final end = subscription.periodEnd;
+  if (end == null) return null;
+  // The server's MIN_DEFER_MS: a period ending within half an hour is simply
+  // charged now, so the sheet must not promise "nothing today" for it.
+  final at = now ?? DateTime.now();
+  if (end.difference(at) < kAutopayMinDefer) return null;
+  return end;
+}
+
+/// Mirrors `MIN_DEFER_MS` in autopayService.ts.
+const Duration kAutopayMinDefer = Duration(minutes: 30);
+
+/// Whether the owner's healthy autopay already charges exactly this — the
+/// button has nothing to do then.
+bool autopayCovers(
+  CatalogSubscription subscription,
+  PlanId planId,
+  BillingInterval interval,
+) {
+  final autopay = subscription.autopay;
+  return autopay != null &&
+      autopay.isHealthy &&
+      autopay.planId == planId &&
+      autopay.interval == interval;
+}
+
+/// The button, with autopay: "Turn on autopay" when it charges nothing today;
+/// otherwise the §9 label (Pay / Renew / Upgrade) — the charge is real now.
+String autopayButtonLabel(
+  CatalogSubscription subscription,
+  PlanId planId,
+  BillingInterval interval,
+) {
+  if (autopayDeferredUntil(subscription, planId, interval) != null) {
+    return 'Turn on autopay';
+  }
+  return checkoutButtonLabel(subscription, planId);
+}
+
+/// "every month" / "every year".
+String autopayEvery(BillingInterval interval) =>
+    interval == BillingInterval.yearly ? 'every year' : 'every month';
+
+/// What the confirm sheet says about money: when the first charge is, and
+/// that it repeats. [deferredUntil] null = charged on approval.
+String autopayChargeLine({
+  required int amountPaise,
+  required BillingInterval interval,
+  required DateTime? deferredUntil,
+}) {
+  final amount = formatPaise(amountPaise);
+  if (deferredUntil != null) {
+    // A mandate that starts later is approved with a small verification
+    // amount on some banks and cards, which Razorpay refunds — said here so a
+    // ₹1–₹5 line on a statement is not read as "they charged me anyway".
+    return 'Nothing is charged for the plan today. $amount is charged '
+        'automatically on ${formatSubscriptionDate(deferredUntil)}, when your '
+        'current period ends, and then ${autopayEvery(interval)} until you turn '
+        'autopay off. Your bank may show a small verification amount now, '
+        'which is refunded.';
+  }
+  return '$amount is charged now, then automatically '
+      '${autopayEvery(interval)} until you turn autopay off.';
+}
+
+/// The owner's autopay, in one line for the autopay card. Null when autopay
+/// is off (the card then offers to turn it on only if a plan is running).
+String? autopayStatusLine(AutopayInfo? autopay) {
+  if (autopay == null) return null;
+  final amount = formatPaise(autopay.amountPaise);
+  final every = autopayEvery(autopay.interval);
+  final next = autopay.nextChargeAt;
+  return switch (autopay.status) {
+    AutopayStatus.pending =>
+      'Autopay could not take the last payment. It will be tried again — '
+          'please make sure your UPI account or card has enough balance.',
+    AutopayStatus.halted =>
+      'Autopay has stopped — the renewal payment kept failing. Turn it on '
+          'again to keep your 3D menu live without a break.',
+    _ => next == null
+        ? 'Autopay is on · $amount $every.'
+        : 'Autopay is on · $amount $every · next charge on '
+            '${formatSubscriptionDate(next)}.',
+  };
+}
 
 int _planRank(PlanId id) => switch (id) {
       PlanId.taste => 0,

@@ -80,7 +80,11 @@ export type OwnerSubscriptionEvent =
   | 'MANUAL_PAYMENT_REJECTED'
   | 'REFUND_ISSUED'
   | 'GRACE_EXTENDED'
-  | 'NO_PLAN_YET';
+  | 'NO_PLAN_YET'
+  | 'AUTOPAY_ON'
+  | 'AUTOPAY_CHARGE_FAILED'
+  | 'AUTOPAY_STOPPED'
+  | 'AUTOPAY_TURNED_OFF';
 
 /** `Notification.title` is capped at 80 and `message` at 500 — clip, never reject. */
 function clip(value: string, max: number): string {
@@ -206,6 +210,8 @@ export interface PlanActivatedInput {
   resumedThreeD: boolean;
   /** The customer page was dark, or carrying a deadline, and this payment cleared it. */
   restoredPage: boolean;
+  /** An autopay charge: the next one happens by itself at `periodEnd`. */
+  autopay?: boolean;
 }
 
 /**
@@ -232,10 +238,13 @@ export async function notifyPlanActivated(input: PlanActivatedInput): Promise<bo
     key: `sub-activated:${input.paymentRecordId.toHexString()}`,
     kind: 'PAYMENT_ACTIVATE',
     title: 'Payment received — your plan is active',
-    message:
-      `${formatInrPaise(input.amountPaise)} received. Your ${input.plan.displayName} ` +
-      `(${interval}) is active until ${formatReceiptDate(input.periodEnd)}, which is when ` +
-      `your next payment is due.${restored}`,
+    message: input.autopay
+      ? `${formatInrPaise(input.amountPaise)} received by autopay. Your ${input.plan.displayName} ` +
+        `(${interval}) is active until ${formatReceiptDate(input.periodEnd)}, and renews ` +
+        `automatically then — nothing for you to do.${restored}`
+      : `${formatInrPaise(input.amountPaise)} received. Your ${input.plan.displayName} ` +
+        `(${interval}) is active until ${formatReceiptDate(input.periodEnd)}, which is when ` +
+        `your next payment is due.${restored}`,
     actionLabel: 'View plan',
     // The sentence names a date and calls it "next payment due"; past that
     // date the row is in grace and the message is no longer true.
@@ -525,5 +534,114 @@ export async function notifyManualPaymentRejected(input: ManualPaymentInput): Pr
       'could not be confirmed, so no plan has been started. You can pay in the app, or ' +
       'talk to us if you think this is a mistake.',
     actionLabel: 'See plans',
+  });
+}
+
+// ── Autopay ──────────────────────────────────────────────────────────────────
+
+export interface AutopayNoticeInput {
+  catalogId: Types.ObjectId;
+  ownerUserId: Types.ObjectId;
+  /** `sub_…` — every autopay key is per mandate. */
+  providerSubscriptionId: string;
+  plan: PlanDefinition;
+  interval: BillingInterval;
+  amountPaise: number;
+}
+
+/**
+ * The owner approved a mandate whose first charge is DEFERRED — they turned
+ * autopay on over a period already paid for. A charged-at-checkout mandate
+ * gets "payment received" from the activation instead, so this is only the
+ * deferred case. One per mandate.
+ */
+export async function notifyAutopayOn(
+  input: AutopayNoticeInput & { firstChargeAt: Date }
+): Promise<boolean> {
+  const interval = input.interval === 'YEARLY' ? 'year' : 'month';
+  return send({
+    event: 'AUTOPAY_ON',
+    catalogId: input.catalogId,
+    ownerUserId: input.ownerUserId,
+    key: `autopay-on:${input.providerSubscriptionId}`,
+    kind: 'PAYMENT_ACTIVATE',
+    title: 'Autopay is on',
+    message:
+      `Your ${input.plan.displayName} plan now renews by itself. The first charge of ` +
+      `${formatInrPaise(input.amountPaise)} is on ${formatReceiptDate(input.firstChargeAt)}, ` +
+      `then every ${interval}. You can turn autopay off any time from the Subscription screen.`,
+    actionLabel: 'View plan',
+  });
+}
+
+/**
+ * A renewal charge failed and Razorpay is retrying. Keyed on the cycle it was
+ * for (`chargeAt`), so one failed renewal is one message however many retry
+ * webhooks arrive.
+ */
+export async function notifyAutopayChargeFailed(
+  input: AutopayNoticeInput & { chargeAt: Date | null }
+): Promise<boolean> {
+  return send({
+    event: 'AUTOPAY_CHARGE_FAILED',
+    catalogId: input.catalogId,
+    ownerUserId: input.ownerUserId,
+    key: `autopay-failed:${input.providerSubscriptionId}:${input.chargeAt ? stamp(input.chargeAt) : 'x'}`,
+    kind: 'PAYMENT_DUE',
+    title: 'Autopay could not take this payment',
+    message:
+      `The ${formatInrPaise(input.amountPaise)} renewal for your ${input.plan.displayName} plan ` +
+      'did not go through. It will be tried again automatically — please make sure your UPI ' +
+      'account or card has enough balance, or pay again from the Subscription screen.',
+    actionLabel: 'View plan',
+  });
+}
+
+/**
+ * The mandate stopped without the owner asking in the app: Razorpay gave up
+ * retrying (HALTED), it ran its full course (COMPLETED), or it was cancelled
+ * from the payer's bank or UPI app. The period already paid for still runs.
+ */
+export async function notifyAutopayStopped(
+  input: AutopayNoticeInput & { reason: 'HALTED' | 'COMPLETED' | 'CANCELLED_EXTERNALLY' }
+): Promise<boolean> {
+  const why =
+    input.reason === 'HALTED'
+      ? 'the renewal payment kept failing'
+      : input.reason === 'COMPLETED'
+        ? 'it reached the end of the payments it was set up for'
+        : 'it was cancelled from your bank or UPI app';
+  return send({
+    event: 'AUTOPAY_STOPPED',
+    catalogId: input.catalogId,
+    ownerUserId: input.ownerUserId,
+    key: `autopay-stopped:${input.providerSubscriptionId}`,
+    kind: 'PAYMENT_DUE',
+    title: 'Autopay has stopped',
+    message:
+      `Autopay for your ${input.plan.displayName} plan stopped because ${why}. Your plan runs ` +
+      'until the end of the period already paid for. Turn autopay on again to keep your 3D ' +
+      'menu live without a break.',
+    actionLabel: 'Turn on autopay',
+  });
+}
+
+/** The owner turned autopay off in the app. Confirms what they did and what it means. */
+export async function notifyAutopayTurnedOff(
+  input: AutopayNoticeInput & { activeUntil: Date | null }
+): Promise<boolean> {
+  return send({
+    event: 'AUTOPAY_TURNED_OFF',
+    catalogId: input.catalogId,
+    ownerUserId: input.ownerUserId,
+    key: `autopay-off:${input.providerSubscriptionId}`,
+    kind: 'INFO',
+    title: 'Autopay turned off',
+    message: input.activeUntil
+      ? `You won't be charged again. Your ${input.plan.displayName} plan stays active until ` +
+        `${formatReceiptDate(input.activeUntil)}; after that, pay or turn autopay back on to ` +
+        'keep your 3D menu live.'
+      : "You won't be charged. Turn autopay back on any time from the Subscription screen.",
+    actionLabel: 'View plan',
   });
 }

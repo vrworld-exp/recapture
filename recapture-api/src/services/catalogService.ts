@@ -28,6 +28,8 @@ import {
   type SubscriptionSummaryDto,
 } from '@/services/subscription/subscriptionService';
 import { settleOpenOrdersOnRead } from '@/services/subscription/reconcileService';
+import { cancelAutopay } from '@/services/subscription/autopayService';
+import { alertAdmins } from '@/services/subscription/adminAlerts';
 import { rejectPendingOnCatalogDelete } from '@/services/subscription/manualPaymentService';
 import {
   buildBrandingImageKey,
@@ -690,6 +692,21 @@ export async function deleteCatalog(userId: string): Promise<DeleteCatalogResult
   // go: a refusal above aborts with everything intact, this row included. It
   // outlives the catalog on purpose — `trialUsedAt` is the owner's history
   // (D2), and the row's `userId` is how a re-created catalog inherits it.
+  // Autopay first: a mandate left running would keep charging a restaurant
+  // that no longer exists. Not a reason to refuse the delete if Razorpay is
+  // down — the admins are told, and the charge would land as an ORPHAN_PAYMENT
+  // (recorded, not activated, a refund case) rather than vanish.
+  const autopay = await cancelAutopay(catalogId, 'CATALOG_DELETED');
+  if (autopay.outcome === 'UNAVAILABLE') {
+    void alertAdmins({
+      kind: 'AUTOPAY_CANCEL_FAILED',
+      catalogId,
+      title: 'Autopay not stopped for a deleted catalog',
+      message:
+        `Catalog ${catalogId.toHexString()} was deleted but its Razorpay autopay could not be ` +
+        'cancelled. Cancel the subscription from the Razorpay dashboard.',
+    });
+  }
   const subscriptionCancelled = await cancelOnCatalogDelete(catalogId);
   // And every cash request still awaiting verification is rejected (E37):
   // an admin working the queue a week from now must not be able to activate

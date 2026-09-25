@@ -35,7 +35,8 @@ class RazorpayCheckoutAdapter implements CheckoutAdapter {
   @override
   Future<CheckoutOutcome> open({
     required String keyId,
-    required String orderId,
+    String? orderId,
+    String? subscriptionId,
     required int amountPaise,
     required String description,
   }) async {
@@ -56,6 +57,9 @@ class RazorpayCheckoutAdapter implements CheckoutAdapter {
           : CheckoutOutcome.success(
               paymentId,
               orderId: r.orderId,
+              // An autopay mandate answers `razorpay_subscription_id`, which
+              // the plugin leaves in the raw map rather than a field.
+              subscriptionId: r.data?['razorpay_subscription_id']?.toString(),
               signature: r.signature,
             ));
     });
@@ -77,11 +81,14 @@ class RazorpayCheckoutAdapter implements CheckoutAdapter {
     });
 
     try {
-      // Ids and amounts only. No `prefill` — the PII rule.
+      // Ids and amounts only. No `prefill` — the PII rule. An autopay mandate
+      // is opened by `subscription_id` with NO amount: the Razorpay plan
+      // carries the price, and passing one is refused.
       razorpay.open({
         'key': keyId,
-        'order_id': orderId,
-        'amount': amountPaise,
+        if (subscriptionId != null) 'subscription_id': subscriptionId,
+        if (subscriptionId == null) 'order_id': orderId,
+        if (subscriptionId == null) 'amount': amountPaise,
         'currency': 'INR',
         'name': 'Mirage Menu',
         'description': description,

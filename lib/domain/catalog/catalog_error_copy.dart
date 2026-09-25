@@ -206,6 +206,19 @@ const Map<String, CatalogErrorCopy> _copy = {
     "We couldn't confirm this payment from the app.",
     'Your plan will update here once the payment is confirmed.',
   ),
+  // Autopay (POST /catalog/subscription/autopay[/verify|/cancel]).
+  'AUTOPAY_ALREADY_ON': CatalogErrorCopy(
+    'Autopay is already on for this plan.',
+    'Pick another plan or interval to switch.',
+  ),
+  'AUTOPAY_NOT_FOUND': CatalogErrorCopy(
+    "We couldn't find this autopay.",
+    'Your plan will update here once the payment is confirmed.',
+  ),
+  'AUTOPAY_NOT_ON': CatalogErrorCopy(
+    'Autopay is already off.',
+    'Pull down to refresh your plan.',
+  ),
   'ORDER_NOT_FOUND': CatalogErrorCopy(
     "We couldn't find this payment's order.",
     'Your plan will update here once the payment is confirmed.',

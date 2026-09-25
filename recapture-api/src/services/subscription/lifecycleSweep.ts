@@ -59,6 +59,7 @@ import {
   notifyPageDeactivated,
   notifyThreeDPaused,
 } from '@/services/subscription/ownerNotifications';
+import { catalogsWithHealthyAutopay } from '@/services/subscription/autopayReadModel';
 import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 
@@ -121,13 +122,26 @@ interface LapsedRow {
  * simply not in the update's match.
  */
 async function sweepToGrace(now: Date, graceDays: number): Promise<number> {
-  const lapsed = await CatalogSubscription.find({
+  const found = await CatalogSubscription.find({
     status: { $in: LAPSABLE },
     periodEnd: { $lte: now },
   })
-    .select({ _id: 1, catalogId: 1, status: 1 })
-    .lean<LapsedRow[]>()
+    .select({ _id: 1, catalogId: 1, status: 1, periodEnd: 1 })
+    .lean<(LapsedRow & { periodEnd: Date })[]>()
     .exec();
+  if (found.length === 0) return 0;
+
+  // AUTOPAY HOLD. A catalog whose mandate is healthy is being charged by
+  // Razorpay right at this boundary; the debit can land hours later (UPI
+  // pre-debit notice, bank processing). Held out of GRACE for
+  // AUTOPAY_RENEWAL_WAIT_HOURS so an owner who did everything right is not
+  // told "payment overdue" every month. Past the wait it lapses like anyone:
+  // a charge that has not landed by then is a real problem.
+  const autopay = await catalogsWithHealthyAutopay(found.map((r) => r.catalogId));
+  const holdUntil = now.getTime() - env.AUTOPAY_RENEWAL_WAIT_HOURS * 3_600_000;
+  const lapsed = found.filter(
+    (r) => !(autopay.has(String(r.catalogId)) && r.periodEnd.getTime() > holdUntil)
+  );
   if (lapsed.length === 0) return 0;
 
   const result = await CatalogSubscription.updateMany(
@@ -390,7 +404,8 @@ function periodNoun(status: SubscriptionStatus, graceFrom?: SubscriptionStatus):
 function reminderCopy(
   milestone: ReminderMilestone,
   row: ReminderRow,
-  now: Date
+  now: Date,
+  autopayOn = false
 ): { title: string; message: string } {
   const noun = periodNoun(row.status, row.graceFrom);
   const daysToPeriodEnd = Math.max(0, Math.ceil((row.periodEnd.getTime() - now.getTime()) / DAY_MS));
@@ -408,6 +423,17 @@ function reminderCopy(
       message:
         'Your menu is live, but it has not been paid for yet. Choose a plan to keep the ' +
         'QR code working — nothing is deleted, and it comes straight back when you pay.',
+    };
+  }
+
+  // Autopay will take the renewal itself — the one useful thing to say is
+  // when, and that the account needs the money in it.
+  if (autopayOn && milestone === 'T_MINUS_1D') {
+    return {
+      title: `Your plan renews by autopay in ${days(daysToPeriodEnd)}`,
+      message:
+        'Nothing to do — the renewal is charged automatically. Please keep enough balance in ' +
+        'the UPI account or card you set autopay up with.',
     };
   }
 
@@ -495,10 +521,17 @@ async function sweepReminders(now: Date, graceDays: number): Promise<number> {
     .lean<ReminderRow[]>()
     .exec();
 
+  const autopay = await catalogsWithHealthyAutopay(
+    rows.filter((r) => LAPSABLE.includes(r.status)).map((r) => r.catalogId)
+  );
+
   let sent = 0;
   for (const row of rows) {
     const milestone = dueMilestone(row, now);
     if (!milestone) continue;
+    const autopayOn = LAPSABLE.includes(row.status) && autopay.has(String(row.catalogId));
+    // A week's notice is for someone who has to act; autopay acts for them.
+    if (autopayOn && milestone === 'T_MINUS_7D') continue;
 
     // Reserve the log row FIRST; the unique index is the authority. A loser
     // (another instance, or the same milestone sent on an earlier sweep) gets
@@ -519,7 +552,7 @@ async function sweepReminders(now: Date, graceDays: number): Promise<number> {
     }
 
     try {
-      const { title, message } = reminderCopy(milestone, row, now);
+      const { title, message } = reminderCopy(milestone, row, now, autopayOn);
       await Notification.create({
         kind: 'PAYMENT_DUE',
         title,

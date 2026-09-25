@@ -124,6 +124,82 @@ class CheckoutOrder {
       '$planName · ${interval == BillingInterval.yearly ? 'yearly' : 'monthly'}';
 }
 
+/// `POST /catalog/subscription/autopay` — an AUTOPAY mandate the checkout
+/// sheet opens on (a Razorpay subscription, `sub_…`), hand-synced with
+/// `AutopayCheckoutDto` in `recapture-api/src/services/subscription/
+/// autopayService.ts`. Nothing is charged when it is minted; the sheet's
+/// approval is what charges (now, or at [firstChargeAt]).
+class AutopayCheckout {
+  const AutopayCheckout({
+    required this.providerSubscriptionId,
+    required this.keyId,
+    required this.amountPaise,
+    required this.planId,
+    required this.planName,
+    required this.interval,
+    required this.firstChargeAt,
+    required this.expiresAt,
+    required this.currentPeriodEnd,
+    required this.daysForfeited,
+    required this.reused,
+  });
+
+  final String providerSubscriptionId;
+
+  /// The PUBLIC half of the key pair. The SDK needs it; it is not a secret.
+  final String keyId;
+
+  /// Each charge, in paise.
+  final int amountPaise;
+  final PlanId planId;
+  final String planName;
+  final BillingInterval interval;
+
+  /// When the FIRST charge happens, when it is not at approval: the owner is
+  /// inside a paid period of this plan, so autopay takes over at its end
+  /// instead of charging twice for the same days. Null = charged on approval.
+  final DateTime? firstChargeAt;
+  final DateTime? expiresAt;
+  final DateTime? currentPeriodEnd;
+
+  /// Days of the running period a charge NOW forfeits (E9). 0 when deferred.
+  final int daysForfeited;
+
+  /// The server handed back the open mandate rather than minting a new one.
+  final bool reused;
+
+  /// Approval charges nothing today.
+  bool get isDeferred => firstChargeAt != null;
+
+  factory AutopayCheckout.fromMap(Map<String, dynamic> map,
+      {bool reused = false}) {
+    final quote = map['quote'] is Map
+        ? (map['quote'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    final snapshot = quote['planSnapshot'] is Map
+        ? (quote['planSnapshot'] as Map).cast<String, dynamic>()
+        : const <String, dynamic>{};
+    return AutopayCheckout(
+      providerSubscriptionId: catalogText(map['providerSubscriptionId']) ?? '',
+      keyId: catalogText(map['keyId']) ?? '',
+      amountPaise: catalogCount(map['amountPaise']),
+      planId: PlanIdX.fromApiValue((quote['planId'] ?? '').toString()),
+      planName: catalogText(snapshot['displayName']) ?? 'Plan',
+      interval:
+          BillingIntervalX.fromApiValue((quote['interval'] ?? '').toString()),
+      firstChargeAt: catalogDate(map['firstChargeAt']),
+      expiresAt: catalogDate(map['expiresAt']),
+      currentPeriodEnd: catalogDate(map['currentPeriodEnd']),
+      daysForfeited: catalogCount(map['daysForfeited']),
+      reused: reused,
+    );
+  }
+
+  /// "Signature plan · monthly autopay" — the sheet's description. No PII.
+  String get description =>
+      '$planName · ${interval == BillingInterval.yearly ? 'yearly' : 'monthly'} autopay';
+}
+
 // ── The ledger ──────────────────────────────────────────────────────────────
 
 /// `PAYMENT_KINDS` on the server.

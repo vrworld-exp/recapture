@@ -403,14 +403,27 @@ function buildAttempt(orderId: string, ctx: HydrationContext, now: Date): Paymen
             (planName ? ` — ${planName}, ${intervalWord}` : '') +
             `. Started by ${actorLabel(initiatedBy)}.`,
         }
-      : {
-          key: 'STARTED',
-          state: 'DONE',
-          at: null,
-          detail:
-            `Order ${orderId} is not on our ledger — our insert failed after Razorpay created ` +
-            "it, so the plan was rebuilt from the order's notes (E3).",
-        }
+      : paid?.providerSubscriptionId
+        ? {
+            // An AUTOPAY charge: Razorpay raised this invoice (and its order)
+            // itself on the mandate's schedule — there is no checkout of ours.
+            key: 'STARTED',
+            state: 'DONE',
+            at: paid.createdAt.toISOString(),
+            detail:
+              `Autopay charge on ${paid.providerSubscriptionId}` +
+              (paid.providerInvoiceId ? ` (invoice ${paid.providerInvoiceId})` : '') +
+              (planName ? ` — ${planName}, ${intervalWord}` : '') +
+              '. Charged by Razorpay on the mandate the owner approved.',
+          }
+        : {
+            key: 'STARTED',
+            state: 'DONE',
+            at: null,
+            detail:
+              `Order ${orderId} is not on our ledger — our insert failed after Razorpay created ` +
+              "it, so the plan was rebuilt from the order's notes (E3).",
+          }
   );
 
   // 2. Razorpay.
@@ -722,7 +735,20 @@ export async function listPaymentAttempts(
 
   const anchorKind = filter === 'ALL' || filter === 'NOT_COMPLETED' ? 'CHECKOUT_CREATED' : 'PAID';
   const match: Record<string, unknown> = {
-    kind: anchorKind,
+    // ALL also lists AUTOPAY charges, which have no checkout row to anchor on:
+    // their PAID row is the whole entry.
+    ...(filter === 'ALL'
+      ? {
+          $and: [
+            {
+              $or: [
+                { kind: 'CHECKOUT_CREATED' },
+                { kind: 'PAID', providerSubscriptionId: { $type: 'string' } },
+              ],
+            },
+          ],
+        }
+      : { kind: anchorKind }),
     providerOrderId: { $type: 'string' },
   };
   if (decoded) {

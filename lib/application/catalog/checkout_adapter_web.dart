@@ -73,7 +73,8 @@ class RazorpayWebCheckoutAdapter implements CheckoutAdapter {
   @override
   Future<CheckoutOutcome> open({
     required String keyId,
-    required String orderId,
+    String? orderId,
+    String? subscriptionId,
     required int amountPaise,
     required String description,
   }) async {
@@ -99,8 +100,6 @@ class RazorpayWebCheckoutAdapter implements CheckoutAdapter {
     // option names, retry policy and theme mirror checkout_adapter_io.dart.
     final options = _CheckoutOptions()
       ..key = keyId
-      ..orderId = orderId
-      ..amount = amountPaise
       ..currency = 'INR'
       ..name = 'Mirage Menu'
       ..description = description
@@ -118,6 +117,7 @@ class RazorpayWebCheckoutAdapter implements CheckoutAdapter {
             : CheckoutOutcome.success(
                 paymentId,
                 orderId: response.orderId,
+                subscriptionId: response.subscriptionId,
                 signature: response.signature,
               ));
       }).toJS
@@ -128,6 +128,17 @@ class RazorpayWebCheckoutAdapter implements CheckoutAdapter {
           // the user closing the sheet.
           finish(lastFailure ?? const CheckoutOutcome.cancelled());
         }).toJS);
+
+    // An autopay mandate is opened by `subscription_id` with NO amount (the
+    // Razorpay plan carries the price); a one-time order by `order_id` and
+    // its amount. Same split as checkout_adapter_io.dart.
+    if (subscriptionId != null) {
+      options.subscriptionId = subscriptionId;
+    } else {
+      options
+        ..orderId = orderId ?? ''
+        ..amount = amountPaise;
+    }
 
     try {
       final checkout = _RazorpayCheckout(options);
@@ -255,6 +266,8 @@ extension type _CheckoutOptions._(JSObject _) implements JSObject {
   external set key(String value);
   @JS('order_id')
   external set orderId(String value);
+  @JS('subscription_id')
+  external set subscriptionId(String value);
   external set amount(int value);
   external set currency(String value);
   external set name(String value);
@@ -283,13 +296,16 @@ extension type _ThemeOptions._(JSObject _) implements JSObject {
 }
 
 /// What `handler` receives: `{ razorpay_payment_id, razorpay_order_id,
-/// razorpay_signature }`. All three are handed to the server as-is; the
-/// signature is the SERVER's to verify, never the client's.
+/// razorpay_signature }` for an order, or `razorpay_subscription_id` in
+/// place of the order id for an autopay mandate. All are handed to the
+/// server as-is; the signature is the SERVER's to verify, never the client's.
 extension type _SuccessResponse._(JSObject _) implements JSObject {
   @JS('razorpay_payment_id')
   external String? get paymentId;
   @JS('razorpay_order_id')
   external String? get orderId;
+  @JS('razorpay_subscription_id')
+  external String? get subscriptionId;
   @JS('razorpay_signature')
   external String? get signature;
 }

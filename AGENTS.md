@@ -1044,7 +1044,26 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   it that way). `periodStart = paidAt`, ALWAYS — out of GRACE, PAUSED, TRIAL,
   COMPED or a running ACTIVE period (an early renewal forfeits the unused days;
   the order response says how many as `daysForfeited`). Over-cap on activation
-  is a notification to the owner, never a block (E11).
+  is a notification to the owner, never a block (E11). The ONE exception to
+  `paidAt + 30/365 days` is the period END of an AUTOPAY charge: it is the
+  invoice's `billing_end` (Razorpay's next charge date, carried on the PAID row
+  as `billingPeriodEnd`), so a calendar-month mandate and the catalog never
+  drift. The start is still `paidAt`.
+  - **Autopay (Razorpay Subscriptions, Sept 2026 — docs/subscription/autopay.md)**
+    is how an OWNER pays now; the one-time order stays for older app builds and
+    as the app's fallback when `/autopay` is missing. One `AutopayMandate` per
+    Razorpay subscription; `autopayService.syncMandate` is the ONLY thing that
+    turns Razorpay's state into ours, and it records money from PAID INVOICES
+    only (never from a status), through `webhookService.recordAutopayCharge` —
+    same `payment:<id>` key, same apply. Every `subscription.*` webhook, the
+    verify, the reconciler, the owner's read and the admin journal call that
+    one sync. At most one LIVE mandate per catalog (a new one going live
+    cancels the rest at Razorpay). Turning autopay off cancels at Razorpay NOW
+    and never touches the paid period. The sweep holds a catalog with a HEALTHY
+    mandate out of GRACE for `AUTOPAY_RENEWAL_WAIT_HOURS`. The one-time handler
+    ignores `payment.captured` for an invoice payment (the mandate records it).
+    `autopayReadModel.ts` is the read side (DTO `autopay`, the sweep's set) and
+    must not import the payment services.
   - **Razorpay lives behind `providers/razorpay.ts`** (the Meshy seam pattern:
     `setRazorpayClient` for tests, CI never calls the live API). `RAZORPAY_KEY_ID`
     / `_KEY_SECRET` / `_WEBHOOK_SECRET` are present-or-absent TOGETHER and the

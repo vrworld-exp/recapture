@@ -45,6 +45,64 @@ export interface RazorpayClient {
   }>;
   /** Capture an AUTHORIZED payment for exactly `amountPaise` (the admin journal's capture). */
   capturePayment(paymentId: string, amountPaise: number): Promise<{ id: string; status: string }>;
+
+  // ── Autopay (Razorpay Subscriptions) ──────────────────────────────────────
+
+  /** A Razorpay plan: one price, charged every `period`. Immutable once made. */
+  createPlan(input: {
+    period: 'monthly' | 'yearly';
+    amountPaise: number;
+    name: string;
+    notes: Record<string, string>;
+  }): Promise<{ id: string }>;
+  /**
+   * A subscription on a plan. `startAt` (unix seconds) defers the first
+   * charge; omitted, the first cycle is charged when the owner authorises.
+   * `expireBy` (unix seconds) is when an unauthorised subscription stops
+   * being payable.
+   */
+  createSubscription(input: {
+    planId: string;
+    totalCount: number;
+    startAt?: number;
+    expireBy: number;
+    notes: Record<string, string>;
+  }): Promise<RazorpaySubscriptionSnapshot>;
+  fetchSubscription(subscriptionId: string): Promise<RazorpaySubscriptionSnapshot>;
+  /** `atCycleEnd`: stop future charges but let the paid cycle run out. */
+  cancelSubscription(
+    subscriptionId: string,
+    atCycleEnd: boolean
+  ): Promise<RazorpaySubscriptionSnapshot>;
+  /** Every invoice Razorpay raised on a subscription — one per charge attempt cycle. */
+  fetchSubscriptionInvoices(subscriptionId: string): Promise<RazorpayInvoiceSnapshot[]>;
+}
+
+/** What we read off a Razorpay subscription. Times are unix SECONDS, as Razorpay sends them. */
+export interface RazorpaySubscriptionSnapshot {
+  id: string;
+  planId: string;
+  status: string;
+  currentStart: number | null;
+  currentEnd: number | null;
+  chargeAt: number | null;
+  startAt: number | null;
+  paidCount: number;
+  /** When it ended (cancelled / completed / halted), when it has. */
+  endedAt: number | null;
+}
+
+export interface RazorpayInvoiceSnapshot {
+  id: string;
+  /** `paid` is the only status that means money moved. */
+  status: string;
+  paymentId: string | null;
+  orderId: string | null;
+  /** Paise. */
+  amountPaid: number;
+  paidAt: number | null;
+  billingStart: number | null;
+  billingEnd: number | null;
 }
 
 /**
@@ -172,7 +230,92 @@ export const razorpayClient: RazorpayClient = {
       return { id: p.id, status: String(p.status) };
     });
   },
+
+  async createPlan(input) {
+    return guarded('create plan', async () => {
+      const plan = await instance().plans.create({
+        period: input.period,
+        interval: 1,
+        item: { name: input.name, amount: input.amountPaise, currency: 'INR' },
+        notes: input.notes,
+      });
+      return { id: plan.id };
+    });
+  },
+
+  async createSubscription(input) {
+    return guarded('create subscription', async () => {
+      const sub = await instance().subscriptions.create({
+        plan_id: input.planId,
+        total_count: input.totalCount,
+        // Razorpay's own SMS/email to the payer (pre-debit notices, receipts).
+        // It collects the contact itself in checkout — we never send one (§7 rule 8).
+        customer_notify: 1,
+        ...(input.startAt !== undefined ? { start_at: input.startAt } : {}),
+        expire_by: input.expireBy,
+        notes: input.notes,
+      });
+      return toSubscriptionSnapshot(sub);
+    });
+  },
+
+  async fetchSubscription(subscriptionId) {
+    return guarded('fetch subscription', async () =>
+      toSubscriptionSnapshot(await instance().subscriptions.fetch(subscriptionId))
+    );
+  },
+
+  async cancelSubscription(subscriptionId, atCycleEnd) {
+    return guarded('cancel subscription', async () =>
+      toSubscriptionSnapshot(await instance().subscriptions.cancel(subscriptionId, atCycleEnd))
+    );
+  },
+
+  async fetchSubscriptionInvoices(subscriptionId) {
+    return guarded('fetch subscription invoices', async () => {
+      const res = await instance().invoices.all({ subscription_id: subscriptionId, count: 100 });
+      return res.items.map((inv) => ({
+        id: String(inv.id),
+        status: String(inv.status),
+        paymentId: typeof inv.payment_id === 'string' && inv.payment_id ? inv.payment_id : null,
+        orderId: typeof inv.order_id === 'string' && inv.order_id ? inv.order_id : null,
+        amountPaid: Number(inv.amount_paid ?? 0),
+        paidAt: numOrNull(inv.paid_at),
+        billingStart: numOrNull(inv.billing_start),
+        billingEnd: numOrNull(inv.billing_end),
+      }));
+    });
+  },
 };
+
+function numOrNull(v: unknown): number | null {
+  const n = typeof v === 'string' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function toSubscriptionSnapshot(sub: {
+  id: string;
+  plan_id: string;
+  status: string;
+  current_start?: number | null;
+  current_end?: number | null;
+  charge_at?: number | null;
+  start_at?: number | null;
+  paid_count?: number | null;
+  ended_at?: number | null;
+}): RazorpaySubscriptionSnapshot {
+  return {
+    id: sub.id,
+    planId: sub.plan_id,
+    status: String(sub.status),
+    currentStart: numOrNull(sub.current_start),
+    currentEnd: numOrNull(sub.current_end),
+    chargeAt: numOrNull(sub.charge_at),
+    startAt: numOrNull(sub.start_at),
+    paidCount: Number(sub.paid_count ?? 0),
+    endedAt: numOrNull(sub.ended_at),
+  };
+}
 
 let active: RazorpayClient = razorpayClient;
 
@@ -248,4 +391,37 @@ export function verifyCheckoutSignature(
 /** Test helper: the signature the Checkout sheet would hand the app. */
 export function signCheckoutResponse(orderId: string, paymentId: string, secret: string): string {
   return createHmac('sha256', secret).update(`${orderId}|${paymentId}`).digest('hex');
+}
+
+/**
+ * The autopay twin of {@link verifyCheckoutSignature}. For a SUBSCRIPTION the
+ * sheet returns `razorpay_subscription_id` instead of an order id, and the
+ * signature is `hex(HMAC-SHA256(KEY_SECRET, paymentId + "|" + subscriptionId))`
+ * — note the order: payment FIRST, the reverse of the order-based one.
+ */
+export function verifySubscriptionSignature(
+  subscriptionId: string,
+  paymentId: string,
+  signature: string | undefined
+): boolean {
+  const secret = env.RAZORPAY_KEY_SECRET;
+  if (!secret || typeof signature !== 'string' || signature.length === 0) return false;
+  const expected = createHmac('sha256', secret).update(`${paymentId}|${subscriptionId}`).digest();
+  let provided: Buffer;
+  try {
+    provided = Buffer.from(signature, 'hex');
+  } catch {
+    return false;
+  }
+  if (provided.length !== expected.length) return false;
+  return timingSafeEqual(provided, expected);
+}
+
+/** Test helper: the signature the sheet hands the app for an autopay authorisation. */
+export function signSubscriptionResponse(
+  subscriptionId: string,
+  paymentId: string,
+  secret: string
+): string {
+  return createHmac('sha256', secret).update(`${paymentId}|${subscriptionId}`).digest('hex');
 }
