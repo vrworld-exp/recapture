@@ -17,6 +17,7 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 
 import { createApp } from '@/app';
 import { env } from '@/config/env';
+import { dropLegacyIndexes } from '@/config/legacyIndexes';
 import { Catalog } from '@/models/Catalog';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogDelegation } from '@/models/CatalogDelegation';
@@ -511,6 +512,45 @@ describe('payment.captured — the flagged outcomes', () => {
 
     const rows = await PaymentRecord.find({}).lean().exec();
     expect(JSON.stringify(rows)).not.toMatch(/9999999999|owner@example|owner@upi/);
+  });
+});
+
+describe('the legacy global providerOrderId index (Stage 01)', () => {
+  const coll = () => mongoose.connection.db!.collection('paymentrecords');
+
+  afterEach(async () => {
+    if ((await coll().indexes()).some((ix) => ix.name === 'providerOrderId_1')) {
+      await coll().dropIndex('providerOrderId_1');
+    }
+  });
+
+  it('blocks the PAID row without posing as a duplicate; the boot cleanup drops it and the payment then activates', async () => {
+    await coll().createIndex(
+      { providerOrderId: 1 },
+      { name: 'providerOrderId_1', unique: true, partialFilterExpression: { providerOrderId: { $type: 'string' } } }
+    );
+    const { owner, catalogId } = await delegated();
+    const { orderId, amountPaise } = await openOrder(owner.auth);
+    const captured = paymentCaptured({ orderId, paymentId: 'pay_legacy', amountPaise });
+
+    // Blocked: nothing recorded, and NOT the "Second payment on one order" alert.
+    await deliver(captured).expect(200);
+    expect(await PaymentRecord.countDocuments({ kind: 'PAID' })).toBe(0);
+    expect(await Notification.countDocuments({ title: 'Second payment on one order' })).toBe(0);
+
+    expect(await dropLegacyIndexes()).toEqual(['paymentrecords.providerOrderId_1']);
+    expect(await dropLegacyIndexes()).toEqual([]); // idempotent
+    // The per-kind index the schema declares is untouched.
+    expect((await coll().indexes()).some((ix) => ix.name === 'kind_1_providerOrderId_1')).toBe(true);
+
+    await deliver(captured).expect(200);
+    const row = await CatalogSubscription.findOne({ catalogId }).lean().exec();
+    expect(row).toMatchObject({ status: 'ACTIVE', source: 'ONLINE', planId: 'TASTE' });
+  });
+
+  it('leaves a same-named index with a different key alone', async () => {
+    await coll().createIndex({ providerOrderId: -1 }, { name: 'providerOrderId_1' });
+    expect(await dropLegacyIndexes()).toEqual([]);
   });
 });
 

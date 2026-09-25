@@ -2,6 +2,7 @@
 import '@/config/env'; // validates env first — import before anything else
 import os from 'node:os';
 import { connectDB } from '@/config/db';
+import { dropLegacyIndexes } from '@/config/legacyIndexes';
 import { createApp } from '@/app';
 import { env } from '@/config/env';
 import { log, toError } from '@/worker/workerLog';
@@ -72,9 +73,25 @@ async function main(): Promise<void> {
   });
 
   await connectDB();
+  await dropLegacyIndexesAtBoot();
   await seedWelcomeNotification();
   await axiosBackendMakeAlive();      // // This fn keep alive our remote backend server.
   startInProcessWorker();
+}
+
+/**
+ * Indexes the schemas stopped declaring (see config/legacyIndexes.ts) — one
+ * of them blocked every online payment from being recorded. Best-effort like
+ * the seed below: a failure is logged and the API keeps serving.
+ */
+async function dropLegacyIndexesAtBoot(): Promise<void> {
+  try {
+    await dropLegacyIndexes();
+  } catch (err) {
+    log('error', 'Legacy index cleanup failed — API still serving', {
+      error: toError(err).message,
+    });
+  }
 }
 
 /**

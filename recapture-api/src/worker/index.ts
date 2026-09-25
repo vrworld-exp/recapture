@@ -14,6 +14,7 @@
 import '@/config/env'; // validates env first — import before anything else
 import os from 'node:os';
 import { connectDB, disconnectDB } from '@/config/db';
+import { dropLegacyIndexes } from '@/config/legacyIndexes';
 import { log, toError } from '@/worker/workerLog';
 import { runWorkerRuntime } from '@/worker/workerRuntime';
 
@@ -25,6 +26,11 @@ async function main(): Promise<void> {
   // by the stale-claim lease, not by anything here.
   await connectDB();
   log('info', 'MongoDB connected', { workerId });
+  // The reconciler records payments here too, so the worker must not wait for
+  // an API boot to clear the index that blocks them. Never fatal.
+  await dropLegacyIndexes().catch((err: unknown) =>
+    log('error', 'Legacy index cleanup failed', { workerId, error: toError(err).message })
+  );
 
   // Resolves only after a graceful drain (SIGTERM/SIGINT).
   await runWorkerRuntime(workerId);

@@ -88,6 +88,29 @@ thisnking to fix it --------------------->>>
     Additionally what i wnat admin should get the status in detailed manner like payment started, razorpay succeeded, backend data updated (catalog get updated) something like this, so admin able to debug each and every payment initiated. for the last thing if razaorpay recived money and not get reflected in catalog (by any reason) give a button to upgrade his/her catalog accordingly ( acc.  to plan he/she payed for.) and admin able to start his/her sub from the app. By implemening this admin no need to leave the app, admin can see and fix right from here.
 
 
+    doing 6. I have done a payment via application and it is working good, but my account not get updated to that respective plan, so find the problem in the flow. And tell me what is can be the real problem ???
+
+
+
+    7. The payment is like one time payment but what I want it should start a auto payment subscription, when user choose monthly the that amount will get deducted in every month or if it is yearly the payment should get deducted yearly based. Means i want Autopay type payment not one time payment, so do like this
+
+
+
+    8. 
+        a) From all subcription page, remove the complementry option ( complementry until btn is there  ) we don't need this option. 
+
+        b) When all subcriptions page get open then all option should be defaul and first as position, currently need attention is as first and default option.
+
+
+
+
+
+
+
+
+
+
+
 
 
 

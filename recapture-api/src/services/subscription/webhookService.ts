@@ -180,6 +180,7 @@ async function recordPaidRow(
   input: OnlinePaymentInput
 ): Promise<{ row: IPaymentRecord; inserted: boolean } | null> {
   const idempotencyKey = `payment:${input.paymentId}`;
+  let duplicateKeyError: unknown;
   try {
     const row = await PaymentRecord.create({
       catalogId: ctx.catalogId,
@@ -199,6 +200,7 @@ async function recordPaidRow(
     return { row, inserted: true };
   } catch (err) {
     if (!isDuplicateKey(err)) throw err;
+    duplicateKeyError = err;
   }
   const existing = await PaymentRecord.findOne({ idempotencyKey }).exec();
   if (existing) return { row: existing, inserted: false };
@@ -207,13 +209,19 @@ async function recordPaidRow(
     .select({ providerPaymentId: 1 })
     .lean()
     .exec();
+  // Neither this payment nor another PAID row holds the order: the collision
+  // came from some other unique index (a legacy one — config/legacyIndexes.ts).
+  // That is a broken write, not a second payment. Throw: the error reaches the
+  // logs instead of a misleading "duplicate" alert, and the order stays
+  // unsettled so the reconciler and the on-read check try it again.
+  if (!other) throw duplicateKeyError;
   void alertAdmins({
     kind: 'DUPLICATE_SUSPECTED',
     catalogId: ctx.catalogId,
     title: 'Second payment on one order',
     message:
       `Razorpay reports payment ${input.paymentId} on order ${input.orderId}, ` +
-      `which is already settled by payment ${other?.providerPaymentId ?? '?'}. Not recorded.`,
+      `which is already settled by payment ${other.providerPaymentId ?? '?'}. Not recorded.`,
   });
   return null;
 }
