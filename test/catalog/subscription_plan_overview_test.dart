@@ -68,8 +68,11 @@ void main() {
   setUp(() => repo = FakePaymentsRepository());
 
   Future<void> pump(WidgetTester tester, Map<String, dynamic> payload) async {
-    // A phone-shaped viewport, so the 70% rule is what it is on a phone.
-    tester.view.physicalSize = const Size(412, 915);
+    // A phone's HEIGHT, so the 70% rule is what it is on a phone. Wider than
+    // a phone because the test font draws every glyph a full em wide, which
+    // makes the pre-existing "Renew · ₹10,071.60 / year" button overflow at
+    // 412px in tests only.
+    tester.view.physicalSize = const Size(600, 915);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final subscription = CatalogSubscription.fromMap(payload);

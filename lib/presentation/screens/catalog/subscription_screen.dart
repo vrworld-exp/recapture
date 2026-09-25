@@ -690,10 +690,9 @@ class _PlanOverview extends StatelessWidget {
                     width: tileWidth,
                     icon: Icons.view_in_ar_outlined,
                     label: '3D/AR dishes',
-                    value: subscription.threeDDishCap == null
-                        ? '${subscription.threeDDishCount} · unlimited'
-                        : '${subscription.threeDDishCount} / '
-                            '${subscription.threeDDishCap}',
+                    // The same line every surface uses: "12 / 15 (Signature
+                    // plan)", "12 (unlimited)" for a comp.
+                    value: threeDUsageLine(subscription),
                     color: over ? AppColors.error : AppColors.textPrimary,
                   ),
                   _OverviewTile(
@@ -822,7 +821,7 @@ class _PlanOverview extends StatelessWidget {
           icon: Icons.local_offer_outlined,
           title: 'Keep your 3D menu after this ends',
           body: 'Plans from ${formatRupees(cheapest.priceMonthlyPaise)} / '
-              'month — save ${cheapest.yearlyDiscountPct}% when you pay '
+              'month, ${cheapest.yearlyDiscountPct}% off when you pay '
               'yearly. Autopay renews it for you.',
           actionLabel: 'See plans',
           onAction: () => onSeePlan(cheapest.planId),
@@ -1639,7 +1638,10 @@ class _CheckoutSectionState extends ConsumerState<CheckoutSection> {
         if (checkout.phase != CheckoutPhase.activating)
           AppButton(
             key: const ValueKey('subscription_pay_button'),
-            label: plan == null
+            // "Turn on autopay" charges nothing today, so it carries no
+            // price (the confirm sheet says what and when) — and stays short
+            // enough for a narrow phone.
+            label: plan == null || _deferredUntil != null
                 ? label
                 : '$label · ${formatPaise(_amountPaise)}'
                     '${widget.interval == BillingInterval.yearly ? ' / year' : ' / month'}',

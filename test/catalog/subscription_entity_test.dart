@@ -402,7 +402,11 @@ void main() {
         expect(
           find.descendant(
             of: button,
-            matching: find.textContaining('${entry.value.$2} · ₹'),
+            // "Turn on autopay" carries no price (nothing is charged today);
+            // every other label is "<label> · ₹…".
+            matching: find.textContaining(entry.value.$2 == 'Turn on autopay'
+                ? entry.value.$2
+                : '${entry.value.$2} · ₹'),
           ),
           findsOneWidget,
           reason: 'status ${entry.key['status']}',
@@ -426,8 +430,8 @@ void main() {
         ),
       );
       await tester.pump();
-      expect(find.textContaining('Turn on autopay · ₹1,199 / month'),
-          findsOneWidget);
+      // No price on "Turn on autopay": nothing is charged today.
+      expect(find.text('Turn on autopay'), findsOneWidget);
 
       await tester
           .tap(find.byKey(const ValueKey('subscription_plan_MASTERCHEF')));
