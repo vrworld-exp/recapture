@@ -92,17 +92,18 @@ thisnking to fix it --------------------->>>
 
 
 
-    DOING..............    7. The payment is like one time payment but what I want it should start a auto payment subscription, when user choose monthly the that amount will get deducted in every month or if it is yearly the payment should get deducted yearly bases. Means i want Autopay type payment not one time payment, so do like this
+    
+    ✅7. The payment is like one time payment but what I want it should start a auto payment subscription, when user choose monthly the that amount will get deducted in every month or if it is yearly the payment should get deducted yearly bases. Means i want Autopay type payment not one time payment, so do like this
 
 
 
 
-    7a. Plz verify two things are implemented or not , 1. Payemnt get reflected right after payment succeess in the app ( if nothing get breaked ), 2. Payment should be autoPay type ( when user confirm then he/she get subcribed for that amount , so on montly or yearly bases payment should get didected by autopay method).
+    DOING......... 7a. Plz verify two things are implemented or not , 1. Payemnt get reflected right after payment succeess in the app ( if nothing get breaked ), 2. Payment should be autoPay type ( when user confirm then he/she get subcribed for that amount , so on montly or yearly bases payment should get didected by autopay method).
 
 
 
 
-    7b. Once any user open their profile page and open subcription tab, and they opted for a plan the they should get better Ui that contains every detail about their plan, rest days, better ui, plan offers, see catalog btn. These all should contain 70% from top then other subcription btn and details should there along with subcribe btn like we have currently.
+    DOING......... 7b. Once any user open their profile page and open subcription tab, and they opted for a plan the they should get better Ui that contains every detail about their plan, rest days, better ui, plan offers, see catalog btn. These all should contain 70% from top then other subcription btn and details should there along with subcribe btn like we have currently.
 
 
 

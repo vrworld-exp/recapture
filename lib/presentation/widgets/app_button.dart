@@ -75,7 +75,14 @@ class AppButton extends StatelessWidget {
                 children: [
                   Icon(icon, size: 18),
                   const SizedBox(width: AppSpacing.sm),
-                  Text(label),
+                  // A full-width button has a bounded width, so a long label
+                  // ("Turn on autopay · ₹1,199 / month" on a 360px phone)
+                  // wraps instead of overflowing. A content-width one may sit
+                  // in an unbounded slot, where a Flexible would throw.
+                  if (isFullWidth)
+                    Flexible(child: Text(label, textAlign: TextAlign.center))
+                  else
+                    Text(label),
                 ],
               )
             : Text(label);

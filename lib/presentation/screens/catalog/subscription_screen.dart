@@ -17,7 +17,9 @@
 //     "Pay from the ReCapture app on your phone".
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/app_router.dart' show AppRoutes;
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -158,6 +160,28 @@ class SubscriptionBody extends ConsumerStatefulWidget {
 class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
   BillingInterval _interval = BillingInterval.monthly;
 
+  /// Where an offer in the overview scrolls to: the plan cards and the
+  /// button, with the offer's plan and interval already selected.
+  final GlobalKey _plansKey = GlobalKey();
+
+  /// An offer was tapped: select what it offers and bring the plans and the
+  /// button into view. Nothing is bought here — the button still asks.
+  void _takeOffer({PlanId? planId, BillingInterval? interval}) {
+    setState(() {
+      if (planId != null) _selectedPlan = planId;
+      if (interval != null) _interval = interval;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = _plansKey.currentContext;
+      if (target == null || !mounted) return;
+      Scrollable.ensureVisible(
+        target,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
   /// The plan the button pays for. Starts on the plan that is running (a
   /// renewal is the common case) and otherwise on the first tier; tapping a
   /// card moves it.
@@ -191,15 +215,39 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
           const _BackToPublishingCard(),
           const SizedBox(height: AppSpacing.md),
         ],
-        _StatusCard(subscription: subscription),
-        if (_AutopayCard.showsFor(subscription)) ...[
+        // An owner ON a plan gets the plan itself first — about 70% of the
+        // screen: what they have, how long it runs, what it includes, what
+        // they could switch to. Everything else (other plans, the button,
+        // history) follows below, as before.
+        if (_PlanOverview.showsFor(subscription)) ...[
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              // 70% of the screen on a phone; capped so a tablet or a wide
+              // browser does not get a mostly empty block.
+              minHeight: (MediaQuery.sizeOf(context).height * 0.7)
+                  .clamp(0.0, 720.0),
+            ),
+            child: _PlanOverview(
+              subscription: subscription,
+              onSwitchToYearly: () => _takeOffer(
+                planId: subscription.planId,
+                interval: BillingInterval.yearly,
+              ),
+              onSeePlan: (planId) => _takeOffer(planId: planId),
+            ),
+          ),
+        ] else ...[
+          _StatusCard(subscription: subscription),
+          if (_AutopayCard.showsFor(subscription)) ...[
+            const SizedBox(height: AppSpacing.md),
+            _AutopayCard(subscription: subscription),
+          ],
           const SizedBox(height: AppSpacing.md),
-          _AutopayCard(subscription: subscription),
+          _UsageCard(subscription: subscription),
         ],
-        const SizedBox(height: AppSpacing.md),
-        _UsageCard(subscription: subscription),
         const SizedBox(height: AppSpacing.xxl),
         Row(
+          key: _plansKey,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text('Plans', style: textTheme.titleMedium),
@@ -324,6 +372,598 @@ class _BackToPublishingCard extends StatelessWidget {
             label: 'Back to publishing',
             icon: Icons.cloud_upload_outlined,
             onPressed: () => navigateBack(context),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The owner's plan, in full — the top of the screen for anyone ON one (a paid
+/// plan, in or out of grace, a trial, a comp). One card, read top to bottom:
+///
+///   YOUR PLAN · status chip
+///   Plan name, price
+///   days-left ring  |  renews / ends on …, grace, autopay
+///   the status sentence (the same one every surface uses)
+///   autopay card
+///   usage tiles: 3D dishes, image dishes, QR standees, billing
+///   what's included
+///   offers: yearly saving, the next tier up
+///   See catalog
+///
+/// Every number is the SERVER's (daysLeft D6, the counts C1); the ring's
+/// fraction is only that number over the period's nominal length.
+class _PlanOverview extends StatelessWidget {
+  const _PlanOverview({
+    required this.subscription,
+    required this.onSwitchToYearly,
+    required this.onSeePlan,
+  });
+
+  final CatalogSubscription subscription;
+  final VoidCallback onSwitchToYearly;
+  final ValueChanged<PlanId> onSeePlan;
+
+  static bool showsFor(CatalogSubscription subscription) =>
+      switch (subscription.status) {
+        SubscriptionStatus.active ||
+        SubscriptionStatus.grace ||
+        SubscriptionStatus.trial ||
+        SubscriptionStatus.comped =>
+          true,
+        _ => false,
+      };
+
+  PlanDefinition? get _plan {
+    final snapshot = subscription.planSnapshot;
+    if (snapshot != null) return snapshot;
+    final id = subscription.planId;
+    return id == null ? null : subscription.plans.byId(id);
+  }
+
+  bool get _yearly => subscription.billingInterval == BillingInterval.yearly;
+
+  String get _title {
+    final name = subscription.planName ?? _plan?.displayName;
+    return switch (subscription.status) {
+      SubscriptionStatus.trial => 'Free trial',
+      SubscriptionStatus.comped => 'Complimentary plan',
+      _ => name ?? 'Your plan',
+    };
+  }
+
+  String? get _priceLine {
+    final plan = _plan;
+    switch (subscription.status) {
+      case SubscriptionStatus.trial:
+        return 'Free for ${subscription.plans.trialDays} days';
+      case SubscriptionStatus.comped:
+        return 'No charge — on us';
+      default:
+        if (plan == null) return null;
+        return _yearly
+            ? '${formatRupees(plan.yearlyPricePaise)} / year'
+            : '${formatRupees(plan.priceMonthlyPaise)} / month';
+    }
+  }
+
+  (String, Color) get _chip => switch (subscription.status) {
+        SubscriptionStatus.active => ('Active', AppColors.success),
+        SubscriptionStatus.grace => ('Grace period', AppColors.warning),
+        SubscriptionStatus.trial => ('Trial', AppColors.royalGold),
+        SubscriptionStatus.comped => ('Complimentary', AppColors.success),
+        _ => ('', AppColors.textSecondary),
+      };
+
+  /// The period's nominal length in days, for the ring. Null = no ring
+  /// fraction worth drawing (a comp runs to whatever date an admin chose).
+  int? get _periodDays => switch (subscription.status) {
+        SubscriptionStatus.trial => subscription.plans.trialDays,
+        SubscriptionStatus.grace => subscription.plans.graceDays,
+        SubscriptionStatus.active => _yearly ? 365 : 30,
+        _ => null,
+      };
+
+  /// "Renews by autopay on …" / "Renews on …" / "Ends on …", or in grace
+  /// "Grace ends on …". Null when there is no date.
+  (String, DateTime)? get _keyDate {
+    final autopay = subscription.autopay;
+    if (subscription.status == SubscriptionStatus.grace) {
+      final end = subscription.graceEndsAt;
+      return end == null ? null : ('Grace ends on', end);
+    }
+    final end = subscription.periodEnd;
+    if (end == null) return null;
+    if (subscription.status == SubscriptionStatus.active &&
+        autopay != null &&
+        autopay.isHealthy) {
+      return ('Renews by autopay on', autopay.nextChargeAt ?? end);
+    }
+    return ('Ends on', end);
+  }
+
+  /// The next tier up from the running plan, when there is one.
+  PlanDefinition? get _nextTier {
+    final plans = subscription.plans.plans;
+    final current = subscription.planId;
+    if (current == null ||
+        subscription.status == SubscriptionStatus.trial ||
+        subscription.status == SubscriptionStatus.comped) {
+      return null;
+    }
+    final index = plans.indexWhere((p) => p.planId == current);
+    if (index < 0 || index + 1 >= plans.length) return null;
+    return plans[index + 1];
+  }
+
+  static String _featureLabel(String feature) => _PlanCard._featureLabel(feature);
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final (chipLabel, chipColor) = _chip;
+    final plan = _plan;
+    final priceLine = _priceLine;
+    final keyDate = _keyDate;
+    final standees = standeeDeliveryLine(subscription);
+    final over = subscription.isOverCap;
+    final days = subscription.daysLeft;
+    final total = _periodDays;
+    final fraction = days == null || total == null || total <= 0
+        ? null
+        : (days / total).clamp(0.0, 1.0);
+    final ringColor = switch (subscription.status) {
+      SubscriptionStatus.grace => AppColors.warning,
+      _ when days != null && days <= 3 => AppColors.warning,
+      _ => AppColors.royalGold,
+    };
+    final nextTier = _nextTier;
+
+    return Container(
+      key: const ValueKey('subscription_plan_overview'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.royalGold.withValues(alpha: 0.45)),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppColors.royalGold.withValues(alpha: 0.16),
+            AppColors.surface1,
+            AppColors.surface1,
+          ],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Header ──────────────────────────────────────────────────────
+          Row(
+            children: [
+              Text(
+                'YOUR PLAN',
+                style: textTheme.labelSmall?.copyWith(
+                  color: AppColors.royalGold,
+                  letterSpacing: 1.4,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                key: const ValueKey('subscription_overview_chip'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.sm,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: chipColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
+                ),
+                child: Text(
+                  chipLabel,
+                  style: textTheme.labelSmall?.copyWith(
+                    color: chipColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            _title,
+            key: const ValueKey('subscription_overview_title'),
+            style: textTheme.headlineSmall?.copyWith(
+              color: AppColors.textPrimary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (priceLine != null) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              priceLine,
+              key: const ValueKey('subscription_overview_price'),
+              style: textTheme.titleMedium?.copyWith(color: AppColors.goldGlow),
+            ),
+          ],
+          const SizedBox(height: AppSpacing.xl),
+
+          // ── Days left + the date that matters ───────────────────────────
+          Row(
+            children: [
+              SizedBox(
+                width: 112,
+                height: 112,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox.expand(
+                      child: CircularProgressIndicator(
+                        value: fraction ?? 1,
+                        strokeWidth: 8,
+                        backgroundColor:
+                            AppColors.disabled.withValues(alpha: 0.35),
+                        valueColor: AlwaysStoppedAnimation(ringColor),
+                      ),
+                    ),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          days == null ? '—' : '$days',
+                          key: const ValueKey('subscription_overview_days'),
+                          style: textTheme.headlineMedium?.copyWith(
+                            color: AppColors.textPrimary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          days == 1 ? 'day left' : 'days left',
+                          style: textTheme.labelSmall
+                              ?.copyWith(color: AppColors.textSecondary),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.lg),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (keyDate != null) ...[
+                      Text(
+                        keyDate.$1,
+                        style: textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        formatSubscriptionDate(keyDate.$2),
+                        key: const ValueKey('subscription_overview_date'),
+                        style: textTheme.titleMedium?.copyWith(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                    ],
+                    // The same sentence every surface uses for this status.
+                    Text(
+                      ownerStatusLine(
+                        subscription,
+                        trialThreeDCap: subscription.plans.trialThreeDCap,
+                      ),
+                      key: const ValueKey('subscription_status_line'),
+                      style: textTheme.bodySmall?.copyWith(
+                        color: subscription.status == SubscriptionStatus.grace
+                            ? AppColors.warning
+                            : AppColors.textSecondary,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          if (_AutopayCard.showsFor(subscription)) ...[
+            const SizedBox(height: AppSpacing.lg),
+            _AutopayCard(subscription: subscription),
+          ],
+
+          // ── Usage ───────────────────────────────────────────────────────
+          const SizedBox(height: AppSpacing.lg),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final tileWidth = (constraints.maxWidth - AppSpacing.sm) / 2;
+              return Wrap(
+                spacing: AppSpacing.sm,
+                runSpacing: AppSpacing.sm,
+                children: [
+                  _OverviewTile(
+                    key: const ValueKey('subscription_usage_3d'),
+                    width: tileWidth,
+                    icon: Icons.view_in_ar_outlined,
+                    label: '3D/AR dishes',
+                    value: subscription.threeDDishCap == null
+                        ? '${subscription.threeDDishCount} · unlimited'
+                        : '${subscription.threeDDishCount} / '
+                            '${subscription.threeDDishCap}',
+                    color: over ? AppColors.error : AppColors.textPrimary,
+                  ),
+                  _OverviewTile(
+                    width: tileWidth,
+                    icon: Icons.image_outlined,
+                    label: 'Image dishes',
+                    value: '${subscription.imageDishCount} · unlimited',
+                  ),
+                  if (standees != null)
+                    _OverviewTile(
+                      key: const ValueKey('subscription_standee_line'),
+                      width: tileWidth,
+                      icon: Icons.qr_code_2,
+                      label: 'QR standees',
+                      value: standees.replaceFirst('QR standees: ', ''),
+                    ),
+                  if (subscription.billingInterval != null &&
+                      subscription.status != SubscriptionStatus.trial &&
+                      subscription.status != SubscriptionStatus.comped)
+                    _OverviewTile(
+                      width: tileWidth,
+                      icon: Icons.event_repeat,
+                      label: 'Billing',
+                      value: _yearly ? 'Yearly' : 'Monthly',
+                    ),
+                ],
+              );
+            },
+          ),
+          if (over) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Text(
+              'More 3D dishes than your plan covers — publishing will ask you '
+              'to upgrade or archive some.',
+              style: textTheme.bodySmall?.copyWith(color: AppColors.error),
+            ),
+          ],
+
+          // ── What's included ─────────────────────────────────────────────
+          if (plan != null &&
+              subscription.status != SubscriptionStatus.trial &&
+              subscription.status != SubscriptionStatus.comped) ...[
+            const SizedBox(height: AppSpacing.lg),
+            Text("What's included", style: textTheme.titleSmall),
+            _Feature('Up to ${plan.threeDDishCap} 3D/AR dishes'),
+            const _Feature('Unlimited image dishes'),
+            _Feature('${plan.includedStandeeCount} QR-code standees included'),
+            for (final feature in plan.features)
+              _Feature(_featureLabel(feature)),
+          ],
+
+          // ── Offers ──────────────────────────────────────────────────────
+          ..._offers(context, plan, nextTier),
+
+          // ── The catalog itself ──────────────────────────────────────────
+          const SizedBox(height: AppSpacing.xl),
+          AppButton.secondary(
+            key: const ValueKey('subscription_see_catalog'),
+            label: 'See catalog',
+            icon: Icons.storefront_outlined,
+            onPressed: () => context.go(AppRoutes.catalog),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _offers(
+    BuildContext context,
+    PlanDefinition? plan,
+    PlanDefinition? nextTier,
+  ) {
+    final offers = <Widget>[];
+    final status = subscription.status;
+    final paid =
+        status == SubscriptionStatus.active || status == SubscriptionStatus.grace;
+
+    if (paid && plan != null && !_yearly && plan.yearlyDiscountPct > 0) {
+      final twelve = plan.priceMonthlyPaise * 12;
+      offers.add(_OfferCard(
+        key: const ValueKey('subscription_offer_yearly'),
+        icon: Icons.savings_outlined,
+        title: 'Save ${plan.yearlyDiscountPct}% with yearly billing',
+        body: '${formatRupees(plan.yearlyPricePaise)} a year instead of '
+            '${formatRupees(twelve)} — the same plan, paid once a year.',
+        actionLabel: 'Switch to yearly',
+        onAction: onSwitchToYearly,
+      ));
+    } else if (paid && plan != null && _yearly && plan.yearlyDiscountPct > 0) {
+      offers.add(_OfferCard(
+        key: const ValueKey('subscription_offer_yearly'),
+        icon: Icons.savings_outlined,
+        title: "You're saving ${plan.yearlyDiscountPct}%",
+        body: 'Yearly billing costs ${formatRupees(plan.yearlyPricePaise)} '
+            'instead of ${formatRupees(plan.priceMonthlyPaise * 12)}.',
+      ));
+    }
+
+    if (nextTier != null) {
+      final extra = nextTier.features
+          .where((f) => plan == null || !plan.features.contains(f))
+          .map(_featureLabel)
+          .toList();
+      offers.add(_OfferCard(
+        key: const ValueKey('subscription_offer_upgrade'),
+        icon: Icons.upgrade,
+        title: 'Upgrade to ${nextTier.displayName}',
+        body: 'Up to ${nextTier.threeDDishCap} 3D/AR dishes'
+            '${extra.isEmpty ? '' : ', plus ${extra.join(', ').toLowerCase()}'}'
+            '. From ${formatRupees(nextTier.priceMonthlyPaise)} / month.',
+        actionLabel: 'See ${nextTier.displayName}',
+        onAction: () => onSeePlan(nextTier.planId),
+      ));
+    }
+
+    if (status == SubscriptionStatus.trial ||
+        status == SubscriptionStatus.comped) {
+      final plans = subscription.plans.plans;
+      final cheapest = plans.isEmpty
+          ? null
+          : plans.reduce(
+              (a, b) => a.priceMonthlyPaise <= b.priceMonthlyPaise ? a : b);
+      if (cheapest != null) {
+        offers.add(_OfferCard(
+          key: const ValueKey('subscription_offer_pick_plan'),
+          icon: Icons.local_offer_outlined,
+          title: 'Keep your 3D menu after this ends',
+          body: 'Plans from ${formatRupees(cheapest.priceMonthlyPaise)} / '
+              'month — save ${cheapest.yearlyDiscountPct}% when you pay '
+              'yearly. Autopay renews it for you.',
+          actionLabel: 'See plans',
+          onAction: () => onSeePlan(cheapest.planId),
+        ));
+      }
+    }
+
+    if (offers.isEmpty) return const [];
+    return [
+      const SizedBox(height: AppSpacing.lg),
+      Text('Offers', style: Theme.of(context).textTheme.titleSmall),
+      const SizedBox(height: AppSpacing.sm),
+      for (var i = 0; i < offers.length; i++) ...[
+        if (i > 0) const SizedBox(height: AppSpacing.sm),
+        offers[i],
+      ],
+    ];
+  }
+}
+
+/// One usage number in the overview grid.
+class _OverviewTile extends StatelessWidget {
+  const _OverviewTile({
+    super.key,
+    required this.width,
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.color = AppColors.textPrimary,
+  });
+
+  final double width;
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      width: width,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surface2,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.disabled.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: AppColors.textMuted),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      textTheme.labelSmall?.copyWith(color: AppColors.textMuted),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            value,
+            style: textTheme.titleSmall
+                ?.copyWith(color: color, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One offer: what it is, why, and (when it has one) the button that selects
+/// it below — never a purchase by itself.
+class _OfferCard extends StatelessWidget {
+  const _OfferCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.body,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.royalGold.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.royalGold.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: AppColors.royalGold),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  body,
+                  style: textTheme.bodySmall
+                      ?.copyWith(color: AppColors.textSecondary, height: 1.4),
+                ),
+                if (actionLabel != null && onAction != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: onAction,
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        foregroundColor: AppColors.royalGold,
+                      ),
+                      child: Text(actionLabel!),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ],
       ),
@@ -605,9 +1245,15 @@ class _UsageRow extends StatelessWidget {
         Text(label,
             style:
                 textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary)),
-        Text(value,
-            style: textTheme.bodyMedium
-                ?.copyWith(color: color, fontWeight: FontWeight.w600)),
+        const SizedBox(width: AppSpacing.md),
+        // "12 / 15 (Signature plan)" can outgrow a narrow phone: it wraps
+        // under its own right edge instead of overflowing.
+        Flexible(
+          child: Text(value,
+              textAlign: TextAlign.end,
+              style: textTheme.bodyMedium
+                  ?.copyWith(color: color, fontWeight: FontWeight.w600)),
+        ),
       ],
     );
   }
@@ -738,23 +1384,26 @@ class _PlanCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: AppSpacing.xs),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
+          // A Wrap, not a Row: "₹20,992 / year  save 30%" is wider than a
+          // small phone, and the saving drops under the price instead.
+          Wrap(
+            spacing: AppSpacing.sm,
+            crossAxisAlignment: WrapCrossAlignment.end,
             children: [
               Text(
                 price,
                 style: textTheme.titleLarge
                     ?.copyWith(color: AppColors.textPrimary),
               ),
-              if (yearly) ...[
-                const SizedBox(width: AppSpacing.sm),
-                Text(
-                  'save ${plan.yearlyDiscountPct}%',
-                  style:
-                      textTheme.labelMedium?.copyWith(color: AppColors.success),
+              if (yearly)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Text(
+                    'save ${plan.yearlyDiscountPct}%',
+                    style: textTheme.labelMedium
+                        ?.copyWith(color: AppColors.success),
+                  ),
                 ),
-              ],
             ],
           ),
           const SizedBox(height: AppSpacing.sm),
