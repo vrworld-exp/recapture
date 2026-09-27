@@ -899,9 +899,11 @@ class _GetProjectsStatusStrip extends StatelessWidget {
     // so it leaves no gap above the list.
     if (failure == null && !isCalling) return const SizedBox.shrink();
 
+    // Plain words, never the route: which API fills this screen is not the
+    // user's business.
     final text = failure != null
-        ? 'GET /projects failed — ${_getProjectsErrorText(failure)}'
-        : 'GET /projects — API calling…';
+        ? "Couldn't load your projects — ${_getProjectsErrorText(failure)}"
+        : 'Fetching your projects from the server…';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(
@@ -941,22 +943,14 @@ class _GetProjectsStatusStrip extends StatelessWidget {
 
 /// Compact, one-line rendering of a `GET /projects` failure.
 ///
-/// Prefers what the server actually said (`{code, message}` envelope, per
-/// AGENTS.md) over Dio's own wording; falls back to the transport message when
-/// there is no response at all (offline / timeout).
+/// The server's own owner-safe `message` when there is one; otherwise a plain
+/// sentence. Never the status, the code, or Dio's wording — Dio's messages
+/// carry the request URL, and which API fills this screen is not for the user.
 String _getProjectsErrorText(Object error) {
-  if (error is! DioException) return error.toString();
-
-  final status = error.response?.statusCode;
-  final body = error.response?.data;
-  final parts = <String>[
-    if (status != null) 'HTTP $status',
-    if (body is Map && body['code'] != null) '${body['code']}',
-    if (body is Map && body['message'] != null) '${body['message']}',
-  ];
-  if (parts.isEmpty) {
-    final message = error.message;
-    parts.add(message != null && message.isNotEmpty ? message : error.type.name);
+  if (error is DioException) {
+    final body = error.response?.data;
+    final message = body is Map ? body['message'] : null;
+    if (message is String && message.isNotEmpty) return message;
   }
-  return parts.join(' · ');
+  return 'Please check your connection and try again.';
 }

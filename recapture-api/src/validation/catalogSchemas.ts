@@ -17,6 +17,7 @@ import {
   PRODUCT_TYPES,
 } from '@/models/types/catalog.types';
 import { BRANDING_SLOTS, PRODUCT_IMAGE_CONTENT_TYPES } from '@/utils/productImageKeys';
+import { STANDEE_SHEET_MAX_COPIES } from '@/services/standeeSheetPdf';
 import { isValidCatalogSlug, toCatalogSlug } from '@/utils/catalogNames';
 
 // A Mongo ObjectId as a 24-char hex string. Validated here so a malformed id is
@@ -578,6 +579,17 @@ export const catalogQrQuerySchema = z
   .object({
     format: z.enum(['png', 'pdf']).default('png'),
     size: z.coerce.number().int().positive().optional(),
+  })
+  .strict();
+
+/**
+ * POST /catalog/standees/download body. The ceiling here is only the sheet's
+ * own; what the owner may actually print is the plan's remaining allowance,
+ * which the route checks in the same write that spends it.
+ */
+export const catalogStandeeDownloadSchema = z
+  .object({
+    copies: z.number().int().min(1).max(STANDEE_SHEET_MAX_COPIES),
   })
   .strict();
 

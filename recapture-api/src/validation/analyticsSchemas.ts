@@ -209,6 +209,9 @@ export const AnalyticsEvent = {
   // overdue invoice, and the text is the reader's business.
   SUBSCRIPTION_OWNER_NOTIFIED: 'subscription_owner_notified',
   CATALOG_QR_RENDERED: 'catalog_qr_rendered',
+  // The owner printed N standees of their menu's QR from the plan's allowance.
+  // Counts only — the same pool `subscription_standees_issued` sets by hand.
+  CATALOG_STANDEES_DOWNLOADED: 'catalog_standees_downloaded',
   // ── Pre-printed standee inventory ─────────────────────────────────────────
   // The MINT, not the code. A code value is a public identifier for a specific
   // restaurant's menu, so it never becomes an analytics property — only the
@@ -1324,6 +1327,15 @@ const publishBlockedBySubscriptionProps = z
   .strict();
 
 /** A QR render. No URL, no business name — the format and the size, nothing else. */
+const catalogStandeesDownloadedProps = z
+  .object({
+    user_id_hash: z.string().min(1),
+    catalog_id: z.string().min(1),
+    copies: z.number().int().positive(),
+    remaining: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const catalogQrRenderedProps = z
   .object({
     user_id_hash: z.string().min(1),
@@ -1529,6 +1541,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_RECEIPT_DOWNLOADED]: subscriptionReceiptDownloadedProps,
   [AnalyticsEvent.SUBSCRIPTION_OWNER_NOTIFIED]: subscriptionOwnerNotifiedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
+  [AnalyticsEvent.CATALOG_STANDEES_DOWNLOADED]: catalogStandeesDownloadedProps,
   [AnalyticsEvent.QR_BATCH_MINTED]: qrBatchMintedProps,
   [AnalyticsEvent.QR_CODE_ASSIGNED]: qrCodeAssignedProps,
   [AnalyticsEvent.QR_CODE_SCANNED]: qrCodeScannedProps,

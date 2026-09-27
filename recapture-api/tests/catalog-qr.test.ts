@@ -26,6 +26,7 @@ import { Catalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { CatalogPublishRun } from '@/models/CatalogPublishRun';
+import { CatalogSubscription } from '@/models/CatalogSubscription';
 import { Job } from '@/models/Job';
 import { User } from '@/models/User';
 import {
@@ -72,6 +73,7 @@ afterEach(async () => {
     Catalog.deleteMany({}),
     CatalogProduct.deleteMany({}),
     CatalogPublishRun.deleteMany({}),
+    CatalogSubscription.deleteMany({}),
     Job.deleteMany({}),
     mongoose.connection.collection('ratewindows').deleteMany({}),
   ]);
@@ -143,6 +145,54 @@ async function decodeQr(png: Buffer): Promise<string | null> {
   const { width, height, data } = image.bitmap;
   const result = jsQR(new Uint8ClampedArray(data), width, height);
   return result?.data ?? null;
+}
+
+/**
+ * A plan's standee allowance on the caller's catalog. `issued` is the shared
+ * pool — owner downloads and the admin's hand count draw from one number.
+ */
+async function grantStandees(
+  userId: string,
+  { included = 10, issued = 0, status = 'ACTIVE' }: { included?: number; issued?: number; status?: string } = {}
+): Promise<void> {
+  const catalog = await Catalog.findOne({ userId: new Types.ObjectId(userId) }).lean().exec();
+  // `publish()` only queues the run; the processor is another suite's subject.
+  // Live is what the standee door checks, so set it the way the run would.
+  if (catalog!.publicUrl) {
+    await Catalog.updateOne({ _id: catalog!._id }, { $set: { status: 'PUBLISHED' } }).exec();
+  }
+  const now = Date.now();
+  await CatalogSubscription.create({
+    catalogId: catalog!._id,
+    userId: new Types.ObjectId(userId),
+    status,
+    planId: 'TASTE',
+    source: 'ONLINE',
+    periodStart: new Date(now),
+    periodEnd: new Date(now + 30 * 86_400_000),
+    threeDDishCap: 10,
+    standeeAllocation: { included, issued },
+  });
+}
+
+async function issuedOf(userId: string): Promise<number> {
+  const catalog = await Catalog.findOne({ userId: new Types.ObjectId(userId) }).lean().exec();
+  const row = await CatalogSubscription.findOne({ catalogId: catalog!._id }).lean().exec();
+  return row?.standeeAllocation?.issued ?? -1;
+}
+
+/** The owner's print file: the counted standee download. */
+function downloadStandees(auth: Auth, copies: number) {
+  return request(app)
+    .post('/catalog/standees/download')
+    .set(auth)
+    .send({ copies })
+    .buffer(true)
+    .parse((res, done) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => done(null, Buffer.concat(chunks)));
+    });
 }
 
 // ── Correctness ─────────────────────────────────────────────────────────────
@@ -348,17 +398,20 @@ describe('size handling', () => {
 
 // ── PDF ─────────────────────────────────────────────────────────────────────
 
-describe('GET /catalog/qr?format=pdf', () => {
+describe('the printable PDF (POST /catalog/standees/download)', () => {
   it('renders one page carrying the code, the name and the URL as text', async () => {
     const { id, auth } = await makeUser();
     await seed(id);
     const publicUrl = await publish(auth);
+    await grantStandees(id);
 
-    const res = await request(app).get('/catalog/qr?format=pdf').set(auth).buffer(true);
+    const res = await downloadStandees(auth, 1);
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('application/pdf');
-    expect(res.headers['content-disposition']).toBe('attachment; filename="blue-cafe-qr.pdf"');
+    expect(res.headers['content-disposition']).toBe(
+      'attachment; filename="blue-cafe-standees-x1.pdf"'
+    );
 
     const pdf = res.body.toString('latin1');
     expect(pdf.startsWith('%PDF-')).toBe(true);
@@ -374,8 +427,9 @@ describe('GET /catalog/qr?format=pdf', () => {
     const { id, auth } = await makeUser();
     await seed(id);
     const publicUrl = await publish(auth);
+    await grantStandees(id);
 
-    const pdf = await request(app).get('/catalog/qr?format=pdf').set(auth).buffer(true);
+    const pdf = await downloadStandees(auth, 1);
     const png = await request(app).get('/catalog/qr?format=png').set(auth).buffer(true);
 
     // The PDF draws the mark as its own RGB XObject over the well, once, the
@@ -408,9 +462,10 @@ describe('GET /catalog/qr?format=pdf', () => {
     const { id, auth } = await makeUser();
     await seed(id);
     await publish(auth);
+    await grantStandees(id);
 
-    const a = await request(app).get('/catalog/qr?format=pdf').set(auth).buffer(true);
-    const b = await request(app).get('/catalog/qr?format=pdf').set(auth).buffer(true);
+    const a = await downloadStandees(auth, 1);
+    const b = await downloadStandees(auth, 1);
 
     expect(Buffer.compare(a.body, b.body)).toBe(0);
   });
@@ -419,8 +474,9 @@ describe('GET /catalog/qr?format=pdf', () => {
     const { id, auth } = await makeUser();
     await seed(id);
     await publish(auth);
+    await grantStandees(id);
 
-    const res = await request(app).get('/catalog/qr?format=pdf').set(auth).buffer(true);
+    const res = await downloadStandees(auth, 1);
     const pdf = res.body.toString('latin1');
 
     // The fiddly part of writing a PDF by hand: every offset in the xref table
@@ -442,6 +498,124 @@ describe('GET /catalog/qr?format=pdf', () => {
     offsets.forEach((offset, index) => {
       expect(pdf.slice(offset, offset + `${index + 1} 0 obj`.length)).toBe(`${index + 1} 0 obj`);
     });
+  });
+});
+
+// ── Standee allowance ───────────────────────────────────────────────────────
+
+describe('owner standee download spends the plan allowance', () => {
+  it('refuses a free PDF from GET /catalog/qr — printing goes through the count', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    await publish(auth);
+    await grantStandees(id);
+
+    const res = await request(app).get('/catalog/qr?format=pdf').set(auth);
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('STANDEE_DOWNLOAD_REQUIRED');
+    expect(await issuedOf(id)).toBe(0);
+  });
+
+  it('prints N pages, spends N, and says what is left', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    await publish(auth);
+    await grantStandees(id, { included: 10, issued: 2 });
+
+    const res = await downloadStandees(auth, 3);
+
+    expect(res.status).toBe(200);
+    expect(res.body.toString('latin1')).toContain('/Count 3');
+    expect(res.headers['x-standees-remaining']).toBe('5');
+    expect(res.headers['x-standees-included']).toBe('10');
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(await issuedOf(id)).toBe(5);
+
+    const quota = await request(app).get('/catalog/standees').set(auth);
+    expect(quota.body).toMatchObject({
+      status: 'success',
+      included: 10,
+      issued: 5,
+      remaining: 5,
+      canDownload: true,
+      isLive: true,
+    });
+  });
+
+  it('refuses more than is left and spends nothing', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    await publish(auth);
+    await grantStandees(id, { included: 10, issued: 8 });
+
+    const res = await request(app).post('/catalog/standees/download').set(auth).send({ copies: 3 });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'STANDEE_LIMIT_REACHED', remaining: 2 });
+    expect(await issuedOf(id)).toBe(8);
+  });
+
+  it('two downloads racing for the last standees cannot both win', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    await publish(auth);
+    await grantStandees(id, { included: 10, issued: 7 });
+
+    const [a, b] = await Promise.all([
+      request(app).post('/catalog/standees/download').set(auth).send({ copies: 2 }),
+      request(app).post('/catalog/standees/download').set(auth).send({ copies: 2 }),
+    ]);
+
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(await issuedOf(id)).toBe(9);
+  });
+
+  it('has nothing to print with no plan, or on a stopped plan', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    await publish(auth);
+    await Catalog.updateOne({ userId: new Types.ObjectId(id) }, { $set: { status: 'PUBLISHED' } }).exec();
+
+    const none = await request(app).post('/catalog/standees/download').set(auth).send({ copies: 1 });
+    expect(none.status).toBe(409);
+    expect(none.body).toMatchObject({ code: 'STANDEE_LIMIT_REACHED', remaining: 0 });
+
+    await grantStandees(id, { status: 'CANCELLED' });
+    const stopped = await request(app)
+      .post('/catalog/standees/download')
+      .set(auth)
+      .send({ copies: 1 });
+    expect(stopped.status).toBe(409);
+    expect(await issuedOf(id)).toBe(0);
+
+    const quota = await request(app).get('/catalog/standees').set(auth);
+    expect(quota.body).toMatchObject({ remaining: 10, canDownload: false });
+  });
+
+  it('only while the catalog is live', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    await grantStandees(id);
+
+    const res = await request(app).post('/catalog/standees/download').set(auth).send({ copies: 1 });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CATALOG_NOT_LIVE');
+    expect(await issuedOf(id)).toBe(0);
+  });
+
+  it('rejects a count outside 1..50', async () => {
+    const { id, auth } = await makeUser();
+    await seed(id);
+    await publish(auth);
+    await grantStandees(id);
+
+    for (const copies of [0, 51, 1.5]) {
+      const res = await request(app).post('/catalog/standees/download').set(auth).send({ copies });
+      expect(res.status).toBe(400);
+    }
+    expect(await issuedOf(id)).toBe(0);
   });
 });
 

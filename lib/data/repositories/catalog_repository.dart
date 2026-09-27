@@ -189,6 +189,15 @@ abstract interface class CatalogRepository {
     int? size,
   });
 
+  /// `GET /catalog/standees` — what the plan's standee allowance has left.
+  Future<StandeeQuota> fetchStandeeQuota();
+
+  /// `POST /catalog/standees/download` — [copies] standees of the menu's QR,
+  /// one per A4 page, SPENT from the allowance. Throws [CatalogFailure]
+  /// `STANDEE_LIMIT_REACHED` when there are not that many left and
+  /// `CATALOG_NOT_LIVE` when the catalog is not published.
+  Future<StandeeDownload> downloadStandees(int copies);
+
   // ── Analytics (features 61-66) ────────────────────────────────────────────
   //
   // Three reads on the same seam as the rest of the catalog, because they are
@@ -302,6 +311,58 @@ class CatalogQrImage {
   final String fileName;
 
   final CatalogQrFormat format;
+}
+
+/// The plan's complimentary standees: what it includes and what is left.
+///
+/// ONE POOL. Owner downloads and the standees an admin hands over draw from
+/// the same count, for the life of the subscription — a renewal adds nothing,
+/// an upgrade adds the difference.
+class StandeeQuota {
+  const StandeeQuota({
+    required this.included,
+    required this.issued,
+    required this.remaining,
+    required this.canDownload,
+    required this.isLive,
+  });
+
+  factory StandeeQuota.fromMap(Map<String, dynamic>? map) {
+    int count(Object? v) => v is num ? v.toInt() : 0;
+    return StandeeQuota(
+      included: count(map?['included']),
+      issued: count(map?['issued']),
+      remaining: count(map?['remaining']),
+      canDownload: map?['canDownload'] == true,
+      isLive: map?['isLive'] == true,
+    );
+  }
+
+  final int included;
+  final int issued;
+  final int remaining;
+
+  /// False when the plan is not running (paused, cancelled, none) or nothing
+  /// is left — the server's answer, not recomputed here.
+  final bool canDownload;
+
+  /// Published, with a link to scan. Standees are only printed for a live menu.
+  final bool isLive;
+}
+
+/// One standee download: the PDF, and what the allowance has left after it.
+class StandeeDownload {
+  const StandeeDownload({
+    required this.file,
+    required this.copies,
+    required this.remaining,
+  });
+
+  final CatalogQrImage file;
+  final int copies;
+
+  /// From `X-Standees-Remaining`; null if a proxy stripped the header.
+  final int? remaining;
 }
 
 /// Concrete [CatalogRepository] over the app Dio (Bearer attach + 401-refresh
@@ -593,6 +654,50 @@ class RemoteCatalogRepository implements CatalogRepository {
       // matters here more than anywhere: "publish first, the QR is created when
       // it goes live" is the single most useful sentence this screen can say,
       // and it is carried entirely by that code.
+      throw CatalogFailure.fromDio(withDecodedBody(error));
+    }
+  }
+
+  @override
+  Future<StandeeQuota> fetchStandeeQuota() => mapCatalogErrors(() async {
+        final res =
+            await _dio.get<Map<String, dynamic>>('/catalog/standees');
+        return StandeeQuota.fromMap(res.data);
+      });
+
+  @override
+  Future<StandeeDownload> downloadStandees(int copies) async {
+    try {
+      final res = await _dio.post<List<int>>(
+        '/catalog/standees/download',
+        data: {'copies': copies},
+        options: Options(responseType: ResponseType.bytes),
+      );
+
+      final data = res.data;
+      if (data == null || data.isEmpty) {
+        throw const CatalogFailure(
+          code: 'MALFORMED_RESPONSE',
+          message: 'Something went wrong. Please try again.',
+        );
+      }
+
+      return StandeeDownload(
+        file: CatalogQrImage(
+          bytes: Uint8List.fromList(data),
+          contentType: res.headers.value(Headers.contentTypeHeader) ??
+              'application/pdf',
+          fileName: fileNameFromDisposition(
+                  res.headers.value('content-disposition')) ??
+              'standees-x$copies.pdf',
+          format: CatalogQrFormat.pdf,
+        ),
+        copies: copies,
+        remaining: int.tryParse(res.headers.value('x-standees-remaining') ?? ''),
+      );
+    } on DioException catch (error) {
+      // Bytes mode applies to the failure body too — decode it, or
+      // STANDEE_LIMIT_REACHED flattens to "something went wrong".
       throw CatalogFailure.fromDio(withDecodedBody(error));
     }
   }

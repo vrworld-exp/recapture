@@ -45,4 +45,12 @@ mixin CatalogRepoPublishDefaults implements CatalogRepository {
     int? size,
   }) =>
       throw UnimplementedError('the QR is not exercised by this test');
+
+  @override
+  Future<StandeeQuota> fetchStandeeQuota() =>
+      throw UnimplementedError('standees are not exercised by this test');
+
+  @override
+  Future<StandeeDownload> downloadStandees(int copies) =>
+      throw UnimplementedError('standees are not exercised by this test');
 }

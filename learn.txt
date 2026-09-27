@@ -108,7 +108,25 @@ thisnking to fix it --------------------->>>
 
 
 
-    8. 
+    ✅8. Catalog does have any option to download standee/QR , please provide a btn to download the standee/qr 
+    If catalog is live then only provide this option 
+    User only download standee that he/she subscribed like if he subscribe for taste the only 10 standee he able to download, so when user click on download button then ask how many he wants to download and range btw 1 to avilable standees.
+    If user download the reduce from downloaded standee values.
+
+
+
+
+    ✅9. Remove the loading text from the home page. I have seen a text that shows loading on home page (getting /products or calling /products api ) this should be removed or change it with appropriate text like fetching products from server. 
+    Because I don't want to show which api I'm calling to get products
+
+
+
+
+
+
+    Once app is ready for production ------------------>>>>>>>>
+
+    Production. 
         a) From all subcription page, remove the complementry option ( complementry until btn is there  ) we don't need this option. 
 
         b) When all subcriptions page get open then all option should be defaul and first as position, currently need attention is as first and default option.

@@ -1,5 +1,6 @@
 package com.mayasabhaxr.recapture
 
+import android.view.WindowManager
 import com.mayasabhaxr.recapture.camera.BlurAnalysisManager
 import com.mayasabhaxr.recapture.camera.CameraCaptureManager
 import com.mayasabhaxr.recapture.camera.CameraControlsManager
@@ -20,6 +21,9 @@ import java.util.concurrent.Executors
 
 /** Sentinel distinguishing an unhandled storage method from a legitimate null result. */
 private val NotImplemented = Any()
+
+/** Must match AppConfig.channelSecureScreen on the Dart side. */
+private const val SECURE_SCREEN_CHANNEL = "com.mayasabhaxr.recapture/secure_screen"
 
 class MainActivity : FlutterActivity() {
 
@@ -271,6 +275,26 @@ class MainActivity : FlutterActivity() {
                 }
                 "cancelNetworkResume" -> {
                     UploadResumeWorker.cancel(applicationContext)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Screenshot guard for the owner's QR screen: FLAG_SECURE on this
+        // window while it is open. Runs on the platform (UI) thread, which is
+        // where window flags must be changed. See lib/platform/secure_screen.dart.
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            SECURE_SCREEN_CHANNEL,
+        ).setMethodCallHandler { call: MethodCall, result: MethodChannel.Result ->
+            when (call.method) {
+                "enable" -> {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    result.success(null)
+                }
+                "disable" -> {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                     result.success(null)
                 }
                 else -> result.notImplemented()

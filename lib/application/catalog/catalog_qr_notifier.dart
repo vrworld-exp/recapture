@@ -1,13 +1,12 @@
 // lib/application/catalog/catalog_qr_notifier.dart
 //
-// The catalog's QR code (features 31-35).
+// The catalog's QR code (features 31-35), as the OWNER sees it.
 //
-// The image is fetched ONCE at a print-worthy size and reused for both the
-// on-screen render and the PNG download. That is deliberate: the endpoint is
-// rate-limited, the bytes are a pure function of a URL that never changes, and
-// re-fetching for the download would spend a request to get back a file the
-// screen is already showing. The PDF is a different render, so it is fetched
-// when asked for.
+// VIEW-ONLY. The owner's print file is the counted standee download
+// (`owner_standee_notifier.dart`), drawn from the plan's allowance; a free
+// PNG/PDF save here would be the way round it, so there is none, and the
+// server refuses `/catalog/qr?format=pdf` for the same reason. What this
+// fetches is a DISPLAY render — see [kOwnerQrFetchSize].
 //
 // The URL itself is NEVER composed here. It is minted server-side at
 // provisioning and frozen (feature 32) — every printed sticker resolves through
@@ -19,9 +18,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
-import 'catalog_qr_service.dart';
 
-/// The size the QR is rendered at.
+/// The size the rep's and admin's QR are rendered at.
 ///
 /// Big enough to print: a table sticker is scanned in bad light by whatever
 /// phone the customer has, and a QR resampled up from a screen-sized render is
@@ -29,11 +27,14 @@ import 'catalog_qr_service.dart';
 /// bounds, so asking large is safe.
 const int kCatalogQrSize = 1024;
 
+/// The owner's on-screen render: sharp at the view size on a 3x display, and
+/// no bigger — the owner prints through the standee download, not from this.
+const int kOwnerQrFetchSize = 512;
+
 @immutable
 class CatalogQrState {
   const CatalogQrState({
     this.image = const AsyncLoading(),
-    this.savingFormat,
     this.failure,
     this.notice,
   });
@@ -41,30 +42,20 @@ class CatalogQrState {
   /// The PNG the screen draws.
   final AsyncValue<CatalogQrImage> image;
 
-  /// Which format is currently being saved, if any. Held per format so the PDF
-  /// button can spin without the PNG button also going busy.
-  final CatalogQrFormat? savingFormat;
-
-  /// A failed save. Kept separate from [image] — a download that fails must not
+  /// A failed action on the screen. Kept separate from [image] — it must not
   /// replace a QR the user can still scan off the screen.
   final CatalogFailure? failure;
 
-  /// "Link copied", "Saved" — the confirmation the action needs to be visible.
+  /// "Link copied" — the confirmation the action needs to be visible.
   final String? notice;
-
-  bool isSaving(CatalogQrFormat format) => savingFormat == format;
 
   CatalogQrState copyWith({
     AsyncValue<CatalogQrImage>? image,
-    Object? savingFormat = _unset,
     Object? failure = _unset,
     Object? notice = _unset,
   }) =>
       CatalogQrState(
         image: image ?? this.image,
-        savingFormat: identical(savingFormat, _unset)
-            ? this.savingFormat
-            : savingFormat as CatalogQrFormat?,
         failure: identical(failure, _unset)
             ? this.failure
             : failure as CatalogFailure?,
@@ -95,52 +86,12 @@ class CatalogQrNotifier extends AutoDisposeNotifier<CatalogQrState> {
   /// explanation off the code.
   Future<void> load() async {
     try {
-      final image = await _repo.fetchQr(size: kCatalogQrSize);
+      final image = await _repo.fetchQr(size: kOwnerQrFetchSize);
       if (_disposed) return;
       state = state.copyWith(image: AsyncData(image), failure: null);
     } on CatalogFailure catch (failure, stack) {
       if (_disposed) return;
       state = state.copyWith(image: AsyncError(failure, stack));
-    }
-  }
-
-  /// Saves the QR in [format] — a share sheet on mobile, a browser download on
-  /// web, chosen by the [qrDelivererProvider] seam.
-  ///
-  /// The PNG reuses the bytes already on screen; the PDF is a separate render
-  /// and is fetched.
-  Future<void> save(CatalogQrFormat format) async {
-    if (state.savingFormat != null) return;
-    state = state.copyWith(savingFormat: format, failure: null, notice: null);
-
-    try {
-      final onScreen = state.image.valueOrNull;
-      final image = (format == CatalogQrFormat.png && onScreen != null)
-          ? onScreen
-          : await _repo.fetchQr(format: format, size: kCatalogQrSize);
-      if (_disposed) return;
-
-      await ref.read(qrDelivererProvider).deliver(QrDownloadFile(
-            bytes: image.bytes,
-            fileName: image.fileName,
-            mimeType: image.contentType,
-          ));
-      if (_disposed) return;
-      state = state.copyWith(savingFormat: null, notice: 'QR code saved.');
-    } on CatalogFailure catch (failure) {
-      if (_disposed) return;
-      state = state.copyWith(savingFormat: null, failure: failure);
-    } catch (_) {
-      if (_disposed) return;
-      // A share sheet the user dismissed, a browser that refused the download.
-      // Mapped copy only — a platform exception's own text is not for a user.
-      state = state.copyWith(
-        savingFormat: null,
-        failure: const CatalogFailure(
-          code: 'QR_SAVE_FAILED',
-          message: "We couldn't save the QR code. Please try again.",
-        ),
-      );
     }
   }
 
@@ -150,8 +101,7 @@ class CatalogQrNotifier extends AutoDisposeNotifier<CatalogQrState> {
 }
 
 /// The QR screen's state. autoDispose so the bytes are not held for the life of
-/// the session — a 1024 px PNG is not large, but nothing needs it after the
-/// screen closes.
+/// the session.
 final catalogQrProvider =
     AutoDisposeNotifierProvider<CatalogQrNotifier, CatalogQrState>(
   CatalogQrNotifier.new,

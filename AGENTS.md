@@ -720,6 +720,43 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   scanner and the `?code=` deep link: the preflight still runs and the rep can
   still edit the field.
 
+### Owner standee download (the plan's allowance)
+
+- **The owner prints through ONE counted door.** `POST /catalog/standees/download
+  {copies}` renders the menu's own QR (`renderCatalogQr`, logo on, one standee
+  per A4 page, `copies` pages) and spends `copies` from
+  `CatalogSubscription.standeeAllocation`. `GET /catalog/standees` returns
+  `{included, issued, remaining, canDownload, isLive}` for the dialog. Both live
+  in `routes/catalog.ts` over `services/subscription/ownerStandeeService.ts`.
+  `GET /catalog/qr?format=pdf` answers `409 STANDEE_DOWNLOAD_REQUIRED` for the
+  owner: a free print file would be the way round the count. The PNG stays,
+  because the view-only screen draws it. The rep and admin doors are untouched.
+- **One pool, lifetime.** `issued` is the SAME counter the admin's "standees
+  issued" sets by hand (README C8). Owner downloads `$inc` it, and the admin
+  write still overwrites it as the correction tool. `applyPaidPeriod` refreshes
+  `included` from the plan and never resets `issued`, so a renewal gives
+  nothing new and an upgrade gives the difference. Both were chosen deliberately
+  (2026-09-27) over a per-period allowance and over separate owner/admin counters.
+- **The spend is ONE guarded write.** `consumeStandees` filters on
+  `issued + copies <= included` (`$expr`) AND a printing status (ACTIVE, GRACE
+  or COMPED), so two racing downloads cannot both take the last standees. The
+  route renders FIRST and spends SECOND, so a render that throws costs nothing.
+  A response lost after the bytes left is still counted. The request is a POST
+  with `Cache-Control: no-store` because a prefetch must never spend. Live means
+  `status === 'PUBLISHED'` with a `publicUrl` (otherwise `409 CATALOG_NOT_LIVE`).
+  Over the count gives `409 STANDEE_LIMIT_REACHED {remaining}`. Headers
+  `X-Standees-Remaining`/`-Included` are in CORS `exposedHeaders`.
+- **Client:** `owner_standee_notifier.dart` + `owner_standee_dialog.dart`
+  (stepper capped at `remaining`), started from the catalog header's
+  "Download standee" (live only) and the QR screen's "Download in A4 size". A
+  save that fails AFTER the server counted keeps the bytes as `unsaved`, and
+  "Save again" re-delivers them without spending again. The owner's QR screen is
+  VIEW-ONLY: no save buttons, the square is drawn at `kOwnerQrViewSize` from a
+  512px fetch, and on Android the window is `FLAG_SECURE` while the screen is
+  open (`lib/platform/secure_screen.dart` ↔ `MainActivity`
+  `SECURE_SCREEN_CHANNEL`). iOS and web cannot block a screenshot; there it is a
+  no-op, and the counted download is the real control.
+
 ### Catalog publish (ReCapture → Mirage)
 
 - **Publishing is an explicit user action that runs as ONE background job over a

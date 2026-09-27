@@ -11,6 +11,7 @@ import '../../../application/catalog/bulk_selection_notifier.dart';
 import '../../../application/catalog/catalog_categories_notifier.dart';
 import '../../../application/catalog/catalog_notifier.dart';
 import '../../../application/catalog/catalog_products_notifier.dart';
+import '../../../application/catalog/owner_standee_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog.dart';
@@ -23,6 +24,7 @@ import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/publish_body.dart' show kPublishStartQuery;
 import '../../widgets/catalog/bulk_selection_bar.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/owner_standee_dialog.dart';
 import '../../widgets/catalog/product_actions.dart';
 import 'create_catalog_dialog.dart';
 import 'delete_catalog_dialog.dart';
@@ -828,6 +830,7 @@ class _CatalogHeaderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final stacked = MediaQuery.sizeOf(context).width <= _kStackedHeaderWidth;
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -984,10 +987,12 @@ class _CatalogHeaderCard extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.md),
           // Wrap, not Row: this grows as the publish surfaces land, and a
-          // header that overflows on a phone is not a header.
-          Wrap(
-            spacing: AppSpacing.sm,
-            runSpacing: AppSpacing.sm,
+          // header that overflows on a phone is not a header. At or below
+          // [_kStackedHeaderWidth] every button takes the full width, one per
+          // row — in a Column, because a full-width AppButton inside a Wrap
+          // has no bounded width to fill (see AppButton).
+          _HeaderActions(
+            stacked: stacked,
             children: [
               AppButton(
                 key: const ValueKey('catalog_publish_cta'),
@@ -996,15 +1001,26 @@ class _CatalogHeaderCard extends StatelessWidget {
                 // those are different promises.
                 label: catalog.isNeverPublished ? 'Publish' : 'Publish changes',
                 icon: Icons.cloud_upload_outlined,
-                isFullWidth: false,
+                isFullWidth: stacked,
                 onPressed: onOpenPublish,
               ),
               AppButton.secondary(
                 key: const ValueKey('catalog_preview_cta'),
                 label: 'Preview',
                 icon: Icons.visibility_outlined,
-                isFullWidth: false,
+                isFullWidth: stacked,
                 onPressed: onOpenPreview,
+              ),
+              // Unconditional, unlike the QR below: before the first publish
+              // there is no code to show, but there IS an analytics
+              // destination whose empty state says "publish first". See
+              // `_CatalogShellState._openAnalytics`.
+              AppButton.secondary(
+                key: const ValueKey('catalog_analytics_cta'),
+                label: 'Analytics',
+                icon: Icons.insights_outlined,
+                isFullWidth: stacked,
+                onPressed: onOpenAnalytics,
               ),
               // Only once a URL exists. Before the first publish there is no
               // code to show, and an entry point to an explanation of why the
@@ -1014,24 +1030,72 @@ class _CatalogHeaderCard extends StatelessWidget {
                   key: const ValueKey('catalog_qr_cta'),
                   label: 'QR code',
                   icon: Icons.qr_code_2,
-                  isFullWidth: false,
+                  isFullWidth: stacked,
                   onPressed: onOpenQr,
                 ),
-              // Unconditional, unlike the QR above: before the first publish
-              // there is no code to show, but there IS an analytics
-              // destination whose empty state says "publish first". See
-              // `_CatalogShellState._openAnalytics`.
-              AppButton.secondary(
-                key: const ValueKey('catalog_analytics_cta'),
-                label: 'Analytics',
-                icon: Icons.insights_outlined,
-                isFullWidth: false,
-                onPressed: onOpenAnalytics,
-              ),
+              // Live only: a standee is printed to be scanned at a table, and
+              // a menu that is not live answers that scan with nothing.
+              if (catalog.status.isLive)
+                _StandeeDownloadButton(fullWidth: stacked),
             ],
           ),
         ],
       ),
+    );
+  }
+}
+
+/// At or below this screen width the header's buttons stack, full width.
+const double _kStackedHeaderWidth = 350;
+
+/// The header's buttons: a wrapping row, or one full-width button per row on
+/// a narrow screen (phone and web alike — it reads the window's width).
+class _HeaderActions extends StatelessWidget {
+  const _HeaderActions({required this.stacked, required this.children});
+
+  final bool stacked;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!stacked) {
+      return Wrap(
+        spacing: AppSpacing.sm,
+        runSpacing: AppSpacing.sm,
+        children: children,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) const SizedBox(height: AppSpacing.sm),
+          children[i],
+        ],
+      ],
+    );
+  }
+}
+
+/// "Download standee" — the menu's QR as A4 standees, counted against the
+/// plan's allowance. Its own Consumer so the header stays a plain widget; it
+/// also reports the download's outcome while the catalog screen is on top.
+class _StandeeDownloadButton extends ConsumerWidget {
+  const _StandeeDownloadButton({required this.fullWidth});
+
+  final bool fullWidth;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final busy = ref.watch(ownerStandeeProvider.select((s) => s.busy));
+    listenOwnerStandee(context, ref);
+    return AppButton.secondary(
+      key: const ValueKey('catalog_standee_cta'),
+      label: 'Download QR/standee',
+      icon: Icons.download_outlined,
+      isFullWidth: fullWidth,
+      isLoading: busy,
+      onPressed: busy ? null : () => startOwnerStandeeDownload(context, ref),
     );
   }
 }

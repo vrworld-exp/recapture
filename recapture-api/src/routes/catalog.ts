@@ -24,6 +24,7 @@ import {
   catalogAnalyticsQuerySchema,
   catalogEntityIdParamsSchema,
   catalogQrQuerySchema,
+  catalogStandeeDownloadSchema,
   catalogTopProductsQuerySchema,
   createCatalogSchema,
   createCategorySchema,
@@ -99,6 +100,7 @@ import { consumeRateWindow } from '@/utils/rateLimit';
 import { env } from '@/config/env';
 import { getSubscriptionStatus } from '@/services/subscription/subscriptionService';
 import { settleOpenOrdersOnRead } from '@/services/subscription/reconcileService';
+import { consumeStandees, standeeQuotaFor } from '@/services/subscription/ownerStandeeService';
 import { verifyClientPayment } from '@/services/subscription/clientVerifyService';
 import {
   cancelAutopay,
@@ -1724,6 +1726,18 @@ router.get(
     }
 
     const { format, size } = parsed.data;
+    if (format === 'pdf') {
+      // The owner's print file is the COUNTED one now — POST
+      // /catalog/standees/download, drawn from the plan's allowance. A free PDF
+      // here would be the way round it. The PNG stays: it is what the QR
+      // screen draws.
+      return fail(
+        res,
+        409,
+        'STANDEE_DOWNLOAD_REQUIRED',
+        'Download your standees to print this QR code.'
+      );
+    }
     const clamped = clampQrSize(size);
 
     // Keyed on everything that can change the bytes and nothing that cannot.
@@ -1759,6 +1773,113 @@ router.get(
 
     res.setHeader('Content-Type', rendered.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
+    res.status(200).send(rendered.body);
+  })
+);
+
+// ── Standees (the owner prints from the plan's allowance) ───────────────────
+//
+// The allowance is `standeeAllocation` on the subscription row — the same pool
+// the admin's "standees issued" sets by hand. See ownerStandeeService for why
+// it is one lifetime count and not two.
+
+/** Live in the sense a customer can use: published, with a link to scan. */
+function isPrintable(catalog: { status: string; publicUrl: string | null }): boolean {
+  return catalog.status === 'PUBLISHED' && !!catalog.publicUrl;
+}
+
+/**
+ * GET /catalog/standees — what the owner could still print, for the dialog.
+ */
+router.get(
+  '/standees',
+  asyncHandler(async (req, res) => {
+    const catalog = await getCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+
+    const quota = await standeeQuotaFor(new Types.ObjectId(catalog.id));
+    res.status(200).json({ status: 'success', ...quota, isLive: isPrintable(catalog) });
+  })
+);
+
+/**
+ * POST /catalog/standees/download { copies } — the menu's QR as a PDF, one
+ * standee per A4 page, `copies` pages, and `copies` spent from the allowance.
+ *
+ * A POST, not a GET: it spends something, and a GET that a browser prefetches
+ * or a proxy retries must never cost the owner a standee. Not cached for the
+ * same reason — no ETag, `no-store`.
+ *
+ * Renders FIRST and spends SECOND, so a render that throws costs nothing. The
+ * spend is the guarded write in `consumeStandees`; the count the dialog showed
+ * is advisory, and two phones racing for the last standee get one file.
+ */
+router.post(
+  '/standees/download',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogStandeeDownloadSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+
+    // The QR's own window: this renders the same square.
+    const rate = await consumeRateWindow(
+      `catalog-qr:${userId}`,
+      env.CATALOG_QR_MAX_PER_WINDOW,
+      env.CATALOG_QR_WINDOW_SECONDS
+    );
+    if (rate.limited) return rateLimited(res, rate.retryAfter);
+
+    const catalog = await getCatalog(userId);
+    if (!catalog) return noCatalog(res);
+    if (!isPrintable(catalog)) {
+      return fail(
+        res,
+        409,
+        'CATALOG_NOT_LIVE',
+        'Standees can be downloaded while your catalog is live. Publish it first.'
+      );
+    }
+
+    const { copies } = parsed.data;
+    const catalogId = new Types.ObjectId(catalog.id);
+
+    const rendered = await renderCatalogQr({
+      publicUrl: catalog.publicUrl!,
+      catalogName: catalog.name,
+      format: 'pdf',
+      logo: true,
+      copies,
+    });
+
+    const spent = await consumeStandees(catalogId, copies);
+    if (spent.outcome === 'REFUSED') {
+      const { remaining } = spent.quota;
+      res.status(409).json({
+        status: 'error',
+        code: 'STANDEE_LIMIT_REACHED',
+        message:
+          remaining > 0
+            ? `You can download ${remaining} more standee${remaining === 1 ? '' : 's'} on your plan.`
+            : 'You have downloaded all the standees your plan includes.',
+        remaining,
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.CATALOG_STANDEES_DOWNLOADED, {
+      user_id_hash: hashIdentifier(userId),
+      catalog_id: catalog.id,
+      copies,
+      remaining: spent.quota.remaining,
+    });
+
+    const filename = rendered.filename.replace(/-qr\.pdf$/, `-standees-x${copies}.pdf`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', rendered.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('X-Standees-Remaining', String(spent.quota.remaining));
+    res.setHeader('X-Standees-Included', String(spent.quota.included));
     res.status(200).send(rendered.body);
   })
 );

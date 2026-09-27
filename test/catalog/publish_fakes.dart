@@ -248,6 +248,48 @@ class FakePublishRepository
     );
   }
 
+  /// What `/catalog/standees` answers. A Taste plan, untouched, by default.
+  StandeeQuota standeeQuota = const StandeeQuota(
+    included: 10,
+    issued: 0,
+    remaining: 10,
+    canDownload: true,
+    isLive: true,
+  );
+
+  /// Every standee download, by count.
+  final List<int> standeeDownloads = [];
+
+  /// Set to refuse the next standee download.
+  CatalogFailure? standeeFailure;
+
+  @override
+  Future<StandeeQuota> fetchStandeeQuota() async => standeeQuota;
+
+  @override
+  Future<StandeeDownload> downloadStandees(int copies) async {
+    standeeDownloads.add(copies);
+    if (standeeFailure != null) throw standeeFailure!;
+    final q = standeeQuota;
+    standeeQuota = StandeeQuota(
+      included: q.included,
+      issued: q.issued + copies,
+      remaining: q.remaining - copies,
+      canDownload: q.remaining - copies > 0,
+      isLive: q.isLive,
+    );
+    return StandeeDownload(
+      file: CatalogQrImage(
+        bytes: Uint8List.fromList(utf8.encode('standees-x$copies')),
+        contentType: 'application/pdf',
+        fileName: 'cafe-mocha-standees-x$copies.pdf',
+        format: CatalogQrFormat.pdf,
+      ),
+      copies: copies,
+      remaining: standeeQuota.remaining,
+    );
+  }
+
   // ── The rest of the seam, not exercised here ──────────────────────────────
 
   @override

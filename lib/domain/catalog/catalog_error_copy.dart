@@ -93,6 +93,20 @@ const Map<String, CatalogErrorCopy> _copy = {
     'The download was cancelled or blocked.',
     'Try again, or photograph the code on screen.',
   ),
+  // ── The owner's standee download (the plan's allowance) ───────────────────
+  // All three are refusals: pressing again gets the same answer.
+  'STANDEE_LIMIT_REACHED': CatalogErrorCopy(
+    'That is more standees than your plan has left.',
+    'Choose a smaller number, or upgrade your plan for more.',
+  ),
+  'CATALOG_NOT_LIVE': CatalogErrorCopy(
+    'Standees can only be downloaded while your catalog is live.',
+    'Publish your catalog first.',
+  ),
+  'STANDEE_DOWNLOAD_REQUIRED': CatalogErrorCopy(
+    'The printable QR code comes as standees now.',
+    'Use Download standee to print it.',
+  ),
   // ── One standee's sheet (admin and rep) ───────────────────────────────────
   // Both are REFUSALS, not outages: the same press gets the same answer, so
   // neither may fall through to "try again in a moment".

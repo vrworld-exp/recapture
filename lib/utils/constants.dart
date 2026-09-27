@@ -166,4 +166,10 @@ abstract final class AppConfig {
   /// through model_viewer_plus and never calls this.
   static const String channelArQuickLook =
       'com.mayasabhaxr.recapture/ar_quicklook';
+
+  /// Native Android screenshot guard — must match MainActivity's
+  /// SECURE_SCREEN_CHANNEL. `enable` / `disable` toggle FLAG_SECURE on the
+  /// window. Android-only: iOS and the browser have no equivalent.
+  static const String channelSecureScreen =
+      'com.mayasabhaxr.recapture/secure_screen';
 }

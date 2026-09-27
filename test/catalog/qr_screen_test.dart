@@ -7,8 +7,9 @@
 //     printed sticker resolves through it. A client that shortened, re-cased or
 //     rebuilt it would break codes already on tables, and nothing in the app
 //     would show it.
-//   • A DOWNLOAD THAT ONLY WORKS ON ONE PLATFORM. One repository method fetches
-//     the bytes; the delivery is a seam. The tests drive both sides of it.
+//   • A FREE PRINT FILE. The owner's screen is view-only; printing is the
+//     counted standee download, capped at what the plan has left, and a save
+//     that fails after the count is re-saved, never paid for twice.
 //   • THE PRE-PUBLISH STATE READ AS A BUG. Before the first publish the backend
 //     answers 409, and "publish first" is an instruction, not an apology.
 //
@@ -25,8 +26,11 @@ import 'package:recapture/application/catalog/catalog_qr_service.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
+import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/presentation/screens/catalog/catalog_qr_screen.dart';
+import 'package:recapture/presentation/widgets/catalog/qr_code_panel.dart';
 
+import 'catalog_entities_test.dart' as golden;
 import 'publish_fakes.dart';
 
 class _StubAuth extends AuthNotifier {
@@ -68,68 +72,145 @@ void main() {
     expect(repo.qrCalls, [CatalogQrFormat.png]);
   });
 
-  testWidgets('saving a PNG reuses the bytes already on screen',
+  testWidgets('view-only: no free save, the square is small, A4 is offered',
       (tester) async {
-    final repo = FakePublishRepository();
-    final deliverer = FakeQrDeliverer();
-
-    await tester.pumpWidget(harness(repo, deliverer: deliverer));
+    await tester.pumpWidget(harness(FakePublishRepository()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('qr_save_png')));
-    await tester.pumpAndSettle();
-
-    // ONE fetch, not two: the endpoint is rate-limited and the bytes are a pure
-    // function of a URL that never changes.
-    expect(repo.qrCalls, [CatalogQrFormat.png]);
-    expect(deliverer.delivered, hasLength(1));
+    // The print file is the COUNTED download; a free save would be the way
+    // round the plan's allowance.
+    expect(find.byKey(const ValueKey('qr_save_png')), findsNothing);
+    expect(find.byKey(const ValueKey('qr_save_pdf')), findsNothing);
+    expect(find.byKey(const ValueKey('qr_download_a4')), findsOneWidget);
     expect(
-      utf8.decode(deliverer.delivered.single.bytes),
-      'qr-bytes-png',
+      tester.getSize(find.byKey(const ValueKey('qr_image'))).width,
+      lessThanOrEqualTo(kOwnerQrViewSize),
     );
-    // The SERVER's filename, so the saved file is named after the catalog.
-    expect(deliverer.delivered.single.fileName, 'cafe-mocha-qr.png');
-    expect(deliverer.delivered.single.mimeType, 'image/png');
-    expect(find.text('QR code saved.'), findsOneWidget);
   });
 
-  testWidgets('saving a PDF fetches the print render', (tester) async {
-    final repo = FakePublishRepository();
+  testWidgets('Download in A4 asks how many, capped at what is left',
+      (tester) async {
+    final repo = FakePublishRepository()
+      ..standeeQuota = const StandeeQuota(
+        included: 10,
+        issued: 7,
+        remaining: 3,
+        canDownload: true,
+        isLive: true,
+      );
     final deliverer = FakeQrDeliverer();
 
     await tester.pumpWidget(harness(repo, deliverer: deliverer));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('qr_save_pdf')));
+    await tester.tap(find.byKey(const ValueKey('qr_download_a4')));
     await tester.pumpAndSettle();
 
-    // A different render, so it IS fetched.
-    expect(repo.qrCalls, [CatalogQrFormat.png, CatalogQrFormat.pdf]);
+    expect(find.text('3 of 10 standees left on your plan.'), findsOneWidget);
+
+    TextButton download() => tester.widget<TextButton>(
+        find.byKey(const ValueKey('owner_standee_download')));
+
+    // Past what is left: the field says so and the button will not go.
+    await tester.enterText(
+        find.byKey(const ValueKey('owner_standee_field')), '4');
+    await tester.pump();
+    expect(download().onPressed, isNull);
+    expect(find.text('Enter a number from 1 to 3.'), findsOneWidget);
+
+    await tester.enterText(
+        find.byKey(const ValueKey('owner_standee_field')), '2');
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('owner_standee_download')));
+    await tester.pumpAndSettle();
+
+    expect(repo.standeeDownloads, [2]);
+    expect(deliverer.delivered.single.fileName, 'cafe-mocha-standees-x2.pdf');
     expect(deliverer.delivered.single.mimeType, 'application/pdf');
+    expect(find.text('2 standees saved. 1 left on your plan.'), findsOneWidget);
   });
 
-  testWidgets('a delivery that fails is reported, not swallowed',
+  testWidgets('with nothing left it says so and offers no download',
       (tester) async {
-    // A dismissed share sheet on a phone, a browser that refused the download.
+    final repo = FakePublishRepository()
+      ..standeeQuota = const StandeeQuota(
+        included: 10,
+        issued: 10,
+        remaining: 0,
+        canDownload: false,
+        isLive: true,
+      );
+
+    await tester.pumpWidget(harness(repo));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('qr_download_a4')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('downloaded all 10 standees'), findsOneWidget);
+    expect(find.byKey(const ValueKey('owner_standee_download')), findsNothing);
+    expect(repo.standeeDownloads, isEmpty);
+  });
+
+  testWidgets('a refusal from the server is explained, not retried',
+      (tester) async {
+    // Another phone took the last standees between the dialog and the press.
+    final repo = FakePublishRepository()
+      ..standeeFailure = const CatalogFailure(
+        code: 'STANDEE_LIMIT_REACHED',
+        message: 'You can download 0 more standees on your plan.',
+        statusCode: 409,
+      );
+
+    await tester.pumpWidget(harness(repo));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('qr_download_a4')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('owner_standee_download')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('more standees than your plan has left'),
+        findsOneWidget);
+    expect(find.text('Save again'), findsNothing);
+  });
+
+  testWidgets('a save that fails is re-saved without spending again',
+      (tester) async {
+    // A dismissed share sheet AFTER the server counted the standees.
+    final repo = FakePublishRepository();
     final deliverer = FakeQrDeliverer()..failure = StateError('no');
 
-    await tester.pumpWidget(
-      harness(FakePublishRepository(), deliverer: deliverer),
-    );
+    await tester.pumpWidget(harness(repo, deliverer: deliverer));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('qr_download_a4')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('owner_standee_download')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('qr_save_png')));
-    await tester.pumpAndSettle();
-
-    // QR_SAVE_FAILED is a CLIENT sentinel — there is no envelope behind a
-    // dismissed share sheet — and it reaches the user through the same mapped
-    // table as every backend code. It was missing from that table until this
-    // assertion was written.
     expect(find.textContaining('cancelled or blocked'), findsOneWidget);
-    expect(find.textContaining('photograph the code'), findsOneWidget);
-    // The code is still on screen — a failed save must not take away a QR the
-    // user can photograph off the display.
+    deliverer.failure = null;
+    await tester.tap(find.text('Save again'));
+    await tester.pumpAndSettle();
+
+    expect(deliverer.delivered, hasLength(1));
+    // ONE download: the retry re-delivered the bytes it already had.
+    expect(repo.standeeDownloads, [1]);
+  });
+
+  testWidgets('a catalog that is not live gets no A4 download',
+      (tester) async {
+    final repo = FakePublishRepository(
+      catalog: Catalog.fromMap(
+        golden.catalogGolden()..['status'] = 'UNPUBLISHED',
+      ),
+    );
+
+    await tester.pumpWidget(harness(repo));
+    await tester.pumpAndSettle();
+
     expect(find.byKey(const ValueKey('qr_image')), findsOneWidget);
+    expect(find.byKey(const ValueKey('qr_download_a4')), findsNothing);
+    expect(
+        find.byKey(const ValueKey('qr_download_needs_live')), findsOneWidget);
   });
 
   testWidgets('before the first publish it explains, it does not apologise',
@@ -186,33 +267,5 @@ void main() {
     );
     // A copy with no acknowledgement reads as a dead button.
     expect(find.text('Link copied.'), findsOneWidget);
-  });
-
-  testWidgets('one save at a time — the other button goes dead meanwhile',
-      (tester) async {
-    // A user who taps PNG and then PDF while the first is still going would
-    // otherwise get two share sheets, or two downloads, from one intention.
-    final deliverer = FakeQrDeliverer()..gate = Completer<void>();
-    final repo = FakePublishRepository();
-
-    await tester.pumpWidget(harness(repo, deliverer: deliverer));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const ValueKey('qr_save_png')));
-    await tester.pump();
-
-    final pdf = tester.widget<OutlinedButton>(
-      find.descendant(
-        of: find.byKey(const ValueKey('qr_save_pdf')),
-        matching: find.byType(OutlinedButton),
-      ),
-    );
-    expect(pdf.onPressed, isNull);
-
-    deliverer.gate!.complete();
-    await tester.pumpAndSettle();
-
-    expect(deliverer.delivered, hasLength(1));
-    expect(repo.qrCalls, [CatalogQrFormat.png]);
   });
 }

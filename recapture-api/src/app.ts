@@ -63,6 +63,10 @@ const corsOptions: CorsOptions = {
     'X-Standee-Sheet-Cards',
     'X-Standee-Sheet-Pages',
     'X-Standee-Sheet-Skipped-Retired',
+    // The owner's standee download: what is left of the plan's allowance
+    // after this file, so the web client can say so without a second request.
+    'X-Standees-Remaining',
+    'X-Standees-Included',
   ],
 };
 

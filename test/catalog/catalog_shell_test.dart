@@ -222,6 +222,32 @@ void main() {
     expect(find.text('12 products · 4 categories'), findsOneWidget);
   });
 
+  testWidgets('offers Download standee only while the catalog is live',
+      (tester) async {
+    // A standee is printed to be scanned at a table; a menu that is not live
+    // answers that scan with nothing.
+    for (final (status, shown) in [
+      ('PUBLISHED', true),
+      ('UNPUBLISHED', false),
+      ('DRAFT', false),
+    ]) {
+      final repo = _FakeCatalogRepo(
+        () async => Catalog.fromMap(golden.catalogGolden()..['status'] = status),
+      );
+
+      await tester.pumpWidget(_app(repo));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('catalog_standee_cta')),
+        shown ? findsOneWidget : findsNothing,
+        reason: status,
+      );
+      // A fresh scope per status: the catalog provider is app-wide.
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
+
   testWidgets('a real failure shows the error state with a retry', (tester) async {
     final repo = _FakeCatalogRepo(
       () async => throw const CatalogFailure(
