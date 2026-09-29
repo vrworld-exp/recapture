@@ -1,5 +1,13 @@
 ✅✅✅✅✅✅
-# Stage 2 — Appearance screen in ReCapture
+# ✅ Stage 2 — Appearance screen in ReCapture
+
+> **Status (2026-09-29): built, uncommitted; tests written, not yet run (run after the last
+> stage).** API: `config/themePresets.ts`, `utils/colorContrast.ts`, `appearance` on Catalog +
+> profile PATCH (owner and rep, `APPEARANCE_LOW_CONTRAST`), `theme` sent on every branding sync,
+> `themePresets` on /remote-config (v7). Flutter: `appearance_screen.dart`,
+> `menu_theme_preview.dart`, `appearance_notifier.dart`, domain `appearance.dart` /
+> `menu_theme_presets.dart` / `color_contrast.dart`; entry from the catalog header and the
+> business profile. Decision taken: `appearance` REPLACES the block (like `contact`), `null` resets.
 
 **Side:** recapture-api + Flutter app.
 **Depends on:** Stage 1 deployed to Mirage (else the field is stored but ignored — harmless).
@@ -42,7 +50,7 @@ card, optionally picks a primary/accent colour, sees a **live phone preview**, s
    - `primary` ≥ 4.5 vs its derived `onPrimary` (and both CTA gradient stops ≥ 4.5 vs it),
      and ≥ 3.0 vs the preset `bg` (price/icons are large + bold → AA-large);
    - `accent` ≥ 4.5 vs the preset `bg` and ≥ 3.0 vs black (Featured badge on the photo scrim).
-   (A flat "primary vs bg ≥ 4.5" would reject Basalt's own red — 3.05:1 on #0B0B0E.)
+   (A flat "primary vs bg ≥ 4.5" would reject Basalt's own red — 3.96:1 on #0B0B0E.)
    Failing → 400 `APPEARANCE_LOW_CONTRAST` with the failing pair. `null` on a key = clear it.
    Put the contrast function in `utils/colorContrast.ts` (pure, tested).
 

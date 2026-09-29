@@ -133,6 +133,28 @@ void main() {
       expect(repo.writes, isEmpty);
     });
 
+    test('layout and font are saved, and survive a change of preset', () async {
+      final (c, repo) = await ready();
+      final n = c.read(appearanceFor(owner).notifier);
+      n.setLayout(MenuLayout.list);
+      n.setFont('classic');
+      n.pickPreset('garden');
+      expect(await n.save(), isTrue);
+      expect(repo.writes.single?.toMap(), {
+        'presetId': 'garden',
+        'layout': 'list',
+        'fontId': 'classic',
+      });
+    });
+
+    test('grid and the default font are the default, not a change', () async {
+      final (c, _) = await ready();
+      final n = c.read(appearanceFor(owner).notifier);
+      n.setLayout(MenuLayout.grid);
+      n.setFont('default');
+      expect(c.read(appearanceFor(owner)).isDirty, isFalse);
+    });
+
     test('reset sends null — the default page', () async {
       final (c, repo) = await ready({'presetId': 'royal'});
       expect(await c.read(appearanceFor(owner).notifier).reset(), isTrue);

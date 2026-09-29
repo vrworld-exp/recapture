@@ -14,6 +14,7 @@ import '../../data/repositories/catalog_failure.dart';
 import '../../domain/catalog/appearance.dart';
 import '../../domain/catalog/catalog_scope.dart';
 import '../../domain/catalog/color_contrast.dart';
+import '../../domain/catalog/menu_theme_fonts.dart';
 import '../../domain/catalog/menu_theme_presets.dart';
 import '../config/config_notifier.dart';
 import 'business_profile_notifier.dart';
@@ -45,7 +46,9 @@ class AppearanceDraft {
     if (a == null) return null;
     final isPlainBasalt = (a.presetId == null || a.presetId == MenuThemePreset.defaultId) &&
         a.primary == null &&
-        a.accent == null;
+        a.accent == null &&
+        (a.layout == null || a.layout == MenuLayout.grid) &&
+        (a.fontId == null || a.fontId == MenuThemeFont.defaultId);
     return isPlainBasalt ? null : a;
   }
 
@@ -94,8 +97,31 @@ class AppearanceNotifier
   /// palette is rarely readable on another, and silently keeping it would
   /// turn a tap on a preset card into a blocked Save.
   void pickPreset(String presetId) {
+    // Layout and font are not colours — they survive a change of palette.
     state = state.copyWith(
-      draft: CatalogAppearance(presetId: presetId),
+      draft: CatalogAppearance(
+        presetId: presetId,
+        layout: state.draft.layout,
+        fontId: state.draft.fontId,
+      ),
+      error: null,
+    );
+  }
+
+  /// Stage 3. `grid` is stored as absent — it is the default.
+  void setLayout(MenuLayout layout) {
+    state = state.copyWith(
+      draft: state.draft.copyWith(layout: layout == MenuLayout.grid ? null : layout),
+      error: null,
+    );
+  }
+
+  /// Stage 3. The default pairing is stored as absent.
+  void setFont(String fontId) {
+    state = state.copyWith(
+      draft: state.draft.copyWith(
+        fontId: fontId == MenuThemeFont.defaultId ? null : fontId,
+      ),
       error: null,
     );
   }

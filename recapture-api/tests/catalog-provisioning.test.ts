@@ -148,6 +148,7 @@ function fakeMirage(seed: MirageRestaurant[] = []): FakeMirage {
         website: input.website ?? '',
         socialLinks: { ...input.socialLinks },
         ...(input.theme ? { theme: { ...input.theme } } : {}),
+        ...(input.coverUrl ? { coverImage: input.coverUrl } : {}),
         categoryIds: [],
       };
       state.restaurants.push(created);
@@ -181,6 +182,10 @@ function fakeMirage(seed: MirageRestaurant[] = []): FakeMirage {
       // `theme` merges the same way (mirage-be adminController, Stage 1).
       if (input.theme !== undefined) {
         found.theme = { ...found.theme, ...input.theme };
+      }
+      // `coverUrl`: '' clears, absent leaves alone (adminController resolveCover).
+      if (input.coverUrl !== undefined) {
+        found.coverImage = input.coverUrl || undefined;
       }
       return { ...found };
     },
@@ -712,6 +717,8 @@ describe('branding', () => {
       mode: '',
       primary: '',
       accent: '',
+      layout: '',
+      fontId: '',
     });
   });
 
@@ -730,6 +737,8 @@ describe('branding', () => {
       mode: '',
       primary: '',
       accent: '#E6C79C',
+      layout: '',
+      fontId: '',
     });
 
     // "Reset to default" removes the block; Mirage must be told, not left alone.
@@ -740,7 +749,40 @@ describe('branding', () => {
       mode: '',
       primary: '',
       accent: '',
+      layout: '',
+      fontId: '',
     });
+  });
+
+  // ── Stage 3: layout, font and the cover ──────────────────────────────────
+
+  it('sends the layout and font pairing with the theme', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog();
+    await Catalog.updateOne(
+      { _id: id },
+      { $set: { appearance: { presetId: 'garden', layout: 'list', fontId: 'friendly' } } }
+    ).exec();
+
+    await provisionCatalog(id);
+
+    expect(mirage.restaurants[0]?.theme).toMatchObject({ layout: 'list', fontId: 'friendly' });
+  });
+
+  it('sends the cover as a URL, and clears it once removed', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({ name: 'Blue Cafe' });
+    await Catalog.updateOne(
+      { _id: id },
+      { $set: { coverImageKey: 'catalogs/abc/branding/cover.jpg' } }
+    ).exec();
+
+    await provisionCatalog(id);
+    expect(mirage.restaurants[0]?.coverImage).toMatch(/\/catalogs\/abc\/branding\/cover\.jpg$/);
+
+    await Catalog.updateOne({ _id: id }, { $unset: { coverImageKey: 1 } }).exec();
+    await syncCatalogBranding(id);
+    expect(mirage.restaurants[0]?.coverImage).toBeUndefined();
   });
 
   it('is a no-op on a catalog that has never been provisioned', async () => {

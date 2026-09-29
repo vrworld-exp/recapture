@@ -1,4 +1,19 @@
-# Stage 3 — Cover image, layout style, fonts
+# ✅ Stage 3 — Cover image, layout style, fonts
+
+> **Status (2026-09-30): built, uncommitted; tests written, not yet run (run after the last
+> stage).** Mirage-be: `coverImage` (+ `coverSourceUrl`, so a re-sent URL is not copied again),
+> `cover` multer field / `coverUrl`, `theme.layout` / `theme.fontId`. Mirage-fe: `src/theme/fonts.ts`,
+> fonts via `--font-heading`/`--font-body` + one `<link>` (boot script too), `MenuItemRow.tsx`
+> (`list`), `large` variant on `MenuItemCard`, cover hero in `MenuScreen`. API: `layout` /
+> `fontId` on `appearance` (Zod), `coverUrl` + theme keys sent on every sync, `coverImageUrl`
+> now public, `themeFonts` on /remote-config. Flutter: layout segmented control + font chips on
+> the Appearance screen, preview draws cover + layouts; cover help text says 1600×900.
+> **Deferred:** per-category layout override (the doc said ship restaurant-level first).
+> **Choices:** the hero sits ABOVE the sticky header (scrolls away) rather than behind it; it
+> loads eagerly with `fetchpriority=high` (it is above the fold — lazy would hurt LCP).
+> The `list` row never mounts `<model-viewer>`; its AR button uses the same path as the grid's
+> (MenuScreen opens the detail sheet and launches AR). Still open: the phone checks and the
+> Lighthouse LCP check below.
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 2 (the `appearance` subdoc and screen).

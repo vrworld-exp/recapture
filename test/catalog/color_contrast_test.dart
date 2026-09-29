@@ -7,6 +7,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/domain/catalog/appearance.dart';
 import 'package:recapture/domain/catalog/color_contrast.dart';
+import 'package:recapture/domain/catalog/menu_theme_fonts.dart';
 import 'package:recapture/domain/catalog/menu_theme_presets.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 
@@ -20,7 +21,7 @@ void main() {
       expect(contrastRatio('#000000', '#FFFFFF'), closeTo(21, 1e-6));
       expect(contrastRatio('#FFFFFF', '#FFFFFF'), closeTo(1, 1e-6));
       // Basalt's own red on its page — why primary-on-bg is 3.0, not 4.5.
-      expect(contrastRatio('#E10600', '#0B0B0E'), closeTo(3.05, 0.05));
+      expect(contrastRatio('#E10600', '#0B0B0E'), closeTo(3.96, 0.01));
     });
   });
 
@@ -130,6 +131,33 @@ void main() {
         MenuThemePreset.listFromOrDefault([preset('garden').toMap()]),
         same(MenuThemePreset.bundled),
       );
+    });
+
+    test('font pairings parse, fall back whole, and ride on the config', () {
+      expect(MenuThemeFont.listFromOrDefault(null), same(MenuThemeFont.bundled));
+      expect(
+        MenuThemeFont.listFromOrDefault([
+          {'id': 'classic', 'label': 'Classic', 'sample': 'x'},
+        ]),
+        same(MenuThemeFont.bundled),
+        reason: 'no default pairing',
+      );
+      final config = CaptureConfig.fromMap({
+        'themeFonts': [for (final f in MenuThemeFont.bundled.take(2)) f.toMap()],
+      });
+      expect(config.themeFonts.map((f) => f.id), ['default', 'classic']);
+    });
+
+    test('an appearance round-trips layout and font', () {
+      final a = CatalogAppearance.fromMap(const {
+        'presetId': 'royal',
+        'layout': 'large',
+        'fontId': 'hindi',
+      });
+      expect(a.layout, MenuLayout.large);
+      expect(a.toMap(), {'presetId': 'royal', 'layout': 'large', 'fontId': 'hindi'});
+      // An unknown layout from a newer server is dropped, not sent back.
+      expect(CatalogAppearance.fromMap(const {'layout': 'carousel'}).layout, isNull);
     });
 
     test('rides on the remote config, bundled when absent', () {

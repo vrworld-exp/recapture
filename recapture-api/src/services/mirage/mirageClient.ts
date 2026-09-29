@@ -683,7 +683,7 @@ const SOCIAL_LINK_KEYS = [
   'whatsapp',
 ] as const;
 const ADDRESS_KEYS = ['line1', 'line2', 'city', 'state', 'postalCode', 'country'] as const;
-const THEME_KEYS = ['presetId', 'mode', 'primary', 'accent'] as const;
+const THEME_KEYS = ['presetId', 'mode', 'primary', 'accent', 'layout', 'fontId'] as const;
 
 function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
   const socialLinks = pickStrings<keyof MirageSocialLinks & string>(
@@ -703,6 +703,7 @@ function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
     ...(socialLinks ? { socialLinks } : {}),
     ...(address ? { address } : {}),
     ...(theme ? { theme } : {}),
+    ...(str(raw.coverImage) ? { coverImage: str(raw.coverImage) } : {}),
     // Absent on documents written before the field existed, and Mirage treats
     // only an EXPLICIT false as unpublished — so absence must stay absence here
     // rather than collapsing to a default we would then read back as truth.
@@ -798,6 +799,7 @@ export const mirageClient: MirageClient = {
         address: input.address,
         isPublished: input.isPublished,
         theme: input.theme,
+        coverUrl: input.coverUrl,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -837,6 +839,7 @@ export const mirageClient: MirageClient = {
         // "nothing due".
         paymentDueAt: input.paymentDueAt === null ? '' : input.paymentDueAt,
         theme: input.theme,
+        coverUrl: input.coverUrl,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });

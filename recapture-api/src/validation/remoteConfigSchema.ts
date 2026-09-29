@@ -1,7 +1,7 @@
 // src/validation/remoteConfigSchema.ts
 import { z } from 'zod';
 import { DEFAULT_PLAN_CATALOG, planCatalogSchema } from '@/config/subscriptionPlans';
-import { THEME_MODES, THEME_PRESETS } from '@/config/themePresets';
+import { THEME_FONTS, THEME_MODES, THEME_PRESETS } from '@/config/themePresets';
 import { presetDerivatives } from '@/utils/colorContrast';
 import {
   SEGMENT_COUNT_BY_SIZE,
@@ -61,6 +61,13 @@ const themePresetWireSchema = z
   .strict();
 
 export type ThemePresetWire = z.infer<typeof themePresetWireSchema>;
+
+/** Stage 3: the font pairings for the Appearance screen's picker. */
+const themeFontWireSchema = z
+  .object({ id: z.string().min(1), label: z.string().min(1), sample: z.string() })
+  .strict();
+
+export const THEME_FONTS_WIRE = THEME_FONTS.map((f) => ({ ...f }));
 
 /**
  * The served preset list, built from config/themePresets.ts (itself a mirror of
@@ -162,6 +169,8 @@ export const remoteConfigSchema = z
     // reason as subscriptionPlans; an app that finds it missing uses its
     // bundled copy.
     themePresets: z.array(themePresetWireSchema).min(1).optional(),
+    // Stage 3 font pairings; same optional/baked rules as themePresets.
+    themeFonts: z.array(themeFontWireSchema).min(1).optional(),
   })
   .strict();
 
@@ -251,4 +260,5 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
   },
   subscriptionPlans: DEFAULT_PLAN_CATALOG,
   themePresets: THEME_PRESETS_WIRE,
+  themeFonts: THEME_FONTS_WIRE,
 };

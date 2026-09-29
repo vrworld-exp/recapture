@@ -4,6 +4,7 @@ import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import {
   remoteConfigSchema,
   DEFAULT_REMOTE_CONFIG,
+  THEME_FONTS_WIRE,
   THEME_PRESETS_WIRE,
   type RemoteConfig,
 } from '@/validation/remoteConfigSchema';
@@ -85,6 +86,7 @@ export async function getRemoteConfig(): Promise<RemoteConfigResult> {
       subscriptionPlans: await getPlanCatalog(),
       // Baked, never from the store — see THEME_PRESETS_WIRE.
       themePresets: THEME_PRESETS_WIRE,
+      themeFonts: THEME_FONTS_WIRE,
     };
 
     const parsed = remoteConfigSchema.safeParse(candidate);

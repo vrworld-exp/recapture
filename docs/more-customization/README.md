@@ -47,15 +47,16 @@ ReCapture; Mirage only renders what it is sent.
 
 ## The stages
 
-**Progress:** ✅ = code built and tests passing (manual phone checks may still be open — see the
-stage's *Done when*). 🚧 = in progress.
+**Progress:** ✅ = code built (typecheck/analyze clean); tests are written but run once after the
+last stage, and manual phone checks may still be open — see the stage's *Done when*.
+🚧 = in progress.
 
 
 | # | Stage | Side | Depends on | Size |
 |---|---|---|---|---|
 | ✅ 1 | [Theme foundations — CSS variables, presets, Mirage `theme` field](stage-01-theme-foundations.md) | **Mirage** BE + FE | — | M |
-| 2 | [Appearance screen in ReCapture — presets, colours, live preview, sync](stage-02-recapture-appearance.md) | BE + FE | 1 | L |
-| 3 | [Cover image, layout style, fonts](stage-03-cover-layout-fonts.md) | BE + FE + Mirage | 2 | M |
+| ✅ 2 | [Appearance screen in ReCapture — presets, colours, live preview, sync](stage-02-recapture-appearance.md) | BE + FE | 1 | L |
+| ✅ 3 | [Cover image, layout style, fonts](stage-03-cover-layout-fonts.md) | BE + FE + Mirage | 2 | M |
 | 4 | [Opening hours, announcement strip, time-windowed categories](stage-04-hours-announcements.md) | BE + FE + Mirage | 2 | M |
 | 5 | [Custom badges and dietary / allergen info](stage-05-badges-dietary.md) | BE + FE + Mirage | 2 | M |
 | 6 | [Multi-language menu](stage-06-multi-language.md) | BE + FE + Mirage | 2 | L |

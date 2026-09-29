@@ -138,6 +138,10 @@ export type MirageTheme = {
   mode?: string;
   primary?: string;
   accent?: string;
+  /** Stage 3: '' | 'grid' | 'list' | 'large'. */
+  layout?: string;
+  /** Stage 3: a font pairing id, '' = default. */
+  fontId?: string;
 };
 
 /**
@@ -181,6 +185,8 @@ export interface MirageRestaurant {
   address?: MirageAddress;
   /** Read back from a Stage-1 Mirage; absent on an older one. */
   theme?: MirageTheme;
+  /** The hero banner's CDN URL (Stage 3); absent when there is none. */
+  coverImage?: string;
   /**
    * The soft on/off switch for the public page (restaurantModel.js:108-113).
    * THIS is what makes unpublish possible without `delete-restaurant`, which
@@ -263,6 +269,8 @@ export interface CreateRestaurantInput {
   isPublished?: boolean;
   /** An older Mirage ignores it — harmless; the next publish re-sends it. */
   theme?: MirageTheme;
+  /** Stage 3: a URL Mirage copies as the hero banner; `''` clears it. */
+  coverUrl?: string;
   image?: MirageFileUpload;
 }
 
@@ -310,6 +318,8 @@ export interface UpdateRestaurantInput {
   paymentDueAt?: string | null;
   /** Merged key by key; see {@link MirageTheme}. */
   theme?: MirageTheme;
+  /** Stage 3: the hero banner URL, `''` = clear, absent = leave alone. */
+  coverUrl?: string;
   image?: MirageFileUpload;
 }
 

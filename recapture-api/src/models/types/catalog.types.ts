@@ -106,6 +106,10 @@ export interface CatalogAppearance {
   mode?: 'dark' | 'light';
   primary?: string;
   accent?: string;
+  /** Stage 3: how dish cards are drawn. Absent = `grid`, today's cards. */
+  layout?: 'grid' | 'list' | 'large';
+  /** Stage 3: a THEME_FONT_IDS pairing. Absent = the default fonts. */
+  fontId?: string;
 }
 
 // ── Products ────────────────────────────────────────────────────────────────

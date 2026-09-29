@@ -31,6 +31,7 @@ import '../../../data/repositories/rep_repository.dart';
 import '../../../domain/catalog/appearance.dart';
 import '../../../domain/catalog/catalog_scope.dart';
 import '../../../domain/catalog/color_contrast.dart';
+import '../../../domain/catalog/menu_theme_fonts.dart';
 import '../../../domain/catalog/menu_theme_presets.dart';
 import '../../../domain/entities/business_profile.dart';
 import '../../../utils/price_format.dart';
@@ -135,6 +136,7 @@ class _AppearanceBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final presets = ref.watch(captureConfigProvider.select((c) => c.themePresets));
+    final fonts = ref.watch(captureConfigProvider.select((c) => c.themeFonts));
     final state = ref.watch(appearanceFor(scope));
     final notifier = ref.read(appearanceFor(scope).notifier);
     final problem = appearanceContrastProblem(state.draft, presets);
@@ -147,12 +149,16 @@ class _AppearanceBody extends ConsumerWidget {
         restaurantName: profile.displayName,
         logoUrl: profile.logoUrl,
         dishes: dishes,
+        layout: state.draft.layout ?? MenuLayout.grid,
+        coverUrl: profile.coverImageUrl,
       ),
     );
 
     final controls = _Controls(
       scope: scope,
       presets: presets,
+      fonts: fonts,
+      hasCover: profile.coverImageUrl != null,
       state: state,
       problem: problem,
       notifier: notifier,
@@ -227,6 +233,8 @@ class _Controls extends StatelessWidget {
   const _Controls({
     required this.scope,
     required this.presets,
+    required this.fonts,
+    required this.hasCover,
     required this.state,
     required this.problem,
     required this.notifier,
@@ -234,6 +242,10 @@ class _Controls extends StatelessWidget {
 
   final CatalogScope scope;
   final List<MenuThemePreset> presets;
+  final List<MenuThemeFont> fonts;
+
+  /// Whether the catalog has a cover image — the banner is set on the profile.
+  final bool hasCover;
   final AppearanceDraft state;
   final AppearanceContrastProblem? problem;
   final AppearanceNotifier notifier;
@@ -260,6 +272,74 @@ class _Controls extends StatelessWidget {
               ),
           ],
         ),
+        const SizedBox(height: AppSpacing.xxl),
+        _Label('Layout'),
+        const SizedBox(height: AppSpacing.md),
+        SegmentedButton<MenuLayout>(
+          key: const Key('appearance-layout'),
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(
+              value: MenuLayout.grid,
+              icon: Icon(Icons.view_agenda_outlined),
+              label: Text('Grid'),
+            ),
+            ButtonSegment(
+              value: MenuLayout.list,
+              icon: Icon(Icons.view_list_outlined),
+              label: Text('List'),
+            ),
+            ButtonSegment(
+              value: MenuLayout.large,
+              icon: Icon(Icons.crop_landscape),
+              label: Text('Large'),
+            ),
+          ],
+          selected: {state.draft.layout ?? MenuLayout.grid},
+          onSelectionChanged: state.saving
+              ? null
+              : (selection) => notifier.setLayout(selection.first),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          (state.draft.layout ?? MenuLayout.grid).help,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+        ),
+        const SizedBox(height: AppSpacing.xxl),
+        _Label('Fonts'),
+        const SizedBox(height: AppSpacing.md),
+        Wrap(
+          spacing: AppSpacing.sm,
+          runSpacing: AppSpacing.sm,
+          children: [
+            for (final font in fonts)
+              ChoiceChip(
+                key: Key('appearance-font-${font.id}'),
+                label: Text(font.label),
+                tooltip: font.sample,
+                selected: (state.draft.fontId ?? MenuThemeFont.defaultId) == font.id,
+                onSelected: state.saving ? null : (_) => notifier.setFont(font.id),
+              ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Text(
+          fonts
+              .firstWhere(
+                (f) => f.id == (state.draft.fontId ?? MenuThemeFont.defaultId),
+                orElse: () => fonts.first,
+              )
+              .sample,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+        ),
+        if (!hasCover) ...[
+          const SizedBox(height: AppSpacing.lg),
+          Text(
+            'Tip: add a cover image on your business profile to show a banner at '
+            'the top of your menu.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          ),
+        ],
         const SizedBox(height: AppSpacing.xxl),
         Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),

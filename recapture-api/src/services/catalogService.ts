@@ -405,7 +405,8 @@ export async function updateCatalog(
  *
  * `name` → restaurant name · `contact.address` → location · `contact.phone` →
  * phoneNo · `logoUrl` → icon · `contact.website` → website ·
- * `contact.socials.*` → socialLinks.
+ * `contact.socials.*` → socialLinks · `coverImageUrl` → coverImage (the menu's
+ * hero banner, more-customization Stage 3) · `appearance` → theme.
  */
 export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'name',
@@ -419,6 +420,8 @@ export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'contact.socials.whatsapp',
   // The menu theme — Mirage `restaurant.theme` (more-customization Stage 2).
   'appearance',
+  // The hero banner — Mirage `restaurant.coverImage` (Stage 3).
+  'coverImageUrl',
 ];
 
 /**
@@ -459,6 +462,8 @@ function toAppearanceDto(a: CatalogAppearance | undefined): CatalogAppearance | 
     ...(a!.mode ? { mode: a!.mode } : {}),
     ...(a!.primary ? { primary: a!.primary } : {}),
     ...(a!.accent ? { accent: a!.accent } : {}),
+    ...(a!.layout ? { layout: a!.layout } : {}),
+    ...(a!.fontId ? { fontId: a!.fontId } : {}),
   };
 }
 
@@ -517,9 +522,10 @@ export async function updateBusinessProfile(
 // product image (see utils/productImageKeys.ts) — they differ only in living
 // under a reserved slot name instead of a product id.
 //
-// The cover has no Mirage counterpart at all and never reaches the public page;
-// the logo becomes the restaurant `icon` at publish. The profile DTO's
-// `publicFields` is what tells the client which is which.
+// Both reach the public page at publish: the logo as the restaurant `icon`, the
+// cover (since more-customization Stage 3) as the menu's hero banner, sent to
+// Mirage as `coverUrl` for it to copy. The profile DTO's `publicFields` is what
+// tells the client which fields are public.
 
 /** What a presigned branding slot hands back to the client. */
 export interface BrandingSlotDto {

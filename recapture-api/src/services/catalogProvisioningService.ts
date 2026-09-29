@@ -22,7 +22,7 @@
 import { Types } from 'mongoose';
 
 import { env } from '@/config/env';
-import { BUCKET_ARTIFACTS } from '@/config/s3';
+import { BUCKET_ARTIFACTS, CLOUDFRONT_BASE } from '@/config/s3';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogSubscription, isEntitledTo3D } from '@/models/CatalogSubscription';
 import type { PublicUrlScheme } from '@/models/types/catalog.types';
@@ -295,7 +295,19 @@ function mirageTheme(catalog: ICatalog): Required<MirageTheme> {
     mode: a?.mode ?? '',
     primary: a?.primary ?? '',
     accent: a?.accent ?? '',
+    layout: a?.layout ?? '',
+    fontId: a?.fontId ?? '',
   };
+}
+
+/**
+ * The cover as the URL Mirage copies from, or `''` to CLEAR it — always sent,
+ * for the same reason as {@link mirageTheme}: omitting it would leave a removed
+ * cover live. Mirage keeps its copy when the URL has not changed, so re-sending
+ * it on every publish costs nothing (adminController resolveCover).
+ */
+function mirageCoverUrl(catalog: ICatalog): string {
+  return catalog.coverImageKey ? `${CLOUDFRONT_BASE}/${catalog.coverImageKey}` : '';
 }
 
 /**
@@ -599,6 +611,7 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
       website: links.website,
       socialLinks: links.socialLinks,
       theme: mirageTheme(catalog),
+      coverUrl: mirageCoverUrl(catalog),
       ...(logo ? { image: logo } : {}),
     });
   } catch (err) {
@@ -669,6 +682,7 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
       website: links.website,
       socialLinks: links.socialLinks,
       theme: mirageTheme(catalog),
+      coverUrl: mirageCoverUrl(catalog),
       ...(logo ? { image: logo } : {}),
     });
 

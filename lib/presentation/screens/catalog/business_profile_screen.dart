@@ -891,7 +891,8 @@ class _BrandingPanel extends StatelessWidget {
             slot: BrandingSlot.cover,
             path: 'coverImageUrl',
             title: 'Cover image',
-            help: 'A wide banner for the top of your catalog.',
+            // Stage 3: the hero banner at the top of the public menu.
+            help: 'The banner at the top of your menu. 1600×900 (16:9) works best.',
             url: profile.coverImageUrl,
             aspectRatio: 16 / 9,
           ),

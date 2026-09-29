@@ -177,6 +177,39 @@ describe('catalog appearance', () => {
     expect(await draftRevisionOf(catalogId)).toBe(before);
   });
 
+  // ── Stage 3 ──────────────────────────────────────────────────────────────
+
+  it('saves a layout and a font pairing', async () => {
+    const { auth } = await ownerWithCatalog();
+    const res = await request(app)
+      .patch('/catalog/profile')
+      .set(auth)
+      .send({ appearance: { presetId: 'bakery', layout: 'large', fontId: 'elegant' } })
+      .expect(200);
+
+    expect(res.body.profile.appearance).toEqual({
+      presetId: 'bakery',
+      layout: 'large',
+      fontId: 'elegant',
+    });
+  });
+
+  it('refuses an unknown layout or font pairing', async () => {
+    const { auth } = await ownerWithCatalog();
+    for (const appearance of [{ layout: 'carousel' }, { fontId: 'comic-sans' }]) {
+      const res = await request(app)
+        .patch('/catalog/profile')
+        .set(auth)
+        .send({ appearance })
+        .expect(400);
+      expect(res.body.code).toBe('INVALID_REQUEST');
+    }
+  });
+
+  it('marks the cover as public — it is the menu hero since Stage 3', async () => {
+    expect(PUBLIC_PROFILE_FIELDS).toContain('coverImageUrl');
+  });
+
   it('is refused the same way on PATCH /catalog', async () => {
     const { auth } = await ownerWithCatalog();
     const res = await request(app)

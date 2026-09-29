@@ -6,6 +6,7 @@
 
 import '../capture/capture_flow_variant.dart';
 import '../capture/capture_mode.dart';
+import '../catalog/menu_theme_fonts.dart';
 import '../catalog/menu_theme_presets.dart';
 import 'catalog_subscription.dart';
 
@@ -476,6 +477,7 @@ class CaptureConfig {
     this.meshySegments = VariantSegments.meshyBundledDefault,
     this.subscriptionPlans = PlanCatalog.bundledDefault,
     this.themePresets = MenuThemePreset.bundled,
+    this.themeFonts = MenuThemeFont.bundled,
   });
 
   final int version;
@@ -508,6 +510,9 @@ class CaptureConfig {
   /// since config version 7). [MenuThemePreset.bundled] when absent or
   /// malformed — see [MenuThemePreset.listFromOrDefault].
   final List<MenuThemePreset> themePresets;
+
+  /// The menu font pairings (`themeFonts`, Stage 3). Bundled when absent.
+  final List<MenuThemeFont> themeFonts;
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
@@ -621,6 +626,7 @@ class CaptureConfig {
       ),
       subscriptionPlans: PlanCatalog.fromMapOrDefault(m['subscriptionPlans']),
       themePresets: MenuThemePreset.listFromOrDefault(m['themePresets']),
+      themeFonts: MenuThemeFont.listFromOrDefault(m['themeFonts']),
     );
   }
 
@@ -634,6 +640,7 @@ class CaptureConfig {
         'meshy_capture_variant_segments': meshySegments.toMap(),
         'subscriptionPlans': subscriptionPlans.toMap(),
         'themePresets': themePresets.map((p) => p.toMap()).toList(),
+        'themeFonts': themeFonts.map((f) => f.toMap()).toList(),
       };
 
   CaptureConfig copyWith({
@@ -646,6 +653,7 @@ class CaptureConfig {
     VariantSegments? meshySegments,
     PlanCatalog? subscriptionPlans,
     List<MenuThemePreset>? themePresets,
+    List<MenuThemeFont>? themeFonts,
   }) =>
       CaptureConfig(
         version: version ?? this.version,
@@ -657,5 +665,6 @@ class CaptureConfig {
         meshySegments: meshySegments ?? this.meshySegments,
         subscriptionPlans: subscriptionPlans ?? this.subscriptionPlans,
         themePresets: themePresets ?? this.themePresets,
+        themeFonts: themeFonts ?? this.themeFonts,
       );
 }

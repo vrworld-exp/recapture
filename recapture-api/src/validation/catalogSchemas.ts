@@ -19,7 +19,12 @@ import {
 import { BRANDING_SLOTS, PRODUCT_IMAGE_CONTENT_TYPES } from '@/utils/productImageKeys';
 import { STANDEE_SHEET_MAX_COPIES } from '@/services/standeeSheetPdf';
 import { isValidCatalogSlug, toCatalogSlug } from '@/utils/catalogNames';
-import { THEME_MODES, THEME_PRESET_IDS } from '@/config/themePresets';
+import {
+  THEME_FONT_IDS,
+  THEME_LAYOUTS,
+  THEME_MODES,
+  THEME_PRESET_IDS,
+} from '@/config/themePresets';
 import { HEX_COLOR_RE } from '@/utils/colorContrast';
 
 // A Mongo ObjectId as a 24-char hex string. Validated here so a malformed id is
@@ -122,6 +127,12 @@ export const appearanceSchema = z
     mode: z.enum(THEME_MODES).optional(),
     primary: hexColor.optional(),
     accent: hexColor.optional(),
+    layout: z.enum(THEME_LAYOUTS).optional(),
+    fontId: z
+      .string()
+      .trim()
+      .refine((v) => THEME_FONT_IDS.includes(v), { message: 'Unknown font pairing' })
+      .optional(),
   })
   .strict();
 

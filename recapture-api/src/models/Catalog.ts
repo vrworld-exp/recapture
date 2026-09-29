@@ -130,6 +130,8 @@ const CatalogAppearanceSchema = new Schema<CatalogAppearance>(
     mode: { type: String, enum: ['dark', 'light'] },
     primary: { type: String, trim: true, match: /^#[0-9a-fA-F]{6}$/ },
     accent: { type: String, trim: true, match: /^#[0-9a-fA-F]{6}$/ },
+    layout: { type: String, enum: ['grid', 'list', 'large'] },
+    fontId: { type: String, trim: true, maxlength: 40 },
   },
   { _id: false }
 );

@@ -176,6 +176,27 @@ export const THEME_PRESETS: readonly ThemePreset[] = [
 
 export const THEME_PRESET_IDS: readonly string[] = THEME_PRESETS.map((p) => p.id);
 
+/** Stage 3 card layouts. `grid` is today's card and the default. */
+export const THEME_LAYOUTS = ['grid', 'list', 'large'] as const;
+export type ThemeLayout = (typeof THEME_LAYOUTS)[number];
+
+/**
+ * Stage 3 font pairings — a MIRROR of the ids in mirage-fe src/theme/fonts.ts,
+ * which owns the actual font stacks. An id Mirage-fe does not know renders the
+ * default fonts, so keep these equal. `default` = today's Poppins.
+ */
+export const THEME_FONTS: readonly { id: string; label: string; sample: string }[] = [
+  { id: 'default', label: 'Default', sample: 'Poppins' },
+  { id: 'classic', label: 'Classic', sample: 'Playfair Display / Inter' },
+  { id: 'modern', label: 'Modern', sample: 'Poppins' },
+  { id: 'friendly', label: 'Friendly', sample: 'Baloo 2 / Nunito' },
+  { id: 'bold', label: 'Bold', sample: 'Bebas Neue / Roboto' },
+  { id: 'elegant', label: 'Elegant', sample: 'Cormorant Garamond / Lato' },
+  { id: 'hindi', label: 'Hindi', sample: 'Tiro Devanagari Hindi / Mukta' },
+];
+
+export const THEME_FONT_IDS: readonly string[] = THEME_FONTS.map((f) => f.id);
+
 export function findThemePreset(id: string | undefined): ThemePreset | undefined {
   return THEME_PRESETS.find((p) => p.id === id);
 }

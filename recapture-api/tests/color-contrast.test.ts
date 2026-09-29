@@ -27,7 +27,7 @@ describe('contrastRatio', () => {
     expect(contrastRatio('#000000', '#FFFFFF')).toBeCloseTo(21, 5);
     expect(contrastRatio('#FFFFFF', '#FFFFFF')).toBeCloseTo(1, 5);
     // Basalt's own red on its own background — the reason primary-on-bg is 3.0.
-    expect(contrastRatio('#E10600', '#0B0B0E')).toBeCloseTo(3.05, 1);
+    expect(contrastRatio('#E10600', '#0B0B0E')).toBeCloseTo(3.96, 2);
   });
 });
 

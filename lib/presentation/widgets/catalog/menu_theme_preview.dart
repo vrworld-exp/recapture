@@ -11,6 +11,7 @@
 // it light over its dark photo scrim ("on-media" in tailwind.config.js).
 import 'package:flutter/material.dart';
 
+import '../../../domain/catalog/appearance.dart';
 import '../../../domain/catalog/menu_theme_presets.dart';
 
 /// `#RRGGBB` → an opaque [Color].
@@ -37,6 +38,8 @@ class MenuThemePreview extends StatelessWidget {
     this.logoUrl,
     this.dishes = const [],
     this.width = 280,
+    this.layout = MenuLayout.grid,
+    this.coverUrl,
   });
 
   final MenuThemeColors colors;
@@ -44,6 +47,12 @@ class MenuThemePreview extends StatelessWidget {
   final String? logoUrl;
   final List<PreviewDish> dishes;
   final double width;
+
+  /// Stage 3: how the dishes are drawn.
+  final MenuLayout layout;
+
+  /// Stage 3: the hero banner, when the catalog has a cover.
+  final String? coverUrl;
 
   static const List<PreviewDish> placeholderDishes = [
     PreviewDish(name: 'Paneer Tikka', price: '₹249', featured: true),
@@ -80,6 +89,10 @@ class MenuThemePreview extends StatelessWidget {
                   physics: const NeverScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(12, 14, 12, 12),
                   children: [
+                    if (coverUrl != null) ...[
+                      _Cover(url: coverUrl!, bg: bg),
+                      const SizedBox(height: 8),
+                    ],
                     // Header: logo, name, contact + share in the primary colour.
                     Row(
                       children: [
@@ -123,8 +136,16 @@ class MenuThemePreview extends StatelessWidget {
                     _Tabs(colors: colors),
                     const SizedBox(height: 10),
                     for (final dish in shown) ...[
-                      _DishCard(dish: dish, colors: colors),
-                      const SizedBox(height: 10),
+                      if (layout == MenuLayout.list)
+                        _DishRow(dish: dish, colors: colors)
+                      else
+                        _DishCard(
+                          dish: dish,
+                          colors: colors,
+                          // `large` is the same card at 4:3 of the frame width.
+                          height: layout == MenuLayout.large ? (width - 40) * 3 / 4 : 150,
+                        ),
+                      SizedBox(height: layout == MenuLayout.list ? 8 : 10),
                     ],
                   ],
                 ),
@@ -254,11 +275,134 @@ class _Tabs extends StatelessWidget {
       );
 }
 
-class _DishCard extends StatelessWidget {
-  const _DishCard({required this.dish, required this.colors});
+class _Cover extends StatelessWidget {
+  const _Cover({required this.url, required this.bg});
+
+  final String url;
+  final Color bg;
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: AspectRatio(
+          aspectRatio: 16 / 9,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Image.network(
+                url,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+              // Mirage-fe's `card-fade`: into the page colour at the bottom.
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [bg.withValues(alpha: 0.9), bg.withValues(alpha: 0)],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
+/// The `list` layout's compact row (mirage-fe MenuItemRow).
+class _DishRow extends StatelessWidget {
+  const _DishRow({required this.dish, required this.colors});
 
   final PreviewDish dish;
   final MenuThemeColors colors;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: menuColor(colors.surface),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: dish.imageUrl != null
+                    ? Image.network(
+                        dish.imageUrl!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => ColoredBox(color: menuColor(colors.surface2)),
+                      )
+                    : ColoredBox(
+                        color: menuColor(colors.surface2),
+                        child: Icon(
+                          Icons.restaurant,
+                          size: 18,
+                          color: menuColor(colors.text2).withValues(alpha: 0.5),
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    dish.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: menuColor(colors.text),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                  if (dish.price != null)
+                    Text(
+                      dish.price!,
+                      style: TextStyle(
+                        color: menuColor(colors.primary),
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [menuColor(colors.ctaFrom), menuColor(colors.ctaTo)],
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                'AR',
+                style: TextStyle(
+                  color: menuColor(colors.onPrimary),
+                  fontSize: 8,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _DishCard extends StatelessWidget {
+  const _DishCard({required this.dish, required this.colors, this.height = 150});
+
+  final PreviewDish dish;
+  final MenuThemeColors colors;
+  final double height;
 
   @override
   Widget build(BuildContext context) {
@@ -266,7 +410,7 @@ class _DishCard extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
       child: SizedBox(
-        height: 150,
+        height: height,
         child: Stack(
           fit: StackFit.expand,
           children: [
