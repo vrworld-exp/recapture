@@ -1,4 +1,5 @@
 // lib/domain/entities/business_profile.dart
+import '../catalog/appearance.dart';
 import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 
@@ -157,6 +158,7 @@ class BusinessProfile {
     this.accountPhone,
     this.logoUrl,
     this.coverImageUrl,
+    this.appearance,
     this.updatedAt,
   });
 
@@ -196,6 +198,10 @@ class BusinessProfile {
   final String? logoUrl;
   final String? coverImageUrl;
 
+  /// How the public menu looks (more-customization Stage 2). Null = the default
+  /// Basalt page. Edited on the Appearance screen, not on this form.
+  final CatalogAppearance? appearance;
+
   /// Dotted paths (`name`, `contact.phone`, `contact.address`, `logoUrl`, …) of
   /// the fields that actually reach the published public catalog.
   ///
@@ -215,6 +221,7 @@ class BusinessProfile {
   factory BusinessProfile.fromMap(Map<String, dynamic> map) {
     final rawContact = map['contact'];
     final rawPublic = map['publicFields'];
+    final rawAppearance = map['appearance'];
     return BusinessProfile(
       id: (map['id'] ?? '').toString(),
       name: catalogText(map['name']) ?? '',
@@ -227,6 +234,11 @@ class BusinessProfile {
       accountPhone: catalogText(map['accountPhone']),
       logoUrl: catalogText(map['logoUrl']),
       coverImageUrl: catalogText(map['coverImageUrl']),
+      // Absent on an older server and null on a catalog that never chose a
+      // look — both are the default page.
+      appearance: rawAppearance is Map<String, dynamic>
+          ? CatalogAppearance.fromMap(rawAppearance)
+          : null,
       // An absent list means "we know of nothing public" — the UI then marks
       // everything ReCapture-only, which understates rather than overpromises.
       publicFields: catalogStringList(rawPublic),
@@ -253,6 +265,23 @@ class BusinessProfile {
         accountPhone: accountPhone,
         logoUrl: logoUrl ?? this.logoUrl,
         coverImageUrl: coverImageUrl ?? this.coverImageUrl,
+        appearance: appearance,
+        publicFields: publicFields,
+        updatedAt: updatedAt,
+      );
+
+  /// This profile with [next] as its appearance — null included, which
+  /// [copyWith]'s `??` could not express. Used by fakes and optimistic reads;
+  /// the notifier adopts the server's row instead.
+  BusinessProfile withAppearance(CatalogAppearance? next) => BusinessProfile(
+        id: id,
+        name: name,
+        businessName: businessName,
+        contact: contact,
+        accountPhone: accountPhone,
+        logoUrl: logoUrl,
+        coverImageUrl: coverImageUrl,
+        appearance: next,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );

@@ -66,6 +66,7 @@ String? flowBackRouteFor(String location) {
     AppRoutes.productNew => AppRoutes.catalog,
     AppRoutes.catalogCategories => AppRoutes.catalog,
     AppRoutes.catalogSettings => AppRoutes.catalog,
+    AppRoutes.catalogAppearance => AppRoutes.catalog,
     AppRoutes.catalogPreview => AppRoutes.catalog,
     AppRoutes.catalogPublish => AppRoutes.catalog,
     // Back from the QR lands on the shell, not on publish: the QR is reachable

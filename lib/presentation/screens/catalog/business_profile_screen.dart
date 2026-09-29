@@ -28,7 +28,9 @@
 // let a rep change how a client signs in.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -893,7 +895,38 @@ class _BrandingPanel extends StatelessWidget {
             url: profile.coverImageUrl,
             aspectRatio: 16 / 9,
           ),
+          const SizedBox(height: AppSpacing.xxl),
+          _AppearanceEntry(scope: scope),
         ],
+      );
+}
+
+/// The way to the Appearance screen (more-customization Stage 2) — the menu's
+/// colours and style, which are edited there rather than on this form.
+class _AppearanceEntry extends StatelessWidget {
+  const _AppearanceEntry({required this.scope});
+
+  final CatalogScope scope;
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+        key: const Key('profile-open-appearance'),
+        style: OutlinedButton.styleFrom(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.all(AppSpacing.md),
+          foregroundColor: AppColors.textPrimary,
+          side: BorderSide(color: AppColors.textMuted.withValues(alpha: 0.35)),
+        ),
+        icon: const Icon(Icons.palette_outlined, size: 18),
+        label: const Text('Appearance — colours & style'),
+        onPressed: () {
+          final catalogId = scope.delegatedCatalogId;
+          if (catalogId == null) {
+            context.pushNamed(AppRouteNames.catalogAppearance);
+          } else {
+            context.push('${AppRoutes.repCatalogs}/$catalogId/appearance');
+          }
+        },
       );
 }
 

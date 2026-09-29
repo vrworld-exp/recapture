@@ -8,6 +8,7 @@ import '../../data/repositories/business_profile_repository.dart';
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
 import '../../data/repositories/rep_repository.dart';
+import '../../domain/catalog/appearance.dart';
 import '../../domain/catalog/catalog_scope.dart';
 import '../../domain/entities/business_profile.dart';
 import '../auth/auth_notifier.dart';
@@ -212,6 +213,22 @@ class BusinessProfileNotifier
             businessName: resolvedBusinessName,
             contact: contact,
           );
+
+    if (!_disposed) state = AsyncData(updated);
+    _refreshCatalog();
+    return updated;
+  }
+
+  /// Saves how the public menu looks (more-customization Stage 2). Null resets
+  /// to the default page.
+  ///
+  /// Same contract as [save]: routed by scope, adopts the server's row, bumps
+  /// the draft badge via [_refreshCatalog], throws [CatalogFailure].
+  Future<BusinessProfile> saveAppearance(CatalogAppearance? appearance) async {
+    final catalogId = _catalogId;
+    final updated = catalogId == null
+        ? await _ownerRepo.updateAppearance(appearance)
+        : await _repRepo.updateAppearance(catalogId, appearance);
 
     if (!_disposed) state = AsyncData(updated);
     _refreshCatalog();

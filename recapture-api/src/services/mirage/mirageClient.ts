@@ -50,6 +50,7 @@ import type {
   MiragePublicCatalog,
   MirageRestaurant,
   MirageSocialLinks,
+  MirageTheme,
   MirageTimeseriesPoint,
   MirageTopProductRow,
   UpdateCategoryInput,
@@ -682,6 +683,7 @@ const SOCIAL_LINK_KEYS = [
   'whatsapp',
 ] as const;
 const ADDRESS_KEYS = ['line1', 'line2', 'city', 'state', 'postalCode', 'country'] as const;
+const THEME_KEYS = ['presetId', 'mode', 'primary', 'accent'] as const;
 
 function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
   const socialLinks = pickStrings<keyof MirageSocialLinks & string>(
@@ -689,6 +691,7 @@ function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
     SOCIAL_LINK_KEYS
   );
   const address = pickStrings<keyof MirageAddress & string>(raw.address, ADDRESS_KEYS);
+  const theme = pickStrings<keyof MirageTheme & string>(raw.theme, THEME_KEYS);
   return {
     id: requireId(raw, 'read restaurant'),
     name: str(raw.name) ?? '',
@@ -699,6 +702,7 @@ function toRestaurant(raw: Record<string, unknown>): MirageRestaurant {
     ...(str(raw.website) ? { website: str(raw.website) } : {}),
     ...(socialLinks ? { socialLinks } : {}),
     ...(address ? { address } : {}),
+    ...(theme ? { theme } : {}),
     // Absent on documents written before the field existed, and Mirage treats
     // only an EXPLICIT false as unpublished — so absence must stay absence here
     // rather than collapsing to a default we would then read back as truth.
@@ -793,6 +797,7 @@ export const mirageClient: MirageClient = {
         socialLinks: input.socialLinks,
         address: input.address,
         isPublished: input.isPublished,
+        theme: input.theme,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -831,6 +836,7 @@ export const mirageClient: MirageClient = {
         // uses to clear a socialLinks key, and Mirage's parser reads '' as
         // "nothing due".
         paymentDueAt: input.paymentDueAt === null ? '' : input.paymentDueAt,
+        theme: input.theme,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });

@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/catalog/appearance.dart';
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_json.dart' show catalogDate;
@@ -309,6 +310,13 @@ abstract interface class RepRepository {
     String? businessName,
     BusinessContact? contact,
   });
+
+  /// Sets the restaurant's menu look — the owner's
+  /// `BusinessProfileRepository.updateAppearance`, on a delegated catalog.
+  Future<BusinessProfile> updateAppearance(
+    String catalogId,
+    CatalogAppearance? appearance,
+  );
 
   /// Uploads a logo or cover through the API and returns its committed key.
   ///
@@ -787,6 +795,19 @@ class RemoteRepRepository implements RepRepository {
             if (businessName != null) 'businessName': businessName,
             if (contact != null) 'contact': contact.toMap(),
           },
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateAppearance(
+    String catalogId,
+    CatalogAppearance? appearance,
+  ) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/profile',
+          data: {'appearance': appearance == null || appearance.isEmpty ? null : appearance.toMap()},
         );
         return _profileFrom(res.data);
       });

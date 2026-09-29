@@ -19,6 +19,8 @@ import {
 import { BRANDING_SLOTS, PRODUCT_IMAGE_CONTENT_TYPES } from '@/utils/productImageKeys';
 import { STANDEE_SHEET_MAX_COPIES } from '@/services/standeeSheetPdf';
 import { isValidCatalogSlug, toCatalogSlug } from '@/utils/catalogNames';
+import { THEME_MODES, THEME_PRESET_IDS } from '@/config/themePresets';
+import { HEX_COLOR_RE } from '@/utils/colorContrast';
 
 // A Mongo ObjectId as a 24-char hex string. Validated here so a malformed id is
 // a 400 that never reaches the DB, and mongoose stays out of the validation
@@ -96,6 +98,34 @@ export const contactSchema = z
   .strict();
 
 /**
+ * The public menu's look (more-customization Stage 2). Shape only: whether the
+ * colours are READABLE on the chosen preset is judged in the service
+ * (utils/colorContrast.ts) so the refusal can carry its own code,
+ * APPEARANCE_LOW_CONTRAST, and name the failing pair.
+ *
+ * Colours are upper-cased at the boundary so the stored value, the response and
+ * what Mirage receives are the same string.
+ */
+const hexColor = z
+  .string()
+  .trim()
+  .regex(HEX_COLOR_RE, 'Colour must be #RRGGBB')
+  .transform((v) => v.toUpperCase());
+
+export const appearanceSchema = z
+  .object({
+    presetId: z
+      .string()
+      .trim()
+      .refine((v) => THEME_PRESET_IDS.includes(v), { message: 'Unknown theme preset' })
+      .optional(),
+    mode: z.enum(THEME_MODES).optional(),
+    primary: hexColor.optional(),
+    accent: hexColor.optional(),
+  })
+  .strict();
+
+/**
  * The catalog NAME field, exported for the same reason `contactSchema` is: rep
  * activation names a catalog, and it must slug, bound and reject exactly as
  * `POST /catalog` does.
@@ -135,6 +165,12 @@ export const updateCatalogSchema = z
     name: slugName(CATALOG_NAME_MAX, 'Catalog name').optional(),
     businessName: z.string().trim().max(BUSINESS_NAME_MAX).optional(),
     contact: contactSchema.optional(),
+    /**
+     * REPLACES the whole block, like `contact` — the Appearance screen always
+     * sends its full state, and a key it leaves out is a key it cleared. `null`
+     * resets to the default Basalt look ("Reset to default").
+     */
+    appearance: appearanceSchema.nullable().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {

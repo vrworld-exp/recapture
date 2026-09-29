@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/data/repositories/business_profile_repository.dart';
+import 'package:recapture/domain/catalog/appearance.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
@@ -169,6 +170,10 @@ class FakePreviewProfileRepo implements BusinessProfileRepository {
     String? businessName,
     BusinessContact? contact,
   }) =>
+      throw UnimplementedError();
+
+  @override
+  Future<BusinessProfile> updateAppearance(CatalogAppearance? appearance) =>
       throw UnimplementedError();
 }
 

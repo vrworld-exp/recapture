@@ -570,6 +570,30 @@ describe("the restaurant's details, edited by the rep", () => {
     expect(await draftRevisionOf(catalogId)).toBeGreaterThan(before);
   });
 
+  // Q2 of the more-customization pack: the rep gets the Appearance screen too.
+  it('sets the menu look on the RESTAURANT, refusing an unreadable colour', async () => {
+    const { catalogId, rep, ownerAuth } = await activated('ABCD2345');
+    const before = await draftRevisionOf(catalogId);
+
+    const refused = await request(app)
+      .patch(`/rep/catalogs/${catalogId}/profile`)
+      .set(rep.auth)
+      .send({ appearance: { presetId: 'garden', primary: '#FFF59D' } });
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe('APPEARANCE_LOW_CONTRAST');
+    expect(await draftRevisionOf(catalogId)).toBe(before);
+
+    const patch = await request(app)
+      .patch(`/rep/catalogs/${catalogId}/profile`)
+      .set(rep.auth)
+      .send({ appearance: { presetId: 'espresso' } });
+    expect(patch.status).toBe(200);
+    expect(await draftRevisionOf(catalogId)).toBeGreaterThan(before);
+
+    const owned = await request(app).get('/catalog/profile').set(ownerAuth);
+    expect(owned.body.profile.appearance).toEqual({ presetId: 'espresso' });
+  });
+
   it('rejects an empty patch instead of bumping the revision for nothing', async () => {
     const { catalogId, rep } = await activated('ABCD2345');
     const before = await draftRevisionOf(catalogId);

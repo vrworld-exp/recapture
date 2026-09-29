@@ -4,6 +4,7 @@ import { getPlanCatalog } from '@/services/subscription/planCatalogService';
 import {
   remoteConfigSchema,
   DEFAULT_REMOTE_CONFIG,
+  THEME_PRESETS_WIRE,
   type RemoteConfig,
 } from '@/validation/remoteConfigSchema';
 
@@ -82,6 +83,8 @@ export async function getRemoteConfig(): Promise<RemoteConfigResult> {
       // a malformed `subscriptionPlans` override then costs only the plans
       // (served from defaults, with its own warning), never the whole config.
       subscriptionPlans: await getPlanCatalog(),
+      // Baked, never from the store — see THEME_PRESETS_WIRE.
+      themePresets: THEME_PRESETS_WIRE,
     };
 
     const parsed = remoteConfigSchema.safeParse(candidate);

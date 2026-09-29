@@ -87,6 +87,27 @@ export interface CatalogContact {
   socials?: CatalogSocials;
 }
 
+/**
+ * How the public Mirage menu LOOKS (more-customization Stage 2).
+ *
+ * PUBLISHED to Mirage as `restaurant.theme` on every branding sync — see
+ * `mirageTheme` in catalogProvisioningService. Every key optional: an absent
+ * appearance (every catalog written before this field) is the default Basalt
+ * page, exactly as before.
+ *
+ * `presetId` must be one of config/themePresets.ts THEME_PRESET_IDS; the colour
+ * overrides are `#RRGGBB` and must pass utils/colorContrast.ts, which is the
+ * same check Mirage-fe re-runs before painting them. Later stages (cover,
+ * layout, fonts) add keys HERE rather than new top-level catalog fields.
+ */
+export interface CatalogAppearance {
+  presetId?: string;
+  /** Informational: every current preset fixes its own mode. */
+  mode?: 'dark' | 'light';
+  primary?: string;
+  accent?: string;
+}
+
 // ── Products ────────────────────────────────────────────────────────────────
 
 /**

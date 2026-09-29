@@ -44,6 +44,7 @@ import {
   type MirageFileUpload,
   type MirageRestaurant,
   type MirageSocialLinks,
+  type MirageTheme,
 } from '@/services/mirage';
 import { isDuplicateKeyError } from '@/services/catalogService';
 import { appendSlugSuffix, toCatalogSlug } from '@/utils/catalogNames';
@@ -275,6 +276,25 @@ function mirageLinks(catalog: ICatalog): {
       youtube: (socials?.youtube ?? '').trim(),
       whatsapp: whatsappDigits(socials?.whatsapp),
     },
+  };
+}
+
+/**
+ * The menu theme Mirage's restaurant record carries (more-customization Stage 2).
+ *
+ * EVERY KEY IS ALWAYS PRESENT, `''` for an unset one — the same reasoning as
+ * {@link mirageLinks}: Mirage merges `theme` key by key, so an omitted key would
+ * keep a colour the owner removed, and "Reset to default" would leave the old
+ * look live. A catalog with no appearance therefore sends four `''`s, which is
+ * Mirage's "default Basalt page".
+ */
+function mirageTheme(catalog: ICatalog): Required<MirageTheme> {
+  const a = catalog.appearance;
+  return {
+    presetId: a?.presetId ?? '',
+    mode: a?.mode ?? '',
+    primary: a?.primary ?? '',
+    accent: a?.accent ?? '',
   };
 }
 
@@ -578,6 +598,7 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
       ...(phoneNo !== undefined ? { phoneNo } : {}),
       website: links.website,
       socialLinks: links.socialLinks,
+      theme: mirageTheme(catalog),
       ...(logo ? { image: logo } : {}),
     });
   } catch (err) {
@@ -647,6 +668,7 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
       ...(phoneNo !== undefined ? { phoneNo } : {}),
       website: links.website,
       socialLinks: links.socialLinks,
+      theme: mirageTheme(catalog),
       ...(logo ? { image: logo } : {}),
     });
 

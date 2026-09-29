@@ -22,6 +22,7 @@ import 'package:recapture/data/repositories/catalog_products_repository.dart'
 import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/data/repositories/standee_sheet.dart';
+import 'package:recapture/domain/catalog/appearance.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -124,6 +125,15 @@ mixin RepRepoCatalogDefaults implements RepRepository {
   }) =>
       throw UnimplementedError(
         'rep profile write is not exercised by this test',
+      );
+
+  @override
+  Future<BusinessProfile> updateAppearance(
+    String catalogId,
+    CatalogAppearance? appearance,
+  ) =>
+      throw UnimplementedError(
+        'rep appearance write is not exercised by this test',
       );
 
   @override

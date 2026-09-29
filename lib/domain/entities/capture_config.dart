@@ -6,6 +6,7 @@
 
 import '../capture/capture_flow_variant.dart';
 import '../capture/capture_mode.dart';
+import '../catalog/menu_theme_presets.dart';
 import 'catalog_subscription.dart';
 
 /// One pitch band (a vertical slice of the capture sphere) and how many capture
@@ -474,6 +475,7 @@ class CaptureConfig {
     this.variantSegments = VariantSegments.bundledDefault,
     this.meshySegments = VariantSegments.meshyBundledDefault,
     this.subscriptionPlans = PlanCatalog.bundledDefault,
+    this.themePresets = MenuThemePreset.bundled,
   });
 
   final int version;
@@ -501,6 +503,11 @@ class CaptureConfig {
   /// version 6). [PlanCatalog.bundledDefault] when absent — an older server,
   /// or a cached pre-v6 payload — which mirrors the server's own defaults.
   final PlanCatalog subscriptionPlans;
+
+  /// The Mirage menu looks for the Appearance screen (`themePresets`, served
+  /// since config version 7). [MenuThemePreset.bundled] when absent or
+  /// malformed — see [MenuThemePreset.listFromOrDefault].
+  final List<MenuThemePreset> themePresets;
 
   /// Compile-time defaults — the app is fully functional on these alone (first
   /// launch, offline, malformed remote). Never empty.
@@ -613,6 +620,7 @@ class CaptureConfig {
         defaults: VariantSegments.meshyDefaults,
       ),
       subscriptionPlans: PlanCatalog.fromMapOrDefault(m['subscriptionPlans']),
+      themePresets: MenuThemePreset.listFromOrDefault(m['themePresets']),
     );
   }
 
@@ -625,6 +633,7 @@ class CaptureConfig {
         'guided_capture_variant_segments': variantSegments.toMap(),
         'meshy_capture_variant_segments': meshySegments.toMap(),
         'subscriptionPlans': subscriptionPlans.toMap(),
+        'themePresets': themePresets.map((p) => p.toMap()).toList(),
       };
 
   CaptureConfig copyWith({
@@ -636,6 +645,7 @@ class CaptureConfig {
     VariantSegments? variantSegments,
     VariantSegments? meshySegments,
     PlanCatalog? subscriptionPlans,
+    List<MenuThemePreset>? themePresets,
   }) =>
       CaptureConfig(
         version: version ?? this.version,
@@ -646,5 +656,6 @@ class CaptureConfig {
         variantSegments: variantSegments ?? this.variantSegments,
         meshySegments: meshySegments ?? this.meshySegments,
         subscriptionPlans: subscriptionPlans ?? this.subscriptionPlans,
+        themePresets: themePresets ?? this.themePresets,
       );
 }

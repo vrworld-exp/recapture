@@ -1,3 +1,4 @@
+✅✅✅✅✅✅
 # Stage 2 — Appearance screen in ReCapture
 
 **Side:** recapture-api + Flutter app.
@@ -35,8 +36,14 @@ card, optionally picks a primary/accent colour, sees a **live phone preview**, s
    reject-to-defaults) so new presets can appear without an app release.
 
 3. **Validation** (Zod, next to the business-profile schema): `presetId` ∈ ids; colours
-   `^#[0-9a-fA-F]{6}$`; contrast of `primary` vs preset `bg` and `text` vs `bg` ≥ 4.5 →
-   otherwise 400 `APPEARANCE_LOW_CONTRAST` with the failing pair. `null` on a key = clear it.
+   `^#[0-9a-fA-F]{6}$`; contrast rules **exactly as Mirage-fe enforces them** in
+   `src/theme/applyTheme.ts` (`primaryPasses` / `accentPasses` / `deriveFromPrimary`, built in
+   Stage 1) — port that file's maths 1:1 and reuse its test vectors:
+   - `primary` ≥ 4.5 vs its derived `onPrimary` (and both CTA gradient stops ≥ 4.5 vs it),
+     and ≥ 3.0 vs the preset `bg` (price/icons are large + bold → AA-large);
+   - `accent` ≥ 4.5 vs the preset `bg` and ≥ 3.0 vs black (Featured badge on the photo scrim).
+   (A flat "primary vs bg ≥ 4.5" would reject Basalt's own red — 3.05:1 on #0B0B0E.)
+   Failing → 400 `APPEARANCE_LOW_CONTRAST` with the failing pair. `null` on a key = clear it.
    Put the contrast function in `utils/colorContrast.ts` (pure, tested).
 
 4. **Write path**: extend the business-profile update (or a new `PATCH /catalog/appearance`

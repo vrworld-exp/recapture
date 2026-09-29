@@ -1,6 +1,8 @@
 // src/validation/remoteConfigSchema.ts
 import { z } from 'zod';
 import { DEFAULT_PLAN_CATALOG, planCatalogSchema } from '@/config/subscriptionPlans';
+import { THEME_MODES, THEME_PRESETS } from '@/config/themePresets';
+import { presetDerivatives } from '@/utils/colorContrast';
 import {
   SEGMENT_COUNT_BY_SIZE,
   MIN_PHOTOS_PER_RING_BY_SIZE,
@@ -25,6 +27,59 @@ const servedPlanCatalogSchema = planCatalogSchema.extend({
   pendingPaymentDays: z.number().int().positive(),
   pendingPaymentThreeDCap: z.number().int().positive(),
   testingPrices: z.boolean(),
+});
+
+const hex = z.string().regex(/^#[0-9A-F]{6}$/);
+
+/**
+ * One Mirage menu theme preset as the Appearance screen draws it
+ * (more-customization Stage 2). Every colour the menu uses is RESOLVED here —
+ * including the button colours derived from `primary` — so the app's preview
+ * paints exactly what Mirage will, without a copy of the derivation maths.
+ */
+const themePresetWireSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    mode: z.enum(THEME_MODES),
+    colors: z
+      .object({
+        bg: hex,
+        surface: hex,
+        surface2: hex,
+        text: hex,
+        text2: hex,
+        primary: hex,
+        accent: hex,
+        overlay: hex,
+        onPrimary: hex,
+        ctaFrom: hex,
+        ctaTo: hex,
+      })
+      .strict(),
+  })
+  .strict();
+
+export type ThemePresetWire = z.infer<typeof themePresetWireSchema>;
+
+/**
+ * The served preset list, built from config/themePresets.ts (itself a mirror of
+ * mirage-fe). Baked, never read from the config store: a preset the store could
+ * add would be one Mirage-fe cannot render.
+ */
+export const THEME_PRESETS_WIRE: ThemePresetWire[] = THEME_PRESETS.map((p) => {
+  const d = presetDerivatives(p);
+  return {
+    id: p.id,
+    label: p.label,
+    mode: p.mode,
+    colors: {
+      ...p.tokens,
+      onPrimary: d.onPrimary,
+      ctaFrom: d.ctaFrom,
+      ctaTo: d.ctaTo,
+    },
+  };
 });
 
 /**
@@ -103,6 +158,10 @@ export const remoteConfigSchema = z
     // WHOLE remote config to defaults for every app in the field. The served
     // shape is therefore its own schema, the override's plus those three.
     subscriptionPlans: servedPlanCatalogSchema.optional(),
+    // The menu theme presets for the Appearance screen. Optional for the same
+    // reason as subscriptionPlans; an app that finds it missing uses its
+    // bundled copy.
+    themePresets: z.array(themePresetWireSchema).min(1).optional(),
   })
   .strict();
 
@@ -162,7 +221,9 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
   // falls back to its bundled defaults, which is the correct degradation.
   // Version 4 retuned the tilt bands to 0–40 / 40–110 / 110–180; version 3 was
   // the 16×3 / 24×2 per-ring counts; version 2 was the 0–180° band scale.
-  version: 6,
+  // Version 7: adds themePresets (the Mirage menu looks for the Appearance
+  // screen, more-customization Stage 2).
+  version: 7,
   // LOW/EYE/TOP guided-capture rings as camera-tilt bands tiling [0, 180]:
   // BOTTOM ring `low` (tilt up) [0,40) / EYE ring `mid` (hold straight)
   // [40,110) / TOP ring `high` (tilt down) [110,180). Deliberately UNEQUAL
@@ -189,4 +250,5 @@ export const DEFAULT_REMOTE_CONFIG: RemoteConfig = {
     without_bottom: variantSegmentsBlock('without_bottom', 'meshy'),
   },
   subscriptionPlans: DEFAULT_PLAN_CATALOG,
+  themePresets: THEME_PRESETS_WIRE,
 };

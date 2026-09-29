@@ -62,6 +62,7 @@ export type {
   MiragePublicCatalog,
   MirageRestaurant,
   MirageSocialLinks,
+  MirageTheme,
   MirageTimeseriesPoint,
   MirageTopProductRow,
   UpdateCategoryInput,

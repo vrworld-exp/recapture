@@ -46,6 +46,7 @@ import '../../presentation/screens/projects/submit_model_screen.dart';
 import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_analytics_screen.dart';
+import '../../presentation/screens/catalog/appearance_screen.dart';
 import '../../presentation/screens/catalog/business_profile_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/catalog/category_manager_screen.dart';
@@ -123,6 +124,10 @@ abstract final class AppRoutes {
 
   /// Catalog metadata: name, business name, logo, cover (feature 2).
   static const catalogSettings = '/catalog/settings';
+
+  /// How the public menu looks — preset, colours, live preview
+  /// (more-customization Stage 2).
+  static const catalogAppearance = '/catalog/appearance';
 
   /// The draft rendered in the public page's shape, before publishing.
   static const catalogPreview = '/catalog/preview';
@@ -207,6 +212,9 @@ abstract final class AppRoutes {
   /// account screen, and a rep reading a route as "the restaurant's profile"
   /// when it says profile would be reading it correctly about the wrong record.
   static const repCatalogDetails = '/rep/catalogs/:id/details';
+
+  /// The restaurant's menu look — the OWNER's [catalogAppearance], delegated.
+  static const repCatalogAppearance = '/rep/catalogs/:id/appearance';
 
   /// The restaurant's whole page as a customer will meet it.
   static const repCatalogPreview = '/rep/catalogs/:id/preview';
@@ -313,6 +321,7 @@ abstract final class AppRouteNames {
   static const notifications = 'notifications';
   static const catalog = 'catalog';
   static const catalogSettings = 'catalogSettings';
+  static const catalogAppearance = 'catalogAppearance';
   static const catalogPreview = 'catalogPreview';
   static const catalogPublish = 'catalogPublish';
   static const catalogQr = 'catalogQr';
@@ -331,6 +340,7 @@ abstract final class AppRouteNames {
   static const repAddDish = 'repAddDish';
   static const repDishDetail = 'repDishDetail';
   static const repCatalogDetails = 'repCatalogDetails';
+  static const repCatalogAppearance = 'repCatalogAppearance';
   static const repCatalogPreview = 'repCatalogPreview';
   static const repCatalogCategories = 'repCatalogCategories';
   static const repCatalogQr = 'repCatalogQr';
@@ -522,6 +532,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         onExit: (context, state) => confirmDiscardProfileEdits(context),
         builder: (_, __) => const FlowBackScope(child: BusinessProfileScreen()),
       ),
+      // The menu look (more-customization Stage 2). STATIC, declared before the
+      // product routes like the profile above.
+      GoRoute(
+        path: AppRoutes.catalogAppearance,
+        name: AppRouteNames.catalogAppearance,
+        builder: (_, __) => const FlowBackScope(child: AppearanceScreen()),
+      ),
       // The catalog preview — the draft in the public page's shape (feature 5).
       // STATIC, declared before the product routes for the same reason the
       // category manager is: a literal segment must never be matchable as an
@@ -705,6 +722,14 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         // The OWNER's business-profile screen, given a delegated scope. One
         // screen, two readers — see BusinessProfileScreen.delegated.
         builder: (context, state) => BusinessProfileScreen.delegated(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogAppearance,
+        name: AppRouteNames.repCatalogAppearance,
+        // The owner's Appearance screen with a delegated scope, as above.
+        builder: (context, state) => AppearanceScreen.delegated(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),

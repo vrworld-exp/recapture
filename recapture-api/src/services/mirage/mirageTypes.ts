@@ -129,6 +129,18 @@ export type MirageSocialLinks = {
 };
 
 /**
+ * The public menu's look (mirage-be restaurantModel.js `theme`, more-customization
+ * Stage 1). Mirage MERGES it key by key like `socialLinks`, and `''` on a key
+ * clears it — so ReCapture always sends all four (see `mirageTheme`).
+ */
+export type MirageTheme = {
+  presetId?: string;
+  mode?: string;
+  primary?: string;
+  accent?: string;
+};
+
+/**
  * restaurantModel.js:95-102.
  *
  * NOTE this does NOT replace the free-text `location`: Mirage writes both
@@ -167,6 +179,8 @@ export interface MirageRestaurant {
   website?: string;
   socialLinks?: MirageSocialLinks;
   address?: MirageAddress;
+  /** Read back from a Stage-1 Mirage; absent on an older one. */
+  theme?: MirageTheme;
   /**
    * The soft on/off switch for the public page (restaurantModel.js:108-113).
    * THIS is what makes unpublish possible without `delete-restaurant`, which
@@ -247,6 +261,8 @@ export interface CreateRestaurantInput {
   socialLinks?: MirageSocialLinks;
   address?: MirageAddress;
   isPublished?: boolean;
+  /** An older Mirage ignores it — harmless; the next publish re-sends it. */
+  theme?: MirageTheme;
   image?: MirageFileUpload;
 }
 
@@ -292,6 +308,8 @@ export interface UpdateRestaurantInput {
    * nothing due".
    */
   paymentDueAt?: string | null;
+  /** Merged key by key; see {@link MirageTheme}. */
+  theme?: MirageTheme;
   image?: MirageFileUpload;
 }
 

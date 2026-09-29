@@ -13,6 +13,7 @@ import { Schema, model, Document, Types } from 'mongoose';
 import {
   CATALOG_STATUSES,
   PUBLIC_URL_SCHEMES,
+  type CatalogAppearance,
   type CatalogContact,
   type CatalogSocials,
   type CatalogStatus,
@@ -35,6 +36,8 @@ export interface ICatalog extends Document {
   logoKey?: string;
   coverImageKey?: string;
   contact?: CatalogContact;
+  /** The public menu's look — see CatalogAppearance. Absent = Basalt. */
+  appearance?: CatalogAppearance;
   status: CatalogStatus;
   /**
    * The Mirage restaurant this catalog is projected into. Written ONCE, at
@@ -118,6 +121,19 @@ const CatalogContactSchema = new Schema<CatalogContact>(
   { _id: false }
 );
 
+// Bounds only — membership of THEME_PRESET_IDS and colour contrast are checked
+// at the API boundary (catalogSchemas.ts / colorContrast.ts), where a failure
+// is a 400 with a reason rather than a Mongoose 500.
+const CatalogAppearanceSchema = new Schema<CatalogAppearance>(
+  {
+    presetId: { type: String, trim: true, maxlength: 40 },
+    mode: { type: String, enum: ['dark', 'light'] },
+    primary: { type: String, trim: true, match: /^#[0-9a-fA-F]{6}$/ },
+    accent: { type: String, trim: true, match: /^#[0-9a-fA-F]{6}$/ },
+  },
+  { _id: false }
+);
+
 const CatalogSchema = new Schema<ICatalog>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
@@ -126,6 +142,7 @@ const CatalogSchema = new Schema<ICatalog>(
     logoKey: { type: String },
     coverImageKey: { type: String },
     contact: { type: CatalogContactSchema },
+    appearance: { type: CatalogAppearanceSchema },
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },
@@ -176,6 +193,7 @@ export const Catalog = model<ICatalog>('Catalog', CatalogSchema);
 export {
   CATALOG_STATUSES,
   PUBLIC_URL_SCHEMES,
+  type CatalogAppearance,
   type CatalogContact,
   type CatalogSocials,
   type CatalogStatus,

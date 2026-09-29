@@ -41,6 +41,7 @@ import 'package:recapture/data/repositories/standee_sheet.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
+import 'package:recapture/domain/catalog/appearance.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
@@ -273,6 +274,15 @@ class FakeRepRepository implements RepRepository {
       businessName: businessName,
       contact: contact,
     );
+    return storedProfile;
+  }
+
+  @override
+  Future<BusinessProfile> updateAppearance(
+    String catalogId,
+    CatalogAppearance? appearance,
+  ) async {
+    storedProfile = storedProfile.withAppearance(appearance);
     return storedProfile;
   }
 

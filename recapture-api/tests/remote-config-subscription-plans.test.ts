@@ -49,7 +49,7 @@ function storedConfig(overrides: Record<string, unknown> = {}) {
 describe('GET /remote-config — subscriptionPlans', () => {
   it('the baked defaults carry the three plans and validate against the served schema', () => {
     expect(DEFAULT_REMOTE_CONFIG.subscriptionPlans).toEqual(DEFAULT_PLAN_CATALOG);
-    expect(DEFAULT_REMOTE_CONFIG.version).toBe(6);
+    expect(DEFAULT_REMOTE_CONFIG.version).toBe(7);
     expect(remoteConfigSchema.safeParse(DEFAULT_REMOTE_CONFIG).success).toBe(true);
   });
 

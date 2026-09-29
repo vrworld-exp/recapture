@@ -37,7 +37,15 @@ import {
   type BrandingSlot,
   type ProductImageContentType,
 } from '@/utils/productImageKeys';
-import type { CatalogContact, CatalogStatus } from '@/models/types/catalog.types';
+import type {
+  CatalogAppearance,
+  CatalogContact,
+  CatalogStatus,
+} from '@/models/types/catalog.types';
+import {
+  appearanceContrastProblem,
+  type AppearanceContrastProblem,
+} from '@/utils/colorContrast';
 import type {
   BrandingCommitInput,
   BrandingUploadUrlInput,
@@ -283,7 +291,22 @@ export async function createCatalog(
 
 export type UpdateCatalogResult =
   | { outcome: 'NOT_FOUND' }
+  | { outcome: 'LOW_CONTRAST'; problem: AppearanceContrastProblem }
   | { outcome: 'UPDATED'; catalog: CatalogDto };
+
+/**
+ * A readable appearance, or the reason it is not. Checked BEFORE the write, on
+ * the input alone: `appearance` replaces the whole block, so what was stored
+ * before has no say in whether the new one is readable.
+ */
+function appearanceRefusal(input: UpdateCatalogInput): AppearanceContrastProblem | null {
+  return input.appearance ? appearanceContrastProblem(input.appearance) : null;
+}
+
+/** An appearance with nothing in it is no appearance — stored as absent. */
+function isEmptyAppearance(a: CatalogAppearance | null | undefined): boolean {
+  return !a || Object.values(a).every((v) => v === undefined || v === '');
+}
 
 /**
  * The ONE catalog-metadata write. Both `PATCH /catalog` and
@@ -302,16 +325,28 @@ async function applyCatalogPatch(
   const ownerId = new Types.ObjectId(userId);
 
   const set: Record<string, unknown> = {};
+  const unset: Record<string, 1> = {};
   if (input.name !== undefined) set.name = input.name;
   if (input.businessName !== undefined) set.businessName = input.businessName;
   if (input.contact !== undefined) set.contact = input.contact;
+  // Appearance REPLACES the block; `null` (Reset to default) and an empty
+  // object both remove it, so the catalog reads exactly like one that never
+  // had an appearance and Mirage is sent the all-'' default theme.
+  if (input.appearance !== undefined) {
+    if (isEmptyAppearance(input.appearance)) unset.appearance = 1;
+    else set.appearance = input.appearance;
+  }
 
   return Catalog.findOneAndUpdate(
     { userId: ownerId, deletedAt: null },
     // The draft bump rides along in the SAME update rather than going through
     // bumpDraftRevision: this write already targets the catalog document, and
     // folding it in keeps the edit and its revision atomic.
-    { $set: set, $inc: { draftRevision: 1 } },
+    {
+      $set: set,
+      ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
+      $inc: { draftRevision: 1 },
+    },
     { new: true, runValidators: true }
   ).exec();
 }
@@ -327,6 +362,9 @@ export async function updateCatalog(
   userId: string,
   input: UpdateCatalogInput
 ): Promise<UpdateCatalogResult> {
+  const problem = appearanceRefusal(input);
+  if (problem) return { outcome: 'LOW_CONTRAST', problem };
+
   const updated = await applyCatalogPatch(userId, input);
 
   if (!updated) return { outcome: 'NOT_FOUND' };
@@ -379,6 +417,8 @@ export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'contact.socials.facebook',
   'contact.socials.youtube',
   'contact.socials.whatsapp',
+  // The menu theme — Mirage `restaurant.theme` (more-customization Stage 2).
+  'appearance',
 ];
 
 /**
@@ -399,6 +439,8 @@ export interface BusinessProfileDto {
    */
   logoUrl: string | null;
   coverImageUrl: string | null;
+  /** The public menu's look; null = the default Basalt page. */
+  appearance: CatalogAppearance | null;
   /** See {@link PUBLIC_PROFILE_FIELDS}. */
   publicFields: readonly string[];
   updatedAt: string;
@@ -407,6 +449,17 @@ export interface BusinessProfileDto {
 /** `null` for an unset key — never a `.../undefined` URL. */
 function cdnUrlForKey(key: string | undefined): string | null {
   return key ? `${CLOUDFRONT_BASE}/${key}` : null;
+}
+
+/** Field by field, like every DTO here; unset keys are omitted, not null. */
+function toAppearanceDto(a: CatalogAppearance | undefined): CatalogAppearance | null {
+  if (isEmptyAppearance(a)) return null;
+  return {
+    ...(a!.presetId ? { presetId: a!.presetId } : {}),
+    ...(a!.mode ? { mode: a!.mode } : {}),
+    ...(a!.primary ? { primary: a!.primary } : {}),
+    ...(a!.accent ? { accent: a!.accent } : {}),
+  };
 }
 
 /** The ONE profile DTO mapper. */
@@ -418,6 +471,7 @@ export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
     contact: c.contact ?? null,
     logoUrl: cdnUrlForKey(c.logoKey),
     coverImageUrl: cdnUrlForKey(c.coverImageKey),
+    appearance: toAppearanceDto(c.appearance),
     publicFields: PUBLIC_PROFILE_FIELDS,
     updatedAt: c.updatedAt.toISOString(),
   };
@@ -433,6 +487,7 @@ export async function getBusinessProfile(userId: string): Promise<BusinessProfil
 
 export type UpdateBusinessProfileResult =
   | { outcome: 'NOT_FOUND' }
+  | { outcome: 'LOW_CONTRAST'; problem: AppearanceContrastProblem }
   | { outcome: 'UPDATED'; profile: BusinessProfileDto };
 
 /**
@@ -447,6 +502,9 @@ export async function updateBusinessProfile(
   userId: string,
   input: UpdateBusinessProfileInput
 ): Promise<UpdateBusinessProfileResult> {
+  const problem = appearanceRefusal(input);
+  if (problem) return { outcome: 'LOW_CONTRAST', problem };
+
   const updated = await applyCatalogPatch(userId, input);
   if (!updated) return { outcome: 'NOT_FOUND' };
 

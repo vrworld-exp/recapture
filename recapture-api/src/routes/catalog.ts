@@ -122,6 +122,7 @@ import {
   verifyPaymentSchema,
 } from '@/validation/subscriptionSchemas';
 import { validateBody } from '@/middleware/validate';
+import { lowContrastBody } from '@/utils/colorContrast';
 import type { Response } from 'express';
 import type { ZodError } from 'zod';
 
@@ -361,6 +362,10 @@ router.patch(
     const result = await updateCatalog(userId, parsed.data);
 
     if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome === 'LOW_CONTRAST') {
+      res.status(400).json(lowContrastBody(result.problem));
+      return;
+    }
 
     track(AnalyticsEvent.CATALOG_UPDATED, {
       user_id_hash: hashIdentifier(userId),
@@ -607,6 +612,10 @@ router.patch(
     const result = await updateBusinessProfile(userId, parsed.data);
 
     if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome === 'LOW_CONTRAST') {
+      res.status(400).json(lowContrastBody(result.problem));
+      return;
+    }
 
     track(AnalyticsEvent.CATALOG_UPDATED, {
       user_id_hash: hashIdentifier(userId),

@@ -24,6 +24,7 @@ import 'package:recapture/data/repositories/business_profile_repository.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
+import 'package:recapture/domain/catalog/appearance.dart';
 import 'package:recapture/domain/catalog/business_profile_validators.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -75,6 +76,14 @@ class FakeProfileRepository implements BusinessProfileRepository {
       businessName: businessName,
       contact: contact,
     );
+    profile = updated;
+    return updated;
+  }
+
+  @override
+  Future<BusinessProfile> updateAppearance(CatalogAppearance? appearance) async {
+    final updated = (profile ?? profileFrom(golden.profileGolden()))
+        .withAppearance(appearance);
     profile = updated;
     return updated;
   }

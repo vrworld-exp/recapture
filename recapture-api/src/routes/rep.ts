@@ -111,6 +111,7 @@ import {
   startTrialSchema,
 } from '@/validation/subscriptionSchemas';
 import { notifyOwnerToPay, nudgeNextAllowedAt } from '@/services/subscription/nudgeService';
+import { lowContrastBody } from '@/utils/colorContrast';
 import {
   getPendingManualPayment,
   submitManualPaymentRequest,
@@ -683,6 +684,10 @@ router.patch(
 
     const result = await updateBusinessProfile(String(catalog.userId), parsed.data);
     if (result.outcome === 'NOT_FOUND') return notDelegated(res);
+    if (result.outcome === 'LOW_CONTRAST') {
+      res.status(400).json(lowContrastBody(result.problem));
+      return;
+    }
 
     track(AnalyticsEvent.CATALOG_UPDATED, {
       // The hashed REP — they made the request. The restaurant is identified by

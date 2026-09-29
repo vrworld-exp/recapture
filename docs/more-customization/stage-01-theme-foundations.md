@@ -1,4 +1,9 @@
-# Stage 1 — Theme foundations (Mirage only)
+# ✅ Stage 1 — Theme foundations (Mirage only)
+
+> **Status (2026-09-29): built, tests green, not yet committed.** mirage-fe `src/theme/`
+> (presets, `applyTheme.ts`, 18 tests), token swap in the menu, boot script in `index.html`;
+> mirage-be `theme` field + `parseThemeField` + `test/theme.test.js` (`npm test`).
+> Still open: the manual screenshot / phone checks below.
 
 **Side:** Mirage BE + Mirage FE. ReCapture is untouched.
 **Ships behind:** nothing. A restaurant with no `theme` renders exactly as today.
@@ -121,4 +126,4 @@ adds a place to store a theme, without changing a single pixel for existing rest
 - [ ] Setting `theme.presetId = "garden"` directly in Atlas turns that one menu light, with no
       unreadable text anywhere, including AR modal and contact sheet.
 - [ ] Reloading a themed menu shows **no** flash of the Basalt colours.
-- [ ] Older ReCapture (no `theme` sent) publishes without touching the stored theme.
+- [x] Older ReCapture (no `theme` sent) publishes without touching the stored theme. *(unit-tested: absent `theme` → untouched)*

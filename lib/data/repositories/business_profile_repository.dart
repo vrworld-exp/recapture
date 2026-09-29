@@ -2,6 +2,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/catalog/appearance.dart';
 import '../../domain/entities/business_profile.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
@@ -28,6 +29,13 @@ abstract interface class BusinessProfileRepository {
     String? businessName,
     BusinessContact? contact,
   });
+
+  /// Sets how the public menu looks (more-customization Stage 2).
+  ///
+  /// [appearance] REPLACES the whole block; null resets to the default page.
+  /// A colour the server finds unreadable is a [CatalogFailure] with code
+  /// `APPEARANCE_LOW_CONTRAST` — the screen checks first, so that is a backstop.
+  Future<BusinessProfile> updateAppearance(CatalogAppearance? appearance);
 }
 
 /// Concrete [BusinessProfileRepository] over the app Dio.
@@ -65,6 +73,17 @@ class RemoteBusinessProfileRepository implements BusinessProfileRepository {
             if (businessName != null) 'businessName': businessName,
             if (contact != null) 'contact': contact.toMap(),
           },
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateAppearance(CatalogAppearance? appearance) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/catalog/profile',
+          // An EXPLICIT null is the reset; an empty appearance means the same.
+          data: {'appearance': appearance == null || appearance.isEmpty ? null : appearance.toMap()},
         );
         return _profileFrom(res.data);
       });

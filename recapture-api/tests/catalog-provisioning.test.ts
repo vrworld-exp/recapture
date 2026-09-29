@@ -147,6 +147,7 @@ function fakeMirage(seed: MirageRestaurant[] = []): FakeMirage {
         ...(input.phoneNo ? { phone: `+91${input.phoneNo}` } : {}),
         website: input.website ?? '',
         socialLinks: { ...input.socialLinks },
+        ...(input.theme ? { theme: { ...input.theme } } : {}),
         categoryIds: [],
       };
       state.restaurants.push(created);
@@ -176,6 +177,10 @@ function fakeMirage(seed: MirageRestaurant[] = []): FakeMirage {
       // handle actually disappears" test mean anything.
       if (input.socialLinks !== undefined) {
         found.socialLinks = { ...found.socialLinks, ...input.socialLinks };
+      }
+      // `theme` merges the same way (mirage-be adminController, Stage 1).
+      if (input.theme !== undefined) {
+        found.theme = { ...found.theme, ...input.theme };
       }
       return { ...found };
     },
@@ -689,6 +694,53 @@ describe('branding', () => {
     await provisionCatalog(id);
 
     expect(mirage.restaurants[0]?.socialLinks?.whatsapp).toBe('919876543210');
+  });
+
+  // ── Menu theme (more-customization Stage 2) ───────────────────────────────
+  //
+  // Mirage merges `theme` key by key, so the same all-keys rule as socialLinks
+  // applies: a colour the owner removed must be sent as '' or it stays live.
+
+  it('sends the default theme (all empty) for a catalog that never chose one', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog();
+
+    await provisionCatalog(id);
+
+    expect(mirage.restaurants[0]?.theme).toEqual({
+      presetId: '',
+      mode: '',
+      primary: '',
+      accent: '',
+    });
+  });
+
+  it('pushes the appearance on every branding sync, and clears what was reset', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({ name: 'Blue Cafe' });
+    await provisionCatalog(id);
+
+    await Catalog.updateOne(
+      { _id: id },
+      { $set: { appearance: { presetId: 'espresso', accent: '#E6C79C' } } }
+    ).exec();
+    await syncCatalogBranding(id);
+    expect(mirage.restaurants[0]?.theme).toEqual({
+      presetId: 'espresso',
+      mode: '',
+      primary: '',
+      accent: '#E6C79C',
+    });
+
+    // "Reset to default" removes the block; Mirage must be told, not left alone.
+    await Catalog.updateOne({ _id: id }, { $unset: { appearance: 1 } }).exec();
+    await syncCatalogBranding(id);
+    expect(mirage.restaurants[0]?.theme).toEqual({
+      presetId: '',
+      mode: '',
+      primary: '',
+      accent: '',
+    });
   });
 
   it('is a no-op on a catalog that has never been provisioned', async () => {

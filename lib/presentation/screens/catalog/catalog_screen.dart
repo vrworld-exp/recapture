@@ -856,6 +856,19 @@ class _CatalogHeaderCard extends StatelessWidget {
                 ),
                 onPressed: onOpenBusinessProfile,
               ),
+              // The menu's look — preset and colours (more-customization
+              // Stage 2). push, like the profile: a sub-screen of the shell.
+              IconButton(
+                key: const Key('catalog-open-appearance'),
+                tooltip: 'Appearance — colours & style',
+                icon: const Icon(
+                  Icons.palette_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                onPressed: () =>
+                    context.pushNamed(AppRouteNames.catalogAppearance),
+              ),
               // Behind a menu, not out on the header next to Publish and
               // Preview. Deleting the catalog is the one action on this screen
               // that cannot be undone and that gives up the public URL — it
