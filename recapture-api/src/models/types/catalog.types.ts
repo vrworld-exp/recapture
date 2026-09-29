@@ -110,7 +110,129 @@ export interface CatalogAppearance {
   layout?: 'grid' | 'list' | 'large';
   /** Stage 3: a THEME_FONT_IDS pairing. Absent = the default fonts. */
   fontId?: string;
+  /** Stage 5: show the diet filter bar on the menu. Absent = off. */
+  showFilters?: boolean;
 }
+
+// ── Badges and dietary detail (more-customization Stage 5) ─────────────────
+
+/** Mapped to lucide icons in mirage-fe (features/menu/dishDetails.tsx). */
+export const BADGE_ICONS = [
+  'flame',
+  'star',
+  'sparkles',
+  'leaf',
+  'chef-hat',
+  'crown',
+  'heart',
+  'thumbs-up',
+  'clock',
+  'percent',
+] as const;
+export type BadgeIcon = (typeof BADGE_ICONS)[number];
+
+/** `primary` / `accent` follow the menu's theme; the rest are fixed hues. */
+export const BADGE_COLORS = ['primary', 'accent', 'red', 'green', 'blue', 'orange'] as const;
+export type BadgeColor = (typeof BADGE_COLORS)[number];
+
+export const MAX_BADGES = 12;
+export const MAX_BADGE_LABEL = 18;
+/** How many a product may carry. The menu card shows two; the sheet shows all. */
+export const MAX_PRODUCT_BADGES = 6;
+
+/**
+ * One badge in the catalog's library. Products hold its `id`; the publish step
+ * denormalises `{ label, icon, color }` onto the Mirage item (dishDetails.ts).
+ */
+export interface CatalogBadge {
+  id: string;
+  label: string;
+  icon: BadgeIcon;
+  color: BadgeColor;
+}
+
+export const PRODUCT_DIETARY = [
+  'JAIN',
+  'VEGAN',
+  'GLUTEN_FREE',
+  'EGGLESS',
+  'SUGAR_FREE',
+  'KETO',
+  'HIGH_PROTEIN',
+] as const;
+export type ProductDietary = (typeof PRODUCT_DIETARY)[number];
+
+export const PRODUCT_ALLERGENS = [
+  'NUTS',
+  'DAIRY',
+  'GLUTEN',
+  'SOY',
+  'EGG',
+  'SHELLFISH',
+  'SESAME',
+] as const;
+export type ProductAllergen = (typeof PRODUCT_ALLERGENS)[number];
+
+/** A vegan or Jain dish cannot also be non-veg — refused as DIET_CONFLICT. */
+export function dietConflicts(
+  foodType: ProductFoodType,
+  dietary: readonly string[] | undefined
+): boolean {
+  return (
+    foodType === 'NON_VEG' && (dietary ?? []).some((d) => d === 'VEGAN' || d === 'JAIN')
+  );
+}
+
+// ── Time-based menu fields (more-customization Stage 4) ────────────────────
+//
+// All PUBLISHED to Mirage, and all evaluated ON THE PUBLIC PAGE in the
+// restaurant's timezone (decision D7) — nothing here is judged server-side, so
+// a scheduled announcement or a breakfast window works without a re-publish.
+
+/** One opening slot. `close` earlier than `open` means it runs past midnight. */
+export interface CatalogHoursSlot {
+  /** 0 = Sunday … 6 = Saturday. */
+  day: number;
+  /** 'HH:mm', 24-hour. */
+  open: string;
+  close: string;
+}
+
+/** Opening hours → Mirage `restaurant.hours`. Replaced whole on every edit. */
+export interface CatalogHours {
+  /** IANA zone; 'Asia/Kolkata' unless the owner says otherwise. */
+  timezone: string;
+  /** Several rows per day allowed (lunch + dinner), at most 3. */
+  weekly: CatalogHoursSlot[];
+  /** 'YYYY-MM-DD' holidays, in the restaurant's timezone. */
+  closedDates: string[];
+  /** Whether the menu shows the "Open · closes 11 pm" chip. */
+  showOpenBadge: boolean;
+}
+
+export const ANNOUNCEMENT_STYLES = ['info', 'offer', 'alert'] as const;
+export type AnnouncementStyle = (typeof ANNOUNCEMENT_STYLES)[number];
+
+/** The announcement strip → Mirage `restaurant.announcement`. */
+export interface CatalogAnnouncement {
+  text: string;
+  emoji?: string;
+  style: AnnouncementStyle;
+  /** Either bound optional; the page shows it while startsAt ≤ now < endsAt. */
+  startsAt?: Date;
+  endsAt?: Date;
+  link?: string;
+}
+
+/** When a category is served → Mirage `category.schedule`. */
+export interface CategorySchedule {
+  days: number[];
+  from: string;
+  to: string;
+}
+
+export const OUTSIDE_WINDOW_MODES = ['hide', 'dim'] as const;
+export type OutsideWindowMode = (typeof OUTSIDE_WINDOW_MODES)[number];
 
 // ── Products ────────────────────────────────────────────────────────────────
 
@@ -293,6 +415,11 @@ export interface ProductPublishedSnapshot {
    * Mirage was showing for that item all along — rather than as "changed".
    */
   foodType?: ProductFoodType;
+  /**
+   * Stage 5: the dish-details key as last pushed (dishDetails.ts). Absent on a
+   * snapshot written before the field, which the planner reads as "none".
+   */
+  details?: string;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;

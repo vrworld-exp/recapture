@@ -187,6 +187,12 @@ function fakeMirage(seed: MirageRestaurant[] = []): FakeMirage {
       if (input.coverUrl !== undefined) {
         found.coverImage = input.coverUrl || undefined;
       }
+      // Stage 4: JSON strings, '' clears (helper/timeFields.js).
+      const time = found as unknown as Record<string, unknown>;
+      if (input.hours !== undefined) time.hours = input.hours ? JSON.parse(input.hours) : null;
+      if (input.announcement !== undefined) {
+        time.announcement = input.announcement ? JSON.parse(input.announcement) : null;
+      }
       return { ...found };
     },
     deleteRestaurant: unexpected('deleteRestaurant'),
@@ -783,6 +789,48 @@ describe('branding', () => {
     await Catalog.updateOne({ _id: id }, { $unset: { coverImageKey: 1 } }).exec();
     await syncCatalogBranding(id);
     expect(mirage.restaurants[0]?.coverImage).toBeUndefined();
+  });
+
+  // ── Stage 4: hours and the announcement ─────────────────────────────────
+
+  it('sends the hours and announcement, and clears both once removed', async () => {
+    const mirage = fakeMirage();
+    const { id } = await seedCatalog({ name: 'Blue Cafe' });
+    await provisionCatalog(id);
+    const stored = () => mirage.restaurants[0] as unknown as Record<string, unknown>;
+
+    await Catalog.updateOne(
+      { _id: id },
+      {
+        $set: {
+          hours: {
+            timezone: 'Asia/Kolkata',
+            weekly: [{ day: 1, open: '12:00', close: '23:00' }],
+            closedDates: [],
+            showOpenBadge: true,
+          },
+          announcement: {
+            text: 'Diwali special',
+            style: 'offer',
+            startsAt: new Date('2026-10-17T18:30:00Z'),
+          },
+        },
+      }
+    ).exec();
+    await syncCatalogBranding(id);
+
+    expect(stored().hours).toMatchObject({ timezone: 'Asia/Kolkata', showOpenBadge: true });
+    expect(stored().announcement).toMatchObject({
+      text: 'Diwali special',
+      style: 'offer',
+      startsAt: '2026-10-17T18:30:00.000Z',
+      endsAt: null,
+    });
+
+    await Catalog.updateOne({ _id: id }, { $unset: { hours: 1, announcement: 1 } }).exec();
+    await syncCatalogBranding(id);
+    expect(stored().hours).toBeNull();
+    expect(stored().announcement).toBeNull();
   });
 
   it('is a no-op on a catalog that has never been provisioned', async () => {

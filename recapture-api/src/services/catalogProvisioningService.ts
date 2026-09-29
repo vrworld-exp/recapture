@@ -306,6 +306,47 @@ function mirageTheme(catalog: ICatalog): Required<MirageTheme> {
  * cover live. Mirage keeps its copy when the URL has not changed, so re-sending
  * it on every publish costs nothing (adminController resolveCover).
  */
+function mirageTimeFields(catalog: ICatalog): { hours: string; announcement: string } {
+  const h = catalog.hours;
+  const a = catalog.announcement;
+  return {
+    // Stage 4. JSON strings, `''` to clear — always sent, so removing the hours
+    // or the announcement in ReCapture removes them from the menu.
+    hours: h
+      ? JSON.stringify({
+          timezone: h.timezone,
+          weekly: h.weekly.map((s) => ({ day: s.day, open: s.open, close: s.close })),
+          closedDates: [...(h.closedDates ?? [])],
+          showOpenBadge: h.showOpenBadge !== false,
+        })
+      : '',
+    announcement: a
+      ? JSON.stringify({
+          text: a.text,
+          emoji: a.emoji ?? '',
+          style: a.style,
+          startsAt: a.startsAt ? a.startsAt.toISOString() : null,
+          endsAt: a.endsAt ? a.endsAt.toISOString() : null,
+          link: a.link ?? '',
+        })
+      : '',
+  };
+}
+
+/**
+ * Stage 5: the badge library (the dishes carry their own copies — this is for
+ * completeness and Mirage's admin) and the diet-filter flag. Always sent.
+ */
+function mirageDishSettings(catalog: ICatalog): { badges: string; showFilters: boolean } {
+  const badges = catalog.badges ?? [];
+  return {
+    badges: badges.length
+      ? JSON.stringify(badges.map((b) => ({ id: b.id, label: b.label, icon: b.icon, color: b.color })))
+      : '',
+    showFilters: catalog.appearance?.showFilters === true,
+  };
+}
+
 function mirageCoverUrl(catalog: ICatalog): string {
   return catalog.coverImageKey ? `${CLOUDFRONT_BASE}/${catalog.coverImageKey}` : '';
 }
@@ -612,6 +653,8 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
       socialLinks: links.socialLinks,
       theme: mirageTheme(catalog),
       coverUrl: mirageCoverUrl(catalog),
+      ...mirageTimeFields(catalog),
+      ...mirageDishSettings(catalog),
       ...(logo ? { image: logo } : {}),
     });
   } catch (err) {
@@ -683,6 +726,8 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
       socialLinks: links.socialLinks,
       theme: mirageTheme(catalog),
       coverUrl: mirageCoverUrl(catalog),
+      ...mirageTimeFields(catalog),
+      ...mirageDishSettings(catalog),
       ...(logo ? { image: logo } : {}),
     });
 

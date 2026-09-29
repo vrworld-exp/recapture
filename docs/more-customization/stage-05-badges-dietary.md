@@ -1,4 +1,20 @@
-# Stage 5 — Custom badges and dietary / allergen info
+# ✅ Stage 5 — Custom badges and dietary / allergen info
+
+> **Status (2026-09-30): built, uncommitted; tests written, not yet run (run after the last
+> stage).** Mirage-be: `helper/dishDetailFields.js`, item `badges` / `dietary` / `allergens` /
+> `spiceLevel` / `calories` / `servesCount` / `prepMinutes`, restaurant `badges` + `showFilters`,
+> all projected. Mirage-fe: `dishDetails.tsx` (`CustomBadge` in theme colours, `DishFacts`,
+> filter rules + `DietFilterBar`), 2 badges on grid/large cards and list rows, all + facts in the
+> detail sheet, filter bar under the tabs (AND, only relevant filters). API: `Catalog.badges`
+> (profile PATCH, replace, server assigns ids, deleted badge `$pull`ed from products in the same
+> request), product fields with `UNKNOWN_BADGE` / `DIET_CONFLICT` (judged on the end state),
+> `appearance.showFilters`. Publish: ONE diffed field `details` (`services/catalog/dishDetails.ts`)
+> built from RESOLVED badges — a rename re-publishes the dishes carrying it; an old snapshot reads
+> as "none", so no menu-wide republish. Flutter: `badge_manager_screen.dart` (suggestions on first
+> open, unsaved until Save), `dish_details_section.dart` in the product editor (saved via a
+> separate `updateDishDetails` call), "Diet filters" switch on the Appearance screen.
+> **Not done:** the REP dish editor has no badge / diet section yet (owner only); per-product
+> badges are capped at 6 (the doc only said "max 2 shown").
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 2.

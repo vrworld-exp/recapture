@@ -23,6 +23,7 @@ import 'package:recapture/domain/entities/qr_standee.dart';
 import 'package:recapture/data/repositories/rep_repository.dart';
 import 'package:recapture/data/repositories/standee_sheet.dart';
 import 'package:recapture/domain/catalog/appearance.dart';
+import 'package:recapture/domain/catalog/menu_time.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -135,6 +136,26 @@ mixin RepRepoCatalogDefaults implements RepRepository {
       throw UnimplementedError(
         'rep appearance write is not exercised by this test',
       );
+
+  @override
+  Future<BusinessProfile> updateHours(String catalogId, CatalogHours? hours) =>
+      throw UnimplementedError('rep hours write is not exercised by this test');
+
+  @override
+  Future<BusinessProfile> updateAnnouncement(
+    String catalogId,
+    CatalogAnnouncement? announcement,
+  ) =>
+      throw UnimplementedError('rep announcement write is not exercised by this test');
+
+  @override
+  Future<CatalogCategory> setCategorySchedule(
+    String catalogId,
+    String categoryId, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  }) =>
+      throw UnimplementedError('rep category schedule is not exercised by this test');
 
   @override
   Future<String> uploadBrandingBytes(

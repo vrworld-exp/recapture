@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
 import 'package:recapture/application/catalog/catalog_notifier.dart';
 import 'package:recapture/application/projects/owner_model_history_notifier.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
@@ -43,6 +44,11 @@ final _jpegBytes = Uint8List.fromList([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]);
 /// Records what the form asked for, so the tests can assert on the REQUEST
 /// rather than on the widget tree's account of it.
 class _FakeProductsRepo implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   _FakeProductsRepo({this.onUpload});
 
   final Future<String> Function()? onUpload;

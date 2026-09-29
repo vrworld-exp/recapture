@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/catalog/appearance.dart';
+import '../../domain/catalog/dish_details.dart';
+import '../../domain/catalog/menu_time.dart';
 import '../../domain/entities/business_profile.dart';
 import '../remote/api_client.dart';
 import 'catalog_failure.dart';
@@ -36,6 +38,16 @@ abstract interface class BusinessProfileRepository {
   /// A colour the server finds unreadable is a [CatalogFailure] with code
   /// `APPEARANCE_LOW_CONTRAST` — the screen checks first, so that is a backstop.
   Future<BusinessProfile> updateAppearance(CatalogAppearance? appearance);
+
+  /// Stage 4: replaces the opening hours; null removes them.
+  Future<BusinessProfile> updateHours(CatalogHours? hours);
+
+  /// Stage 4: replaces the announcement strip; null clears it.
+  Future<BusinessProfile> updateAnnouncement(CatalogAnnouncement? announcement);
+
+  /// Stage 5: replaces the badge library. A badge left out is deleted and the
+  /// server pulls it from every dish in the same request.
+  Future<BusinessProfile> updateBadges(List<CatalogBadge> badges);
 }
 
 /// Concrete [BusinessProfileRepository] over the app Dio.
@@ -84,6 +96,34 @@ class RemoteBusinessProfileRepository implements BusinessProfileRepository {
           '/catalog/profile',
           // An EXPLICIT null is the reset; an empty appearance means the same.
           data: {'appearance': appearance == null || appearance.isEmpty ? null : appearance.toMap()},
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateHours(CatalogHours? hours) => mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/catalog/profile',
+          data: {'hours': hours?.toMap()},
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateAnnouncement(CatalogAnnouncement? announcement) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/catalog/profile',
+          data: {'announcement': announcement?.toMap()},
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateBadges(List<CatalogBadge> badges) => mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/catalog/profile',
+          data: {'badges': [for (final b in badges) b.toMap()]},
         );
         return _profileFrom(res.data);
       });

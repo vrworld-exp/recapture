@@ -981,6 +981,15 @@ router.post(
       case 'OBJECT_NOT_FOUND':
       case 'TOO_LARGE':
         return fail(res, 400, result.outcome, 'That image could not be attached.');
+      case 'DIET_CONFLICT':
+        return fail(
+          res,
+          400,
+          'DIET_CONFLICT',
+          'A vegan or Jain dish cannot also be marked non-veg.'
+        );
+      case 'UNKNOWN_BADGE':
+        return fail(res, 400, 'UNKNOWN_BADGE', 'That badge is not in your badge list.');
       case 'CREATED':
         break;
     }
@@ -1364,6 +1373,15 @@ router.patch(
       case 'OBJECT_NOT_FOUND':
       case 'TOO_LARGE':
         return fail(res, 400, result.outcome, 'That image could not be attached.');
+      case 'DIET_CONFLICT':
+        return fail(
+          res,
+          400,
+          'DIET_CONFLICT',
+          'A vegan or Jain dish cannot also be marked non-veg.'
+        );
+      case 'UNKNOWN_BADGE':
+        return fail(res, 400, 'UNKNOWN_BADGE', 'That badge is not in your badge list.');
       case 'UPDATED':
         break;
     }

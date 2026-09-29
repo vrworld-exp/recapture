@@ -1,5 +1,6 @@
 // lib/domain/entities/catalog_category.dart
 import '../catalog/catalog_names.dart';
+import '../catalog/menu_time.dart';
 import 'catalog_json.dart';
 import 'product_sync_status.dart';
 
@@ -22,6 +23,8 @@ class CatalogCategory {
     this.syncError,
     this.updatedAt,
     this.createdAt,
+    this.schedule,
+    this.hideOutsideWindow = false,
   });
 
   final String id;
@@ -53,6 +56,13 @@ class CatalogCategory {
   final DateTime? updatedAt;
   final DateTime? createdAt;
 
+  /// Stage 4: when this section is served on the menu. Null = always.
+  final CategorySchedule? schedule;
+
+  /// Stage 4: outside the window, hide it (true) or show it dimmed with its
+  /// hours (false, the server's default).
+  final bool hideOutsideWindow;
+
   bool get isEmpty => productCount == 0;
 
   factory CatalogCategory.fromMap(Map<String, dynamic> map) => CatalogCategory(
@@ -65,6 +75,9 @@ class CatalogCategory {
         syncError: catalogText(map['syncError']),
         updatedAt: catalogDate(map['updatedAt']),
         createdAt: catalogDate(map['createdAt']),
+        // Absent on an older server — always available, as before.
+        schedule: CategorySchedule.tryParse(map['schedule']),
+        hideOutsideWindow: map['outsideWindow'] == 'hide',
       );
 
   Map<String, dynamic> toMap() => {
@@ -76,6 +89,8 @@ class CatalogCategory {
         'syncError': syncError,
         'updatedAt': updatedAt?.toIso8601String(),
         'createdAt': createdAt?.toIso8601String(),
+        'schedule': schedule?.toMap(),
+        'outsideWindow': hideOutsideWindow ? 'hide' : 'dim',
       };
 
   CatalogCategory copyWith({
@@ -92,6 +107,8 @@ class CatalogCategory {
         syncError: syncError,
         updatedAt: updatedAt,
         createdAt: createdAt,
+        schedule: schedule,
+        hideOutsideWindow: hideOutsideWindow,
       );
 }
 

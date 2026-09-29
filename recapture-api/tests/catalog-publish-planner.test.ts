@@ -14,6 +14,7 @@
 //   • NO SILENT SKIP — changing ANY field in PRODUCT_DIFF_FIELDS must produce
 //     an UPDATE. A field the diff forgets reads back as "unchanged", and the
 //     user's edit never reaches the public page while the app reports success.
+import { dishDetailsKey, dishDetailsOf } from '@/services/catalog/dishDetails';
 import { describe, it, expect } from 'vitest';
 
 import type { ProductPublishedSnapshot } from '@/models/types/catalog.types';
@@ -282,6 +283,13 @@ const CHANGED_VALUES: Record<ProductDiffField, Partial<CatalogSnapshotProduct>> 
   categoryId: { categoryId: 'c2' },
   position: { position: 5 },
   foodType: { foodType: 'NON_VEG' },
+  details: {
+    details: dishDetailsKey(
+      dishDetailsOf({ badgeIds: ['b1'], dietary: ['JAIN'] }, [
+        { id: 'b1', label: 'New', icon: 'sparkles', color: 'green' },
+      ])
+    ),
+  },
   glbUrl: { glbUrl: 'https://cdn.test/model-v2.glb' },
   usdzUrl: { usdzUrl: 'https://cdn.test/model-v2.usdz' },
   thumbnailUrl: { thumbnailUrl: 'https://cdn.test/preview-v2.jpg' },

@@ -9,6 +9,7 @@ import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
 import '../../data/repositories/rep_repository.dart';
 import '../../domain/catalog/appearance.dart';
+import '../../domain/catalog/menu_time.dart';
 import '../../domain/catalog/catalog_scope.dart';
 import '../../domain/entities/business_profile.dart';
 import '../auth/auth_notifier.dart';
@@ -230,6 +231,29 @@ class BusinessProfileNotifier
         ? await _ownerRepo.updateAppearance(appearance)
         : await _repRepo.updateAppearance(catalogId, appearance);
 
+    if (!_disposed) state = AsyncData(updated);
+    _refreshCatalog();
+    return updated;
+  }
+
+  /// Stage 4: replaces the opening hours (null removes them). Same contract as
+  /// [saveAppearance].
+  Future<BusinessProfile> saveHours(CatalogHours? hours) async {
+    final catalogId = _catalogId;
+    final updated = catalogId == null
+        ? await _ownerRepo.updateHours(hours)
+        : await _repRepo.updateHours(catalogId, hours);
+    if (!_disposed) state = AsyncData(updated);
+    _refreshCatalog();
+    return updated;
+  }
+
+  /// Stage 4: replaces the announcement strip (null clears it).
+  Future<BusinessProfile> saveAnnouncement(CatalogAnnouncement? announcement) async {
+    final catalogId = _catalogId;
+    final updated = catalogId == null
+        ? await _ownerRepo.updateAnnouncement(announcement)
+        : await _repRepo.updateAnnouncement(catalogId, announcement);
     if (!_disposed) state = AsyncData(updated);
     _refreshCatalog();
     return updated;

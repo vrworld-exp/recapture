@@ -107,6 +107,18 @@ async function adopt(
   context.mirageCategoryIds.set(categoryId, mirageCategoryId);
 }
 
+/**
+ * The availability window as Mirage takes it (Stage 4): a JSON string, or `''`
+ * to CLEAR — always sent, so removing a window in ReCapture removes it from the
+ * menu instead of leaving the old one live.
+ */
+function mirageSchedule(category: CatalogSnapshotCategory) {
+  return {
+    schedule: category.schedule ? JSON.stringify(category.schedule) : '',
+    outsideWindow: category.outsideWindow ?? 'dim',
+  };
+}
+
 /** The snapshot row a step points at. */
 function categoryOf(
   context: PublishRunContext,
@@ -139,6 +151,7 @@ async function createCategory(
       name: mirageCategoryName(category.name),
       restaurantId,
       sortPosition: category.position,
+      ...mirageSchedule(category),
     });
     await adopt(context, category.id, created.id);
     return { outcome: 'SUCCEEDED' };
@@ -176,6 +189,7 @@ async function updateCategory(
     await client.updateCategory(mirageCategoryId, {
       name: mirageCategoryName(category.name),
       sortPosition: category.position,
+      ...mirageSchedule(category),
     });
     // Mirage's echo (`garden_chairs`) is deliberately DROPPED here — only the
     // id and the sync timestamps are ours to write.

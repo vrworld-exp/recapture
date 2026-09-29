@@ -23,6 +23,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/data/repositories/business_profile_repository.dart';
 import 'package:recapture/domain/catalog/appearance.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
+import 'package:recapture/domain/catalog/menu_time.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
@@ -174,6 +176,16 @@ class FakePreviewProfileRepo implements BusinessProfileRepository {
 
   @override
   Future<BusinessProfile> updateAppearance(CatalogAppearance? appearance) =>
+      throw UnimplementedError();
+
+  @override
+  Future<BusinessProfile> updateHours(CatalogHours? hours) => throw UnimplementedError();
+
+  @override
+  Future<BusinessProfile> updateBadges(List<CatalogBadge> badges) => throw UnimplementedError();
+
+  @override
+  Future<BusinessProfile> updateAnnouncement(CatalogAnnouncement? announcement) =>
       throw UnimplementedError();
 }
 

@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/catalog/menu_time.dart';
 import '../../domain/catalog/publish_request_result.dart';
 import '../../domain/catalog/publish_status.dart';
 import '../../domain/entities/business_profile.dart';
@@ -121,6 +122,14 @@ abstract interface class CatalogRepository {
   Future<CatalogCategory> createCategory(String name);
 
   Future<CatalogCategory> renameCategory(String id, String name);
+
+  /// Stage 4: a section's availability window (null = always), and whether it
+  /// hides or dims outside it.
+  Future<CatalogCategory> setCategorySchedule(
+    String id, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  });
 
   /// Deletes a category and returns how many products the server moved out of
   /// it (into the first remaining category, or Uncategorized for the last) —
@@ -538,6 +547,23 @@ class RemoteCatalogRepository implements CatalogRepository {
         final res = await _dio.patch<Map<String, dynamic>>(
           '/catalog/categories/$id',
           data: {'name': name},
+        );
+        return _categoryFrom(res.data);
+      });
+
+  @override
+  Future<CatalogCategory> setCategorySchedule(
+    String id, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/catalog/categories/$id',
+          data: {
+            'schedule': schedule?.toMap(),
+            'outsideWindow': hideOutsideWindow ? 'hide' : 'dim',
+          },
         );
         return _categoryFrom(res.data);
       });

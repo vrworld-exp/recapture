@@ -13,6 +13,8 @@
 // Every stub throws. A test that reaches one is asserting on a call it never
 // meant to make, and a silent default (an empty status, a fake run id) would
 // let that pass.
+import 'package:recapture/domain/catalog/menu_time.dart';
+import 'package:recapture/domain/entities/catalog_category.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
@@ -53,4 +55,15 @@ mixin CatalogRepoPublishDefaults implements CatalogRepository {
   @override
   Future<StandeeDownload> downloadStandees(int copies) =>
       throw UnimplementedError('standees are not exercised by this test');
+
+  // Stage 4 — in BOTH the publish and delete defaults on purpose: between them
+  // they cover every CatalogRepository fake in test/catalog, and a class mixing
+  // both takes one identical stub either way.
+  @override
+  Future<CatalogCategory> setCategorySchedule(
+    String id, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  }) =>
+      throw UnimplementedError('category schedule is not exercised by this test');
 }

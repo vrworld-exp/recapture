@@ -14,6 +14,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
 import 'package:recapture/application/catalog/catalog_notifier.dart';
 import 'package:recapture/application/projects/owner_model_history_notifier.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
@@ -32,6 +33,11 @@ import 'package:recapture/presentation/screens/catalog/change_product_model_scre
 import 'catalog_entities_test.dart' as golden;
 
 class _FakeProductsRepo implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   _FakeProductsRepo({required this.product, this.onUpdate});
 
   final CatalogProduct product;
@@ -338,6 +344,11 @@ void main() {
 }
 
 class _StaleProductsRepo implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   @override
   Future<CatalogProduct> get(String id) async => throw const CatalogFailure(
         code: 'NOT_FOUND',

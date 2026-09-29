@@ -15,6 +15,8 @@ import 'package:recapture/application/config/config_notifier.dart';
 import 'package:recapture/data/repositories/business_profile_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/catalog/appearance.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
+import 'package:recapture/domain/catalog/menu_time.dart';
 import 'package:recapture/domain/catalog/catalog_scope.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -49,6 +51,16 @@ class _AppearanceRepo implements BusinessProfileRepository {
     profile = profile.withAppearance(appearance);
     return profile;
   }
+
+  @override
+  Future<BusinessProfile> updateHours(CatalogHours? hours) => throw UnimplementedError();
+
+  @override
+  Future<BusinessProfile> updateBadges(List<CatalogBadge> badges) => throw UnimplementedError();
+
+  @override
+  Future<BusinessProfile> updateAnnouncement(CatalogAnnouncement? announcement) =>
+      throw UnimplementedError();
 }
 
 class _StubAuth extends AuthNotifier {

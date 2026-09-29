@@ -11,7 +11,17 @@
 //     and then fails Mongoose validation would surface as a 500 instead of the
 //     400 it is.
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import {
+  ANNOUNCEMENT_STYLES,
+  BADGE_COLORS,
+  BADGE_ICONS,
+  MAX_BADGE_LABEL,
+  MAX_BADGES,
+  MAX_PRODUCT_BADGES,
+  OUTSIDE_WINDOW_MODES,
+  PRODUCT_ALLERGENS,
+  PRODUCT_DIETARY,
   PRODUCT_AVAILABILITIES,
   PRODUCT_FOOD_TYPES,
   PRODUCT_TYPES,
@@ -128,6 +138,8 @@ export const appearanceSchema = z
     primary: hexColor.optional(),
     accent: hexColor.optional(),
     layout: z.enum(THEME_LAYOUTS).optional(),
+    /** Stage 5: the diet filter bar on the menu. */
+    showFilters: z.boolean().optional(),
     fontId: z
       .string()
       .trim()
@@ -135,6 +147,165 @@ export const appearanceSchema = z
       .optional(),
   })
   .strict();
+
+// ── Time-based fields (more-customization Stage 4) ──────────────────────────
+
+const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const hhmm = z.string().regex(HHMM_RE, 'Time must be HH:mm (24-hour)');
+const minutesOf = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+
+/** Mirrored bounds — the Flutter form checks the same numbers. */
+export const MAX_SLOTS_PER_DAY = 3;
+export const MAX_FUTURE_CLOSED_DATES = 60;
+
+const isValidTimeZone = (tz: string) => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Opening hours. REPLACES the stored block (a partial weekly timetable is
+ * meaningless); `null` removes it. Slots on one day may not overlap — a past-
+ * midnight slot is measured to its real end — and a day holds at most three.
+ */
+export const hoursSchema = z
+  .object({
+    timezone: z
+      .string()
+      .trim()
+      .max(64)
+      .refine(isValidTimeZone, { message: 'Unknown time zone' })
+      .default('Asia/Kolkata'),
+    weekly: z
+      .array(
+        z
+          .object({ day: z.number().int().min(0).max(6), open: hhmm, close: hhmm })
+          .strict()
+          .refine((s) => s.open !== s.close, { message: 'A slot cannot open and close at the same time' })
+      )
+      .max(7 * MAX_SLOTS_PER_DAY),
+    closedDates: z
+      .array(z.string().regex(YMD_RE, 'Dates must be YYYY-MM-DD'))
+      .max(366)
+      .default([]),
+    showOpenBadge: z.boolean().default(true),
+  })
+  .strict()
+  .superRefine((hours, ctx) => {
+    for (let day = 0; day <= 6; day++) {
+      const slots = hours.weekly
+        .filter((s) => s.day === day)
+        .map((s) => {
+          const start = minutesOf(s.open);
+          const close = minutesOf(s.close);
+          return { start, end: close <= start ? close + 24 * 60 : close };
+        })
+        .sort((a, b) => a.start - b.start);
+      if (slots.length > MAX_SLOTS_PER_DAY) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['weekly'],
+          message: `At most ${MAX_SLOTS_PER_DAY} slots per day`,
+        });
+      }
+      for (let i = 1; i < slots.length; i++) {
+        if (slots[i]!.start < slots[i - 1]!.end) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['weekly'],
+            message: 'Two slots on the same day overlap',
+          });
+        }
+      }
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const future = new Set(hours.closedDates.filter((d) => d >= today));
+    if (future.size > MAX_FUTURE_CLOSED_DATES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['closedDates'],
+        message: `At most ${MAX_FUTURE_CLOSED_DATES} upcoming holidays`,
+      });
+    }
+  })
+  .transform((hours) => ({ ...hours, closedDates: [...new Set(hours.closedDates)].sort() }));
+
+/**
+ * The announcement strip. REPLACES the stored one; `null` clears it. The date
+ * window is enforced on the public page, so a Diwali offer set once appears and
+ * disappears on its own.
+ */
+export const announcementSchema = z
+  .object({
+    text: z.string().trim().min(1).max(120),
+    emoji: z.string().trim().max(8).optional(),
+    style: z.enum(ANNOUNCEMENT_STYLES).default('info'),
+    startsAt: z.coerce.date().optional(),
+    endsAt: z.coerce.date().optional(),
+    link: z
+      .string()
+      .trim()
+      .max(300)
+      .regex(/^https?:\/\//i, 'Link must start with http:// or https://')
+      .optional(),
+  })
+  .strict()
+  .refine((a) => !a.startsAt || !a.endsAt || a.endsAt > a.startsAt, {
+    message: 'The end must be after the start',
+    path: ['endsAt'],
+  });
+
+/** When a category is served. `null` = always. */
+export const categoryScheduleSchema = z
+  .object({
+    days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+    from: hhmm,
+    to: hhmm,
+  })
+  .strict()
+  .refine((s) => s.from !== s.to, { message: 'The window cannot start and end at the same time' })
+  .transform((s) => ({ ...s, days: [...new Set(s.days)].sort((a, b) => a - b) }));
+
+// ── Badges and dietary detail (more-customization Stage 5) ─────────────────
+
+/**
+ * The badge library. REPLACES the stored list; a badge that disappears from it
+ * is pulled from every product in the same request (catalogService). A badge
+ * without an `id` is new and gets one here, so the stored id, the response and
+ * what products reference are the same string.
+ */
+export const badgesSchema = z
+  .array(
+    z
+      .object({
+        id: z.string().trim().min(1).max(40).optional(),
+        label: z.string().trim().min(1).max(MAX_BADGE_LABEL),
+        icon: z.enum(BADGE_ICONS),
+        color: z.enum(BADGE_COLORS),
+      })
+      .strict()
+  )
+  .max(MAX_BADGES)
+  .transform((list) => list.map((b) => ({ ...b, id: b.id ?? randomUUID().slice(0, 12) })))
+  .refine((list) => new Set(list.map((b) => b.id)).size === list.length, {
+    message: 'Badge ids must be unique',
+  });
+
+/** Product-side detail fields, shared by create and update. `null` clears a number. */
+const dishDetailFields = {
+  badgeIds: z.array(z.string().trim().min(1).max(40)).max(MAX_PRODUCT_BADGES).optional(),
+  dietary: z.array(z.enum(PRODUCT_DIETARY)).max(PRODUCT_DIETARY.length).optional(),
+  allergens: z.array(z.enum(PRODUCT_ALLERGENS)).max(PRODUCT_ALLERGENS.length).optional(),
+  spiceLevel: z.number().int().min(0).max(3).nullable().optional(),
+  calories: z.number().int().min(0).max(5000).nullable().optional(),
+  servesCount: z.number().int().min(1).max(50).nullable().optional(),
+  prepMinutes: z.number().int().min(0).max(600).nullable().optional(),
+};
 
 /**
  * The catalog NAME field, exported for the same reason `contactSchema` is: rep
@@ -182,6 +353,11 @@ export const updateCatalogSchema = z
      * resets to the default Basalt look ("Reset to default").
      */
     appearance: appearanceSchema.nullable().optional(),
+    /** Stage 4. Replaces the block; `null` removes it. */
+    hours: hoursSchema.nullable().optional(),
+    announcement: announcementSchema.nullable().optional(),
+    /** Stage 5: the badge library (replaces; `[]` empties it). */
+    badges: badgesSchema.optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {
@@ -252,6 +428,9 @@ export const createCategorySchema = z
     name: slugName(CATEGORY_NAME_MAX, 'Category name'),
     /** Omit to append at the end — the service resolves the next position. */
     position: z.number().int().min(0).optional(),
+    /** Stage 4: breakfast 07:00–11:00 and the like. */
+    schedule: categoryScheduleSchema.nullable().optional(),
+    outsideWindow: z.enum(OUTSIDE_WINDOW_MODES).optional(),
   })
   .strict();
 
@@ -261,6 +440,9 @@ export const updateCategorySchema = z
   .object({
     name: slugName(CATEGORY_NAME_MAX, 'Category name').optional(),
     position: z.number().int().min(0).optional(),
+    /** Stage 4. `null` = always available again. */
+    schedule: categoryScheduleSchema.nullable().optional(),
+    outsideWindow: z.enum(OUTSIDE_WINDOW_MODES).optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {
@@ -325,6 +507,7 @@ export const createProductSchema = z
     featured: z.boolean().optional(),
     /** Veg / non-veg / no label. Omitted = VEG, the schema default. */
     foodType: z.enum(PRODUCT_FOOD_TYPES).optional(),
+    ...dishDetailFields,
     position: z.number().int().min(0).optional(),
     sourceModelId: objectId('model id').optional(),
     /**
@@ -402,6 +585,7 @@ export const updateProductSchema = z
     availability: z.enum(PRODUCT_AVAILABILITIES).optional(),
     featured: z.boolean().optional(),
     foodType: z.enum(PRODUCT_FOOD_TYPES).optional(),
+    ...dishDetailFields,
     position: z.number().int().min(0).optional(),
     /** Convert the product to this type. Requires the matching asset below. */
     type: z.enum(PRODUCT_TYPES).optional(),

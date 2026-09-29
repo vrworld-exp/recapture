@@ -17,6 +17,7 @@ import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_categories_notifier.dart';
 import 'package:recapture/application/catalog/catalog_products_notifier.dart';
@@ -90,6 +91,11 @@ class ListCall {
 /// fixed list so a test can answer differently per cursor, delay one response
 /// past another, or throw.
 class FakeProductsRepository implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   FakeProductsRepository(this.respond);
 
   final Future<CatalogProductPage> Function(ListCall call) respond;

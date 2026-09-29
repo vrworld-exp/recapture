@@ -20,6 +20,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
 import 'package:recapture/application/catalog/catalog_notifier.dart';
 import 'package:recapture/application/projects/owner_model_history_notifier.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
@@ -45,6 +46,11 @@ Widget _stubRender(BuildContext _, ProjectModelView model) =>
     Text('RENDER:${model.id}');
 
 class _FakeProductsRepo implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   String? lastSourceModelId;
   int createCalls = 0;
 

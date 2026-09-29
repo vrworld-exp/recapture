@@ -50,6 +50,10 @@ export interface CategoryDto {
   syncStatus: SyncStatus;
   /** OUR message for the last failure, never Mirage's prose. Null when fine. */
   syncError: string | null;
+  /** Stage 4: when this section is served; null = always. */
+  schedule: { days: number[]; from: string; to: string } | null;
+  /** Stage 4: outside the window — `dim` unless set to `hide`. */
+  outsideWindow: 'hide' | 'dim';
   updatedAt: string;
   createdAt: string;
 }
@@ -62,6 +66,10 @@ function toCategoryDto(c: ICatalogCategory, productCount: number): CategoryDto {
     productCount,
     syncStatus: c.syncStatus,
     syncError: c.syncError?.message ?? null,
+    schedule: c.schedule
+      ? { days: [...c.schedule.days], from: c.schedule.from, to: c.schedule.to }
+      : null,
+    outsideWindow: c.outsideWindow ?? 'dim',
     updatedAt: c.updatedAt.toISOString(),
     createdAt: c.createdAt.toISOString(),
   };
@@ -185,6 +193,8 @@ export async function createCategory(
       userId: new Types.ObjectId(userId),
       name: input.name,
       position,
+      ...(input.schedule ? { schedule: input.schedule } : {}),
+      ...(input.outsideWindow ? { outsideWindow: input.outsideWindow } : {}),
     });
   } catch (err) {
     if (isDuplicateKeyError(err)) return { outcome: 'DUPLICATE_NAME' };
@@ -245,13 +255,20 @@ export async function updateCategory(
   const catalogId = catalog._id as Types.ObjectId;
 
   const set: Record<string, unknown> = {};
+  const unset: Record<string, 1> = {};
   if (input.name !== undefined) set.name = input.name;
   if (input.position !== undefined) set.position = input.position;
+  // Stage 4. Bumps the row's updatedAt, which is how the planner knows to push it.
+  if (input.schedule !== undefined) {
+    if (input.schedule === null) unset.schedule = 1;
+    else set.schedule = input.schedule;
+  }
+  if (input.outsideWindow !== undefined) set.outsideWindow = input.outsideWindow;
 
   try {
     const updated = await CatalogCategory.findOneAndUpdate(
       { _id: new Types.ObjectId(categoryId), catalogId, deletedAt: null },
-      { $set: set },
+      { $set: set, ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}) },
       { new: true, runValidators: true }
     ).exec();
 

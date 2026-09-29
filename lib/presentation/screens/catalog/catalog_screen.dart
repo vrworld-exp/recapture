@@ -23,7 +23,9 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/publish_body.dart' show kPublishStartQuery;
 import '../../widgets/catalog/bulk_selection_bar.dart';
+import '../../widgets/catalog/announcement_editor.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../../domain/catalog/catalog_scope.dart';
 import '../../widgets/catalog/owner_standee_dialog.dart';
 import '../../widgets/catalog/product_actions.dart';
 import 'create_catalog_dialog.dart';
@@ -479,6 +481,13 @@ class _CatalogBody extends ConsumerWidget {
                       onOpenSubscription: onOpenSubscription,
                     ),
                   ),
+                  // Stage 4: the announcement strip — offers, festivals, notices.
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.only(top: AppSpacing.md),
+                      child: AnnouncementCard(scope: CatalogScope.owner()),
+                    ),
+                  ),
                   const SliverToBoxAdapter(
                     child: SizedBox(height: AppSpacing.xxl),
                   ),
@@ -868,6 +877,17 @@ class _CatalogHeaderCard extends StatelessWidget {
                 ),
                 onPressed: () =>
                     context.pushNamed(AppRouteNames.catalogAppearance),
+              ),
+              // Stage 5: the badge library.
+              IconButton(
+                key: const Key('catalog-open-badges'),
+                tooltip: 'Badges',
+                icon: const Icon(
+                  Icons.sell_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                onPressed: () => context.pushNamed(AppRouteNames.catalogBadges),
               ),
               // Behind a menu, not out on the header next to Publish and
               // Preview. Deleting the catalog is the one action on this screen

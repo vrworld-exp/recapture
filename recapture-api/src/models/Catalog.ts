@@ -13,8 +13,14 @@ import { Schema, model, Document, Types } from 'mongoose';
 import {
   CATALOG_STATUSES,
   PUBLIC_URL_SCHEMES,
+  ANNOUNCEMENT_STYLES,
+  BADGE_COLORS,
+  BADGE_ICONS,
+  type CatalogBadge,
+  type CatalogAnnouncement,
   type CatalogAppearance,
   type CatalogContact,
+  type CatalogHours,
   type CatalogSocials,
   type CatalogStatus,
   type PublicUrlScheme,
@@ -38,6 +44,12 @@ export interface ICatalog extends Document {
   contact?: CatalogContact;
   /** The public menu's look — see CatalogAppearance. Absent = Basalt. */
   appearance?: CatalogAppearance;
+  /** Stage 4: opening hours. Absent = none, no chip on the menu. */
+  hours?: CatalogHours;
+  /** Stage 4: the announcement strip. Absent = none. */
+  announcement?: CatalogAnnouncement;
+  /** Stage 5: the owner's badge library. Products reference these by id. */
+  badges?: CatalogBadge[];
   status: CatalogStatus;
   /**
    * The Mirage restaurant this catalog is projected into. Written ONCE, at
@@ -132,6 +144,43 @@ const CatalogAppearanceSchema = new Schema<CatalogAppearance>(
     accent: { type: String, trim: true, match: /^#[0-9a-fA-F]{6}$/ },
     layout: { type: String, enum: ['grid', 'list', 'large'] },
     fontId: { type: String, trim: true, maxlength: 40 },
+    showFilters: { type: Boolean },
+  },
+  { _id: false }
+);
+
+// Stage 4. Bounds only — overlap / per-day / holiday rules are the Zod
+// schema's job, where a failure is a 400 that names the field.
+const CatalogHoursSchema = new Schema<CatalogHours>(
+  {
+    timezone: { type: String, trim: true, maxlength: 64, default: 'Asia/Kolkata' },
+    weekly: {
+      type: [
+        new Schema(
+          {
+            day: { type: Number, min: 0, max: 6, required: true },
+            open: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+            close: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+    closedDates: { type: [String], default: [] },
+    showOpenBadge: { type: Boolean, default: true },
+  },
+  { _id: false }
+);
+
+const CatalogAnnouncementSchema = new Schema<CatalogAnnouncement>(
+  {
+    text: { type: String, required: true, trim: true, maxlength: 120 },
+    emoji: { type: String, trim: true, maxlength: 8 },
+    style: { type: String, enum: ANNOUNCEMENT_STYLES, default: 'info' },
+    startsAt: { type: Date },
+    endsAt: { type: Date },
+    link: { type: String, trim: true, maxlength: 300 },
   },
   { _id: false }
 );
@@ -145,6 +194,22 @@ const CatalogSchema = new Schema<ICatalog>(
     coverImageKey: { type: String },
     contact: { type: CatalogContactSchema },
     appearance: { type: CatalogAppearanceSchema },
+    hours: { type: CatalogHoursSchema },
+    announcement: { type: CatalogAnnouncementSchema },
+    badges: {
+      type: [
+        new Schema<CatalogBadge>(
+          {
+            id: { type: String, required: true, maxlength: 40 },
+            label: { type: String, required: true, trim: true, maxlength: 18 },
+            icon: { type: String, required: true, enum: BADGE_ICONS },
+            color: { type: String, required: true, enum: BADGE_COLORS },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },

@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
 import 'package:recapture/app/theme/app_theme.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_categories_notifier.dart';
@@ -193,6 +194,11 @@ class FakeCategoriesRepository
 
 /// A products repository that answers per-category lists and records bulk moves.
 class FakeCategoryProductsRepository implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   FakeCategoryProductsRepository(this.byCategory);
 
   /// categoryId (or `'none'`) → its products.

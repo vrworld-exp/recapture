@@ -8,7 +8,14 @@
 // Mirage side. The "Uncategorized" bucket is a null `categoryId` on the product
 // in ReCapture, materialised as a real Mirage category on first need.
 import { Schema, model, Document, Types } from 'mongoose';
-import { SYNC_STATUSES, type SyncError, type SyncStatus } from './types/catalog.types';
+import {
+  OUTSIDE_WINDOW_MODES,
+  SYNC_STATUSES,
+  type CategorySchedule,
+  type OutsideWindowMode,
+  type SyncError,
+  type SyncStatus,
+} from './types/catalog.types';
 import { SyncErrorSchema } from './catalogShared';
 
 export interface ICatalogCategory extends Document {
@@ -31,6 +38,10 @@ export interface ICatalogCategory extends Document {
    * re-create on the next run.
    */
   mirageCategoryId?: string;
+  /** Stage 4: when this section is served. Absent = always. */
+  schedule?: CategorySchedule;
+  /** Stage 4: outside the window, `dim` (default) or `hide`. */
+  outsideWindow?: OutsideWindowMode;
   syncStatus: SyncStatus;
   syncError?: SyncError;
   lastSyncedAt?: Date;
@@ -46,6 +57,17 @@ const CatalogCategorySchema = new Schema<ICatalogCategory>(
     name: { type: String, required: true, trim: true, maxlength: 80 },
     position: { type: Number, required: true, default: 0 },
     mirageCategoryId: { type: String },
+    schedule: {
+      type: new Schema<CategorySchedule>(
+        {
+          days: { type: [Number], required: true },
+          from: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+          to: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
+        },
+        { _id: false }
+      ),
+    },
+    outsideWindow: { type: String, enum: OUTSIDE_WINDOW_MODES },
     syncStatus: { type: String, enum: SYNC_STATUSES, required: true, default: 'NEVER' },
     syncError: { type: SyncErrorSchema },
     lastSyncedAt: { type: Date },

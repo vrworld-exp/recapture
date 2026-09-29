@@ -1,4 +1,3 @@
-✅✅✅✅✅✅
 # ✅ Stage 2 — Appearance screen in ReCapture
 
 > **Status (2026-09-29): built, uncommitted; tests written, not yet run (run after the last

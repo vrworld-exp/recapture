@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/catalog_failure.dart';
 import '../../data/repositories/catalog_repository.dart';
+import '../../domain/catalog/menu_time.dart';
 import '../../domain/entities/catalog_category.dart';
 import '../auth/auth_notifier.dart';
 import 'catalog_notifier.dart';
@@ -80,6 +81,29 @@ class CatalogCategoriesNotifier extends AsyncNotifier<CatalogCategoryList> {
   /// otherwise.
   Future<CatalogCategory> rename(String id, String name) async {
     final updated = await _repo.renameCategory(id, name);
+    state = AsyncData(CatalogCategoryList(
+      categories: [
+        for (final category in _list.categories)
+          if (category.id == id) updated else category,
+      ],
+      uncategorizedCount: _list.uncategorizedCount,
+    ));
+    _refreshCatalogHeader();
+    return updated;
+  }
+
+  /// Stage 4: sets a category's availability window (null = always). Same
+  /// shape as [rename]: the server's row replaces ours, the header refreshes.
+  Future<CatalogCategory> setSchedule(
+    String id, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  }) async {
+    final updated = await _repo.setCategorySchedule(
+      id,
+      schedule: schedule,
+      hideOutsideWindow: hideOutsideWindow,
+    );
     state = AsyncData(CatalogCategoryList(
       categories: [
         for (final category in _list.categories)

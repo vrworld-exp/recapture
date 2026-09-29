@@ -17,6 +17,8 @@
 //                  `publishedSnapshot`. Also worker-owned.
 import { Schema, model, Document, Types } from 'mongoose';
 import {
+  PRODUCT_ALLERGENS,
+  PRODUCT_DIETARY,
   PRODUCT_AVAILABILITIES,
   PRODUCT_FOOD_TYPES,
   PRODUCT_MODEL_STATUSES,
@@ -79,6 +81,19 @@ export interface ICatalogProduct extends Document {
    * document predating the field reads the same way.
    */
   foodType: ProductFoodType;
+  /**
+   * Stage 5 — PUBLISHED. Badge ids from `Catalog.badges` (a deleted badge is
+   * pulled from every product in the same request), structured diet and
+   * allergen codes, and optional facts. All absent on older documents, which
+   * render exactly as before.
+   */
+  badgeIds?: string[];
+  dietary?: string[];
+  allergens?: string[];
+  spiceLevel?: number | null;
+  calories?: number | null;
+  servesCount?: number | null;
+  prepMinutes?: number | null;
   /**
    * Display order within the catalog. ReCapture honours it everywhere; Mirage
    * has no sort field at all, so on the public page order is by creation date.
@@ -168,6 +183,13 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
     // has been rendering for those items — so no migration and no visible
     // change for anything already published.
     foodType: { type: String, enum: PRODUCT_FOOD_TYPES, required: true, default: 'VEG' },
+    badgeIds: { type: [String], default: undefined },
+    dietary: { type: [{ type: String, enum: PRODUCT_DIETARY }], default: undefined },
+    allergens: { type: [{ type: String, enum: PRODUCT_ALLERGENS }], default: undefined },
+    spiceLevel: { type: Number, min: 0, max: 3 },
+    calories: { type: Number, min: 0, max: 5000 },
+    servesCount: { type: Number, min: 1, max: 50 },
+    prepMinutes: { type: Number, min: 0, max: 600 },
     position: { type: Number, required: true, default: 0 },
     sourceProjectId: { type: Schema.Types.ObjectId, ref: 'Project' },
     sourceModelId: { type: Schema.Types.ObjectId, ref: 'ProjectModel' },

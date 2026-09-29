@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/catalog/appearance.dart';
+import '../../domain/catalog/menu_time.dart';
 import '../../domain/entities/business_profile.dart';
 import '../../domain/entities/catalog.dart';
 import '../../domain/entities/catalog_json.dart' show catalogDate;
@@ -317,6 +318,23 @@ abstract interface class RepRepository {
     String catalogId,
     CatalogAppearance? appearance,
   );
+
+  /// Stage 4, on a delegated catalog: opening hours (null removes them).
+  Future<BusinessProfile> updateHours(String catalogId, CatalogHours? hours);
+
+  /// Stage 4, on a delegated catalog: the announcement (null clears it).
+  Future<BusinessProfile> updateAnnouncement(
+    String catalogId,
+    CatalogAnnouncement? announcement,
+  );
+
+  /// Stage 4: a section's availability window (null = always).
+  Future<CatalogCategory> setCategorySchedule(
+    String catalogId,
+    String categoryId, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  });
 
   /// Uploads a logo or cover through the API and returns its committed key.
   ///
@@ -797,6 +815,47 @@ class RemoteRepRepository implements RepRepository {
           },
         );
         return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateHours(String catalogId, CatalogHours? hours) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/profile',
+          data: {'hours': hours?.toMap()},
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<BusinessProfile> updateAnnouncement(
+    String catalogId,
+    CatalogAnnouncement? announcement,
+  ) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/profile',
+          data: {'announcement': announcement?.toMap()},
+        );
+        return _profileFrom(res.data);
+      });
+
+  @override
+  Future<CatalogCategory> setCategorySchedule(
+    String catalogId,
+    String categoryId, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  }) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/rep/catalogs/$catalogId/categories/$categoryId',
+          data: {
+            'schedule': schedule?.toMap(),
+            'outsideWindow': hideOutsideWindow ? 'hide' : 'dim',
+          },
+        );
+        return _categoryFrom(res.data);
       });
 
   @override

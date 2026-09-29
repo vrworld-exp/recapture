@@ -1,4 +1,5 @@
 // lib/domain/entities/catalog_product.dart
+import '../catalog/dish_details.dart';
 import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 import 'product_availability.dart';
@@ -37,6 +38,7 @@ class CatalogProduct {
     this.availability = ProductAvailability.inStock,
     this.featured = false,
     this.foodType = ProductFoodType.veg,
+    this.details = const DishDetails(),
     this.glbUrl,
     this.usdzUrl,
     this.thumbnailUrl,
@@ -89,6 +91,9 @@ class CatalogProduct {
   /// Defaults to veg, which is also what an older server means by not sending
   /// it. See [ProductFoodType].
   final ProductFoodType foodType;
+
+  /// Stage 5: badges and dietary / allergen detail. Empty on an older server.
+  final DishDetails details;
 
   /// Sort key within the catalog. ⚠ ReCapture-only: Mirage sorts the public page
   /// by creation date and stores no position (feature 48).
@@ -175,6 +180,7 @@ class CatalogProduct {
         ),
         featured: map['featured'] == true,
         foodType: ProductFoodTypeX.fromApiValue(map['foodType']?.toString()),
+        details: DishDetails.fromMap(map),
         position: catalogCount(map['position']),
         glbUrl: catalogText(map['glbUrl']),
         usdzUrl: catalogText(map['usdzUrl']),
@@ -209,6 +215,7 @@ class CatalogProduct {
         'availability': availability.apiValue,
         'featured': featured,
         'foodType': foodType.apiValue,
+        ...details.toPatch(),
         'position': position,
         'glbUrl': glbUrl,
         'usdzUrl': usdzUrl,
@@ -244,6 +251,7 @@ class CatalogProduct {
     ProductAvailability? availability,
     bool? featured,
     ProductFoodType? foodType,
+    DishDetails? details,
     int? position,
     ProductModelStatus? modelStatus,
     ProductSyncStatus? syncStatus,
@@ -265,6 +273,7 @@ class CatalogProduct {
         availability: availability ?? this.availability,
         featured: featured ?? this.featured,
         foodType: foodType ?? this.foodType,
+        details: details ?? this.details,
         position: position ?? this.position,
         glbUrl: glbUrl,
         usdzUrl: usdzUrl,

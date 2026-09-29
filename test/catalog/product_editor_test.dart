@@ -16,6 +16,7 @@ import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/data/datasources/product_image_picker.dart';
 import 'package:recapture/data/repositories/catalog_failure.dart';
@@ -49,6 +50,11 @@ class UpdateCall {
 
 /// A products repository for one product.
 class EditorRepository implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   EditorRepository(this._product);
 
   CatalogProduct _product;

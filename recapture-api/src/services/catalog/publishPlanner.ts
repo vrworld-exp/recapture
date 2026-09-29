@@ -21,6 +21,7 @@
 //     never publishes the edit. `JSON.stringify(a) === JSON.stringify(b)` and
 //     object spreads are both banned here for exactly that reason — key order
 //     and dropped keys are invisible failures.
+import { EMPTY_DISH_DETAILS_KEY } from '@/services/catalog/dishDetails';
 import { isModelPending } from '@/models/types/catalog.types';
 import type {
   ProductPublishedSnapshot,
@@ -97,6 +98,10 @@ export const PRODUCT_DIFF_FIELDS = [
   // as VEG (see the accessor), which is what Mirage was already rendering for
   // that item, so only a product someone actually reclassified plans an UPDATE.
   'foodType',
+  // Stage 5: badges + diet detail as ONE field (dishDetails.ts). A snapshot
+  // without it reads as "none", so only dishes that actually got a badge or
+  // diet info plan an UPDATE — no menu-wide republish on deploy.
+  'details',
   'glbUrl',
   'usdzUrl',
   'thumbnailUrl',
@@ -177,6 +182,10 @@ const PRODUCT_DIFF_ACCESSORS: Record<ProductDiffField, DiffAccessor> = {
   position: { current: (p) => p.position, published: (s) => s.position },
   // Absent-on-snapshot means VEG, deliberately — see PRODUCT_DIFF_FIELDS.
   foodType: { current: (p) => p.foodType, published: (s) => s.foodType ?? 'VEG' },
+  details: {
+    current: (p) => p.details ?? EMPTY_DISH_DETAILS_KEY,
+    published: (s) => s.details ?? EMPTY_DISH_DETAILS_KEY,
+  },
   glbUrl: { current: (p) => p.glbUrl, published: (s) => s.glbUrl },
   usdzUrl: { current: (p) => p.usdzUrl, published: (s) => s.usdzUrl },
   thumbnailUrl: { current: (p) => p.thumbnailUrl, published: (s) => s.thumbnailUrl },

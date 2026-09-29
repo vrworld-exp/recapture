@@ -41,6 +41,7 @@ class CatalogAppearance {
     this.accent,
     this.layout,
     this.fontId,
+    this.showFilters = false,
   });
 
   /// One of the served / bundled preset ids (see menu_theme_presets.dart).
@@ -59,13 +60,17 @@ class CatalogAppearance {
   /// Stage 3. A font pairing id (menu_theme_fonts.dart); null = default fonts.
   final String? fontId;
 
+  /// Stage 5. Show the diet filter bar (Veg only / Jain / Vegan / …) on the menu.
+  final bool showFilters;
+
   bool get isEmpty =>
       presetId == null &&
       mode == null &&
       primary == null &&
       accent == null &&
       layout == null &&
-      fontId == null;
+      fontId == null &&
+      !showFilters;
 
   /// Field by field — an unknown key from a newer server is dropped rather than
   /// carried into a `.strict()` write that would then be refused.
@@ -76,6 +81,7 @@ class CatalogAppearance {
         accent: catalogText(map['accent'])?.toUpperCase(),
         layout: MenuLayout.tryParse(map['layout']),
         fontId: catalogText(map['fontId']),
+        showFilters: map['showFilters'] == true,
       );
 
   /// Only set keys: the server REPLACES the block, so an absent key is a
@@ -87,6 +93,7 @@ class CatalogAppearance {
         if (accent != null) 'accent': accent,
         if (layout != null) 'layout': layout!.apiValue,
         if (fontId != null) 'fontId': fontId,
+        if (showFilters) 'showFilters': true,
       };
 
   /// Nullable fields take a sentinel so "clear the accent" is expressible.
@@ -96,6 +103,7 @@ class CatalogAppearance {
     Object? accent = _keep,
     Object? layout = _keep,
     Object? fontId = _keep,
+    bool? showFilters,
   }) =>
       CatalogAppearance(
         presetId: identical(presetId, _keep) ? this.presetId : presetId as String?,
@@ -104,6 +112,7 @@ class CatalogAppearance {
         accent: identical(accent, _keep) ? this.accent : accent as String?,
         layout: identical(layout, _keep) ? this.layout : layout as MenuLayout?,
         fontId: identical(fontId, _keep) ? this.fontId : fontId as String?,
+        showFilters: showFilters ?? this.showFilters,
       );
 
   @override
@@ -114,10 +123,12 @@ class CatalogAppearance {
       other.primary == primary &&
       other.accent == accent &&
       other.layout == layout &&
-      other.fontId == fontId;
+      other.fontId == fontId &&
+      other.showFilters == showFilters;
 
   @override
-  int get hashCode => Object.hash(presetId, mode, primary, accent, layout, fontId);
+  int get hashCode =>
+      Object.hash(presetId, mode, primary, accent, layout, fontId, showFilters);
 }
 
 const Object _keep = Object();

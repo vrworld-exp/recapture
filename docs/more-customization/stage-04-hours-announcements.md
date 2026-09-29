@@ -1,4 +1,21 @@
-# Stage 4 — Opening hours, announcement strip, time-windowed categories
+# ✅ Stage 4 — Opening hours, announcement strip, time-windowed categories
+
+> **Status (2026-09-30): built, uncommitted; tests written, not yet run (run after the last
+> stage).** Mirage-be: `helper/timeFields.js` (hours / announcement / schedule parsers, REPLACE,
+> `""` clears), `restaurant.hours` + `announcement` (Mixed), `category.schedule` +
+> `outsideWindow`, all projected publicly. Mirage-fe: `hours.ts` (Intl, restaurant zone — never
+> the phone's), `AnnouncementBar.tsx` (under PaymentDueBanner, dismiss per text hash), `useNow`
+> minute clock, "Open · closes 11 pm" chip under the name, week table in the contact sheet,
+> hide/dim categories + a "you can still browse" note on a dimmed tab. API: `Catalog.hours` /
+> `announcement` on the profile PATCH (owner + rep), `CatalogCategory.schedule` /
+> `outsideWindow`, all sent to Mirage on every publish (`''` clears). Flutter:
+> `opening_hours_screen.dart` (owner + rep routes), `announcement_editor.dart` (card on the
+> catalog screen and the profile; Scheduled/Live/Expired label), "Available times" in both
+> category managers.
+> **Choices:** hours live on their own screen reached from the business profile (not inline in
+> the profile form, whose dirty-tracking is text-field based). The time-zone is not editable
+> yet — it defaults to Asia/Kolkata and the screens say "India time". Not yet covered by a
+> test: the category publish step carrying `schedule` (catalog-category-sync.test.ts).
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 2.

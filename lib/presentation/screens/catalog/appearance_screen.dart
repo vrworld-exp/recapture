@@ -332,6 +332,18 @@ class _Controls extends StatelessWidget {
               .sample,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
         ),
+        const SizedBox(height: AppSpacing.lg),
+        SwitchListTile(
+          key: const Key('appearance-show-filters'),
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Diet filters on the menu'),
+          subtitle: Text(
+            'Veg only, Jain, Vegan, Gluten-free, No nuts — only the ones your dishes have.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          ),
+          value: state.draft.showFilters,
+          onChanged: state.saving ? null : notifier.setShowFilters,
+        ),
         if (!hasCover) ...[
           const SizedBox(height: AppSpacing.lg),
           Text(

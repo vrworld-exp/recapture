@@ -34,6 +34,7 @@ import '../../../application/catalog/category_products_notifier.dart'
 import '../../../application/rep/rep_category_products_notifier.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
+import '../../../data/repositories/rep_repository.dart';
 import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/entities/catalog_category.dart';
 import '../../../domain/entities/catalog_product.dart';
@@ -43,6 +44,7 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/category_schedule_dialog.dart';
 import '../catalog/category_manager_screen.dart'
     show CategorySelection, kCategoryMasterDetailWidth, kCategoryTouchWidth;
 
@@ -582,6 +584,14 @@ class _CategoryRow extends ConsumerWidget {
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: AppColors.textMuted),
                   ),
+                  if (categoryScheduleHint(category) != null)
+                    Tooltip(
+                      message: categoryScheduleHint(category)!,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(Icons.schedule, size: 16, color: AppColors.textMuted),
+                      ),
+                    ),
                   _CategoryRowMenu(
                     catalogId: catalogId,
                     category: category,
@@ -750,6 +760,8 @@ class _CategoryRowMenu extends ConsumerWidget {
         ),
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'rename', child: Text('Rename')),
+          // Stage 4: breakfast, lunch, happy hour.
+          const PopupMenuItem(value: 'schedule', child: Text('Available times')),
           PopupMenuItem(
             value: 'delete',
             child: Text(
@@ -758,9 +770,29 @@ class _CategoryRowMenu extends ConsumerWidget {
             ),
           ),
         ],
-        onSelected: (value) {
+        onSelected: (value) async {
           if (value == 'rename') {
             onRename();
+          } else if (value == 'schedule') {
+            final messenger = CatalogFeedback.of(context);
+            final choice = await showCategoryScheduleDialog(context, category);
+            if (choice == null) return;
+            try {
+              await ref.read(repRepositoryProvider).setCategorySchedule(
+                    catalogId,
+                    category.id,
+                    schedule: choice.schedule,
+                    hideOutsideWindow: choice.hide,
+                  );
+              ref.invalidate(repCategoriesProvider(catalogId));
+              ref.invalidate(repCatalogDocumentProvider(catalogId));
+              CatalogFeedback.confirm(
+                messenger,
+                'Saved. It changes on the menu the next time you publish.',
+              );
+            } on CatalogFailure catch (failure) {
+              CatalogFeedback.failure(messenger, failure, subject: 'the times');
+            }
           } else {
             showRepDeleteCategoryDialog(context, catalogId, category);
           }

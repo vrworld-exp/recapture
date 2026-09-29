@@ -18,6 +18,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../application/catalog/business_profile_notifier.dart';
+import '../../../domain/catalog/dish_details.dart';
+import '../../widgets/catalog/dish_details_section.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
@@ -219,6 +222,8 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
   late bool _featured = widget.product.featured;
   late ProductFoodType _foodType = widget.product.foodType;
   late List<String> _tags = [...widget.product.tags];
+  // Stage 5: badges + diet detail, saved through their own call.
+  late DishDetails _details = widget.product.details;
 
   String? _failureMessage;
 
@@ -265,6 +270,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
   bool get _availabilityChanged => _availability != widget.product.availability;
   bool get _featuredChanged => _featured != widget.product.featured;
   bool get _foodTypeChanged => _foodType != widget.product.foodType;
+  bool get _detailsChanged => _details != widget.product.details;
 
   bool get _isDirty =>
       _nameChanged ||
@@ -274,7 +280,8 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
       _tagsChanged ||
       _availabilityChanged ||
       _featuredChanged ||
-      _foodTypeChanged;
+      _foodTypeChanged ||
+      _detailsChanged;
 
   /// Publishes the dirty flag outward — to the router's browser-back guard and
   /// to the browser's own tab-close prompt.
@@ -300,6 +307,8 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_isDirty) return;
+    // The API's DIET_CONFLICT rule, before the round trip.
+    if (_details.validate(_foodType) != null) return;
 
     setState(() => _failureMessage = null);
 
@@ -318,6 +327,7 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
         availability: _availabilityChanged ? _availability : null,
         featured: _featuredChanged ? _featured : null,
         foodType: _foodTypeChanged ? _foodType : null,
+        details: _detailsChanged ? _details : null,
       );
       if (!mounted) return;
 
@@ -691,6 +701,21 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
             enabled: !busy,
             onChanged: (value) {
               setState(() => _foodType = value);
+              _recomputeDirty();
+            },
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          // Stage 5: badges and diet & allergens.
+          DishDetailsSection(
+            value: _details,
+            library: ref.watch(
+              businessProfileProvider.select((p) => p.valueOrNull?.badges ?? const []),
+            ),
+            enabled: !busy,
+            problem: _details.validate(_foodType),
+            onManageBadges: () => context.pushNamed(AppRouteNames.catalogBadges),
+            onChanged: (value) {
+              setState(() => _details = value);
               _recomputeDirty();
             },
           ),

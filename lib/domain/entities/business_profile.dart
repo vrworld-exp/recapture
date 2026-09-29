@@ -1,5 +1,7 @@
 // lib/domain/entities/business_profile.dart
 import '../catalog/appearance.dart';
+import '../catalog/dish_details.dart';
+import '../catalog/menu_time.dart';
 import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 
@@ -159,6 +161,9 @@ class BusinessProfile {
     this.logoUrl,
     this.coverImageUrl,
     this.appearance,
+    this.hours,
+    this.announcement,
+    this.badges = const [],
     this.updatedAt,
   });
 
@@ -202,6 +207,13 @@ class BusinessProfile {
   /// Basalt page. Edited on the Appearance screen, not on this form.
   final CatalogAppearance? appearance;
 
+  /// Stage 4: opening hours (null = none) and the announcement strip.
+  final CatalogHours? hours;
+  final CatalogAnnouncement? announcement;
+
+  /// Stage 5: the badge library dishes pick from. Empty = none yet.
+  final List<CatalogBadge> badges;
+
   /// Dotted paths (`name`, `contact.phone`, `contact.address`, `logoUrl`, …) of
   /// the fields that actually reach the published public catalog.
   ///
@@ -222,6 +234,7 @@ class BusinessProfile {
     final rawContact = map['contact'];
     final rawPublic = map['publicFields'];
     final rawAppearance = map['appearance'];
+    final rawHours = map['hours'];
     return BusinessProfile(
       id: (map['id'] ?? '').toString(),
       name: catalogText(map['name']) ?? '',
@@ -239,6 +252,11 @@ class BusinessProfile {
       appearance: rawAppearance is Map<String, dynamic>
           ? CatalogAppearance.fromMap(rawAppearance)
           : null,
+      hours: rawHours is Map<String, dynamic> ? CatalogHours.fromMap(rawHours) : null,
+      announcement: CatalogAnnouncement.tryParse(map['announcement']),
+      badges: map['badges'] is List
+          ? (map['badges'] as List).map(CatalogBadge.tryParse).whereType<CatalogBadge>().toList()
+          : const [],
       // An absent list means "we know of nothing public" — the UI then marks
       // everything ReCapture-only, which understates rather than overpromises.
       publicFields: catalogStringList(rawPublic),
@@ -266,6 +284,49 @@ class BusinessProfile {
         logoUrl: logoUrl ?? this.logoUrl,
         coverImageUrl: coverImageUrl ?? this.coverImageUrl,
         appearance: appearance,
+        hours: hours,
+        announcement: announcement,
+        badges: badges,
+        publicFields: publicFields,
+        updatedAt: updatedAt,
+      );
+
+  /// This profile with Stage 4 fields replaced — null included. For fakes.
+  BusinessProfile withTimeFields({
+    Object? hours = _keepField,
+    Object? announcement = _keepField,
+  }) =>
+      BusinessProfile(
+        id: id,
+        name: name,
+        businessName: businessName,
+        contact: contact,
+        accountPhone: accountPhone,
+        logoUrl: logoUrl,
+        coverImageUrl: coverImageUrl,
+        appearance: appearance,
+        hours: identical(hours, _keepField) ? this.hours : hours as CatalogHours?,
+        announcement: identical(announcement, _keepField)
+            ? this.announcement
+            : announcement as CatalogAnnouncement?,
+        badges: badges,
+        publicFields: publicFields,
+        updatedAt: updatedAt,
+      );
+
+  /// This profile with a new badge library. For fakes.
+  BusinessProfile withBadges(List<CatalogBadge> next) => BusinessProfile(
+        id: id,
+        name: name,
+        businessName: businessName,
+        contact: contact,
+        accountPhone: accountPhone,
+        logoUrl: logoUrl,
+        coverImageUrl: coverImageUrl,
+        appearance: appearance,
+        hours: hours,
+        announcement: announcement,
+        badges: next,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
@@ -282,7 +343,12 @@ class BusinessProfile {
         logoUrl: logoUrl,
         coverImageUrl: coverImageUrl,
         appearance: next,
+        hours: hours,
+        announcement: announcement,
+        badges: badges,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
 }
+
+const Object _keepField = Object();

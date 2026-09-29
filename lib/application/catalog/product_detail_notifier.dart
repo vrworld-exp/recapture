@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/catalog_products_repository.dart';
+import '../../domain/catalog/dish_details.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
 import '../../domain/entities/product_food_type.dart';
@@ -91,20 +92,40 @@ class ProductDetailNotifier
     ProductAvailability? availability,
     bool? featured,
     ProductFoodType? foodType,
+    DishDetails? details,
   }) async {
     step.value = ProductSaveStep.saving;
     try {
-      final updated = await _repo.update(
-        arg,
-        name: name,
-        description: description,
-        price: price,
-        categoryId: categoryId,
-        tags: tags,
-        availability: availability,
-        featured: featured,
-        foodType: foodType,
-      );
+      final hasBaseFields = name != null ||
+          description != null ||
+          !identical(price, kCatalogUnchanged) ||
+          !identical(categoryId, kCatalogUnchanged) ||
+          tags != null ||
+          availability != null ||
+          featured != null ||
+          foodType != null;
+      CatalogProduct? updated;
+      // The base fields first: a foodType change and a new VEGAN tag in one
+      // save must reach the server in that order, or the diet check would
+      // judge the new tag against the OLD non-veg marker.
+      if (hasBaseFields) {
+        updated = await _repo.update(
+          arg,
+          name: name,
+          description: description,
+          price: price,
+          categoryId: categoryId,
+          tags: tags,
+          availability: availability,
+          featured: featured,
+          foodType: foodType,
+        );
+      }
+      // Stage 5: badges + diet detail, on their own call.
+      if (details != null) {
+        updated = await _repo.updateDishDetails(arg, details);
+      }
+      if (updated == null) throw StateError('save() called with nothing to save');
       _adopt(updated);
       return updated;
     } finally {

@@ -48,7 +48,8 @@ class AppearanceDraft {
         a.primary == null &&
         a.accent == null &&
         (a.layout == null || a.layout == MenuLayout.grid) &&
-        (a.fontId == null || a.fontId == MenuThemeFont.defaultId);
+        (a.fontId == null || a.fontId == MenuThemeFont.defaultId) &&
+        !a.showFilters;
     return isPlainBasalt ? null : a;
   }
 
@@ -103,6 +104,7 @@ class AppearanceNotifier
         presetId: presetId,
         layout: state.draft.layout,
         fontId: state.draft.fontId,
+        showFilters: state.draft.showFilters,
       ),
       error: null,
     );
@@ -114,6 +116,11 @@ class AppearanceNotifier
       draft: state.draft.copyWith(layout: layout == MenuLayout.grid ? null : layout),
       error: null,
     );
+  }
+
+  /// Stage 5: the diet filter bar on the menu.
+  void setShowFilters(bool on) {
+    state = state.copyWith(draft: state.draft.copyWith(showFilters: on), error: null);
   }
 
   /// Stage 3. The default pairing is stored as absent.

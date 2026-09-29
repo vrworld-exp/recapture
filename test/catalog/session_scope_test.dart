@@ -15,6 +15,7 @@
 // does. A token-refresh rotation must not, because it is the same session.
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_categories_notifier.dart';
 import 'package:recapture/application/catalog/catalog_notifier.dart';
@@ -24,6 +25,7 @@ import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/entities/auth_session.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
+import 'package:recapture/domain/entities/catalog_product.dart';
 
 import 'product_grid_test.dart' show FakeCatalogRepository, pageOf, product;
 
@@ -52,6 +54,11 @@ class _CountingCatalogRepo extends FakeCatalogRepository {
 }
 
 class _CountingProductsRepo implements CatalogProductsRepository {
+
+  // Stage 5 — not exercised by this suite.
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      throw UnimplementedError('dish details are not exercised by this test');
   int listCalls = 0;
 
   @override

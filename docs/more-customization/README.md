@@ -57,8 +57,8 @@ last stage, and manual phone checks may still be open — see the stage's *Done 
 | ✅ 1 | [Theme foundations — CSS variables, presets, Mirage `theme` field](stage-01-theme-foundations.md) | **Mirage** BE + FE | — | M |
 | ✅ 2 | [Appearance screen in ReCapture — presets, colours, live preview, sync](stage-02-recapture-appearance.md) | BE + FE | 1 | L |
 | ✅ 3 | [Cover image, layout style, fonts](stage-03-cover-layout-fonts.md) | BE + FE + Mirage | 2 | M |
-| 4 | [Opening hours, announcement strip, time-windowed categories](stage-04-hours-announcements.md) | BE + FE + Mirage | 2 | M |
-| 5 | [Custom badges and dietary / allergen info](stage-05-badges-dietary.md) | BE + FE + Mirage | 2 | M |
+| ✅ 4 | [Opening hours, announcement strip, time-windowed categories](stage-04-hours-announcements.md) | BE + FE + Mirage | 2 | M |
+| ✅ 5 | [Custom badges and dietary / allergen info](stage-05-badges-dietary.md) | BE + FE + Mirage | 2 | M |
 | 6 | [Multi-language menu](stage-06-multi-language.md) | BE + FE + Mirage | 2 | L |
 | 7 | [AR branding, pairings ("goes well with"), engagement buttons, branded QR](stage-07-ar-engagement-qr.md) | BE + FE + Mirage | 2 | L |
 | 8 | [Plan gating, custom domain, rollout](stage-08-plan-gating-rollout.md) | BE + FE + infra | 1–7 | M |

@@ -271,6 +271,12 @@ export interface CreateRestaurantInput {
   theme?: MirageTheme;
   /** Stage 3: a URL Mirage copies as the hero banner; `''` clears it. */
   coverUrl?: string;
+  /** Stage 4: JSON strings, `''` clears (helper/timeFields.js). */
+  hours?: string;
+  announcement?: string;
+  /** Stage 5: the badge library (JSON, `''` = none) and the filter bar flag. */
+  badges?: string;
+  showFilters?: boolean;
   image?: MirageFileUpload;
 }
 
@@ -320,6 +326,12 @@ export interface UpdateRestaurantInput {
   theme?: MirageTheme;
   /** Stage 3: the hero banner URL, `''` = clear, absent = leave alone. */
   coverUrl?: string;
+  /** Stage 4: JSON strings, `''` clears, absent leaves alone. */
+  hours?: string;
+  announcement?: string;
+  /** Stage 5: the badge library (JSON, `''` = none) and the filter bar flag. */
+  badges?: string;
+  showFilters?: boolean;
   image?: MirageFileUpload;
 }
 
@@ -338,6 +350,9 @@ export interface CreateCategoryInput {
   restaurantId: string;
   /** categoryModel.js:66-70. Lower sorts first; everything defaults to 0. */
   sortPosition?: number;
+  /** Stage 4: the window as a JSON string, `''` = always. */
+  schedule?: string;
+  outsideWindow?: 'hide' | 'dim';
   image?: MirageFileUpload;
 }
 
@@ -346,6 +361,9 @@ export interface UpdateCategoryInput {
   /** Same normalization warning as CreateCategoryInput. */
   name?: string;
   sortPosition?: number;
+  /** Stage 4: the window as a JSON string, `''` = always. */
+  schedule?: string;
+  outsideWindow?: 'hide' | 'dim';
   image?: MirageFileUpload;
 }
 
@@ -364,6 +382,14 @@ export interface CreateItemInput {
   availability?: MirageAvailability;
   featured?: boolean;
   sortPosition?: number;
+  /** Stage 5 — strings as dishDetails.ts builds them; `''` clears each one. */
+  badges?: string;
+  dietary?: string;
+  allergens?: string;
+  spiceLevel?: string;
+  calories?: string;
+  servesCount?: string;
+  prepMinutes?: string;
   /** The product photo. At least one of `image`/`object` is required. */
   image?: MirageFileUpload;
   /** The GLB. */
@@ -401,6 +427,14 @@ export interface UpdateItemInput {
   availability?: MirageAvailability;
   featured?: boolean;
   sortPosition?: number;
+  /** Stage 5 — strings as dishDetails.ts builds them; `''` clears each one. */
+  badges?: string;
+  dietary?: string;
+  allergens?: string;
+  spiceLevel?: string;
+  calories?: string;
+  servesCount?: string;
+  prepMinutes?: string;
   image?: MirageFileUpload;
   object?: MirageFileUpload;
   objectIos?: MirageFileUpload;

@@ -25,6 +25,8 @@ import 'package:recapture/data/repositories/catalog_failure.dart';
 import 'package:recapture/data/repositories/catalog_products_repository.dart';
 import 'package:recapture/data/repositories/catalog_repository.dart';
 import 'package:recapture/domain/catalog/appearance.dart';
+import 'package:recapture/domain/catalog/dish_details.dart';
+import 'package:recapture/domain/catalog/menu_time.dart';
 import 'package:recapture/domain/catalog/business_profile_validators.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
@@ -84,6 +86,29 @@ class FakeProfileRepository implements BusinessProfileRepository {
   Future<BusinessProfile> updateAppearance(CatalogAppearance? appearance) async {
     final updated = (profile ?? profileFrom(golden.profileGolden()))
         .withAppearance(appearance);
+    profile = updated;
+    return updated;
+  }
+
+  @override
+  Future<BusinessProfile> updateBadges(List<CatalogBadge> badges) async {
+    final updated = (profile ?? profileFrom(golden.profileGolden())).withBadges(badges);
+    profile = updated;
+    return updated;
+  }
+
+  @override
+  Future<BusinessProfile> updateHours(CatalogHours? hours) async {
+    final updated =
+        (profile ?? profileFrom(golden.profileGolden())).withTimeFields(hours: hours);
+    profile = updated;
+    return updated;
+  }
+
+  @override
+  Future<BusinessProfile> updateAnnouncement(CatalogAnnouncement? announcement) async {
+    final updated = (profile ?? profileFrom(golden.profileGolden()))
+        .withTimeFields(announcement: announcement);
     profile = updated;
     return updated;
   }

@@ -31,6 +31,7 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/category_schedule_dialog.dart';
 
 /// Width at or above which the manager splits into master and detail.
 ///
@@ -561,6 +562,14 @@ class _CategoryRow extends ConsumerWidget {
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: AppColors.textMuted),
                   ),
+                  if (categoryScheduleHint(category) != null)
+                    Tooltip(
+                      message: categoryScheduleHint(category)!,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 4),
+                        child: Icon(Icons.schedule, size: 16, color: AppColors.textMuted),
+                      ),
+                    ),
                   _CategoryRowMenu(
                     category: category,
                     onRename: () => onEdit(category.id),
@@ -720,6 +729,8 @@ class _CategoryRowMenu extends ConsumerWidget {
         ),
         itemBuilder: (_) => [
           const PopupMenuItem(value: 'rename', child: Text('Rename')),
+          // Stage 4: breakfast, lunch, happy hour.
+          const PopupMenuItem(value: 'schedule', child: Text('Available times')),
           PopupMenuItem(
             value: 'delete',
             child: Text(
@@ -728,9 +739,26 @@ class _CategoryRowMenu extends ConsumerWidget {
             ),
           ),
         ],
-        onSelected: (value) {
+        onSelected: (value) async {
           if (value == 'rename') {
             onRename();
+          } else if (value == 'schedule') {
+            final messenger = CatalogFeedback.of(context);
+            final choice = await showCategoryScheduleDialog(context, category);
+            if (choice == null) return;
+            try {
+              await ref.read(catalogCategoriesProvider.notifier).setSchedule(
+                    category.id,
+                    schedule: choice.schedule,
+                    hideOutsideWindow: choice.hide,
+                  );
+              CatalogFeedback.confirm(
+                messenger,
+                'Saved. It changes on your menu the next time you publish.',
+              );
+            } on CatalogFailure catch (failure) {
+              CatalogFeedback.failure(messenger, failure, subject: 'the times');
+            }
           } else {
             showDeleteCategoryDialog(context, category);
           }

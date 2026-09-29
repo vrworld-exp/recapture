@@ -17,7 +17,11 @@ import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
 import { Project } from '@/models/Project';
 import { ProjectModel } from '@/models/ProjectModel';
-import { effectiveFoodType, effectiveModelStatus } from '@/models/types/catalog.types';
+import {
+  dietConflicts,
+  effectiveFoodType,
+  effectiveModelStatus,
+} from '@/models/types/catalog.types';
 import type {
   ProductAssets,
   ProductFoodType,
@@ -66,6 +70,14 @@ export interface ProductDto {
   featured: boolean;
   /** Veg / non-veg / no label — the marker the public menu shows. */
   foodType: ProductFoodType;
+  /** Stage 5: ids into the catalog's badge library, in the owner's order. */
+  badgeIds: string[];
+  dietary: string[];
+  allergens: string[];
+  spiceLevel: number | null;
+  calories: number | null;
+  servesCount: number | null;
+  prepMinutes: number | null;
   position: number;
   /** OUR CloudFront URLs, frozen at create time. Null for an image-only row. */
   glbUrl: string | null;
@@ -125,6 +137,13 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     // Derived, never raw: a row predating the field is VEG, which is what
     // Mirage has been rendering for it.
     foodType: effectiveFoodType(p),
+    badgeIds: [...(p.badgeIds ?? [])],
+    dietary: [...(p.dietary ?? [])],
+    allergens: [...(p.allergens ?? [])],
+    spiceLevel: p.spiceLevel ?? null,
+    calories: p.calories ?? null,
+    servesCount: p.servesCount ?? null,
+    prepMinutes: p.prepMinutes ?? null,
     position: p.position,
     glbUrl: p.assets?.glbUrl ?? null,
     usdzUrl: p.assets?.usdzUrl ?? null,
@@ -264,6 +283,39 @@ export async function getProduct(
 
 // ── Create ──────────────────────────────────────────────────────────────────
 
+/** Every badge id is one of the catalog's own (or nothing was sent). */
+function badgesBelong(
+  ids: readonly string[] | undefined,
+  library: readonly { id: string }[] | undefined
+): boolean {
+  if (!ids || ids.length === 0) return true;
+  const known = new Set((library ?? []).map((b) => b.id));
+  return ids.every((id) => known.has(id));
+}
+
+/**
+ * The Stage 5 fields a create/update writes — only the ones sent, lists
+ * de-duplicated, numbers passed through (`null` clears one).
+ */
+function dishDetailWrites(input: {
+  badgeIds?: string[];
+  dietary?: string[];
+  allergens?: string[];
+  spiceLevel?: number | null;
+  calories?: number | null;
+  servesCount?: number | null;
+  prepMinutes?: number | null;
+}): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (input.badgeIds !== undefined) out.badgeIds = [...new Set(input.badgeIds)];
+  if (input.dietary !== undefined) out.dietary = [...new Set(input.dietary)];
+  if (input.allergens !== undefined) out.allergens = [...new Set(input.allergens)];
+  for (const key of ['spiceLevel', 'calories', 'servesCount', 'prepMinutes'] as const) {
+    if (input[key] !== undefined) out[key] = input[key];
+  }
+  return out;
+}
+
 export type CreateProductResult =
   | { outcome: 'NO_CATALOG' }
   | { outcome: 'CATEGORY_NOT_FOUND' }
@@ -274,6 +326,8 @@ export type CreateProductResult =
   | { outcome: 'FORBIDDEN' }
   | { outcome: 'OBJECT_NOT_FOUND' }
   | { outcome: 'TOO_LARGE' }
+  | { outcome: 'DIET_CONFLICT' }
+  | { outcome: 'UNKNOWN_BADGE' }
   | { outcome: 'CREATED'; product: ProductDto };
 
 /** Non-owner inputs to a create. Empty for every owner-driven call. */
@@ -305,6 +359,11 @@ export async function createProduct(
 
   const catalogId = catalog._id as Types.ObjectId;
   const ownerId = new Types.ObjectId(userId);
+
+  // Stage 5: a vegan or Jain dish cannot be non-veg, and a badge must be one
+  // of this catalog's own.
+  if (dietConflicts(input.foodType ?? 'VEG', input.dietary)) return { outcome: 'DIET_CONFLICT' };
+  if (!badgesBelong(input.badgeIds, catalog.badges)) return { outcome: 'UNKNOWN_BADGE' };
 
   // Category, when given, must be a live category of THIS catalog. Scoping the
   // lookup to the catalog is what stops a product being filed under someone
@@ -406,6 +465,7 @@ export async function createProduct(
     // Omitted = VEG through the schema default. Only an explicit NON_VEG or
     // NONE is ever a choice the caller made.
     ...(input.foodType !== undefined ? { foodType: input.foodType } : {}),
+    ...dishDetailWrites(input),
     position,
     ...(sourceProjectId ? { sourceProjectId } : {}),
     ...(sourceModelId ? { sourceModelId } : {}),
@@ -556,6 +616,8 @@ export type UpdateProductResult =
   | { outcome: 'FORBIDDEN' }
   | { outcome: 'OBJECT_NOT_FOUND' }
   | { outcome: 'TOO_LARGE' }
+  | { outcome: 'DIET_CONFLICT' }
+  | { outcome: 'UNKNOWN_BADGE' }
   | { outcome: 'UPDATED'; product: ProductDto };
 
 /**
@@ -580,6 +642,18 @@ export async function updateProduct(
 
   const existing = await CatalogProduct.findOne({ _id: id, catalogId, deletedAt: null }).exec();
   if (!existing) return { outcome: 'NOT_FOUND' };
+
+  // Stage 5: judged on the END state — a patch that only adds VEGAN to a dish
+  // already marked non-veg conflicts just as much as one sending both.
+  if (
+    dietConflicts(
+      input.foodType ?? effectiveFoodType(existing),
+      input.dietary ?? existing.dietary
+    )
+  ) {
+    return { outcome: 'DIET_CONFLICT' };
+  }
+  if (!badgesBelong(input.badgeIds, catalog.badges)) return { outcome: 'UNKNOWN_BADGE' };
 
   if (input.categoryId) {
     const category = await CatalogCategory.findOne({
@@ -613,6 +687,7 @@ export async function updateProduct(
   if (input.availability !== undefined) set.availability = input.availability;
   if (input.featured !== undefined) set.featured = input.featured;
   if (input.foodType !== undefined) set.foodType = input.foodType;
+  Object.assign(set, dishDetailWrites(input));
   if (input.position !== undefined) set.position = input.position;
 
   // ── Assets: replace a model (15), replace an image (16), convert a type (17)

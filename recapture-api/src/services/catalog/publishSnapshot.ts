@@ -15,6 +15,7 @@
 // mutate its input would make "planning the same snapshot twice yields an
 // identical plan" untestable, and the freeze turns an accidental write into a
 // TypeError in dev rather than a wrong plan in production.
+import { dishDetailsKey, dishDetailsOf } from '@/services/catalog/dishDetails';
 import { Types } from 'mongoose';
 
 import { Catalog } from '@/models/Catalog';
@@ -66,6 +67,9 @@ export interface CatalogSnapshotCategory {
   name: string;
   position: number;
   mirageCategoryId?: string;
+  /** Stage 4: the availability window, pushed with every create/update. */
+  schedule?: { days: number[]; from: string; to: string };
+  outsideWindow?: 'hide' | 'dim';
   syncStatus: SyncStatus;
   /**
    * The pair the planner uses to detect "edited since we last pushed it".
@@ -91,6 +95,11 @@ export interface CatalogSnapshotProduct {
   position: number;
   /** Veg / non-veg / no label — always resolved, never absent (see effectiveFoodType). */
   foodType: ProductFoodType;
+  /**
+   * Stage 5: badges (resolved against the catalog's library) and diet detail,
+   * as one stable key — see services/catalog/dishDetails.ts.
+   */
+  details?: string;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;
@@ -223,6 +232,14 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
         name: category.name,
         position: category.position,
         mirageCategoryId: category.mirageCategoryId,
+        schedule: category.schedule
+          ? {
+              days: [...category.schedule.days],
+              from: category.schedule.from,
+              to: category.schedule.to,
+            }
+          : undefined,
+        outsideWindow: category.outsideWindow,
         syncStatus: category.syncStatus,
         updatedAt: category.updatedAt,
         lastSyncedAt: category.lastSyncedAt,
@@ -238,6 +255,7 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
         categoryId: product.categoryId ? idOf(product.categoryId) : null,
         position: product.position,
         foodType: effectiveFoodType(product),
+        details: dishDetailsKey(dishDetailsOf(product, catalog.badges)),
         glbUrl: product.assets?.glbUrl,
         usdzUrl: product.assets?.usdzUrl,
         thumbnailUrl: product.assets?.thumbnailUrl,

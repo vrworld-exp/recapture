@@ -48,6 +48,7 @@ import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
+import '../../widgets/catalog/announcement_editor.dart';
 import '../../widgets/catalog/catalog_message.dart';
 
 /// Width at or above which the form splits into two columns.
@@ -898,7 +899,40 @@ class _BrandingPanel extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xxl),
           _AppearanceEntry(scope: scope),
+          const SizedBox(height: AppSpacing.md),
+          _HoursEntry(scope: scope),
+          const SizedBox(height: AppSpacing.md),
+          // Stage 4: also on the owner's catalog screen; here it serves reps too.
+          AnnouncementCard(scope: scope),
         ],
+      );
+}
+
+/// The way to the opening-hours editor (Stage 4).
+class _HoursEntry extends StatelessWidget {
+  const _HoursEntry({required this.scope});
+
+  final CatalogScope scope;
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+        key: const Key('profile-open-hours'),
+        style: OutlinedButton.styleFrom(
+          alignment: Alignment.centerLeft,
+          padding: const EdgeInsets.all(AppSpacing.md),
+          foregroundColor: AppColors.textPrimary,
+          side: BorderSide(color: AppColors.textMuted.withValues(alpha: 0.35)),
+        ),
+        icon: const Icon(Icons.schedule, size: 18),
+        label: const Text('Opening hours & holidays'),
+        onPressed: () {
+          final catalogId = scope.delegatedCatalogId;
+          if (catalogId == null) {
+            context.pushNamed(AppRouteNames.catalogHours);
+          } else {
+            context.push('${AppRoutes.repCatalogs}/$catalogId/hours');
+          }
+        },
       );
 }
 

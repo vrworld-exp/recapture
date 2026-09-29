@@ -42,6 +42,7 @@ import 'package:recapture/domain/catalog/publish_request_result.dart';
 import 'package:recapture/domain/catalog/publish_status.dart';
 import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/catalog/appearance.dart';
+import 'package:recapture/domain/catalog/menu_time.dart';
 import 'package:recapture/domain/entities/business_profile.dart';
 import 'package:recapture/domain/entities/catalog.dart';
 import 'package:recapture/domain/entities/catalog_category.dart';
@@ -285,6 +286,30 @@ class FakeRepRepository implements RepRepository {
     storedProfile = storedProfile.withAppearance(appearance);
     return storedProfile;
   }
+
+  @override
+  Future<BusinessProfile> updateHours(String catalogId, CatalogHours? hours) async {
+    storedProfile = storedProfile.withTimeFields(hours: hours);
+    return storedProfile;
+  }
+
+  @override
+  Future<BusinessProfile> updateAnnouncement(
+    String catalogId,
+    CatalogAnnouncement? announcement,
+  ) async {
+    storedProfile = storedProfile.withTimeFields(announcement: announcement);
+    return storedProfile;
+  }
+
+  @override
+  Future<CatalogCategory> setCategorySchedule(
+    String catalogId,
+    String categoryId, {
+    required CategorySchedule? schedule,
+    required bool hideOutsideWindow,
+  }) =>
+      throw UnimplementedError();
 
   @override
   Future<String> uploadBrandingBytes(

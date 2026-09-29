@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../domain/catalog/dish_details.dart';
 import '../../domain/entities/catalog_json.dart';
 import '../../domain/entities/catalog_product.dart';
 import '../../domain/entities/product_availability.dart';
@@ -160,6 +161,11 @@ abstract interface class CatalogProductsRepository {
     String? sourceModelId,
     String? imageKey,
   });
+
+  /// Stage 5: replaces the product's badges and dietary detail — the FULL
+  /// block, so something removed in the editor is removed on the server.
+  /// Separate from [update] so a diet-only edit never sends an empty patch.
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details);
 
   /// Mints a presigned slot to upload a product image into.
   ///
@@ -347,6 +353,16 @@ class RemoteCatalogProductsRepository implements CatalogProductsRepository {
             if (sourceModelId != null) 'sourceModelId': sourceModelId,
             if (imageKey != null) 'imageKey': imageKey,
           },
+        );
+        return _productFrom(res.data);
+      });
+
+  @override
+  Future<CatalogProduct> updateDishDetails(String id, DishDetails details) =>
+      mapCatalogErrors(() async {
+        final res = await _dio.patch<Map<String, dynamic>>(
+          '/catalog/products/$id',
+          data: details.toPatch(),
         );
         return _productFrom(res.data);
       });

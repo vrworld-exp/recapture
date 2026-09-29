@@ -32,6 +32,7 @@
 // exposes only get-all-items-for-cat), so the alternative is a fan-out read over
 // every category on every duplicate — and adopting an item found under a tab the
 // user did not choose is a worse failure than reporting one.
+import { EMPTY_DISH_DETAILS_KEY, mirageDishFields } from '@/services/catalog/dishDetails';
 import { Types } from 'mongoose';
 
 import { CatalogProduct } from '@/models/CatalogProduct';
@@ -180,6 +181,7 @@ function snapshotOf(
     mirageCategoryId,
     position: product.position,
     foodType: product.foodType,
+    details: product.details,
     glbUrl: product.glbUrl,
     usdzUrl: product.usdzUrl,
     thumbnailUrl: product.thumbnailUrl,
@@ -252,6 +254,8 @@ async function createProduct(
     // the boolean the public page grew up on in step with it.
     foodType: product.foodType,
     isNonVeg: product.foodType === 'NON_VEG',
+    // Stage 5: badges (denormalised) + diet detail, always sent on a create.
+    ...mirageDishFields(product.details ?? EMPTY_DISH_DETAILS_KEY),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };
@@ -412,6 +416,7 @@ async function applyUpdate(
     ...(changed('foodType')
       ? { foodType: product.foodType, isNonVeg: product.foodType === 'NON_VEG' }
       : {}),
+    ...(changed('details') ? mirageDishFields(product.details ?? EMPTY_DISH_DETAILS_KEY) : {}),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };

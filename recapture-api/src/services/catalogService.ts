@@ -38,8 +38,11 @@ import {
   type ProductImageContentType,
 } from '@/utils/productImageKeys';
 import type {
+  AnnouncementStyle,
+  CatalogBadge,
   CatalogAppearance,
   CatalogContact,
+  CatalogHours,
   CatalogStatus,
 } from '@/models/types/catalog.types';
 import {
@@ -305,7 +308,8 @@ function appearanceRefusal(input: UpdateCatalogInput): AppearanceContrastProblem
 
 /** An appearance with nothing in it is no appearance — stored as absent. */
 function isEmptyAppearance(a: CatalogAppearance | null | undefined): boolean {
-  return !a || Object.values(a).every((v) => v === undefined || v === '');
+  // `showFilters: false` is the default, so it counts as nothing set.
+  return !a || Object.values(a).every((v) => v === undefined || v === '' || v === false);
 }
 
 /**
@@ -336,8 +340,18 @@ async function applyCatalogPatch(
     if (isEmptyAppearance(input.appearance)) unset.appearance = 1;
     else set.appearance = input.appearance;
   }
+  // Stage 4: both REPLACE their block; null removes it.
+  if (input.hours !== undefined) {
+    if (input.hours === null) unset.hours = 1;
+    else set.hours = input.hours;
+  }
+  if (input.announcement !== undefined) {
+    if (input.announcement === null) unset.announcement = 1;
+    else set.announcement = input.announcement;
+  }
+  if (input.badges !== undefined) set.badges = input.badges;
 
-  return Catalog.findOneAndUpdate(
+  const updated = await Catalog.findOneAndUpdate(
     { userId: ownerId, deletedAt: null },
     // The draft bump rides along in the SAME update rather than going through
     // bumpDraftRevision: this write already targets the catalog document, and
@@ -349,6 +363,18 @@ async function applyCatalogPatch(
     },
     { new: true, runValidators: true }
   ).exec();
+
+  // Stage 5: a badge removed from the library comes off every product in the
+  // same request, so no dish keeps pointing at a badge that no longer exists.
+  // Pulling "everything not in the new list" needs no before/after diff.
+  if (updated && input.badges !== undefined) {
+    await CatalogProduct.updateMany(
+      { catalogId: updated._id, badgeIds: { $exists: true, $ne: [] } },
+      { $pull: { badgeIds: { $nin: input.badges.map((b) => b.id) } } }
+    ).exec();
+  }
+
+  return updated;
 }
 
 /**
@@ -422,6 +448,11 @@ export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'appearance',
   // The hero banner — Mirage `restaurant.coverImage` (Stage 3).
   'coverImageUrl',
+  // Opening hours and the announcement strip (Stage 4).
+  'hours',
+  'announcement',
+  // The badge library (Stage 5) — reaches customers through the dishes.
+  'badges',
 ];
 
 /**
@@ -444,6 +475,12 @@ export interface BusinessProfileDto {
   coverImageUrl: string | null;
   /** The public menu's look; null = the default Basalt page. */
   appearance: CatalogAppearance | null;
+  /** Stage 4: opening hours; null = none set. */
+  hours: CatalogHours | null;
+  /** Stage 4: the announcement strip, dates as ISO strings; null = none. */
+  announcement: AnnouncementDto | null;
+  /** Stage 5: the badge library, in the owner's order. Empty = none. */
+  badges: CatalogBadge[];
   /** See {@link PUBLIC_PROFILE_FIELDS}. */
   publicFields: readonly string[];
   updatedAt: string;
@@ -452,6 +489,16 @@ export interface BusinessProfileDto {
 /** `null` for an unset key — never a `.../undefined` URL. */
 function cdnUrlForKey(key: string | undefined): string | null {
   return key ? `${CLOUDFRONT_BASE}/${key}` : null;
+}
+
+/** The announcement on the wire — dates as ISO strings, null when unbounded. */
+export interface AnnouncementDto {
+  text: string;
+  emoji?: string;
+  style: AnnouncementStyle;
+  startsAt: string | null;
+  endsAt: string | null;
+  link?: string;
 }
 
 /** Field by field, like every DTO here; unset keys are omitted, not null. */
@@ -464,6 +511,7 @@ function toAppearanceDto(a: CatalogAppearance | undefined): CatalogAppearance | 
     ...(a!.accent ? { accent: a!.accent } : {}),
     ...(a!.layout ? { layout: a!.layout } : {}),
     ...(a!.fontId ? { fontId: a!.fontId } : {}),
+    ...(a!.showFilters ? { showFilters: true } : {}),
   };
 }
 
@@ -477,6 +525,25 @@ export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
     logoUrl: cdnUrlForKey(c.logoKey),
     coverImageUrl: cdnUrlForKey(c.coverImageKey),
     appearance: toAppearanceDto(c.appearance),
+    hours: c.hours
+      ? {
+          timezone: c.hours.timezone,
+          weekly: c.hours.weekly.map((s) => ({ day: s.day, open: s.open, close: s.close })),
+          closedDates: [...(c.hours.closedDates ?? [])],
+          showOpenBadge: c.hours.showOpenBadge !== false,
+        }
+      : null,
+    announcement: c.announcement
+      ? {
+          text: c.announcement.text,
+          ...(c.announcement.emoji ? { emoji: c.announcement.emoji } : {}),
+          style: c.announcement.style,
+          startsAt: c.announcement.startsAt?.toISOString() ?? null,
+          endsAt: c.announcement.endsAt?.toISOString() ?? null,
+          ...(c.announcement.link ? { link: c.announcement.link } : {}),
+        }
+      : null,
+    badges: (c.badges ?? []).map((b) => ({ id: b.id, label: b.label, icon: b.icon, color: b.color })),
     publicFields: PUBLIC_PROFILE_FIELDS,
     updatedAt: c.updatedAt.toISOString(),
   };

@@ -47,6 +47,8 @@ import '../../presentation/screens/projects/model_viewer_screen.dart';
 import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_analytics_screen.dart';
 import '../../presentation/screens/catalog/appearance_screen.dart';
+import '../../presentation/screens/catalog/badge_manager_screen.dart';
+import '../../presentation/screens/catalog/opening_hours_screen.dart';
 import '../../presentation/screens/catalog/business_profile_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
 import '../../presentation/screens/catalog/category_manager_screen.dart';
@@ -128,6 +130,12 @@ abstract final class AppRoutes {
   /// How the public menu looks — preset, colours, live preview
   /// (more-customization Stage 2).
   static const catalogAppearance = '/catalog/appearance';
+
+  /// Opening hours + holidays (more-customization Stage 4).
+  static const catalogHours = '/catalog/hours';
+
+  /// The badge library (more-customization Stage 5).
+  static const catalogBadges = '/catalog/badges';
 
   /// The draft rendered in the public page's shape, before publishing.
   static const catalogPreview = '/catalog/preview';
@@ -215,6 +223,9 @@ abstract final class AppRoutes {
 
   /// The restaurant's menu look — the OWNER's [catalogAppearance], delegated.
   static const repCatalogAppearance = '/rep/catalogs/:id/appearance';
+
+  /// The restaurant's opening hours — the OWNER's [catalogHours], delegated.
+  static const repCatalogHours = '/rep/catalogs/:id/hours';
 
   /// The restaurant's whole page as a customer will meet it.
   static const repCatalogPreview = '/rep/catalogs/:id/preview';
@@ -322,6 +333,8 @@ abstract final class AppRouteNames {
   static const catalog = 'catalog';
   static const catalogSettings = 'catalogSettings';
   static const catalogAppearance = 'catalogAppearance';
+  static const catalogHours = 'catalogHours';
+  static const catalogBadges = 'catalogBadges';
   static const catalogPreview = 'catalogPreview';
   static const catalogPublish = 'catalogPublish';
   static const catalogQr = 'catalogQr';
@@ -341,6 +354,7 @@ abstract final class AppRouteNames {
   static const repDishDetail = 'repDishDetail';
   static const repCatalogDetails = 'repCatalogDetails';
   static const repCatalogAppearance = 'repCatalogAppearance';
+  static const repCatalogHours = 'repCatalogHours';
   static const repCatalogPreview = 'repCatalogPreview';
   static const repCatalogCategories = 'repCatalogCategories';
   static const repCatalogQr = 'repCatalogQr';
@@ -539,6 +553,16 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogAppearance,
         builder: (_, __) => const FlowBackScope(child: AppearanceScreen()),
       ),
+      GoRoute(
+        path: AppRoutes.catalogHours,
+        name: AppRouteNames.catalogHours,
+        builder: (_, __) => const FlowBackScope(child: OpeningHoursScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogBadges,
+        name: AppRouteNames.catalogBadges,
+        builder: (_, __) => const FlowBackScope(child: BadgeManagerScreen()),
+      ),
       // The catalog preview — the draft in the public page's shape (feature 5).
       // STATIC, declared before the product routes for the same reason the
       // category manager is: a literal segment must never be matchable as an
@@ -730,6 +754,13 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.repCatalogAppearance,
         // The owner's Appearance screen with a delegated scope, as above.
         builder: (context, state) => AppearanceScreen.delegated(
+          catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogHours,
+        name: AppRouteNames.repCatalogHours,
+        builder: (context, state) => OpeningHoursScreen.delegated(
           catalogId: state.pathParameters['id'] ?? '',
         ),
       ),
