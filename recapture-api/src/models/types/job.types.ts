@@ -79,6 +79,14 @@ export const SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE = 'SUBSCRIPTION_AR_ENTITLEMENT
  * and AC-4 promises its photo menu stays up.
  */
 export const SUBSCRIPTION_PAGE_STATE_JOB_TYPE = 'SUBSCRIPTION_PAGE_STATE';
+/**
+ * Building and sending one catalog's weekly value report (more-customization
+ * Stage 9). Carries `payload.{catalogId, weekStart}` — no upload, no project.
+ * Enqueued by the `weekly-report-sweep` periodic task from Monday 09:30 IST,
+ * one job per published catalog, keyed `weekly-report:<catalogId>:<weekStart>`
+ * so a sweep that runs every few minutes enqueues each week once.
+ */
+export const WEEKLY_REPORT_JOB_TYPE = 'WEEKLY_REPORT';
 
 /**
  * Claim priority for the jobs a PERSON is standing and waiting on — a catalog

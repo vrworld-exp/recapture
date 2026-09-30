@@ -40,8 +40,15 @@ import {
   updateCatalogSchema,
   updateCategorySchema,
   updateProductSchema,
+  reportPrefsSchema,
+  weeklyReportParamSchema,
 } from '@/validation/catalogSchemas';
 import { listCatalogActivity } from '@/services/catalogActivityService';
+import {
+  getWeeklyReport,
+  listWeeklyReports,
+  updateReportPrefs,
+} from '@/services/weeklyReportService';
 import {
   ANALYTICS_TIMEZONE,
   EMPTY_SUMMARY,
@@ -70,7 +77,9 @@ import { Types as MongooseTypes } from 'mongoose';
  */
 async function printableQrStyle(doc: ICatalog | null) {
   if (!doc?.qrStyle) return resolveQrStyle(null);
-  const { entitlements } = await resolveCustomizationEntitlements(doc._id as MongooseTypes.ObjectId);
+  const { entitlements } = await resolveCustomizationEntitlements(
+    doc._id as MongooseTypes.ObjectId
+  );
   return entitlements.brandedQr ? resolveQrStyle(doc.qrStyle) : resolveQrStyle(null);
 }
 import type { ICatalog } from '@/models/Catalog';
@@ -135,11 +144,7 @@ import { getSubscriptionStatus } from '@/services/subscription/subscriptionServi
 import { settleOpenOrdersOnRead } from '@/services/subscription/reconcileService';
 import { consumeStandees, standeeQuotaFor } from '@/services/subscription/ownerStandeeService';
 import { verifyClientPayment } from '@/services/subscription/clientVerifyService';
-import {
-  cancelAutopay,
-  startAutopay,
-  verifyAutopay,
-} from '@/services/subscription/autopayService';
+import { cancelAutopay, startAutopay, verifyAutopay } from '@/services/subscription/autopayService';
 import { createOrReturnOrder } from '@/services/subscription/checkoutService';
 import { listPaymentsForOwner, receiptNoFor } from '@/services/subscription/paymentLedgerService';
 import {
@@ -1386,10 +1391,7 @@ router.get(
     // The checkout's activation poll lands here: settle a paid order now
     // rather than waiting on the webhook or the worker (fail-open, bounded).
     await settleOpenOrdersOnRead(catalog._id as Types.ObjectId);
-    const subscription = await getSubscriptionStatus(
-      catalog._id as Types.ObjectId,
-      catalog.userId
-    );
+    const subscription = await getSubscriptionStatus(catalog._id as Types.ObjectId, catalog.userId);
     res.status(200).json({ status: 'success', subscription });
   })
 );
@@ -1650,8 +1652,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const catalog = await findOwnedCatalog(req.user!.userId);
     if (!catalog) return noCatalog(res);
-    const notFound = (): void =>
-      fail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
+    const notFound = (): void => fail(res, 404, 'PAYMENT_NOT_FOUND', 'That payment was not found.');
 
     const raw = req.params.paymentId;
     if (!Types.ObjectId.isValid(raw)) return notFound();
@@ -2201,6 +2202,44 @@ router.get(
       distribution: [0, 0, 0, 0, 0],
       recent: [],
     }));
+  })
+);
+
+// ── Weekly value report (more-customization Stage 9) ─────────────────────────
+
+/** GET /catalog/reports — the last twelve weeks, newest first, plus the on/off prefs. */
+router.get(
+  '/reports',
+  asyncHandler(async (req, res) => {
+    const result = await listWeeklyReports(req.user!.userId);
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    res.status(200).json({ status: 'success', reports: result.reports, prefs: result.prefs });
+  })
+);
+
+/** PUT /catalog/reports/prefs — `{ weekly?, channels? }`. Declared before `/:weekStart`. */
+router.put(
+  '/reports/prefs',
+  asyncHandler(async (req, res) => {
+    const parsed = reportPrefsSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    const result = await updateReportPrefs(req.user!.userId, parsed.data);
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    res.status(200).json({ status: 'success', prefs: result.prefs });
+  })
+);
+
+/** GET /catalog/reports/:weekStart — one stored report (`latest` for the newest). */
+router.get(
+  '/reports/:weekStart',
+  asyncHandler(async (req, res) => {
+    const parsed = weeklyReportParamSchema.safeParse(req.params.weekStart);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    const result = await getWeeklyReport(req.user!.userId, parsed.data);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'REPORT_NOT_FOUND', 'There is no report for that week.');
+    }
+    res.status(200).json({ status: 'success', report: result.report });
   })
 );
 

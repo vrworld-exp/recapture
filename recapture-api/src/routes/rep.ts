@@ -111,6 +111,8 @@ import {
   startTrialSchema,
 } from '@/validation/subscriptionSchemas';
 import { notifyOwnerToPay, nudgeNextAllowedAt } from '@/services/subscription/nudgeService';
+import { getWeeklyReport, listWeeklyReports } from '@/services/weeklyReportService';
+import { weeklyReportParamSchema } from '@/validation/catalogSchemas';
 import { lowContrastBody } from '@/utils/colorContrast';
 import {
   getPendingManualPayment,
@@ -2245,4 +2247,42 @@ router.get(
     res.status(200).json({ status: 'success', ...result });
   })
 );
+
+// ── Weekly value report, read-only (more-customization Stage 9) ─────────────
+//
+// "Your menu got 1,240 views last week" at a renewal visit is the best sales
+// tool a rep has. Read-only: the on/off switch is the owner's alone.
+
+/** GET /rep/catalogs/:id/reports — the restaurant's last twelve weekly reports. */
+router.get(
+  '/catalogs/:id/reports',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const result = await listWeeklyReports(String(catalog.userId));
+    if (result.outcome === 'NOT_FOUND') return notDelegated(res);
+    res.status(200).json({ status: 'success', reports: result.reports });
+  })
+);
+
+/** GET /rep/catalogs/:id/reports/:weekStart — one report (`latest` for the newest). */
+router.get(
+  '/catalogs/:id/reports/:weekStart',
+  asyncHandler(async (req, res) => {
+    const repUserId = new Types.ObjectId(req.user!.userId);
+    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
+    if (!catalog) return notDelegated(res);
+
+    const parsed = weeklyReportParamSchema.safeParse(req.params.weekStart);
+    if (!parsed.success) return fail(res, 400, 'INVALID_REQUEST', 'weekStart must be YYYY-MM-DD');
+    const result = await getWeeklyReport(String(catalog.userId), parsed.data);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'REPORT_NOT_FOUND', 'There is no report for that week.');
+    }
+    res.status(200).json({ status: 'success', report: result.report });
+  })
+);
+
 export default router;

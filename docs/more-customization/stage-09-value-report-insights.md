@@ -1,4 +1,47 @@
-# Stage 9 — Weekly value report + dish insights
+# ✅ Stage 9 — Weekly value report + dish insights
+
+> **Status (2026-09-30): built, uncommitted.** Typecheck / analyze clean on all four sides.
+> Tests: only `recapture-api/tests/weekly-report.test.ts` (17, passing) — week boundaries, the
+> delta floor, every rule true/false, top-2 ranking, delivery idempotency, opt-out, quiet week.
+> Full suite not run (run once at the end).
+>
+> **Mirage-be** — `menu_item_impression` appended to `EVENT_TYPES`; two new reports, admin +
+> `/me` scope like the others: `/analytics/item-funnel` (per dish impressions / opens / AR views,
+> grouped by restaurant + product) and `/analytics/hourly` (menu views by weekday × hour in the
+> caller's zone, `dow` 0 = Monday). **Mirage-fe** — same event in `types.ts`; `useItemImpression`
+> in `useTracking.ts` (≥ 50 % visible for ≥ 1 s, once per dish per session) on `MenuItemCard`
+> **and** `MenuItemRow` (the list layout).
+>
+> **API** — `models/WeeklyReport.ts` (unique `catalogId + weekStart`), `Catalog.reportPrefs`,
+> `services/insights/rules.ts` (7 pure rules + `pickTips`), `services/weeklyReportService.ts`
+> (build / store+notify / read / prefs; one text builder for every channel),
+> `services/weeklyReportJobs.ts` (sweep + enqueue), `worker/processors/weeklyReportProcessor.ts`,
+> job type `WEEKLY_REPORT`, periodic task `weekly-report-sweep`. Routes: `GET /catalog/reports`,
+> `GET /catalog/reports/:weekStart|latest`, `PUT /catalog/reports/prefs`,
+> `GET /rep/catalogs/:id/reports[/:weekStart]` (read-only). **Flutter** —
+> `domain/catalog/weekly_report.dart`, `data/repositories/weekly_report_repository.dart`,
+> `screens/catalog/weekly_report_screen.dart` (report + history/switch), routes
+> `/catalog/reports[/:weekStart]` and the rep pair, entry buttons on the analytics screen and the
+> rep's restaurant screen.
+>
+> **Differs from the text below:**
+> - **Off by default**: env `WEEKLY_REPORTS_ENABLED` (+ `WEEKLY_REPORT_SWEEP_INTERVAL_MS`, 15 min).
+>   Sweep enqueues from Monday 09:30 IST onward (late, never early); the notification goes out as
+>   each job runs, not at exactly 10:00.
+> - Notification `kind: 'ANALYTICS'` (exists; not INFO); action URL is the in-app route
+>   `/catalog/reports/<weekStart>` (the client routes by leading `/`, not `recapture://`).
+> - `busiestSlot` comes from the new `/analytics/hourly`; Mirage's timeseries is daily only.
+> - `arViews` = `ar_view_clicked` (what the analytics screen and daily chart count), not
+>   `ar_session_started`.
+> - `qrScans` sums `QrScanDaily` over UTC days (that rollup has no IST bucket) — ≤ 5½ h off at
+>   each end of the week.
+> - `DRAFT_NOT_PUBLISHED` ages from `lastPublishedAt` (there is no "draft since" timestamp).
+> - `AR_OUTPERFORMS` compares average detail opens per dish (≥ 3 dishes each side); the suggested
+>   dish is the most-opened photo-only one. Tip deep-links: 3D upsell opens the product editor.
+> - Quiet week (< 10 views): report still stored (`notified: false`); the "place your QR" nudge is
+>   keyed per calendar month.
+> - Reps get read-only screens, no notification. WhatsApp not built (channel does not exist yet);
+>   `channels` is stored.
 
 **Side:** recapture-api (worker + service) + Flutter + small Mirage-fe events.
 **Depends on:** nothing in this pack (uses the existing analytics system).

@@ -683,6 +683,18 @@ const envSchema = z.object({
    */
   SUBSCRIPTION_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(600_000),
   /**
+   * more-customization Stage 9: the Monday weekly value report. OFF by default
+   * — switching it on sends every published owner a notification the next
+   * Monday 09:30 IST, so it is turned on deliberately, per environment, after a
+   * test catalog has had its report checked against the analytics screen.
+   */
+  WEEKLY_REPORTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  /** How often the weekly-report sweep looks for catalogs still owed last week's report. */
+  WEEKLY_REPORT_SWEEP_INTERVAL_MS: z.coerce.number().int().positive().default(900_000),
+  /**
    * How long a catalog may sit with NO subscription row before its owner is
    * told, once, that they have not chosen a plan (the sweep's fifth scan).
    *

@@ -87,6 +87,15 @@ class CatalogAnalyticsScreen extends ConsumerWidget {
             const AnalyticsInfoHint(section: AnalyticsSection.overview),
           ],
         ),
+        actions: [
+          // Stage 9: the Monday value reports, and their on/off switch.
+          IconButton(
+            key: const ValueKey('analytics_weekly_reports'),
+            tooltip: 'Weekly reports',
+            icon: const Icon(Icons.event_note_outlined),
+            onPressed: () => context.push(AppRoutes.catalogReports),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Center(

@@ -196,13 +196,12 @@ export const hoursSchema = z
         z
           .object({ day: z.number().int().min(0).max(6), open: hhmm, close: hhmm })
           .strict()
-          .refine((s) => s.open !== s.close, { message: 'A slot cannot open and close at the same time' })
+          .refine((s) => s.open !== s.close, {
+            message: 'A slot cannot open and close at the same time',
+          })
       )
       .max(7 * MAX_SLOTS_PER_DAY),
-    closedDates: z
-      .array(z.string().regex(YMD_RE, 'Dates must be YYYY-MM-DD'))
-      .max(366)
-      .default([]),
+    closedDates: z.array(z.string().regex(YMD_RE, 'Dates must be YYYY-MM-DD')).max(366).default([]),
     showOpenBadge: z.boolean().default(true),
   })
   .strict()
@@ -1024,9 +1023,7 @@ export const catalogActivityQuerySchema = z
  * the scope is not theirs to choose. The service ignores it regardless — this
  * is the second lock on the same door.
  */
-const isoDay = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
 
 export const catalogAnalyticsQuerySchema = z
   .object({
@@ -1049,4 +1046,27 @@ export const catalogTopProductsQuerySchema = z
   .refine((value) => !value.from || !value.to || value.from <= value.to, {
     message: 'from must not be after to',
     path: ['from'],
+  });
+
+// ── Weekly value report (more-customization Stage 9) ─────────────────────────
+
+/** `:weekStart` — a `YYYY-MM-DD` day key, or `latest`. */
+export const weeklyReportParamSchema = z.union([
+  z.literal('latest'),
+  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'weekStart must be YYYY-MM-DD'),
+]);
+
+/** PUT /catalog/reports/prefs. WHATSAPP is accepted and stored ahead of that channel shipping. */
+export const reportPrefsSchema = z
+  .object({
+    weekly: z.boolean().optional(),
+    channels: z
+      .array(z.enum(['IN_APP', 'WHATSAPP']))
+      .max(2)
+      .transform((v) => [...new Set(v)])
+      .optional(),
+  })
+  .strict()
+  .refine((v) => v.weekly !== undefined || v.channels !== undefined, {
+    message: 'Nothing to update',
   });

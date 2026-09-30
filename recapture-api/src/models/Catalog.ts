@@ -35,6 +35,7 @@ import {
   type CatalogStatus,
   type PublicUrlScheme,
 } from './types/catalog.types';
+import type { CatalogReportPrefs } from './types/weeklyReport.types';
 
 export interface ICatalog extends Document {
   /**
@@ -90,6 +91,12 @@ export interface ICatalog extends Document {
    * upgrade puts them back).
    */
   publishedEntitlementsKey?: string;
+  /**
+   * Stage 9: the weekly value report. ReCapture-only, never published. Absent =
+   * `{ weekly: true, channels: ['IN_APP'] }` — every owner gets the report
+   * until they switch it off.
+   */
+  reportPrefs?: CatalogReportPrefs;
   status: CatalogStatus;
   /**
    * The Mirage restaurant this catalog is projected into. Written ONCE, at
@@ -318,6 +325,18 @@ const CatalogSchema = new Schema<ICatalog>(
     },
     slug: { type: String, trim: true, lowercase: true, maxlength: 40 },
     publishedEntitlementsKey: { type: String },
+    reportPrefs: {
+      type: new Schema<CatalogReportPrefs>(
+        {
+          weekly: { type: Boolean, default: true },
+          channels: {
+            type: [{ type: String, enum: ['IN_APP', 'WHATSAPP'] }],
+            default: ['IN_APP'],
+          },
+        },
+        { _id: false }
+      ),
+    },
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },

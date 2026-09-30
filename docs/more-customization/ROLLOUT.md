@@ -21,7 +21,13 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
    the Mirage-fe host, a wildcard TLS certificate (Vercel supports wildcard domains), Mirage-fe
    `VITE_MENU_DOMAIN=<menu domain>`, recapture-api `MENU_SUBDOMAIN_BASE=<menu domain>`. Without
    the API variable the address is saved but no URL is shown.
-6. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
+6. **Weekly reports (Stage 9)** are off until recapture-api `WEEKLY_REPORTS_ENABLED=true` on the
+   WORKER's environment. Deploy mirage-be (new `/analytics/item-funnel`, `/analytics/hourly`, the
+   `menu_item_impression` type) and mirage-fe (the impression event) first — without the new
+   Mirage endpoints the report still goes out, just with no busiest hour and no "scroll past" tip.
+   Turn it on for one test catalog's environment, check Monday's numbers against the analytics
+   screen, then everyone. The first Monday after switching on, every published owner gets one.
+7. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
    2–3 presets — once Stage 3 is live.
 
 ## Per stage
@@ -36,3 +42,4 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 | 6 Multi-language | | | Owner types everything (Q3); chrome en + hi only; progress computed in the app. |
 | 7 AR / pairings / buttons / QR | | | Dishes published by NAME, not Mirage id; `jsqr` now a runtime dependency; no tests (user). |
 | 8 Plan gating / subdomain / rollout | | | Rollout flag served on `GET /catalog/entitlements`, not the strict remote-config payload; no tests (user). |
+| 9 Weekly value report | | | Off until `WEEKLY_REPORTS_ENABLED=true`; Mirage adds `/hourly` beside `/item-funnel`; "AR views" = `ar_view_clicked`; notification opens `/catalog/reports/<week>`. |

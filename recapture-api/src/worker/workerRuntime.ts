@@ -21,6 +21,7 @@ import { productExecutor } from '@/services/catalog/productSync';
 import { restaurantExecutor } from '@/services/catalogPublishService';
 import { runSubscriptionSweep } from '@/services/subscription/lifecycleSweep';
 import { reconcileOpenOrders } from '@/services/subscription/reconcileService';
+import { runWeeklyReportSweep } from '@/services/weeklyReportJobs';
 import { registerProcessor } from '@/worker/processorRegistry';
 import { captureProcessingProcessor } from '@/worker/processors/captureProcessingProcessor';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
@@ -28,6 +29,7 @@ import { mirageCatalogPublishProcessor } from '@/worker/processors/mirageCatalog
 import { modelOptimizationProcessor } from '@/worker/processors/modelOptimizationProcessor';
 import { subscriptionArEntitlementProcessor } from '@/worker/processors/subscriptionArEntitlementProcessor';
 import { subscriptionPageStateProcessor } from '@/worker/processors/subscriptionPageStateProcessor';
+import { weeklyReportProcessor } from '@/worker/processors/weeklyReportProcessor';
 import { startWorker } from '@/worker/worker';
 import {
   DEFAULT_JOB_TYPE,
@@ -36,6 +38,7 @@ import {
   MODEL_OPTIMIZATION_JOB_TYPE,
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
   SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
+  WEEKLY_REPORT_JOB_TYPE,
 } from '@/worker/workerTypes';
 
 /**
@@ -71,6 +74,9 @@ export function registerAllProcessors(): void {
   // that its Mirage body is `{ arEnabled }` and nothing else, and widening it
   // to sometimes unpublish would break the invariant that makes it safe.
   registerProcessor(SUBSCRIPTION_PAGE_STATE_JOB_TYPE, subscriptionPageStateProcessor);
+  // The owner's Monday value report (more-customization Stage 9). Mirage reads
+  // plus two idempotent writes; no credential beyond the analytics one.
+  registerProcessor(WEEKLY_REPORT_JOB_TYPE, weeklyReportProcessor);
   registerPublishExecutors();
 }
 
@@ -157,6 +163,14 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
         name: 'subscription-sweep',
         intervalMs: env.SUBSCRIPTION_SWEEP_INTERVAL_MS,
         run: runSubscriptionSweep,
+      },
+      // Stage 9: from Monday 09:30 IST, one WEEKLY_REPORT job per published
+      // catalog still owed last week's report. A no-op unless
+      // WEEKLY_REPORTS_ENABLED, and before Monday 09:30.
+      {
+        name: 'weekly-report-sweep',
+        intervalMs: env.WEEKLY_REPORT_SWEEP_INTERVAL_MS,
+        run: runWeeklyReportSweep,
       },
     ],
   });

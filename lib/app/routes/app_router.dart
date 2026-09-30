@@ -64,6 +64,7 @@ import '../../presentation/screens/catalog/change_product_model_screen.dart';
 import '../../presentation/screens/catalog/product_editor_screen.dart';
 import '../../presentation/screens/catalog/publish_screen.dart';
 import '../../presentation/screens/catalog/subscription_screen.dart';
+import '../../presentation/screens/catalog/weekly_report_screen.dart';
 import '../../presentation/widgets/catalog/publish_body.dart'
     show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
@@ -198,6 +199,13 @@ abstract final class AppRoutes {
   /// The owner's subscription: status, 3D usage, the plans. No checkout yet.
   static const catalogSubscription = '/catalog/subscription';
 
+  /// The weekly value report's history and on/off switch (more-customization Stage 9).
+  static const catalogReports = '/catalog/reports';
+
+  /// One weekly report. `:weekStart` = `YYYY-MM-DD` (a Monday) or `latest`.
+  /// Where the Monday notification's "See report" lands.
+  static const catalogReport = '/catalog/reports/:weekStart';
+
   // ── Rep (the field surface, /rep) ─────────────────────────────────────────
   // Gated on isSalesRep in the router's redirect below, not inside the screens:
   // a USER who deep-links here must land somewhere real, never on a screen that
@@ -250,6 +258,10 @@ abstract final class AppRoutes {
 
   /// The restaurant's opening hours — the OWNER's [catalogHours], delegated.
   static const repCatalogHours = '/rep/catalogs/:id/hours';
+
+  /// A delegated restaurant's weekly reports, read-only (Stage 9).
+  static const repCatalogReports = '/rep/catalogs/:id/reports';
+  static const repCatalogReport = '/rep/catalogs/:id/reports/:weekStart';
 
   /// The restaurant's whole page as a customer will meet it.
   static const repCatalogPreview = '/rep/catalogs/:id/preview';
@@ -375,6 +387,8 @@ abstract final class AppRouteNames {
   static const businessProfile = 'businessProfile';
   static const catalogAnalytics = 'catalogAnalytics';
   static const catalogSubscription = 'catalogSubscription';
+  static const catalogReports = 'catalogReports';
+  static const catalogReport = 'catalogReport';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repStandees = 'repStandees';
@@ -385,6 +399,8 @@ abstract final class AppRouteNames {
   static const repCatalogDetails = 'repCatalogDetails';
   static const repCatalogAppearance = 'repCatalogAppearance';
   static const repCatalogHours = 'repCatalogHours';
+  static const repCatalogReports = 'repCatalogReports';
+  static const repCatalogReport = 'repCatalogReport';
   static const repCatalogPreview = 'repCatalogPreview';
   static const repCatalogCategories = 'repCatalogCategories';
   static const repCatalogQr = 'repCatalogQr';
@@ -688,6 +704,21 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           ),
         ),
       ),
+      // The weekly value report (Stage 9). STATIC prefix, declared before the
+      // product routes like analytics; the history first so the literal
+      // `reports` never reads as a week.
+      GoRoute(
+        path: AppRoutes.catalogReports,
+        name: AppRouteNames.catalogReports,
+        builder: (_, __) => const FlowBackScope(child: WeeklyReportsScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogReport,
+        name: AppRouteNames.catalogReport,
+        builder: (_, state) => FlowBackScope(
+          child: WeeklyReportScreen(weekStart: state.pathParameters['weekStart'] ?? 'latest'),
+        ),
+      ),
       // The category manager. STATIC, and declared before the product routes
       // for the same reason `products/new` is: a literal segment must never be
       // matchable as an id.
@@ -824,6 +855,20 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.repCatalogHours,
         builder: (context, state) => OpeningHoursScreen.delegated(
           catalogId: state.pathParameters['id'] ?? '',
+        ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogReports,
+        name: AppRouteNames.repCatalogReports,
+        builder: (context, state) =>
+            WeeklyReportsScreen(repCatalogId: state.pathParameters['id'] ?? ''),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogReport,
+        name: AppRouteNames.repCatalogReport,
+        builder: (context, state) => WeeklyReportScreen(
+          repCatalogId: state.pathParameters['id'] ?? '',
+          weekStart: state.pathParameters['weekStart'] ?? 'latest',
         ),
       ),
       GoRoute(

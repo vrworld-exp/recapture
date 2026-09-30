@@ -109,6 +109,13 @@ export interface MirageClient {
    * interface keeps compiling; the service treats its absence as UNAVAILABLE.
    */
   analyticsFeedback?(query: MirageAnalyticsQuery): Promise<unknown>;
+  /**
+   * Stage 9: per-dish impressions / opens / AR views, and menu views by
+   * weekday × hour. Optional for the same reason; the weekly report treats a
+   * missing or failing one as "no data" rather than failing the whole report.
+   */
+  analyticsItemFunnel?(query: MirageAnalyticsQuery): Promise<unknown[]>;
+  analyticsHourly?(query: MirageAnalyticsQuery): Promise<unknown[]>;
 }
 
 /**
@@ -298,7 +305,9 @@ interface RequestSpec {
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : undefined;
+  return value !== null && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 /**
@@ -621,7 +630,9 @@ export async function warmUpMirage(): Promise<boolean> {
     const delay = MIRAGE_RETRY_DELAYS_MS[attempt];
     if (delay !== undefined) await sleep(delay);
   }
-  console.warn('[mirage] warm-up ping got no answer — proceeding; the run will classify what follows');
+  console.warn(
+    '[mirage] warm-up ping got no answer — proceeding; the run will classify what follows'
+  );
   return false;
 }
 
@@ -679,14 +690,7 @@ function pickStrings<K extends string>(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-const SOCIAL_LINK_KEYS = [
-  'instagram',
-  'facebook',
-  'x',
-  'youtube',
-  'linkedin',
-  'whatsapp',
-] as const;
+const SOCIAL_LINK_KEYS = ['instagram', 'facebook', 'x', 'youtube', 'linkedin', 'whatsapp'] as const;
 const ADDRESS_KEYS = ['line1', 'line2', 'city', 'state', 'postalCode', 'country'] as const;
 const THEME_KEYS = ['presetId', 'mode', 'primary', 'accent', 'layout', 'fontId'] as const;
 
@@ -1145,6 +1149,28 @@ export const mirageClient: MirageClient = {
       requiresAdmin: true,
       query: analyticsParams(query),
     });
+  },
+
+  async analyticsItemFunnel(query: MirageAnalyticsQuery): Promise<unknown[]> {
+    const data = await send<unknown>({
+      method: 'get',
+      path: '/analytics/item-funnel',
+      context: 'analytics item funnel',
+      requiresAdmin: true,
+      query: analyticsParams(query),
+    });
+    return Array.isArray(data) ? data : [];
+  },
+
+  async analyticsHourly(query: MirageAnalyticsQuery): Promise<unknown[]> {
+    const data = await send<unknown>({
+      method: 'get',
+      path: '/analytics/hourly',
+      context: 'analytics hourly',
+      requiresAdmin: true,
+      query: analyticsParams(query),
+    });
+    return Array.isArray(data) ? data : [];
   },
 };
 

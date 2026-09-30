@@ -105,6 +105,13 @@ class RepCatalogDetailScreen extends ConsumerWidget {
             onPressed: () =>
                 context.push('${AppRoutes.repCatalogs}/$catalogId/preview'),
           ),
+          // Stage 9: "your menu got 1,240 views last week" — the renewal pitch.
+          IconButton(
+            key: const ValueKey('rep_weekly_reports'),
+            icon: const Icon(Icons.event_note_outlined),
+            tooltip: 'Weekly reports',
+            onPressed: () => context.push('${AppRoutes.repCatalogs}/$catalogId/reports'),
+          ),
           IconButton(
             key: const ValueKey('rep_restaurant_details'),
             icon: const Icon(Icons.storefront_outlined),
