@@ -11,7 +11,7 @@
 import { Types } from 'mongoose';
 
 import { Catalog, type ICatalog } from '@/models/Catalog';
-import { CatalogDelegation } from '@/models/CatalogDelegation';
+import { CatalogDelegation, REP_KIND_FILTER } from '@/models/CatalogDelegation';
 import { isDuplicateKeyError } from '@/services/catalogService';
 import { customerUrl } from '@/services/customerUrl';
 import {
@@ -98,7 +98,7 @@ export async function revokeDelegation(
 export async function listDelegatedCatalogs(
   repUserId: Types.ObjectId
 ): Promise<CatalogSummaryDto[]> {
-  const grants = await CatalogDelegation.find({ repUserId, revokedAt: null })
+  const grants = await CatalogDelegation.find({ repUserId, revokedAt: null, ...REP_KIND_FILTER })
     .sort({ grantedAt: -1 })
     .lean()
     .exec();
@@ -169,6 +169,8 @@ export async function resolveDelegatedCatalog(
     repUserId,
     catalogId: id,
     revokedAt: null,
+    // Stage 14.3: a restaurant's own staff never reach the rep surface.
+    ...REP_KIND_FILTER,
   })
     .lean()
     .exec();

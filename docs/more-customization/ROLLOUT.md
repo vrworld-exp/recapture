@@ -44,7 +44,10 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
     and the worker; leave it unset anywhere AI should stay off. Optional: `AI_MODEL`,
     `AI_MONTHLY_BUDGET_INR` (default 2000), `AI_USD_TO_INR` (default 84). Check spend in the
     `aiusages` collection (one row per month, split by purpose).
-11. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
+11. **Stage 14**: API + app only (no Mirage change). Staff sign in with the invited phone number
+    through the normal OTP login; tell owners that is how their team gets in. The worker must run
+    for "sold out until tomorrow" to come back at 5 am.
+12. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
    2–3 presets — once Stage 3 is live.
 
 ## Per stage
@@ -64,3 +67,4 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 | 11 My plate | | | Mirage absent = off; ReCapture default on → appears at each owner's next publish; own ungated settings screen. |
 | 12 Reviews / customers / links | | | Opt-in under `/analytics/*`, pulled on read; review link Google-only; no Places search; not plan-gated. |
 | 13 AI menu import / descriptions / enhance | | | Pages via API not presigned; one call per page; `allowNoImage` on Mirage create-item; fingerprint undo. |
+| 14 Today / staff / PDF | | | Ordinary diffed publish (no targeted mode); managers = stock + prices only; PDF Latin-only; not plan-gated. |

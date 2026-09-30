@@ -146,6 +146,11 @@ export interface ICatalogProduct extends Document {
   /** Hidden from the catalog (and deleted from Mirage on the next publish). */
   /** Stage 13: the menu import that created it — what "Undo import" removes. */
   importId?: Types.ObjectId;
+  /**
+   * Stage 14.1: "sold out until tomorrow". The availability sweep puts the dish
+   * back IN_STOCK at this instant (05:00 IST) and publishes. Absent = stays as set.
+   */
+  availabilityResetAt?: Date;
   archivedAt?: Date;
   deletedAt?: Date;
   createdAt: Date;
@@ -224,6 +229,7 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
     // skip, publishing nothing. Same reasoning as ModelGenerationTrace.selection.
     publishedSnapshot: { type: Schema.Types.Mixed },
     importId: { type: Schema.Types.ObjectId, ref: 'MenuImport' },
+    availabilityResetAt: { type: Date },
     archivedAt: { type: Date },
     deletedAt: { type: Date },
   },
@@ -242,6 +248,9 @@ CatalogProductSchema.index({ catalogId: 1, categoryId: 1, deletedAt: 1 });
 // The publish worker's work query ("what still needs syncing") AND feature 53's
 // manual retry, which re-enqueues exactly the FAILED subset.
 CatalogProductSchema.index({ catalogId: 1, syncStatus: 1 });
+
+// Stage 14.1: the availability sweep's "due now" read.
+CatalogProductSchema.index({ availabilityResetAt: 1 }, { sparse: true });
 
 // Name search, and the pre-publish uniqueness check that mirrors Mirage's
 // per-restaurant item-name constraint (adminController.js:888-897) so the

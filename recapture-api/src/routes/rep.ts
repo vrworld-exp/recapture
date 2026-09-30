@@ -113,6 +113,7 @@ import {
 import { notifyOwnerToPay, nudgeNextAllowedAt } from '@/services/subscription/nudgeService';
 import { getWeeklyReport, listWeeklyReports } from '@/services/weeklyReportService';
 import { aiCatalogRouter } from '@/routes/aiCatalogRoutes';
+import { brandingOf, printableQrStyle } from '@/services/printableQr';
 import { weeklyReportParamSchema } from '@/validation/catalogSchemas';
 import { lowContrastBody } from '@/utils/colorContrast';
 import {
@@ -1975,12 +1976,17 @@ router.get(
     // THE OWNER ROUTE'S KEY, unchanged and deliberately so. Same inputs, same
     // bytes, same tag — a CDN or a client that has one of these cached must hit
     // on the other, because they are the same image.
+    // The owner's branded look (and the owner's key), shared through
+    // services/printableQr so the two routes cannot drift apart again.
+    const style = await printableQrStyle(delegated);
     const etag = strongETag({
       url,
       name: catalog.name,
       format,
       size: clamped,
       logo: true,
+      style,
+      ...(style.logoCenter ? { logoKey: delegated.logoKey ?? null } : {}),
     });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
@@ -1996,6 +2002,8 @@ router.get(
       size: clamped,
       // Same as the owner route, and it must stay that way — see above.
       logo: true,
+      style,
+      branding: brandingOf(delegated),
     });
 
     track(AnalyticsEvent.CATALOG_QR_RENDERED, {

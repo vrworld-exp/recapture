@@ -16,8 +16,22 @@ import { Schema, model, Document, Types } from 'mongoose';
  * deleted row cannot answer, and a rep whose access was withdrawn is exactly
  * the case someone will later need to reconstruct.
  */
+/**
+ * Stage 14.3: who the grant is for. REP is the field rep (every row written
+ * before this field existed reads as REP through the `$in: ['REP', null]`
+ * filters); MANAGER and STAFF are the restaurant's own people, invited by the
+ * owner, reaching the catalog only through `/staff` with the permissions in
+ * services/staff/staffPermissions.ts. `repUserId` names whoever holds the grant.
+ */
+export const DELEGATION_KINDS = ['REP', 'MANAGER', 'STAFF'] as const;
+export type DelegationKind = (typeof DELEGATION_KINDS)[number];
+
+/** Matches REP grants, including every row written before `kind` existed. */
+export const REP_KIND_FILTER = { kind: { $in: ['REP', null] } } as const;
+
 export interface ICatalogDelegation extends Document {
   repUserId: Types.ObjectId;
+  kind?: DelegationKind;
   catalogId: Types.ObjectId;
   grantedAt: Date;
   /** Null while the grant is live. Set — never unset — when it is withdrawn. */
@@ -41,6 +55,7 @@ const CatalogDelegationSchema = new Schema<ICatalogDelegation>(
     // the same to a query but not to everyone reading the collection.
     revokedAt: { type: Date, default: null },
     grantedByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    kind: { type: String, enum: DELEGATION_KINDS },
   },
   { timestamps: true }
 );

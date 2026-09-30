@@ -15,6 +15,7 @@ import remoteConfigRouter from '@/routes/remoteConfig';
 import adminRouter from '@/routes/admin';
 import publicRouter from '@/routes/public';
 import repRouter from '@/routes/rep';
+import staffRouter from '@/routes/staff';
 import notificationsRouter from '@/routes/notifications';
 import webhooksRouter from '@/routes/webhooks';
 
@@ -112,6 +113,8 @@ export function createApp(): express.Express {
   // CatalogDelegation grant. It MIRRORS /catalog rather than replacing it —
   // /catalog and /projects are unchanged.
   app.use('/rep', repRouter);
+  // Stage 14.3: a restaurant's own managers and staff.
+  app.use('/staff', staffRouter);
   // The printed standee (no JWT, no envelope). THE ONE ROUTER THAT ANSWERS IN
   // HTML: its client is a phone camera opening a browser, so it returns 302s
   // and text/html and carries its own terminal error handler so a thrown error

@@ -23,6 +23,7 @@ import { runSubscriptionSweep } from '@/services/subscription/lifecycleSweep';
 import { reconcileOpenOrders } from '@/services/subscription/reconcileService';
 import { runWeeklyReportSweep } from '@/services/weeklyReportJobs';
 import { purgeOldImportFiles } from '@/services/menuImport/menuImportService';
+import { runAvailabilityResetSweep } from '@/services/todayService';
 import { registerProcessor } from '@/worker/processorRegistry';
 import { captureProcessingProcessor } from '@/worker/processors/captureProcessingProcessor';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
@@ -180,6 +181,12 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
         run: runWeeklyReportSweep,
       },
       // Stage 13.1: menu photos are kept at most 30 days. Hourly is plenty.
+      // Stage 14.1: "sold out until tomorrow" back in stock at 05:00 IST.
+      {
+        name: 'availability-reset',
+        intervalMs: 5 * 60 * 1000,
+        run: runAvailabilityResetSweep,
+      },
       {
         name: 'menu-import-file-purge',
         intervalMs: 60 * 60 * 1000,

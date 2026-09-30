@@ -74,7 +74,7 @@ Not about looks: these bring the owner money, save them time, or prove the subsc
 | ✅ 11 | ["My plate" list — show to waiter](stage-11-my-plate.md) | Mirage-fe (+ small BE) | — | S–M |
 | ✅ 12 | [Google reviews, customer opt-in list, delivery & booking links](stage-12-reviews-customers-links.md) | BE + FE + Mirage | 7.3 | M |
 | ✅ 13 | [Menu from a photo + AI descriptions + photo enhance](stage-13-ai-menu-import-content.md) | BE (AI module, worker) + FE | — | L |
-| 14 | [Quick edit, bulk prices, staff access, printable PDF menu](stage-14-quick-edit-staff-pdf.md) | BE + FE | — | M |
+| ✅ 14 | [Quick edit, bulk prices, staff access, printable PDF menu](stage-14-quick-edit-staff-pdf.md) | BE + FE | — | M |
 | 15 | [⭐ Instagram-ready 3D spin videos](stage-15-3d-spin-videos.md) | BE (render worker) + FE | 3D models | L |
 | 16 | [Multi-branch restaurants — design only](stage-16-multi-branch-design.md) | data model + all | 14 | XL |
 

@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../data/repositories/ai_repository.dart';
+import '../../../data/repositories/today_repository.dart';
+import 'staff_screen.dart';
 import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
@@ -326,21 +328,30 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   }
 }
 
-/// First run: the account has no catalog at all.
-class _NoCatalogYet extends StatelessWidget {
+/// First run: the account has no catalog at all. Someone invited as staff
+/// (Stage 14.3) is offered the restaurants they help run instead.
+class _NoCatalogYet extends ConsumerWidget {
   const _NoCatalogYet({required this.onCreate});
 
   final VoidCallback onCreate;
 
   @override
-  Widget build(BuildContext context) => CatalogMessage(
-        icon: Icons.storefront_outlined,
-        title: 'No catalog yet',
-        body: 'Your catalog is the storefront customers open when they scan '
-            'your QR code. Create it once — the link never changes after that.',
-        actionLabel: 'Create catalog',
-        onAction: onCreate,
-      );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final helping = ref.watch(myStaffCatalogsProvider).valueOrNull ?? const [];
+    return CatalogMessage(
+      icon: Icons.storefront_outlined,
+      title: 'No catalog yet',
+      body: helping.isEmpty
+          ? 'Your catalog is the storefront customers open when they scan '
+              'your QR code. Create it once — the link never changes after that.'
+          : 'You help run ${helping.map((c) => c.name).join(', ')}. Open it to mark dishes '
+              'sold out or change prices — or create your own catalog.',
+      actionLabel: helping.isEmpty ? 'Create catalog' : 'Restaurants I help run',
+      onAction: helping.isEmpty ? onCreate : () => context.pushNamed(AppRouteNames.staffHome),
+      secondaryActionLabel: helping.isEmpty ? null : 'Create my own catalog',
+      onSecondaryAction: helping.isEmpty ? null : onCreate,
+    );
+  }
 }
 
 /// A catalog exists: the header card, then the product surface.
@@ -922,6 +933,9 @@ class _CatalogHeaderCard extends ConsumerWidget {
                   _CatalogMenuAction.customers => context.pushNamed(AppRouteNames.catalogCustomers),
                   _CatalogMenuAction.links => context.pushNamed(AppRouteNames.catalogLinks),
                   _CatalogMenuAction.import => context.pushNamed(AppRouteNames.catalogImport),
+                  _CatalogMenuAction.today => context.pushNamed(AppRouteNames.catalogToday),
+                  _CatalogMenuAction.staff => context.pushNamed(AppRouteNames.catalogStaff),
+                  _CatalogMenuAction.printMenu => showPrintableMenuDialog(context, ref),
                   _CatalogMenuAction.aiDescriptions =>
                     context.pushNamed(AppRouteNames.catalogAiDescriptions),
                   _CatalogMenuAction.address => context.pushNamed(AppRouteNames.catalogAddress),
@@ -988,6 +1002,49 @@ class _CatalogHeaderCard extends ConsumerWidget {
                         const SizedBox(width: AppSpacing.sm),
                         Text(
                           'My plate',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Stage 14: daily stock & prices, the team, the paper menu.
+                  PopupMenuItem(
+                    key: const Key('catalog-open-today'),
+                    value: _CatalogMenuAction.today,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.today_outlined, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Today: stock & prices',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    key: const Key('catalog-open-staff'),
+                    value: _CatalogMenuAction.staff,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.group_outlined, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Staff',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    key: const Key('catalog-open-print'),
+                    value: _CatalogMenuAction.printMenu,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.print_outlined, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Printable menu',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ],
@@ -1317,6 +1374,9 @@ enum _CatalogMenuAction {
   links,
   import,
   aiDescriptions,
+  today,
+  staff,
+  printMenu,
   address,
   delete,
 }

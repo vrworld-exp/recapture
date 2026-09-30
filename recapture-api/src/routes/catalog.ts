@@ -47,6 +47,9 @@ import {
 } from '@/validation/catalogSchemas';
 import { listCatalogActivity } from '@/services/catalogActivityService';
 import { aiCatalogRouter } from '@/routes/aiCatalogRoutes';
+import { todayRouter } from '@/routes/todayRoutes';
+import { inviteStaff, listStaff, revokeStaff } from '@/services/staff/staffService';
+import { buildMenuPdf, MENU_PDF_SIZES, MENU_PDF_TEMPLATES } from '@/services/menuPdfService';
 import {
   deleteCustomer,
   exportCustomersCsv,
@@ -90,28 +93,8 @@ import { getServerFlag } from '@/services/remoteConfigService';
 import { z } from 'zod';
 import { Types as MongooseTypes } from 'mongoose';
 
-/**
- * Stage 8.1: the style to PRINT. A plan without the branded QR prints the
- * plain square — the style stays saved and comes back with an upgrade.
- */
-async function printableQrStyle(doc: ICatalog | null) {
-  if (!doc?.qrStyle) return resolveQrStyle(null);
-  const { entitlements } = await resolveCustomizationEntitlements(
-    doc._id as MongooseTypes.ObjectId
-  );
-  return entitlements.brandedQr ? resolveQrStyle(doc.qrStyle) : resolveQrStyle(null);
-}
 import type { ICatalog } from '@/models/Catalog';
-
-/** Stage 7: what a branded render reads off the catalog document. */
-function brandingOf(doc: ICatalog): BrandingSource {
-  return {
-    catalogName: doc.name,
-    appearance: doc.appearance ?? null,
-    ...(doc.logoKey ? { logoKey: doc.logoKey } : {}),
-    ...(doc.coverImageKey ? { coverImageKey: doc.coverImageKey } : {}),
-  };
-}
+import { brandingOf, printableQrStyle } from '@/services/printableQr';
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 import {
   getPublishStatus,
@@ -2412,7 +2395,12 @@ router.delete(
       return fail(res, 404, 'CUSTOMER_NOT_FOUND', 'That customer was not found.');
     }
     if (result.outcome === 'UNAVAILABLE') {
-      return fail(res, 503, 'CUSTOMERS_UNAVAILABLE', 'Could not delete right now. Please try again.');
+      return fail(
+        res,
+        503,
+        'CUSTOMERS_UNAVAILABLE',
+        'Could not delete right now. Please try again.'
+      );
     }
     res.status(200).json({ status: 'success' });
   })
@@ -2422,6 +2410,105 @@ router.delete(
 router.use(
   '/',
   aiCatalogRouter(async (req) => findOwnedCatalog(req.user!.userId), noCatalog)
+);
+
+// ── Today, bulk prices (Stage 14.1–14.2) — owner scope ──────────────────────
+router.use(
+  '/',
+  todayRouter(async (req) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    return catalog ? { catalog, role: 'OWNER' as const } : null;
+  }, noCatalog)
+);
+
+// ── Staff access (Stage 14.3) — owner manages who helps ─────────────────────
+
+const inviteStaffSchema = z
+  .object({
+    phone: z.string().trim().min(6).max(20),
+    kind: z.enum(['MANAGER', 'STAFF']),
+    name: z.string().trim().max(40).optional(),
+  })
+  .strict();
+
+/** GET /catalog/staff — members and open invites. */
+router.get(
+  '/staff',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    res
+      .status(200)
+      .json({ status: 'success', staff: await listStaff(catalog._id as MongooseTypes.ObjectId) });
+  })
+);
+
+/** POST /catalog/staff — `{ phone, kind, name? }`; up to 5 live helpers. */
+router.post(
+  '/staff',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    const parsed = inviteStaffSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    const result = await inviteStaff(
+      { _id: catalog._id as MongooseTypes.ObjectId, userId: catalog.userId },
+      parsed.data
+    );
+    if (result.outcome === 'REJECTED') {
+      const messages: Record<string, [number, string]> = {
+        INVALID_PHONE: [400, 'Enter a 10-digit mobile number.'],
+        SELF: [400, 'That is your own number.'],
+        LIMIT: [409, 'You can add up to 5 people.'],
+        ALREADY: [409, 'That number already has access.'],
+      };
+      const [status, message] = messages[result.code];
+      return fail(res, status, result.code, message);
+    }
+    res.status(201).json({ status: 'success', member: result.member });
+  })
+);
+
+/** DELETE /catalog/staff/:id — remove a member or cancel an invite. Immediate. */
+router.delete(
+  '/staff/:id',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    if (!(await revokeStaff(catalog._id as MongooseTypes.ObjectId, req.params.id))) {
+      return fail(res, 404, 'STAFF_NOT_FOUND', 'That person was not found.');
+    }
+    res.status(200).json({ status: 'success' });
+  })
+);
+
+// ── Printable menu (Stage 14.4) ─────────────────────────────────────────────
+
+const menuPdfQuerySchema = z.object({
+  template: z.enum(MENU_PDF_TEMPLATES).default('classic'),
+  size: z.enum(MENU_PDF_SIZES).default('A4'),
+  includeQr: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  source: z.enum(['published', 'draft']).default('published'),
+});
+
+/** GET /catalog/menu.pdf?template=&size=&includeQr=&source= */
+router.get(
+  '/menu.pdf',
+  asyncHandler(async (req, res) => {
+    const catalog = await findOwnedCatalog(req.user!.userId);
+    if (!catalog) return noCatalog(res);
+    const parsed = menuPdfQuerySchema.safeParse(req.query);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    const pdf = await buildMenuPdf(catalog._id as MongooseTypes.ObjectId, parsed.data);
+    if (!pdf) return noCatalog(res);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="menu.pdf"');
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(pdf);
+  })
 );
 
 export default router;

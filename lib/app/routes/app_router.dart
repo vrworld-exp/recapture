@@ -71,6 +71,8 @@ import '../../presentation/screens/catalog/customers_screen.dart';
 import '../../presentation/screens/catalog/order_links_screen.dart';
 import '../../presentation/screens/catalog/menu_import_screen.dart';
 import '../../presentation/screens/catalog/ai_descriptions_screen.dart';
+import '../../presentation/screens/catalog/today_screen.dart';
+import '../../presentation/screens/catalog/staff_screen.dart';
 import '../../presentation/widgets/catalog/publish_body.dart'
     show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
@@ -227,6 +229,11 @@ abstract final class AppRoutes {
   /// Stage 13: menu import from photos, and bulk AI descriptions.
   static const catalogImport = '/catalog/import';
   static const catalogAiDescriptions = '/catalog/ai-descriptions';
+
+  /// Stage 14: the Today screen, staff management, and the helper's own list.
+  static const catalogToday = '/catalog/today';
+  static const catalogStaff = '/catalog/staff';
+  static const staffHome = '/staff';
 
   // ── Rep (the field surface, /rep) ─────────────────────────────────────────
   // Gated on isSalesRep in the router's redirect below, not inside the screens:
@@ -422,6 +429,9 @@ abstract final class AppRouteNames {
   static const catalogLinks = 'catalogLinks';
   static const catalogImport = 'catalogImport';
   static const catalogAiDescriptions = 'catalogAiDescriptions';
+  static const catalogToday = 'catalogToday';
+  static const catalogStaff = 'catalogStaff';
+  static const staffHome = 'staffHome';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repStandees = 'repStandees';
@@ -759,6 +769,21 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (_, state) => FlowBackScope(
           child: OfferEditorScreen(offerId: state.pathParameters['offerId']),
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogToday,
+        name: AppRouteNames.catalogToday,
+        builder: (_, __) => const FlowBackScope(child: TodayScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogStaff,
+        name: AppRouteNames.catalogStaff,
+        builder: (_, __) => const FlowBackScope(child: StaffScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.staffHome,
+        name: AppRouteNames.staffHome,
+        builder: (_, __) => const FlowBackScope(child: MyStaffCatalogsScreen()),
       ),
       GoRoute(
         path: AppRoutes.catalogImport,

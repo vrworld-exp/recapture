@@ -26,7 +26,7 @@ import { Types } from 'mongoose';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { customerUrl } from '@/services/customerUrl';
 import { CatalogCategory } from '@/models/CatalogCategory';
-import { CatalogDelegation } from '@/models/CatalogDelegation';
+import { CatalogDelegation, REP_KIND_FILTER } from '@/models/CatalogDelegation';
 import { CatalogProduct, type ICatalogProduct } from '@/models/CatalogProduct';
 import { CatalogPublishRun, type ICatalogPublishRun } from '@/models/CatalogPublishRun';
 import { CatalogSubscription } from '@/models/CatalogSubscription';
@@ -192,7 +192,7 @@ async function modelOwnerIds(
   ownerId: Types.ObjectId,
   catalogId: Types.ObjectId
 ): Promise<Types.ObjectId[]> {
-  const grants = await CatalogDelegation.find({ catalogId, revokedAt: null })
+  const grants = await CatalogDelegation.find({ catalogId, revokedAt: null, ...REP_KIND_FILTER })
     .select({ repUserId: 1 })
     .lean()
     .exec();

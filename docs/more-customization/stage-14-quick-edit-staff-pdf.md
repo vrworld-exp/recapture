@@ -1,4 +1,49 @@
-# Stage 14 — Quick edit, bulk prices, staff access, printable PDF menu
+# ✅ Stage 14 — Quick edit, bulk prices, staff access, printable PDF menu
+
+> **Status (2026-09-30): built, uncommitted.** Typecheck / lint / analyze clean (Flutter: all of
+> `lib`). Tests: `recapture-api/tests/today-staff-pdf.test.ts` (17 — rounding vectors, bulk apply =
+> one bump, undo restores exact values and keeps dishes edited since, one undo per batch, staff
+> permission matrix over HTTP incl. 403 on price / bulk / undo for STAFF, MANAGER may price, invite
+> → claim on sign-in, revoke effective on the next request, staff grant never a rep grant, 5-helper
+> cap, own-number refused, 05:00 IST reset time, back-in-stock sweep, PDF for 0 / 1 / 200 dishes in
+> all three templates, wrapping); `test/catalog/stage14_today_test.dart` (2). Regression: rep,
+> publish, product-sync suites pass (123). **Also fixed a Stage 7 drift** found by
+> `rep-catalog-qr.test.ts`: the rep's QR route still printed the plain square (and a different
+> ETag) after the owner's got the branded style — both now use `services/printableQr.ts`.
+>
+> **14.1 / 14.2** — `services/todayService.ts` (list, one-batch changes, "sold out until tomorrow"
+> via `CatalogProduct.availabilityResetAt` = next 05:00 IST, bulk preview / apply / 7-day undo,
+> `runAvailabilityResetSweep` every 5 min), `models/CatalogChangeLog.ts` (per-dish "Ravi marked X
+> sold out", BULK_PRICE batches for undo; 90-day TTL), `routes/todayRoutes.ts` mounted for the
+> owner (`/catalog/today`, `/catalog/prices/bulk[/preview]`, `/catalog/prices/undo`,
+> `/catalog/today/publish`). Flutter `screens/catalog/today_screen.dart` at `/catalog/today`.
+> **14.3** — `CatalogDelegation.kind` (REP | MANAGER | STAFF; old rows = REP via
+> `REP_KIND_FILTER`, applied to every rep query), `models/StaffInvite.ts`,
+> `services/staff/{staffPermissions,staffService}.ts`, owner `/catalog/staff` (list / invite by
+> phone / remove), helper area `/staff` (`GET /staff/catalogs`, then the Today router under
+> `/staff/catalogs/:id`). Permissions enforced in the service, not only the route. Flutter
+> `screens/catalog/staff_screen.dart`: `/catalog/staff`, `/staff` (helper's list → Today); the
+> "No catalog yet" screen offers "Restaurants I help run" to someone who helps somewhere.
+> **14.4** — `services/menuPdfService.ts`, `GET /catalog/menu.pdf?template&size&includeQr&source`;
+> "Printable menu" dialog in the catalog ⋮ menu (share / download).
+>
+> **Differs from the text below:**
+> - **No separate "targeted publish" mode.** The ordinary publish already diffs and pushes only
+>   changed dishes (plus a branding refresh), which is what the promotion path uses too.
+> - **Managers get stock + prices + bulk prices + publish — not full dish / section / offer
+>   editing.** That would mean exposing the whole authoring API through `/staff`; not built.
+> - **Revoke does not kill refresh tokens** — the grant is re-read on every request, so access
+>   ends on the next call anyway, and a helper who is also an owner elsewhere is not logged out.
+> - Invites: a user with that verified phone gets access at once; otherwise the invite is claimed
+>   when they first open `/staff` after signing in with the number. 5 helpers max, **not plan-gated**
+>   (Stage 8's table has no row for it — decide if wanted).
+> - Price-undo batches live in the change log (`BULK_PRICE`), no separate `PriceChangeLog`.
+>   Dishes have one price, so "applies to variants" does not arise.
+> - **PDF is Latin-only**: the hand-rolled writer uses built-in Helvetica, so prices print as
+>   "Rs 250" and dishes print in the menu's primary language; Hindi / Devanagari would need an
+>   embedded, shaped font — not done. No template thumbnails in the picker. Theme primary colour on
+>   headings (too-light colours fall back to near-black for paper).
+> - No Android home-screen shortcut ("Mark sold out") — needs a native quick-actions plugin.
 
 **Side:** recapture-api + Flutter.
 **Depends on:** nothing.
