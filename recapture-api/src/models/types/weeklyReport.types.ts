@@ -61,6 +61,8 @@ export interface WeeklyReportMetrics {
   offerViews?: number;
   /** Stage 11: "My plate" — plates built, their average value, the most-added dish. */
   plates?: { built: number; avgValue: number; topDish: string | null };
+  /** Stage 12.1: taps on the Google review button (prompt + contact sheet). */
+  reviewTaps?: number;
   /**
    * Percent change against the previous week, one decimal. Null — not 0, not
    * "▲ 400%" — when the previous week had fewer than

@@ -253,7 +253,8 @@ class _EngagementSectionState extends ConsumerState<_EngagementSection> {
   }
 
   MenuEngagement get _value => MenuEngagement(
-        reviewUrl: _review.text.trim(),
+        // A pasted Place ID is turned into Google's direct review link.
+        reviewUrl: googleReviewLinkFrom(_review.text) ?? _review.text.trim(),
         whatsappOrder: _whatsappOrder,
         callWaiter: _callWaiter,
         wifiSsid: _ssid.text.trim(),
@@ -304,10 +305,37 @@ class _EngagementSectionState extends ConsumerState<_EngagementSection> {
           enabled: !_saving,
           keyboardType: TextInputType.url,
           onChanged: (_) => setState(() {}),
-          decoration: const InputDecoration(
+          decoration: InputDecoration(
             labelText: 'Google review link (optional)',
-            hintText: 'https://g.page/r/…/review',
-            helperText: 'Adds "Rate us". Customers are asked once, after a minute on the menu.',
+            hintText: 'https://g.page/r/…/review — or paste your Place ID',
+            helperText: 'Adds "Rate us". Customers are asked once a month, after 15 minutes '
+                'on the menu or 20 minutes after showing their plate to the waiter.',
+            helperMaxLines: 3,
+            errorText: _review.text.trim().isEmpty || googleReviewLinkFrom(_review.text) != null
+                ? null
+                : 'Use your Google review link or Place ID (starts with ChIJ).',
+          ),
+        ),
+        // Stage 12.1: a Place ID becomes the direct "write a review" link.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: const Key('engagement-review-help'),
+            icon: const Icon(Icons.help_outline, size: 16),
+            label: const Text('Find my Google Place ID'),
+            onPressed: () => showDialog<void>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Your Google review link'),
+                content: const SelectableText(
+                  'Best: in Google Business Profile, tap "Ask for reviews" and paste that link here.\n\n'
+                  'Or find your Place ID (it starts with ChIJ) with Google\'s Place ID finder:\n'
+                  '$kPlaceIdFinderUrl\n\n'
+                  'Paste the ID here and we build the link that opens the review box directly.',
+                ),
+                actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK'))],
+              ),
+            ),
           ),
         ),
         const SizedBox(height: AppSpacing.md),

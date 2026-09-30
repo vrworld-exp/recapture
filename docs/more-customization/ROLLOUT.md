@@ -35,7 +35,11 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
    owner's next publish after the release. Deploy mirage-be + mirage-fe first (an older Mirage
    drops `plate`, which just means no plate). If you would rather roll it out gradually, flip the
    default in `Catalog.plate` / the profile DTO before shipping.
-9. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
+9. **Stage 12**: deploy mirage-be first (new `optIn` collection + routes; `links` / `customers` on
+   the restaurant), then mirage-fe (the `/:restaurant/offers-notice` page must exist before any
+   owner switches sign-ups on), then the API + app. Tell owners with a non-Google review link that
+   they will need to replace it the next time they save their customer buttons.
+10. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
    2–3 presets — once Stage 3 is live.
 
 ## Per stage
@@ -53,3 +57,4 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 | 9 Weekly value report | | | Off until `WEEKLY_REPORTS_ENABLED=true`; Mirage adds `/hourly` beside `/item-funnel`; "AR views" = `ar_view_clicked`; notification opens `/catalog/reports/<week>`. |
 | 10 Offers / combos / happy hour | | | One `restaurant.offers` block on the branding sync (dishes by name), not a Mirage offer collection; no variants; not flag-gated. |
 | 11 My plate | | | Mirage absent = off; ReCapture default on → appears at each owner's next publish; own ungated settings screen. |
+| 12 Reviews / customers / links | | | Opt-in under `/analytics/*`, pulled on read; review link Google-only; no Places search; not plan-gated. |

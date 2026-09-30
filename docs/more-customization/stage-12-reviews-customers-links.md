@@ -1,4 +1,53 @@
-# Stage 12 — Google reviews, customer opt-in list, delivery & booking links
+# ✅ Stage 12 — Google reviews, customer opt-in list, delivery & booking links
+
+> **Status (2026-09-30): built, uncommitted.** Typecheck / analyze clean on all four sides (Flutter:
+> all of `lib`). Tests: `mirage-fe/src/features/customers/stage12.test.tsx` (10 — prompt timing, 30-day
+> cap, no rating gate, phone / birthday rules, consent box unticked + words sent, link hosts),
+> `recapture-api/tests/customers-links.test.ts` (8 — Google-only review link, platform hosts, booking,
+> pull scoped to the restaurant, opted-out never exported, CSV formula-injection guard, export audit
+> event, delete reaches Mirage, 24-month retention, birthdays this week),
+> `test/catalog/stage12_links_test.dart` (4). Also updated one guardrail in
+> `catalog-analytics-proxy.test.ts`: the pinned summary keys now include Stage 11's `plateStats`.
+>
+> **12.1** — mirage-fe `ReviewPrompt` now shows after 15 min on the page, or 20 min after "Show to
+> waiter" (the plate sheet stamps `mirage.plate.waiter.<slug>`; re-checked when the tab comes back),
+> once per visitor per restaurant per 30 days; `review_prompt_shown`. No rating step anywhere
+> (comment block in `menuExtras.ts`). API: `engagement.reviewUrl` must be Google
+> (google.com / google.co.in / g.page / goo.gl / maps.app.goo.gl). Flutter: the review field
+> accepts a Place ID (`ChIJ…`) and builds `search.google.com/local/writereview?placeid=…`, plus a
+> "Find my Google Place ID" help. Weekly report: "⭐ N customers tapped Review" (`metrics.reviewTaps`).
+>
+> **12.2** — mirage-be `optInModel` (unique restaurant+phone; consent text + version + time; kept on
+> opt-out), `optInController`: `POST /analytics/opt-in` (only if `customers.optInEnabled`, `consent`
+> must be literal `true`, +91 mobiles, ≤ 3 per visitor per day, IP limiter), `POST /analytics/opt-out`
+> (same answer whether or not the number was listed), admin `GET /analytics/opt-ins?restaurant=&since=`
+> and `DELETE /analytics/opt-ins/:id`; deleted with the restaurant. mirage-fe: sign-up card under the
+> menu, form (box unticked, button disabled until ticked, exact words sent), notice page
+> `/:restaurant/offers-notice` with a no-login opt-out. API: `CustomerContact`, `customersService`
+> (pull on read, scope double-checked, 24-month retention, CSV of subscribed only with formula
+> guard, `customers_exported` audit event, delete here + at Mirage, mark opted out), owner-only
+> routes `/catalog/customers[/export|/:id/opt-out|/:id]` — no rep twin; contacts deleted with the
+> catalog. Flutter: `/catalog/customers` (switch, counts, birthdays this week, search, CSV,
+> per-contact WhatsApp chat with the owner's message, copy, opt out, delete).
+>
+> **12.3** — `Catalog.links` (host-checked per platform, https; booking WHATSAPP / PHONE / URL),
+> synced as `restaurant.links`; mirage-fe "Order online" chips (Zomato / Swiggy icons) and "Book a
+> table" in the contact sheet; `delivery_link_clicked`, `booking_clicked`. Flutter `/catalog/links`.
+>
+> **Differs from the text below:**
+> - The public routes are `/analytics/opt-in` and `/analytics/opt-out` (beside `/analytics/feedback`,
+>   same no-API-key + rate-limit pattern), not `/public/opt-in`. ReCapture PULLS (no webhook).
+> - The pull runs when the owner opens Customers or exports — no background job.
+> - "Search their business name" for the review link is not built (needs a Places API key); the
+>   owner pastes their Google review link or Place ID.
+> - Sending = one WhatsApp chat at a time from the owner's phone with their message; no bulk send.
+> - STOP replies are handled by the owner marking the contact opted out (no WhatsApp inbox yet), or
+>   the diner using the notice page.
+> - Booking button is in the contact sheet only, not the header. Only Zomato / Swiggy have logos;
+>   the others are text chips.
+> - ⚠ Existing review links that are not Google's now fail validation the next time the owner
+>   saves the customer-buttons block (they keep working on the menu until then).
+> - Not plan-gated (not decided); owner-only screens, not behind `appearanceEnabled`.
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 7.3 (engagement block) — this stage extends it.

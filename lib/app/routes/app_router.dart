@@ -67,6 +67,8 @@ import '../../presentation/screens/catalog/subscription_screen.dart';
 import '../../presentation/screens/catalog/weekly_report_screen.dart';
 import '../../presentation/screens/catalog/offers_screen.dart';
 import '../../presentation/screens/catalog/plate_settings_screen.dart';
+import '../../presentation/screens/catalog/customers_screen.dart';
+import '../../presentation/screens/catalog/order_links_screen.dart';
 import '../../presentation/widgets/catalog/publish_body.dart'
     show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
@@ -215,6 +217,10 @@ abstract final class AppRoutes {
 
   /// The "My plate" switches (Stage 11).
   static const catalogPlate = '/catalog/plate';
+
+  /// Stage 12: the WhatsApp-offers list (owner only) and the order / booking links.
+  static const catalogCustomers = '/catalog/customers';
+  static const catalogLinks = '/catalog/links';
 
   // ── Rep (the field surface, /rep) ─────────────────────────────────────────
   // Gated on isSalesRep in the router's redirect below, not inside the screens:
@@ -403,6 +409,8 @@ abstract final class AppRouteNames {
   static const catalogOfferNew = 'catalogOfferNew';
   static const catalogOfferDetail = 'catalogOfferDetail';
   static const catalogPlate = 'catalogPlate';
+  static const catalogCustomers = 'catalogCustomers';
+  static const catalogLinks = 'catalogLinks';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repStandees = 'repStandees';
@@ -739,6 +747,16 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (_, state) => FlowBackScope(
           child: OfferEditorScreen(offerId: state.pathParameters['offerId']),
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogCustomers,
+        name: AppRouteNames.catalogCustomers,
+        builder: (_, __) => const FlowBackScope(child: CustomersScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogLinks,
+        name: AppRouteNames.catalogLinks,
+        builder: (_, __) => const FlowBackScope(child: OrderLinksScreen()),
       ),
       GoRoute(
         path: AppRoutes.catalogPlate,

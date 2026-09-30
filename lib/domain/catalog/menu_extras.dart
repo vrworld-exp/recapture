@@ -354,3 +354,99 @@ class MenuPlate {
   MenuPlate copyWith({bool? enabled, bool? showTotal}) =>
       MenuPlate(enabled: enabled ?? this.enabled, showTotal: showTotal ?? this.showTotal);
 }
+
+// ── Stage 12 ─────────────────────────────────────────────────────────────────
+
+/// The Google "write a review" link for a Place ID (`ChIJ…`), or the input
+/// unchanged when it is already a link. Null when it is neither. (12.1)
+String? googleReviewLinkFrom(String input) {
+  final value = input.trim();
+  if (RegExp(r'^ChIJ[\w-]{10,}$').hasMatch(value)) {
+    return 'https://search.google.com/local/writereview?placeid=$value';
+  }
+  return isGoogleReviewLink(value) ? value : null;
+}
+
+/// https on google.com / google.co.in / g.page / goo.gl — the server's rule.
+bool isGoogleReviewLink(String value) {
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null || uri.scheme != 'https') return false;
+  final host = uri.host.toLowerCase();
+  const hosts = ['google.com', 'google.co.in', 'g.page', 'goo.gl', 'maps.app.goo.gl'];
+  return hosts.any((h) => host == h || host.endsWith('.$h'));
+}
+
+/// Google's own tool for finding a business's Place ID.
+const kPlaceIdFinderUrl = 'https://developers.google.com/maps/documentation/places/web-service/place-id';
+
+enum DeliveryPlatform {
+  zomato('zomato', 'Zomato', ['zomato.com']),
+  swiggy('swiggy', 'Swiggy', ['swiggy.com']),
+  magicpin('magicpin', 'magicpin', ['magicpin.in']),
+  eazydiner('eazydiner', 'EazyDiner', ['eazydiner.com']),
+  dineout('dineout', 'Dineout', ['dineout.co.in', 'swiggy.com']);
+
+  const DeliveryPlatform(this.key, this.label, this.hosts);
+  final String key;
+  final String label;
+  final List<String> hosts;
+
+  /// https on this platform's own domain — the server refuses anything else.
+  bool accepts(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null || uri.scheme != 'https') return false;
+    final host = uri.host.toLowerCase();
+    return hosts.any((h) => host == h || host.endsWith('.$h'));
+  }
+}
+
+enum BookingType {
+  whatsapp('WHATSAPP', 'WhatsApp message'),
+  phone('PHONE', 'Phone call'),
+  url('URL', 'Booking website');
+
+  const BookingType(this.apiValue, this.label);
+  final String apiValue;
+  final String label;
+}
+
+/// Delivery and booking links on the menu (12.3). Empty = nothing shown.
+class MenuLinks {
+  const MenuLinks({this.delivery = const {}, this.bookingType, this.bookingValue});
+
+  final Map<DeliveryPlatform, String> delivery;
+  final BookingType? bookingType;
+  final String? bookingValue;
+
+  static const none = MenuLinks();
+
+  bool get isEmpty => delivery.isEmpty && bookingType == null;
+
+  factory MenuLinks.fromMap(Object? raw) {
+    if (raw is! Map) return none;
+    final booking = raw['booking'];
+    BookingType? type;
+    String? value;
+    if (booking is Map && booking['value'] is String) {
+      type = BookingType.values.where((t) => t.apiValue == booking['type']).firstOrNull;
+      value = booking['value'] as String;
+    }
+    return MenuLinks(
+      delivery: {
+        for (final p in DeliveryPlatform.values)
+          if (raw[p.key] is String && (raw[p.key] as String).isNotEmpty) p: raw[p.key] as String,
+      },
+      bookingType: type,
+      bookingValue: type == null ? null : value,
+    );
+  }
+
+  /// The PATCH value — null clears every link.
+  Map<String, dynamic>? toMap() => isEmpty
+      ? null
+      : {
+          for (final e in delivery.entries) e.key.key: e.value,
+          if (bookingType != null && (bookingValue ?? '').trim().isNotEmpty)
+            'booking': {'type': bookingType!.apiValue, 'value': bookingValue!.trim()},
+        };
+}

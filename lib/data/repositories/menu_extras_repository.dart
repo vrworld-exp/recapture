@@ -37,6 +37,12 @@ abstract interface class MenuExtrasRepository {
 
   /// Stage 11: My plate on / off, totals on / off.
   Future<BusinessProfile> updatePlate(MenuPlate plate);
+
+  /// Stage 12: delivery / booking links (replaces; empty clears them).
+  Future<BusinessProfile> updateLinks(MenuLinks links);
+
+  /// Stage 12: the "Get offers on WhatsApp" card on the menu.
+  Future<BusinessProfile> updateOptIn(bool enabled);
   Future<BusinessProfile> updateQrStyle(QrStyle style);
 
   /// A dish's "goes well with" list (≤ [kMaxPairings] other products).
@@ -90,6 +96,13 @@ class RemoteMenuExtrasRepository implements MenuExtrasRepository {
 
   @override
   Future<BusinessProfile> updatePlate(MenuPlate plate) => _patch({'plate': plate.toMap()});
+
+  @override
+  Future<BusinessProfile> updateLinks(MenuLinks links) => _patch({'links': links.toMap()});
+
+  @override
+  Future<BusinessProfile> updateOptIn(bool enabled) =>
+      _patch({'customers': {'optInEnabled': enabled}});
 
   @override
   Future<BusinessProfile> updateQrStyle(QrStyle style) =>

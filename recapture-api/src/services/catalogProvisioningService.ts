@@ -388,6 +388,8 @@ async function mirageStage7Fields(
   engagement: string;
   offers: string;
   plate: string;
+  links: string;
+  customers: string;
 }> {
   return {
     arBranding: mirageArBrandingField(catalog),
@@ -401,6 +403,9 @@ async function mirageStage7Fields(
       enabled: catalog.plate?.enabled !== false,
       showTotal: catalog.plate?.showTotal !== false,
     }),
+    // Stage 12: always sent, `''` = none / off.
+    links: catalog.links && Object.keys(catalog.links).length > 0 ? JSON.stringify(catalog.links) : '',
+    customers: catalog.customers?.optInEnabled ? JSON.stringify({ optInEnabled: true }) : '',
   };
 }
 

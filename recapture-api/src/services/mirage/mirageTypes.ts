@@ -286,6 +286,9 @@ export interface CreateRestaurantInput {
   offers?: string;
   /** Stage 11: `{ enabled, showTotal }` as JSON. */
   plate?: string;
+  /** Stage 12: JSON blocks, `''` clears. */
+  links?: string;
+  customers?: string;
   engagement?: string;
   /** Stage 8.2: the menu subdomain; `''` clears. */
   slug?: string;
@@ -353,6 +356,9 @@ export interface UpdateRestaurantInput {
   offers?: string;
   /** Stage 11: `{ enabled, showTotal }` as JSON. */
   plate?: string;
+  /** Stage 12: JSON blocks, `''` clears. */
+  links?: string;
+  customers?: string;
   engagement?: string;
   /** Stage 8.2: the menu subdomain; `''` clears. */
   slug?: string;

@@ -11,6 +11,7 @@
 // change permanently invisible to the publish screen.
 import { randomUUID } from 'crypto';
 import { Types } from 'mongoose';
+import { CustomerContact } from '@/models/CustomerContact';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogCategory } from '@/models/CatalogCategory';
@@ -50,6 +51,8 @@ import type {
   CatalogEngagement,
   CatalogQrStyle,
   CatalogSpotlight,
+  CatalogCustomers,
+  CatalogLinks,
 } from '@/models/types/catalog.types';
 import { effectiveLanguages } from '@/models/types/catalog.types';
 import { translationWrites } from '@/services/catalog/menuTranslations';
@@ -373,6 +376,12 @@ async function applyCatalogPatch(
   }
   // Stage 11: My plate — replaced whole.
   if (input.plate !== undefined) set.plate = input.plate;
+  // Stage 12: links replaced whole (null / all-empty removes); the sign-up switch.
+  if (input.links !== undefined) {
+    if (input.links === null || Object.keys(input.links).length === 0) unset.links = 1;
+    else set.links = input.links;
+  }
+  if (input.customers !== undefined) set.customers = input.customers;
 
   const updated = await Catalog.findOneAndUpdate(
     { userId: ownerId, deletedAt: null },
@@ -497,6 +506,9 @@ export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'engagement',
   // "My plate" (Stage 11).
   'plate',
+  // Delivery / booking links and the WhatsApp-offers card (Stage 12).
+  'links',
+  'customers',
 ];
 
 /**
@@ -539,6 +551,10 @@ export interface BusinessProfileDto {
   qrStyle: CatalogQrStyle | null;
   /** Stage 11: My plate. Always present — absent on the catalog reads as on, with totals. */
   plate: { enabled: boolean; showTotal: boolean };
+  /** Stage 12: null = no delivery / booking links. */
+  links: CatalogLinks | null;
+  /** Stage 12: the WhatsApp-offers card; off unless switched on. */
+  customers: CatalogCustomers;
   /**
    * Stage 8.2: the menu's pretty address and its full URL (null when no
    * subdomain host is configured). Additional to `publicUrl`, never instead.
@@ -667,6 +683,8 @@ export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
           feedbackForm: c.engagement.feedbackForm === true,
         }
       : null,
+    links: c.links && Object.keys(c.links).length > 0 ? { ...c.links } : null,
+    customers: { optInEnabled: c.customers?.optInEnabled === true },
     plate: {
       enabled: c.plate?.enabled !== false,
       showTotal: c.plate?.showTotal !== false,
@@ -994,6 +1012,9 @@ export async function deleteCatalog(userId: string): Promise<DeleteCatalogResult
   // is about to stop existing; its counts are not destructured because nothing
   // reports them.
   await CatalogPublishRun.deleteMany({ catalogId }).exec();
+  // Stage 12.2: the customer list never outlives the catalog it was given to.
+  // (Mirage deletes its copy with the restaurant.)
+  await CustomerContact.deleteMany({ catalogId }).exec();
 
   await Catalog.deleteOne({ _id: catalogId }).exec();
 

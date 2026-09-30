@@ -35,6 +35,9 @@ import {
   PRODUCT_AVAILABILITIES,
   PRODUCT_FOOD_TYPES,
   PRODUCT_TYPES,
+  BOOKING_TYPES,
+  DELIVERY_HOSTS,
+  type DeliveryPlatform,
 } from '@/models/types/catalog.types';
 import { BRANDING_SLOTS, PRODUCT_IMAGE_CONTENT_TYPES } from '@/utils/productImageKeys';
 import { STANDEE_SHEET_MAX_COPIES } from '@/services/standeeSheetPdf';
@@ -407,10 +410,30 @@ const httpsUrl = z
   .max(300)
   .regex(/^https:\/\//i, 'Link must start with https://');
 
+/**
+ * Stage 12.1: the review link must lead to GOOGLE — the "write a review" box, a
+ * g.page review link, or a Google Maps short link. Anything else is refused, so
+ * the menu's review button can never send a diner to a third-party rating page.
+ */
+const GOOGLE_REVIEW_HOSTS = ['google.com', 'google.co.in', 'g.page', 'goo.gl', 'maps.app.goo.gl'];
+export const isGoogleReviewUrl = (value: string): boolean => {
+  try {
+    const u = new URL(value);
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname.toLowerCase();
+    return GOOGLE_REVIEW_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  } catch {
+    return false;
+  }
+};
+const googleReviewUrl = httpsUrl.refine(isGoogleReviewUrl, {
+  message: 'Use your Google review link (search.google.com, g.page or maps.app.goo.gl)',
+});
+
 /** The customer buttons. REPLACES the block; `null` switches them all off. */
 export const engagementSchema = z
   .object({
-    reviewUrl: httpsUrl.optional(),
+    reviewUrl: googleReviewUrl.optional(),
     whatsappOrder: z.boolean().default(false),
     callWaiter: z.boolean().default(false),
     wifi: z
@@ -504,6 +527,42 @@ export type CreateCatalogInput = z.infer<typeof createCatalogSchema>;
  * deep merge gives no way to clear a single field, and "clear my website" is a
  * real thing a user does.
  */
+/** Stage 12.3: delivery / booking links — each https on the platform's own domain. */
+const platformUrl = (platform: DeliveryPlatform) =>
+  httpsUrl.refine(
+    (value) => {
+      try {
+        const host = new URL(value).hostname.toLowerCase();
+        return DELIVERY_HOSTS[platform].some((h) => host === h || host.endsWith(`.${h}`));
+      } catch {
+        return false;
+      }
+    },
+    { message: `Use your ${platform} page link (${DELIVERY_HOSTS[platform][0]})` }
+  );
+
+export const linksSchema = z
+  .object({
+    zomato: platformUrl('zomato').optional(),
+    swiggy: platformUrl('swiggy').optional(),
+    magicpin: platformUrl('magicpin').optional(),
+    eazydiner: platformUrl('eazydiner').optional(),
+    dineout: platformUrl('dineout').optional(),
+    booking: z
+      .object({ type: z.enum(BOOKING_TYPES), value: z.string().trim().min(1).max(300) })
+      .strict()
+      .superRefine((b, ctx) => {
+        if (b.type === 'URL' && !/^https:\/\//i.test(b.value)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Booking link must start with https://' });
+        }
+        if (b.type !== 'URL' && b.value.replace(/\D/g, '').length < 10) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Enter a phone number with at least 10 digits' });
+        }
+      })
+      .optional(),
+  })
+  .strict();
+
 export const updateCatalogSchema = z
   .object({
     name: slugName(CATALOG_NAME_MAX, 'Catalog name').optional(),
@@ -529,6 +588,9 @@ export const updateCatalogSchema = z
     spotlight: spotlightSchema.nullable().optional(),
     engagement: engagementSchema.nullable().optional(),
     qrStyle: qrStyleSchema.nullable().optional(),
+    /** Stage 12: delivery / booking links (replaces; `null` removes) and the sign-up card. */
+    links: linksSchema.nullable().optional(),
+    customers: z.object({ optInEnabled: z.boolean() }).strict().optional(),
     /** Stage 11: My plate. Replaces the block. */
     plate: z.object({ enabled: z.boolean(), showTotal: z.boolean() }).strict().optional(),
   })

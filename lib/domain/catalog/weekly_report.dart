@@ -85,6 +85,7 @@ class WeeklyReport {
     this.platesBuilt = 0,
     this.avgPlateValue = 0,
     this.topPlateDish,
+    this.reviewTaps = 0,
     required this.menuViewsDelta,
     required this.visitorsDelta,
     required this.arViewsDelta,
@@ -112,6 +113,9 @@ class WeeklyReport {
   final int platesBuilt;
   final int avgPlateValue;
   final String? topPlateDish;
+
+  /// Stage 12.1: taps on the Google review button.
+  final int reviewTaps;
 
   /// Percent vs the previous week; null when that week was too small to compare.
   final double? menuViewsDelta;
@@ -141,6 +145,7 @@ class WeeklyReport {
       qrScans: _int(metrics['qrScans']),
       arViews: _int(metrics['arViews']),
       offerViews: _int(metrics['offerViews']),
+      reviewTaps: _int(metrics['reviewTaps']),
       platesBuilt: _int(_map(metrics['plates'])['built']),
       avgPlateValue: _int(_map(metrics['plates'])['avgValue']),
       topPlateDish: _map(metrics['plates'])['topDish'] is String

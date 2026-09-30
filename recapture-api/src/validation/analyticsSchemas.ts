@@ -203,6 +203,9 @@ export const AnalyticsEvent = {
   SUBSCRIPTION_STANDEES_ISSUED: 'subscription_standees_issued',
   // The owner downloaded a receipt PDF. The kind of row, never its amount.
   SUBSCRIPTION_RECEIPT_DOWNLOADED: 'subscription_receipt_downloaded',
+  // Stage 12.2: the audit line for an owner downloading their customer list —
+  // who, which catalog, how many rows. Never a phone number.
+  CUSTOMERS_EXPORTED: 'customers_exported',
   // One in-app message TO THE OWNER about their own subscription
   // (services/subscription/ownerNotifications.ts). The `event` is what
   // happened, never the sentence sent: a message can name one restaurant's
@@ -1279,6 +1282,14 @@ const subscriptionAutopayChangedProps = z
   })
   .strict();
 
+const customersExportedProps = z
+  .object({
+    catalog_id: z.string().min(1),
+    user_id: z.string().min(1),
+    count: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const subscriptionReceiptDownloadedProps = z
   .object({
     catalog_id: z.string().min(1),
@@ -1539,6 +1550,7 @@ export const EVENT_SCHEMAS = {
   [AnalyticsEvent.SUBSCRIPTION_SWEEP_RAN]: subscriptionSweepRanProps,
   [AnalyticsEvent.SUBSCRIPTION_STANDEES_ISSUED]: subscriptionStandeesIssuedProps,
   [AnalyticsEvent.SUBSCRIPTION_RECEIPT_DOWNLOADED]: subscriptionReceiptDownloadedProps,
+  [AnalyticsEvent.CUSTOMERS_EXPORTED]: customersExportedProps,
   [AnalyticsEvent.SUBSCRIPTION_OWNER_NOTIFIED]: subscriptionOwnerNotifiedProps,
   [AnalyticsEvent.CATALOG_QR_RENDERED]: catalogQrRenderedProps,
   [AnalyticsEvent.CATALOG_STANDEES_DOWNLOADED]: catalogStandeesDownloadedProps,

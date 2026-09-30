@@ -116,6 +116,13 @@ export interface MirageClient {
    */
   analyticsItemFunnel?(query: MirageAnalyticsQuery): Promise<unknown[]>;
   analyticsHourly?(query: MirageAnalyticsQuery): Promise<unknown[]>;
+  /**
+   * Stage 12.2: one restaurant's WhatsApp-offers sign-ups changed since
+   * `since` (oldest first, ≤ 500), and deleting one. Optional like the other
+   * later reports; the restaurant is always the caller's own mapping.
+   */
+  listOptIns?(restaurantId: string, since: Date | null): Promise<Record<string, unknown>[]>;
+  deleteOptIn?(restaurantId: string, optInId: string): Promise<void>;
 }
 
 /**
@@ -818,6 +825,8 @@ export const mirageClient: MirageClient = {
         spotlight: input.spotlight,
         offers: input.offers,
         plate: input.plate,
+        links: input.links,
+        customers: input.customers,
         engagement: input.engagement,
         slug: input.slug,
       },
@@ -869,6 +878,8 @@ export const mirageClient: MirageClient = {
         spotlight: input.spotlight,
         offers: input.offers,
         plate: input.plate,
+        links: input.links,
+        customers: input.customers,
         engagement: input.engagement,
         slug: input.slug,
       },
@@ -1164,6 +1175,27 @@ export const mirageClient: MirageClient = {
       query: analyticsParams(query),
     });
     return Array.isArray(data) ? data : [];
+  },
+
+  async listOptIns(restaurantId: string, since: Date | null): Promise<Record<string, unknown>[]> {
+    const data = await send<unknown>({
+      method: 'get',
+      path: '/analytics/opt-ins',
+      context: 'opt-in list',
+      requiresAdmin: true,
+      query: { restaurant: restaurantId, ...(since ? { since: since.toISOString() } : {}) },
+    });
+    return Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
+  },
+
+  async deleteOptIn(restaurantId: string, optInId: string): Promise<void> {
+    await send<unknown>({
+      method: 'delete',
+      path: `/analytics/opt-ins/${encodeURIComponent(optInId)}`,
+      context: 'opt-in delete',
+      requiresAdmin: true,
+      query: { restaurant: restaurantId },
+    });
   },
 
   async analyticsHourly(query: MirageAnalyticsQuery): Promise<unknown[]> {

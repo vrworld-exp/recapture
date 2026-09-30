@@ -284,6 +284,9 @@ class _SummaryCard extends StatelessWidget {
           if (report.busiestLabel != null)
             Text('⏰ Busiest: ${report.busiestLabel}',
                 style: text.bodyMedium?.copyWith(color: AppColors.textSecondary)),
+          if (report.reviewTaps > 0)
+            Text('⭐ ${_count(report.reviewTaps)} customers tapped Review',
+                style: text.bodyMedium?.copyWith(color: AppColors.textSecondary)),
           if (report.platesBuilt > 0)
             Text(
               '🍽 ${_count(report.platesBuilt)} customers built a plate'

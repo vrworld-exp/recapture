@@ -677,3 +677,29 @@ export interface PublishRunError {
    */
   suggestedName?: string;
 }
+
+// ── Stage 12: delivery / booking links, WhatsApp-offers sign-up ─────────────
+
+export const DELIVERY_PLATFORMS = ['zomato', 'swiggy', 'magicpin', 'eazydiner', 'dineout'] as const;
+export type DeliveryPlatform = (typeof DELIVERY_PLATFORMS)[number];
+
+/** Each platform link must be https on one of these hosts (or a subdomain). */
+export const DELIVERY_HOSTS: Record<DeliveryPlatform, readonly string[]> = {
+  zomato: ['zomato.com'],
+  swiggy: ['swiggy.com'],
+  magicpin: ['magicpin.in'],
+  eazydiner: ['eazydiner.com'],
+  dineout: ['dineout.co.in', 'swiggy.com'],
+};
+
+export const BOOKING_TYPES = ['WHATSAPP', 'PHONE', 'URL'] as const;
+export type BookingType = (typeof BOOKING_TYPES)[number];
+
+export type CatalogLinks = Partial<Record<DeliveryPlatform, string>> & {
+  booking?: { type: BookingType; value: string };
+};
+
+export interface CatalogCustomers {
+  /** The "Get offers on WhatsApp" card on the menu. */
+  optInEnabled: boolean;
+}

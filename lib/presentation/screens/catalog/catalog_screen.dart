@@ -916,6 +916,8 @@ class _CatalogHeaderCard extends ConsumerWidget {
                   _CatalogMenuAction.extras => context.pushNamed(AppRouteNames.catalogExtras),
                   _CatalogMenuAction.offers => context.pushNamed(AppRouteNames.catalogOffers),
                   _CatalogMenuAction.plate => context.pushNamed(AppRouteNames.catalogPlate),
+                  _CatalogMenuAction.customers => context.pushNamed(AppRouteNames.catalogCustomers),
+                  _CatalogMenuAction.links => context.pushNamed(AppRouteNames.catalogLinks),
                   _CatalogMenuAction.address => context.pushNamed(AppRouteNames.catalogAddress),
                   _CatalogMenuAction.delete => onDeleteCatalog(),
                 },
@@ -980,6 +982,35 @@ class _CatalogHeaderCard extends ConsumerWidget {
                         const SizedBox(width: AppSpacing.sm),
                         Text(
                           'My plate',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Stage 12: the WhatsApp-offers list and the order / booking links.
+                  PopupMenuItem(
+                    key: const Key('catalog-open-customers'),
+                    value: _CatalogMenuAction.customers,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.people_outline, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Customers',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    key: const Key('catalog-open-links'),
+                    value: _CatalogMenuAction.links,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.delivery_dining_outlined, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Order & booking links',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ],
@@ -1240,7 +1271,7 @@ Color _subscriptionColor(SubscriptionSummary? summary) =>
 /// The header's overflow menu. An enum with one entry rather than a bare
 /// callback because this menu is where the next catalog-level action lands, and
 /// a `switch` over it is a compile error the day one is added without a branch.
-enum _CatalogMenuAction { translations, extras, offers, plate, address, delete }
+enum _CatalogMenuAction { translations, extras, offers, plate, customers, links, address, delete }
 
 class _Chip extends StatelessWidget {
   const _Chip({required this.label, required this.color});

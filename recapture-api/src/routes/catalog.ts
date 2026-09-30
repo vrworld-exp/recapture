@@ -47,6 +47,12 @@ import {
 } from '@/validation/catalogSchemas';
 import { listCatalogActivity } from '@/services/catalogActivityService';
 import {
+  deleteCustomer,
+  exportCustomersCsv,
+  listCustomers,
+  markCustomerOptedOut,
+} from '@/services/customersService';
+import {
   createOffer,
   deleteOffer,
   listOffers,
@@ -2349,6 +2355,63 @@ router.delete(
     if (result.outcome === 'NO_CATALOG') return noCatalog(res);
     if (result.outcome === 'NOT_FOUND') {
       return fail(res, 404, 'OFFER_NOT_FOUND', 'That offer was not found.');
+    }
+    res.status(200).json({ status: 'success' });
+  })
+);
+
+// ── Customers — the WhatsApp-offers list (more-customization Stage 12.2) ────
+//
+// Pulled from Mirage on every read (restaurant forced from the owner's own
+// mapping). Owner only — there is deliberately no /rep/ twin: a rep never sees
+// diners' phone numbers.
+
+/** GET /catalog/customers?q= — the list, counts and this week's birthdays. */
+router.get(
+  '/customers',
+  asyncHandler(async (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 60) : undefined;
+    const result = await listCustomers(req.user!.userId, { q });
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    res.status(200).json({ status: 'success', ...result.list });
+  })
+);
+
+/** GET /catalog/customers/export — CSV of subscribed contacts only; audit-logged. */
+router.get(
+  '/customers/export',
+  asyncHandler(async (req, res) => {
+    const result = await exportCustomersCsv(req.user!.userId);
+    if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="customers.csv"');
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).send(result.csv);
+  })
+);
+
+/** POST /catalog/customers/:id/opt-out — they replied STOP. Kept, never exported again. */
+router.post(
+  '/customers/:id/opt-out',
+  asyncHandler(async (req, res) => {
+    const result = await markCustomerOptedOut(req.user!.userId, req.params.id);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'CUSTOMER_NOT_FOUND', 'That customer was not found.');
+    }
+    res.status(200).json({ status: 'success' });
+  })
+);
+
+/** DELETE /catalog/customers/:id — removes them here and at Mirage. */
+router.delete(
+  '/customers/:id',
+  asyncHandler(async (req, res) => {
+    const result = await deleteCustomer(req.user!.userId, req.params.id);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'CUSTOMER_NOT_FOUND', 'That customer was not found.');
+    }
+    if (result.outcome === 'UNAVAILABLE') {
+      return fail(res, 503, 'CUSTOMERS_UNAVAILABLE', 'Could not delete right now. Please try again.');
     }
     res.status(200).json({ status: 'success' });
   })

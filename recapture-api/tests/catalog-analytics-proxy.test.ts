@@ -270,6 +270,8 @@ describe('the boundary translation', () => {
       'funnel',
       'kpis',
       'modelHealth',
+      // Stage 11: My plate stats — scoped like every per-dish panel.
+      'plateStats',
       'previousKpis',
       'range',
       'status',

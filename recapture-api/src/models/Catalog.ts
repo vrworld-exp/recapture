@@ -36,6 +36,7 @@ import {
   type PublicUrlScheme,
 } from './types/catalog.types';
 import type { CatalogReportPrefs } from './types/weeklyReport.types';
+import type { CatalogCustomers, CatalogLinks } from './types/catalog.types';
 
 export interface ICatalog extends Document {
   /**
@@ -103,6 +104,12 @@ export interface ICatalog extends Document {
    * with the branding; Mirage treats its own absent value as off.
    */
   plate?: { enabled: boolean; showTotal: boolean };
+  /** Stage 12.3: delivery / booking links. Absent = none shown. Published. */
+  links?: CatalogLinks;
+  /** Stage 12.2: the WhatsApp-offers sign-up card. Absent = off. Published. */
+  customers?: CatalogCustomers;
+  /** Stage 12.2: the last opt-in `updatedAt` pulled from Mirage — the next pull's cursor. */
+  customersSyncedAt?: Date;
   status: CatalogStatus;
   /**
    * The Mirage restaurant this catalog is projected into. Written ONCE, at
@@ -352,6 +359,12 @@ const CatalogSchema = new Schema<ICatalog>(
         { _id: false }
       ),
     },
+    // Mixed: validated whole by linksSchema on the way in, replaced whole.
+    links: { type: Schema.Types.Mixed },
+    customers: {
+      type: new Schema({ optInEnabled: { type: Boolean, default: false } }, { _id: false }),
+    },
+    customersSyncedAt: { type: Date },
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },
