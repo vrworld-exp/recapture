@@ -1,4 +1,9 @@
-# Stage 15 — Instagram-ready 3D spin videos
+# ⏸ Stage 15 — Instagram-ready 3D spin videos
+
+> **Deferred (2026-09-30, owner's decision): not being built for now.** Nothing in the code
+> depends on it. Before picking it up again, answer Q8 (where the renderer runs — it needs
+> Chromium + ffmpeg and ~1 GB RAM per render, which the current Render starter service cannot
+> host) and who may make videos / remove the watermark.
 
 **Side:** recapture-api (render worker) + Flutter. No Mirage change.
 **Depends on:** dishes with a published 3D model (GLB). Stage 2/3 theme + logo used for the frame.
