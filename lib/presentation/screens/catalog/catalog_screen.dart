@@ -905,9 +905,27 @@ class _CatalogHeaderCard extends StatelessWidget {
                   color: AppColors.textSecondary,
                 ),
                 onSelected: (action) => switch (action) {
+                  _CatalogMenuAction.translations =>
+                    context.pushNamed(AppRouteNames.catalogTranslations),
                   _CatalogMenuAction.delete => onDeleteCatalog(),
                 },
                 itemBuilder: (context) => [
+                  // Stage 6: here rather than as a fifth header icon, which
+                  // would squeeze the catalog name on a phone.
+                  PopupMenuItem(
+                    key: const Key('catalog-open-translations'),
+                    value: _CatalogMenuAction.translations,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.translate, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Languages & translations',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
                   PopupMenuItem(
                     value: _CatalogMenuAction.delete,
                     child: Row(
@@ -1147,7 +1165,7 @@ Color _subscriptionColor(SubscriptionSummary? summary) =>
 /// The header's overflow menu. An enum with one entry rather than a bare
 /// callback because this menu is where the next catalog-level action lands, and
 /// a `switch` over it is a compile error the day one is added without a branch.
-enum _CatalogMenuAction { delete }
+enum _CatalogMenuAction { translations, delete }
 
 class _Chip extends StatelessWidget {
   const _Chip({required this.label, required this.color});

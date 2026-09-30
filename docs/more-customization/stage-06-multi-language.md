@@ -1,9 +1,51 @@
-# Stage 6 — Multi-language menu
+# ✅ Stage 6 — Multi-language menu
+
+> **Status (2026-09-30): built, uncommitted; tests written, not yet run (run after the last
+> stage).** Q3 answered: all 9 languages selectable (up to 3 per menu), **owner types
+> everything** — no `POST /catalog/translate`, no provider.
+>
+> **API:** `MENU_LANGUAGES` (en + the 9), `Catalog.languages` (replaced on the profile PATCH;
+> changing it touches every category so the planner re-pushes their names),
+> `CatalogProduct.i18n` / `CatalogCategory.i18n` / `Catalog.i18n` (Mixed, **merged per
+> language** with dotted `$set`/`$unset` — `null` or all-blank removes a language). Catalog-level
+> text is `Catalog.i18n[lang] = { announcement, badges: { badgeId: label } }` rather than an
+> `i18n` inside the announcement / badge blocks, so the Stage 4/5 editors (which replace those
+> blocks whole) can never drop a translation. Keys are only checked against the language list,
+> NOT against the enabled languages — text for a switched-off language is kept and simply not
+> published. Publish: `services/catalog/menuTranslations.ts`; product translations are ONE new
+> diffed field `i18n` (key of the enabled languages only; a pre-Stage-6 snapshot reads as
+> empty, so no menu-wide republish); badge labels ride inside `details` only when translated
+> (untranslated badges keep the old key); the announcement JSON carries `i18n`; restaurant gets
+> `languages`. Tests: `tests/catalog-languages.test.ts`.
+>
+> **Mirage-be:** `helper/i18nFields.js`; item / category `i18n`, restaurant `languages`, badge +
+> announcement `i18n` accepted and projected. Test: `test/i18nFields.test.js`.
+>
+> **Mirage-fe:** `src/i18n/` (`languages.ts`, `ui.ts`, `en.json` + `hi.json`,
+> `MenuLanguageContext.tsx`), `features/menu/localize.ts` (items localized ONCE in MenuScreen;
+> ids unchanged, `primaryName` kept for analytics), `LanguageSwitcher.tsx` (native `<select>` in
+> the header, hidden with 0 extra), `<html lang>`, Noto fallback via `--font-script` appended to
+> every font stack, `props.lang` on every event (only on a menu that offers a choice). Search
+> matches either language. Test: `features/menu/languages.test.tsx`.
+>
+> **Flutter:** `domain/catalog/menu_languages.dart`, `MenuTranslationsRepository` (its own
+> interface, so no existing test fake changed), Menu languages screen, Translations screen
+> (per-language %, untranslated first, quick-edit dialogs for dishes / sections /
+> announcement + badges), "Other languages" tile in the product editor (saves on its own
+> call). Entry: catalog header ⋮ → *Languages & translations*. Test:
+> `test/catalog/menu_languages_test.dart`.
+>
+> **Deviations / not done:** completeness is computed in the app from the product list (no
+> separate endpoint); UI chrome ships in English + Hindi only — other languages show English
+> chrome with the owner's translated text; the category manager has no language tabs (sections
+> are translated on the Translations screen); rep surfaces have no translation editing yet
+> (owner only, like Stage 5's badges); `client_page_view` fires before the restaurant (and so
+> its languages) has loaded, so it carries no `lang` — later events do.
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 2 (Stage 3's `hindi` font pairing helps).
 **Size:** L
-**Blocked on:** Q3 (languages, machine translation yes/no).
+**Blocked on:** ~~Q3~~ answered — see status.
 
 ## Outcome
 

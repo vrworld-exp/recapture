@@ -22,6 +22,7 @@
 //     object spreads are both banned here for exactly that reason — key order
 //     and dropped keys are invisible failures.
 import { EMPTY_DISH_DETAILS_KEY } from '@/services/catalog/dishDetails';
+import { EMPTY_TRANSLATIONS_KEY } from '@/services/catalog/menuTranslations';
 import { isModelPending } from '@/models/types/catalog.types';
 import type {
   ProductPublishedSnapshot,
@@ -102,6 +103,10 @@ export const PRODUCT_DIFF_FIELDS = [
   // without it reads as "none", so only dishes that actually got a badge or
   // diet info plan an UPDATE — no menu-wide republish on deploy.
   'details',
+  // Stage 6: name / description in the enabled languages, as ONE field
+  // (menuTranslations.ts). A snapshot without it reads as "none", so only dishes
+  // that actually got a translation plan an UPDATE — no republish on deploy.
+  'i18n',
   'glbUrl',
   'usdzUrl',
   'thumbnailUrl',
@@ -185,6 +190,10 @@ const PRODUCT_DIFF_ACCESSORS: Record<ProductDiffField, DiffAccessor> = {
   details: {
     current: (p) => p.details ?? EMPTY_DISH_DETAILS_KEY,
     published: (s) => s.details ?? EMPTY_DISH_DETAILS_KEY,
+  },
+  i18n: {
+    current: (p) => p.i18n ?? EMPTY_TRANSLATIONS_KEY,
+    published: (s) => s.i18n ?? EMPTY_TRANSLATIONS_KEY,
   },
   glbUrl: { current: (p) => p.glbUrl, published: (s) => s.glbUrl },
   usdzUrl: { current: (p) => p.usdzUrl, published: (s) => s.usdzUrl },

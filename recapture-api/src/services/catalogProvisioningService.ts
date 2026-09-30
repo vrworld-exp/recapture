@@ -51,6 +51,11 @@ import { appendSlugSuffix, toCatalogSlug } from '@/utils/catalogNames';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
 import { parseProductImageKey, productImageContentTypeFor } from '@/utils/productImageKeys';
+import {
+  announcementTranslations,
+  mirageLanguagesField,
+  publishedLanguages,
+} from '@/services/catalog/menuTranslations';
 
 /** How `publicUrl` is derived today. Recorded on the document at minting. */
 const PUBLIC_URL_SCHEME: PublicUrlScheme = 'MIRAGE_OBJECT_ID';
@@ -309,6 +314,9 @@ function mirageTheme(catalog: ICatalog): Required<MirageTheme> {
 function mirageTimeFields(catalog: ICatalog): { hours: string; announcement: string } {
   const h = catalog.hours;
   const a = catalog.announcement;
+  // Stage 6: the announcement in each enabled language rides inside the same
+  // JSON, so it is replaced — and cleared — together with the primary text.
+  const translated = a ? announcementTranslations(catalog.i18n, publishedLanguages(catalog)) : {};
   return {
     // Stage 4. JSON strings, `''` to clear — always sent, so removing the hours
     // or the announcement in ReCapture removes them from the menu.
@@ -328,6 +336,7 @@ function mirageTimeFields(catalog: ICatalog): { hours: string; announcement: str
           startsAt: a.startsAt ? a.startsAt.toISOString() : null,
           endsAt: a.endsAt ? a.endsAt.toISOString() : null,
           link: a.link ?? '',
+          ...(Object.keys(translated).length > 0 ? { i18n: translated } : {}),
         })
       : '',
   };
@@ -337,13 +346,20 @@ function mirageTimeFields(catalog: ICatalog): { hours: string; announcement: str
  * Stage 5: the badge library (the dishes carry their own copies — this is for
  * completeness and Mirage's admin) and the diet-filter flag. Always sent.
  */
-function mirageDishSettings(catalog: ICatalog): { badges: string; showFilters: boolean } {
+function mirageDishSettings(catalog: ICatalog): {
+  badges: string;
+  showFilters: boolean;
+  languages: string;
+} {
   const badges = catalog.badges ?? [];
   return {
     badges: badges.length
       ? JSON.stringify(badges.map((b) => ({ id: b.id, label: b.label, icon: b.icon, color: b.color })))
       : '',
     showFilters: catalog.appearance?.showFilters === true,
+    // Stage 6: which languages the switcher offers — always sent, so turning
+    // the last extra language off hides the switcher again.
+    languages: mirageLanguagesField(catalog),
   };
 }
 

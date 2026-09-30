@@ -33,6 +33,7 @@
 // every category on every duplicate — and adopting an item found under a tab the
 // user did not choose is a worse failure than reporting one.
 import { EMPTY_DISH_DETAILS_KEY, mirageDishFields } from '@/services/catalog/dishDetails';
+import { mirageTranslationsField } from '@/services/catalog/menuTranslations';
 import { Types } from 'mongoose';
 
 import { CatalogProduct } from '@/models/CatalogProduct';
@@ -182,6 +183,7 @@ function snapshotOf(
     position: product.position,
     foodType: product.foodType,
     details: product.details,
+    i18n: product.i18n,
     glbUrl: product.glbUrl,
     usdzUrl: product.usdzUrl,
     thumbnailUrl: product.thumbnailUrl,
@@ -256,6 +258,8 @@ async function createProduct(
     isNonVeg: product.foodType === 'NON_VEG',
     // Stage 5: badges (denormalised) + diet detail, always sent on a create.
     ...mirageDishFields(product.details ?? EMPTY_DISH_DETAILS_KEY),
+    // Stage 6: translations, always sent on a create (`''` = none).
+    i18n: mirageTranslationsField(product.i18n),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };
@@ -417,6 +421,7 @@ async function applyUpdate(
       ? { foodType: product.foodType, isNonVeg: product.foodType === 'NON_VEG' }
       : {}),
     ...(changed('details') ? mirageDishFields(product.details ?? EMPTY_DISH_DETAILS_KEY) : {}),
+    ...(changed('i18n') ? { i18n: mirageTranslationsField(product.i18n) } : {}),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };

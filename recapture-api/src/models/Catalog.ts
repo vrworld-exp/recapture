@@ -16,8 +16,11 @@ import {
   ANNOUNCEMENT_STYLES,
   BADGE_COLORS,
   BADGE_ICONS,
+  MENU_LANGUAGES,
   type CatalogBadge,
   type CatalogAnnouncement,
+  type CatalogLanguages,
+  type CatalogTranslations,
   type CatalogAppearance,
   type CatalogContact,
   type CatalogHours,
@@ -50,6 +53,14 @@ export interface ICatalog extends Document {
   announcement?: CatalogAnnouncement;
   /** Stage 5: the owner's badge library. Products reference these by id. */
   badges?: CatalogBadge[];
+  /** Stage 6: which languages the menu is offered in. Absent = English only. */
+  languages?: CatalogLanguages;
+  /**
+   * Stage 6: the announcement and badge labels in each extra language. Kept
+   * even for a language the owner has since switched off — it is simply not
+   * published until the language is back on.
+   */
+  i18n?: CatalogTranslations;
   status: CatalogStatus;
   /**
    * The Mirage restaurant this catalog is projected into. Written ONCE, at
@@ -210,6 +221,18 @@ const CatalogSchema = new Schema<ICatalog>(
       ],
       default: undefined,
     },
+    languages: {
+      type: new Schema<CatalogLanguages>(
+        {
+          primary: { type: String, enum: MENU_LANGUAGES, required: true, default: 'en' },
+          extra: { type: [{ type: String, enum: MENU_LANGUAGES }], default: [] },
+        },
+        { _id: false }
+      ),
+    },
+    // Mixed: keyed by language, shape and bounds checked by the Zod schema.
+    // Written with dotted `i18n.<lang>` paths, so no markModified is needed.
+    i18n: { type: Schema.Types.Mixed },
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },

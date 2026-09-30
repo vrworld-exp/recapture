@@ -277,6 +277,8 @@ export interface CreateRestaurantInput {
   /** Stage 5: the badge library (JSON, `''` = none) and the filter bar flag. */
   badges?: string;
   showFilters?: boolean;
+  /** Stage 6: `{ primary, extra }` as JSON (helper/i18nFields.js). */
+  languages?: string;
   image?: MirageFileUpload;
 }
 
@@ -332,6 +334,8 @@ export interface UpdateRestaurantInput {
   /** Stage 5: the badge library (JSON, `''` = none) and the filter bar flag. */
   badges?: string;
   showFilters?: boolean;
+  /** Stage 6: `{ primary, extra }` as JSON (helper/i18nFields.js). */
+  languages?: string;
   image?: MirageFileUpload;
 }
 
@@ -353,6 +357,8 @@ export interface CreateCategoryInput {
   /** Stage 4: the window as a JSON string, `''` = always. */
   schedule?: string;
   outsideWindow?: 'hide' | 'dim';
+  /** Stage 6: `{ hi: { name } }` as JSON, `''` = none. */
+  i18n?: string;
   image?: MirageFileUpload;
 }
 
@@ -364,6 +370,8 @@ export interface UpdateCategoryInput {
   /** Stage 4: the window as a JSON string, `''` = always. */
   schedule?: string;
   outsideWindow?: 'hide' | 'dim';
+  /** Stage 6: `{ hi: { name } }` as JSON, `''` = none. */
+  i18n?: string;
   image?: MirageFileUpload;
 }
 
@@ -390,6 +398,8 @@ export interface CreateItemInput {
   calories?: string;
   servesCount?: string;
   prepMinutes?: string;
+  /** Stage 6 — `{ hi: { name, description } }` as JSON (menuTranslations.ts); `''` clears. */
+  i18n?: string;
   /** The product photo. At least one of `image`/`object` is required. */
   image?: MirageFileUpload;
   /** The GLB. */
@@ -435,6 +445,8 @@ export interface UpdateItemInput {
   calories?: string;
   servesCount?: string;
   prepMinutes?: string;
+  /** Stage 6 — `{ hi: { name, description } }` as JSON (menuTranslations.ts); `''` clears. */
+  i18n?: string;
   image?: MirageFileUpload;
   object?: MirageFileUpload;
   objectIos?: MirageFileUpload;

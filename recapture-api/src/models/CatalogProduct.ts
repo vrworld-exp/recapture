@@ -29,6 +29,7 @@ import {
   type ProductFoodType,
   type ProductModelStatus,
   type ProductPublishedSnapshot,
+  type ProductTranslations,
   type ProductType,
   type SyncError,
   type SyncStatus,
@@ -94,6 +95,12 @@ export interface ICatalogProduct extends Document {
   calories?: number | null;
   servesCount?: number | null;
   prepMinutes?: number | null;
+  /**
+   * Stage 6 — PUBLISHED. The dish's name / description in other languages,
+   * keyed by language code. Only the catalog's enabled languages reach the
+   * menu; the rest are kept for when the owner switches them back on.
+   */
+  i18n?: ProductTranslations;
   /**
    * Display order within the catalog. ReCapture honours it everywhere; Mirage
    * has no sort field at all, so on the public page order is by creation date.
@@ -190,6 +197,9 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
     calories: { type: Number, min: 0, max: 5000 },
     servesCount: { type: Number, min: 1, max: 50 },
     prepMinutes: { type: Number, min: 0, max: 600 },
+    // Mixed, keyed by language; bounds are the Zod schema's. Written through
+    // dotted `i18n.<lang>` paths so one language never overwrites another.
+    i18n: { type: Schema.Types.Mixed },
     position: { type: Number, required: true, default: 0 },
     sourceProjectId: { type: Schema.Types.ObjectId, ref: 'Project' },
     sourceModelId: { type: Schema.Types.ObjectId, ref: 'ProjectModel' },

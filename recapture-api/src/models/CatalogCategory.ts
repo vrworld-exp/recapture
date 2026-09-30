@@ -12,6 +12,7 @@ import {
   OUTSIDE_WINDOW_MODES,
   SYNC_STATUSES,
   type CategorySchedule,
+  type CategoryTranslations,
   type OutsideWindowMode,
   type SyncError,
   type SyncStatus,
@@ -42,6 +43,8 @@ export interface ICatalogCategory extends Document {
   schedule?: CategorySchedule;
   /** Stage 4: outside the window, `dim` (default) or `hide`. */
   outsideWindow?: OutsideWindowMode;
+  /** Stage 6: the section's name in other languages. */
+  i18n?: CategoryTranslations;
   syncStatus: SyncStatus;
   syncError?: SyncError;
   lastSyncedAt?: Date;
@@ -68,6 +71,7 @@ const CatalogCategorySchema = new Schema<ICatalogCategory>(
       ),
     },
     outsideWindow: { type: String, enum: OUTSIDE_WINDOW_MODES },
+    i18n: { type: Schema.Types.Mixed },
     syncStatus: { type: String, enum: SYNC_STATUSES, required: true, default: 'NEVER' },
     syncError: { type: SyncErrorSchema },
     lastSyncedAt: { type: Date },

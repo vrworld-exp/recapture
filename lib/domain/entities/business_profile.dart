@@ -1,6 +1,7 @@
 // lib/domain/entities/business_profile.dart
 import '../catalog/appearance.dart';
 import '../catalog/dish_details.dart';
+import '../catalog/menu_languages.dart';
 import '../catalog/menu_time.dart';
 import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
@@ -164,6 +165,8 @@ class BusinessProfile {
     this.hours,
     this.announcement,
     this.badges = const [],
+    this.languages = MenuLanguages.englishOnly,
+    this.i18n = const {},
     this.updatedAt,
   });
 
@@ -214,6 +217,13 @@ class BusinessProfile {
   /// Stage 5: the badge library dishes pick from. Empty = none yet.
   final List<CatalogBadge> badges;
 
+  /// Stage 6: which languages the menu is offered in (English only by default).
+  final MenuLanguages languages;
+
+  /// Stage 6: the announcement and badge labels per language — every stored
+  /// language, including one switched off. Empty when none.
+  final Map<MenuLanguage, CatalogLanguageText> i18n;
+
   /// Dotted paths (`name`, `contact.phone`, `contact.address`, `logoUrl`, …) of
   /// the fields that actually reach the published public catalog.
   ///
@@ -257,6 +267,9 @@ class BusinessProfile {
       badges: map['badges'] is List
           ? (map['badges'] as List).map(CatalogBadge.tryParse).whereType<CatalogBadge>().toList()
           : const [],
+      // Absent on an older server — English only, nothing translated.
+      languages: MenuLanguages.fromMap(map['languages']),
+      i18n: parseCatalogTranslations(map['i18n']),
       // An absent list means "we know of nothing public" — the UI then marks
       // everything ReCapture-only, which understates rather than overpromises.
       publicFields: catalogStringList(rawPublic),
@@ -287,6 +300,8 @@ class BusinessProfile {
         hours: hours,
         announcement: announcement,
         badges: badges,
+        languages: languages,
+        i18n: i18n,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
@@ -310,6 +325,8 @@ class BusinessProfile {
             ? this.announcement
             : announcement as CatalogAnnouncement?,
         badges: badges,
+        languages: languages,
+        i18n: i18n,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
@@ -327,6 +344,8 @@ class BusinessProfile {
         hours: hours,
         announcement: announcement,
         badges: next,
+        languages: languages,
+        i18n: i18n,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
@@ -346,6 +365,8 @@ class BusinessProfile {
         hours: hours,
         announcement: announcement,
         badges: badges,
+        languages: languages,
+        i18n: i18n,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );

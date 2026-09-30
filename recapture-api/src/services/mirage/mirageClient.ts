@@ -804,6 +804,7 @@ export const mirageClient: MirageClient = {
         announcement: input.announcement,
         badges: input.badges,
         showFilters: input.showFilters,
+        languages: input.languages,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -848,6 +849,7 @@ export const mirageClient: MirageClient = {
         announcement: input.announcement,
         badges: input.badges,
         showFilters: input.showFilters,
+        languages: input.languages,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -887,6 +889,7 @@ export const mirageClient: MirageClient = {
         sortPosition: input.sortPosition,
         schedule: input.schedule,
         outsideWindow: input.outsideWindow,
+        i18n: input.i18n,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -905,6 +908,7 @@ export const mirageClient: MirageClient = {
         sortPosition: input.sortPosition,
         schedule: input.schedule,
         outsideWindow: input.outsideWindow,
+        i18n: input.i18n,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -950,6 +954,7 @@ export const mirageClient: MirageClient = {
         calories: input.calories,
         servesCount: input.servesCount,
         prepMinutes: input.prepMinutes,
+        i18n: input.i18n,
         tags: input.tags,
         availability: input.availability,
         featured: input.featured,
@@ -999,6 +1004,7 @@ export const mirageClient: MirageClient = {
         calories: input.calories,
         servesCount: input.servesCount,
         prepMinutes: input.prepMinutes,
+        i18n: input.i18n,
         tags: input.tags,
         availability: input.availability,
         featured: input.featured,

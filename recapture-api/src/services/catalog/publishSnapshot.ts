@@ -16,6 +16,13 @@
 // identical plan" untestable, and the freeze turns an accidental write into a
 // TypeError in dev rather than a wrong plan in production.
 import { dishDetailsKey, dishDetailsOf } from '@/services/catalog/dishDetails';
+import {
+  badgeTranslations,
+  categoryTranslations,
+  productTranslationsKey,
+  publishedLanguages,
+  type PublishedTranslations,
+} from '@/services/catalog/menuTranslations';
 import { Types } from 'mongoose';
 
 import { Catalog } from '@/models/Catalog';
@@ -70,6 +77,12 @@ export interface CatalogSnapshotCategory {
   /** Stage 4: the availability window, pushed with every create/update. */
   schedule?: { days: number[]; from: string; to: string };
   outsideWindow?: 'hide' | 'dim';
+  /**
+   * Stage 6: the name in the catalog's ENABLED languages, pushed with every
+   * create/update. Switching a language on or off touches every category
+   * (catalogService), which is what gets the new set pushed.
+   */
+  i18n?: PublishedTranslations;
   syncStatus: SyncStatus;
   /**
    * The pair the planner uses to detect "edited since we last pushed it".
@@ -100,6 +113,11 @@ export interface CatalogSnapshotProduct {
    * as one stable key — see services/catalog/dishDetails.ts.
    */
   details?: string;
+  /**
+   * Stage 6: name / description in the enabled languages, as one stable key —
+   * see services/catalog/menuTranslations.ts.
+   */
+  i18n?: string;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;
@@ -193,6 +211,11 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
       .exec(),
   ]);
 
+  // Stage 6: only the enabled extra languages are published; text kept for a
+  // language the owner switched off stays in ReCapture.
+  const languages = publishedLanguages(catalog);
+  const badgeLabels = badgeTranslations(catalog.i18n, languages);
+
   const snapshot: CatalogSnapshot = {
     catalog: compact({
       id: idOf(catalog._id as Types.ObjectId),
@@ -240,6 +263,7 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
             }
           : undefined,
         outsideWindow: category.outsideWindow,
+        i18n: categoryTranslations(category, languages),
         syncStatus: category.syncStatus,
         updatedAt: category.updatedAt,
         lastSyncedAt: category.lastSyncedAt,
@@ -255,7 +279,8 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
         categoryId: product.categoryId ? idOf(product.categoryId) : null,
         position: product.position,
         foodType: effectiveFoodType(product),
-        details: dishDetailsKey(dishDetailsOf(product, catalog.badges)),
+        details: dishDetailsKey(dishDetailsOf(product, catalog.badges, badgeLabels)),
+        i18n: productTranslationsKey(product, languages),
         glbUrl: product.assets?.glbUrl,
         usdzUrl: product.assets?.usdzUrl,
         thumbnailUrl: product.assets?.thumbnailUrl,

@@ -15,6 +15,7 @@
 //     an UPDATE. A field the diff forgets reads back as "unchanged", and the
 //     user's edit never reaches the public page while the app reports success.
 import { dishDetailsKey, dishDetailsOf } from '@/services/catalog/dishDetails';
+import { productTranslationsKey } from '@/services/catalog/menuTranslations';
 import { describe, it, expect } from 'vitest';
 
 import type { ProductPublishedSnapshot } from '@/models/types/catalog.types';
@@ -290,6 +291,7 @@ const CHANGED_VALUES: Record<ProductDiffField, Partial<CatalogSnapshotProduct>> 
       ])
     ),
   },
+  i18n: { i18n: productTranslationsKey({ i18n: { hi: { name: 'कुर्सी' } } }, ['hi']) },
   glbUrl: { glbUrl: 'https://cdn.test/model-v2.glb' },
   usdzUrl: { usdzUrl: 'https://cdn.test/model-v2.usdz' },
   thumbnailUrl: { thumbnailUrl: 'https://cdn.test/preview-v2.jpg' },

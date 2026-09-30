@@ -183,6 +183,69 @@ export function dietConflicts(
   );
 }
 
+// ── Menu languages (more-customization Stage 6) ────────────────────────────
+//
+// The primary text stays where it always was (`name`, `description`, the
+// announcement's `text`, a badge's `label`) — nothing moves. Translations sit
+// BESIDE it, keyed by language, and the owner types every one of them (Q3: no
+// machine translation). The public page falls back to the primary text wherever
+// a translation is missing.
+
+/**
+ * Every language a menu can be written in. Mirage-fe maps each to a label and,
+ * for the non-Latin scripts, a Noto font (src/i18n/languages.ts). Hand-synced
+ * with that file, mirage-be helper/i18nFields.js and the Flutter
+ * domain/catalog/menu_languages.dart.
+ */
+export const MENU_LANGUAGES = ['en', 'hi', 'mr', 'gu', 'ta', 'te', 'kn', 'bn', 'pa', 'ml'] as const;
+export type MenuLanguage = (typeof MENU_LANGUAGES)[number];
+
+/** How many languages a menu may offer besides its primary one. */
+export const MAX_EXTRA_LANGUAGES = 3;
+
+/**
+ * Which languages the menu is offered in → Mirage `restaurant.languages`.
+ * `extra` never contains `primary`. Absent on the catalog = English only.
+ */
+export interface CatalogLanguages {
+  primary: MenuLanguage;
+  extra: MenuLanguage[];
+}
+
+export const DEFAULT_LANGUAGES: CatalogLanguages = { primary: 'en', extra: [] };
+
+/** A dish's name / description in one language. Either may be missing. */
+export interface ProductTranslation {
+  name?: string;
+  description?: string;
+}
+export type ProductTranslations = Partial<Record<MenuLanguage, ProductTranslation>>;
+
+/** A category's name in one language. */
+export interface CategoryTranslation {
+  name?: string;
+}
+export type CategoryTranslations = Partial<Record<MenuLanguage, CategoryTranslation>>;
+
+/**
+ * The catalog-level text in one language: the announcement and the badge
+ * labels, the latter keyed by badge id. Kept on the catalog rather than inside
+ * the announcement / badge blocks so the Stage 4 and 5 editors, which REPLACE
+ * those blocks whole, can never drop a translation they know nothing about.
+ */
+export interface CatalogLanguageText {
+  announcement?: string;
+  badges?: Record<string, string>;
+}
+export type CatalogTranslations = Partial<Record<MenuLanguage, CatalogLanguageText>>;
+
+/** The stored languages, or English-only for a catalog that never chose. */
+export function effectiveLanguages(catalog: { languages?: CatalogLanguages | null }): CatalogLanguages {
+  const l = catalog.languages;
+  if (!l) return { primary: DEFAULT_LANGUAGES.primary, extra: [] };
+  return { primary: l.primary ?? 'en', extra: [...(l.extra ?? [])] };
+}
+
 // ── Time-based menu fields (more-customization Stage 4) ────────────────────
 //
 // All PUBLISHED to Mirage, and all evaluated ON THE PUBLIC PAGE in the
@@ -420,6 +483,11 @@ export interface ProductPublishedSnapshot {
    * snapshot written before the field, which the planner reads as "none".
    */
   details?: string;
+  /**
+   * Stage 6: the translations key as last pushed (menuTranslations.ts). Absent
+   * on a snapshot written before the field, which the planner reads as "none".
+   */
+  i18n?: string;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;

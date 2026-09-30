@@ -48,6 +48,8 @@ import '../../presentation/screens/catalog/add_product_screen.dart';
 import '../../presentation/screens/catalog/catalog_analytics_screen.dart';
 import '../../presentation/screens/catalog/appearance_screen.dart';
 import '../../presentation/screens/catalog/badge_manager_screen.dart';
+import '../../presentation/screens/catalog/menu_languages_screen.dart';
+import '../../presentation/screens/catalog/translations_screen.dart';
 import '../../presentation/screens/catalog/opening_hours_screen.dart';
 import '../../presentation/screens/catalog/business_profile_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
@@ -136,6 +138,12 @@ abstract final class AppRoutes {
 
   /// The badge library (more-customization Stage 5).
   static const catalogBadges = '/catalog/badges';
+
+  /// Which languages the menu is offered in (more-customization Stage 6).
+  static const catalogLanguages = '/catalog/languages';
+
+  /// Every dish, section and badge label per language, with progress (Stage 6).
+  static const catalogTranslations = '/catalog/translations';
 
   /// The draft rendered in the public page's shape, before publishing.
   static const catalogPreview = '/catalog/preview';
@@ -335,6 +343,8 @@ abstract final class AppRouteNames {
   static const catalogAppearance = 'catalogAppearance';
   static const catalogHours = 'catalogHours';
   static const catalogBadges = 'catalogBadges';
+  static const catalogLanguages = 'catalogLanguages';
+  static const catalogTranslations = 'catalogTranslations';
   static const catalogPreview = 'catalogPreview';
   static const catalogPublish = 'catalogPublish';
   static const catalogQr = 'catalogQr';
@@ -562,6 +572,17 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.catalogBadges,
         name: AppRouteNames.catalogBadges,
         builder: (_, __) => const FlowBackScope(child: BadgeManagerScreen()),
+      ),
+      // Stage 6: languages + translations. STATIC, before the product routes.
+      GoRoute(
+        path: AppRoutes.catalogLanguages,
+        name: AppRouteNames.catalogLanguages,
+        builder: (_, __) => const FlowBackScope(child: MenuLanguagesScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogTranslations,
+        name: AppRouteNames.catalogTranslations,
+        builder: (_, __) => const FlowBackScope(child: TranslationsScreen()),
       ),
       // The catalog preview — the draft in the public page's shape (feature 5).
       // STATIC, declared before the product routes for the same reason the

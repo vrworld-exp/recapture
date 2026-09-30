@@ -18,6 +18,8 @@ import {
   BADGE_ICONS,
   MAX_BADGE_LABEL,
   MAX_BADGES,
+  MAX_EXTRA_LANGUAGES,
+  MENU_LANGUAGES,
   MAX_PRODUCT_BADGES,
   OUTSIDE_WINDOW_MODES,
   PRODUCT_ALLERGENS,
@@ -296,6 +298,73 @@ export const badgesSchema = z
     message: 'Badge ids must be unique',
   });
 
+// ── Menu languages (more-customization Stage 6) ────────────────────────────
+
+const menuLanguage = z.enum(MENU_LANGUAGES);
+
+/**
+ * Which languages the menu is offered in. `extra` may not repeat `primary`,
+ * and is de-duplicated here so the stored list is the list the owner meant.
+ */
+export const languagesSchema = z
+  .object({
+    primary: menuLanguage.default('en'),
+    extra: z.array(menuLanguage).max(MAX_EXTRA_LANGUAGES).default([]),
+  })
+  .strict()
+  .refine((l) => !l.extra.includes(l.primary), {
+    message: 'An extra language cannot be the primary one',
+    path: ['extra'],
+  })
+  .transform((l) => ({ primary: l.primary, extra: [...new Set(l.extra)] }));
+
+/**
+ * One translated string. Same bound as the primary field it translates; `''`
+ * (or all spaces) means "no translation" and is dropped by the service.
+ * Deliberately NOT slugged, unlike the primary names — it is display text only.
+ */
+const translatedText = (max: number) => z.string().trim().max(max);
+
+/**
+ * A per-language PATCH: `{ hi: {...}, ta: null }`. Only the languages named are
+ * touched — `null` removes that language's text, an object replaces it — so
+ * saving the Hindi text never disturbs the Tamil. Keys must be known language
+ * codes; whether a language is currently ENABLED is not checked, so text typed
+ * for a language the owner is about to switch on is not lost.
+ */
+const perLanguage = <T extends z.ZodTypeAny>(entry: T) =>
+  z
+    .record(menuLanguage, entry.nullable())
+    .refine((v) => Object.keys(v).length > 0, { message: 'Name at least one language' });
+
+export const productI18nSchema = perLanguage(
+  z
+    .object({
+      name: translatedText(PRODUCT_NAME_MAX).optional(),
+      description: translatedText(PRODUCT_DESCRIPTION_MAX).optional(),
+    })
+    .strict()
+);
+
+export const categoryI18nSchema = perLanguage(
+  z.object({ name: translatedText(CATEGORY_NAME_MAX).optional() }).strict()
+);
+
+/** The announcement and badge labels (by badge id) in one language. */
+export const catalogI18nSchema = perLanguage(
+  z
+    .object({
+      announcement: translatedText(120).optional(),
+      badges: z
+        .record(z.string().trim().min(1).max(40), translatedText(MAX_BADGE_LABEL))
+        .refine((v) => Object.keys(v).length <= MAX_BADGES, {
+          message: `At most ${MAX_BADGES} badge labels`,
+        })
+        .optional(),
+    })
+    .strict()
+);
+
 /** Product-side detail fields, shared by create and update. `null` clears a number. */
 const dishDetailFields = {
   badgeIds: z.array(z.string().trim().min(1).max(40)).max(MAX_PRODUCT_BADGES).optional(),
@@ -305,6 +374,8 @@ const dishDetailFields = {
   calories: z.number().int().min(0).max(5000).nullable().optional(),
   servesCount: z.number().int().min(1).max(50).nullable().optional(),
   prepMinutes: z.number().int().min(0).max(600).nullable().optional(),
+  /** Stage 6: the dish in other languages, merged per language. */
+  i18n: productI18nSchema.optional(),
 };
 
 /**
@@ -358,6 +429,10 @@ export const updateCatalogSchema = z
     announcement: announcementSchema.nullable().optional(),
     /** Stage 5: the badge library (replaces; `[]` empties it). */
     badges: badgesSchema.optional(),
+    /** Stage 6: the menu's languages (replaces the block). */
+    languages: languagesSchema.optional(),
+    /** Stage 6: announcement + badge labels, merged per language. */
+    i18n: catalogI18nSchema.optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {
@@ -431,6 +506,8 @@ export const createCategorySchema = z
     /** Stage 4: breakfast 07:00–11:00 and the like. */
     schedule: categoryScheduleSchema.nullable().optional(),
     outsideWindow: z.enum(OUTSIDE_WINDOW_MODES).optional(),
+    /** Stage 6: the name in other languages, merged per language. */
+    i18n: categoryI18nSchema.optional(),
   })
   .strict();
 
@@ -443,6 +520,8 @@ export const updateCategorySchema = z
     /** Stage 4. `null` = always available again. */
     schedule: categoryScheduleSchema.nullable().optional(),
     outsideWindow: z.enum(OUTSIDE_WINDOW_MODES).optional(),
+    /** Stage 6: the name in other languages, merged per language. */
+    i18n: categoryI18nSchema.optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {

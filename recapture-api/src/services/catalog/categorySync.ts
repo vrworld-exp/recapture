@@ -116,6 +116,12 @@ function mirageSchedule(category: CatalogSnapshotCategory) {
   return {
     schedule: category.schedule ? JSON.stringify(category.schedule) : '',
     outsideWindow: category.outsideWindow ?? 'dim',
+    // Stage 6: the name in the enabled languages — same "always sent, `''`
+    // clears" rule, so switching a language off takes its tab names down too.
+    i18n:
+      category.i18n && Object.keys(category.i18n).length > 0
+        ? JSON.stringify(category.i18n)
+        : '',
   };
 }
 

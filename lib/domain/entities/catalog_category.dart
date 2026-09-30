@@ -1,5 +1,6 @@
 // lib/domain/entities/catalog_category.dart
 import '../catalog/catalog_names.dart';
+import '../catalog/menu_languages.dart';
 import '../catalog/menu_time.dart';
 import 'catalog_json.dart';
 import 'product_sync_status.dart';
@@ -25,6 +26,7 @@ class CatalogCategory {
     this.createdAt,
     this.schedule,
     this.hideOutsideWindow = false,
+    this.i18n = const {},
   });
 
   final String id;
@@ -63,6 +65,9 @@ class CatalogCategory {
   /// hours (false, the server's default).
   final bool hideOutsideWindow;
 
+  /// Stage 6: the section's name in other languages. Empty on an older server.
+  final Map<MenuLanguage, String> i18n;
+
   bool get isEmpty => productCount == 0;
 
   factory CatalogCategory.fromMap(Map<String, dynamic> map) => CatalogCategory(
@@ -78,6 +83,7 @@ class CatalogCategory {
         // Absent on an older server — always available, as before.
         schedule: CategorySchedule.tryParse(map['schedule']),
         hideOutsideWindow: map['outsideWindow'] == 'hide',
+        i18n: parseNameTranslations(map['i18n']),
       );
 
   Map<String, dynamic> toMap() => {
@@ -91,6 +97,7 @@ class CatalogCategory {
         'createdAt': createdAt?.toIso8601String(),
         'schedule': schedule?.toMap(),
         'outsideWindow': hideOutsideWindow ? 'hide' : 'dim',
+        'i18n': {for (final e in i18n.entries) e.key.code: {'name': e.value}},
       };
 
   CatalogCategory copyWith({
@@ -109,6 +116,7 @@ class CatalogCategory {
         createdAt: createdAt,
         schedule: schedule,
         hideOutsideWindow: hideOutsideWindow,
+        i18n: i18n,
       );
 }
 

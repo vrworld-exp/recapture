@@ -1,5 +1,6 @@
 // lib/domain/entities/catalog_product.dart
 import '../catalog/dish_details.dart';
+import '../catalog/menu_languages.dart';
 import '../catalog/catalog_names.dart';
 import 'catalog_json.dart';
 import 'product_availability.dart';
@@ -39,6 +40,7 @@ class CatalogProduct {
     this.featured = false,
     this.foodType = ProductFoodType.veg,
     this.details = const DishDetails(),
+    this.i18n = const {},
     this.glbUrl,
     this.usdzUrl,
     this.thumbnailUrl,
@@ -94,6 +96,11 @@ class CatalogProduct {
 
   /// Stage 5: badges and dietary / allergen detail. Empty on an older server.
   final DishDetails details;
+
+  /// Stage 6: the dish's name / description in other languages — every stored
+  /// one, including a language the owner has switched off. Empty on an older
+  /// server. Edited on the Translations screen, saved on its own call.
+  final Map<MenuLanguage, DishTranslation> i18n;
 
   /// Sort key within the catalog. ⚠ ReCapture-only: Mirage sorts the public page
   /// by creation date and stores no position (feature 48).
@@ -181,6 +188,7 @@ class CatalogProduct {
         featured: map['featured'] == true,
         foodType: ProductFoodTypeX.fromApiValue(map['foodType']?.toString()),
         details: DishDetails.fromMap(map),
+        i18n: parseDishTranslations(map['i18n']),
         position: catalogCount(map['position']),
         glbUrl: catalogText(map['glbUrl']),
         usdzUrl: catalogText(map['usdzUrl']),
@@ -216,6 +224,7 @@ class CatalogProduct {
         'featured': featured,
         'foodType': foodType.apiValue,
         ...details.toPatch(),
+        'i18n': {for (final e in i18n.entries) e.key.code: e.value.toMap()},
         'position': position,
         'glbUrl': glbUrl,
         'usdzUrl': usdzUrl,
@@ -252,6 +261,7 @@ class CatalogProduct {
     bool? featured,
     ProductFoodType? foodType,
     DishDetails? details,
+    Map<MenuLanguage, DishTranslation>? i18n,
     int? position,
     ProductModelStatus? modelStatus,
     ProductSyncStatus? syncStatus,
@@ -274,6 +284,7 @@ class CatalogProduct {
         featured: featured ?? this.featured,
         foodType: foodType ?? this.foodType,
         details: details ?? this.details,
+        i18n: i18n ?? this.i18n,
         position: position ?? this.position,
         glbUrl: glbUrl,
         usdzUrl: usdzUrl,

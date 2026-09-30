@@ -22,9 +22,14 @@ import {
   effectiveFoodType,
   effectiveModelStatus,
 } from '@/models/types/catalog.types';
+import {
+  translationWrites,
+  translationsForCreate,
+} from '@/services/catalog/menuTranslations';
 import type {
   ProductAssets,
   ProductFoodType,
+  ProductTranslations,
   ProductModelStatus,
   ProductAvailability,
   ProductType,
@@ -78,6 +83,12 @@ export interface ProductDto {
   calories: number | null;
   servesCount: number | null;
   prepMinutes: number | null;
+  /**
+   * Stage 6: the dish in other languages, keyed by language code — EVERY
+   * stored language, including one the owner has switched off (its text is
+   * kept, just not published). `{}` when none.
+   */
+  i18n: ProductTranslations;
   position: number;
   /** OUR CloudFront URLs, frozen at create time. Null for an image-only row. */
   glbUrl: string | null;
@@ -144,6 +155,7 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     calories: p.calories ?? null,
     servesCount: p.servesCount ?? null,
     prepMinutes: p.prepMinutes ?? null,
+    i18n: productTranslationsDto(p.i18n),
     position: p.position,
     glbUrl: p.assets?.glbUrl ?? null,
     usdzUrl: p.assets?.usdzUrl ?? null,
@@ -165,6 +177,26 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     updatedAt: p.updatedAt.toISOString(),
     createdAt: p.createdAt.toISOString(),
   };
+}
+
+/**
+ * Stored translations as the DTO carries them: field by field, strings only,
+ * a language with nothing left in it dropped — a hand-edited or partially
+ * written Mixed value never reaches the client as anything else.
+ */
+function productTranslationsDto(raw: unknown): ProductTranslations {
+  const out: ProductTranslations = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [lang, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { name, description } = entry as Record<string, unknown>;
+    const t = {
+      ...(typeof name === 'string' && name ? { name } : {}),
+      ...(typeof description === 'string' && description ? { description } : {}),
+    };
+    if (Object.keys(t).length > 0) out[lang as keyof ProductTranslations] = t;
+  }
+  return out;
 }
 
 // ── List ────────────────────────────────────────────────────────────────────
@@ -466,6 +498,8 @@ export async function createProduct(
     // NONE is ever a choice the caller made.
     ...(input.foodType !== undefined ? { foodType: input.foodType } : {}),
     ...dishDetailWrites(input),
+    // Stage 6: text in other languages may be typed before the first save.
+    ...(translationsForCreate(input.i18n) ? { i18n: translationsForCreate(input.i18n) } : {}),
     position,
     ...(sourceProjectId ? { sourceProjectId } : {}),
     ...(sourceModelId ? { sourceModelId } : {}),
@@ -688,6 +722,9 @@ export async function updateProduct(
   if (input.featured !== undefined) set.featured = input.featured;
   if (input.foodType !== undefined) set.foodType = input.foodType;
   Object.assign(set, dishDetailWrites(input));
+  // Stage 6: merged per language — saving Hindi never touches the Tamil text.
+  const translations = translationWrites(input.i18n);
+  Object.assign(set, translations.set);
   if (input.position !== undefined) set.position = input.position;
 
   // ── Assets: replace a model (15), replace an image (16), convert a type (17)
@@ -767,7 +804,11 @@ export async function updateProduct(
 
   const updated = await CatalogProduct.findOneAndUpdate(
     { _id: id, catalogId, deletedAt: null },
-    { $set: set },
+    {
+      // A patch that only removes a language has nothing to $set.
+      ...(Object.keys(set).length > 0 ? { $set: set } : {}),
+      ...(Object.keys(translations.unset).length > 0 ? { $unset: translations.unset } : {}),
+    },
     { new: true, runValidators: true }
   ).exec();
 

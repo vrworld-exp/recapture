@@ -43,8 +43,12 @@ import type {
   CatalogAppearance,
   CatalogContact,
   CatalogHours,
+  CatalogLanguages,
+  CatalogTranslations,
   CatalogStatus,
 } from '@/models/types/catalog.types';
+import { effectiveLanguages } from '@/models/types/catalog.types';
+import { translationWrites } from '@/services/catalog/menuTranslations';
 import {
   appearanceContrastProblem,
   type AppearanceContrastProblem,
@@ -350,6 +354,12 @@ async function applyCatalogPatch(
     else set.announcement = input.announcement;
   }
   if (input.badges !== undefined) set.badges = input.badges;
+  // Stage 6: the languages block is replaced; the announcement / badge-label
+  // translations merge per language, like a product's.
+  if (input.languages !== undefined) set.languages = input.languages;
+  const translations = translationWrites(input.i18n);
+  Object.assign(set, translations.set);
+  Object.assign(unset, translations.unset);
 
   const updated = await Catalog.findOneAndUpdate(
     { userId: ownerId, deletedAt: null },
@@ -357,12 +367,23 @@ async function applyCatalogPatch(
     // bumpDraftRevision: this write already targets the catalog document, and
     // folding it in keeps the edit and its revision atomic.
     {
-      $set: set,
+      ...(Object.keys(set).length > 0 ? { $set: set } : {}),
       ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
       $inc: { draftRevision: 1 },
     },
     { new: true, runValidators: true }
   ).exec();
+
+  // Stage 6: a category's published name set depends on which languages are
+  // on, but the planner only re-pushes a category edited since its last sync.
+  // Touching them is what gets the new set to the menu on the next publish.
+  if (updated && input.languages !== undefined) {
+    await CatalogCategory.updateMany(
+      { catalogId: updated._id, deletedAt: null },
+      { $set: { updatedAt: new Date() } },
+      { timestamps: false }
+    ).exec();
+  }
 
   // Stage 5: a badge removed from the library comes off every product in the
   // same request, so no dish keeps pointing at a badge that no longer exists.
@@ -453,6 +474,9 @@ export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'announcement',
   // The badge library (Stage 5) — reaches customers through the dishes.
   'badges',
+  // The menu's languages and the text in them (Stage 6).
+  'languages',
+  'i18n',
 ];
 
 /**
@@ -481,6 +505,13 @@ export interface BusinessProfileDto {
   announcement: AnnouncementDto | null;
   /** Stage 5: the badge library, in the owner's order. Empty = none. */
   badges: CatalogBadge[];
+  /** Stage 6: which languages the menu is offered in (English only by default). */
+  languages: CatalogLanguages;
+  /**
+   * Stage 6: the announcement and badge labels per language — every stored
+   * language, including one switched off. `{}` when none.
+   */
+  i18n: CatalogTranslations;
   /** See {@link PUBLIC_PROFILE_FIELDS}. */
   publicFields: readonly string[];
   updatedAt: string;
@@ -515,6 +546,32 @@ function toAppearanceDto(a: CatalogAppearance | undefined): CatalogAppearance | 
   };
 }
 
+/**
+ * Stored catalog translations for the DTO, strings only. A label for a badge
+ * that has since been deleted passes through: it is never published (nothing
+ * resolves to it), and the app's next save of that language drops it.
+ */
+function catalogTranslationsDto(raw: unknown): CatalogTranslations {
+  const out: CatalogTranslations = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [lang, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { announcement, badges } = entry as Record<string, unknown>;
+    const labels: Record<string, string> = {};
+    if (badges && typeof badges === 'object') {
+      for (const [id, label] of Object.entries(badges as Record<string, unknown>)) {
+        if (typeof label === 'string' && label) labels[id] = label;
+      }
+    }
+    const t = {
+      ...(typeof announcement === 'string' && announcement ? { announcement } : {}),
+      ...(Object.keys(labels).length > 0 ? { badges: labels } : {}),
+    };
+    if (Object.keys(t).length > 0) out[lang as keyof CatalogTranslations] = t;
+  }
+  return out;
+}
+
 /** The ONE profile DTO mapper. */
 export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
   return {
@@ -544,6 +601,8 @@ export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
         }
       : null,
     badges: (c.badges ?? []).map((b) => ({ id: b.id, label: b.label, icon: b.icon, color: b.color })),
+    languages: effectiveLanguages(c),
+    i18n: catalogTranslationsDto(c.i18n),
     publicFields: PUBLIC_PROFILE_FIELDS,
     updatedAt: c.updatedAt.toISOString(),
   };

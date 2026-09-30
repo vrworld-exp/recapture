@@ -29,7 +29,11 @@
 import { Types } from 'mongoose';
 import { CatalogCategory, type ICatalogCategory } from '@/models/CatalogCategory';
 import { CatalogProduct } from '@/models/CatalogProduct';
-import type { SyncStatus } from '@/models/types/catalog.types';
+import type { CategoryTranslations, SyncStatus } from '@/models/types/catalog.types';
+import {
+  translationWrites,
+  translationsForCreate,
+} from '@/services/catalog/menuTranslations';
 import {
   bumpDraftRevision,
   findOwnedCatalog,
@@ -54,8 +58,21 @@ export interface CategoryDto {
   schedule: { days: number[]; from: string; to: string } | null;
   /** Stage 4: outside the window — `dim` unless set to `hide`. */
   outsideWindow: 'hide' | 'dim';
+  /** Stage 6: the name in other languages (every stored one). `{}` when none. */
+  i18n: CategoryTranslations;
   updatedAt: string;
   createdAt: string;
+}
+
+/** Field by field, strings only — see productTranslationsDto. */
+function categoryTranslationsDto(raw: unknown): CategoryTranslations {
+  const out: CategoryTranslations = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [lang, entry] of Object.entries(raw as Record<string, unknown>)) {
+    const name = entry && typeof entry === 'object' ? (entry as Record<string, unknown>).name : undefined;
+    if (typeof name === 'string' && name) out[lang as keyof CategoryTranslations] = { name };
+  }
+  return out;
 }
 
 function toCategoryDto(c: ICatalogCategory, productCount: number): CategoryDto {
@@ -70,6 +87,7 @@ function toCategoryDto(c: ICatalogCategory, productCount: number): CategoryDto {
       ? { days: [...c.schedule.days], from: c.schedule.from, to: c.schedule.to }
       : null,
     outsideWindow: c.outsideWindow ?? 'dim',
+    i18n: categoryTranslationsDto(c.i18n),
     updatedAt: c.updatedAt.toISOString(),
     createdAt: c.createdAt.toISOString(),
   };
@@ -195,6 +213,7 @@ export async function createCategory(
       position,
       ...(input.schedule ? { schedule: input.schedule } : {}),
       ...(input.outsideWindow ? { outsideWindow: input.outsideWindow } : {}),
+      ...(translationsForCreate(input.i18n) ? { i18n: translationsForCreate(input.i18n) } : {}),
     });
   } catch (err) {
     if (isDuplicateKeyError(err)) return { outcome: 'DUPLICATE_NAME' };
@@ -264,11 +283,18 @@ export async function updateCategory(
     else set.schedule = input.schedule;
   }
   if (input.outsideWindow !== undefined) set.outsideWindow = input.outsideWindow;
+  // Stage 6: merged per language, like a product's.
+  const translations = translationWrites(input.i18n);
+  Object.assign(set, translations.set);
+  Object.assign(unset, translations.unset);
 
   try {
     const updated = await CatalogCategory.findOneAndUpdate(
       { _id: new Types.ObjectId(categoryId), catalogId, deletedAt: null },
-      { $set: set, ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}) },
+      {
+        ...(Object.keys(set).length > 0 ? { $set: set } : {}),
+        ...(Object.keys(unset).length > 0 ? { $unset: unset } : {}),
+      },
       { new: true, runValidators: true }
     ).exec();
 
