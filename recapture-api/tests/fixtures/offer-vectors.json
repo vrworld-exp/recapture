@@ -1,0 +1,35 @@
+{
+  "_comment": "Stage 10 offer vectors. IDENTICAL copy in recapture-api/tests/fixtures/offer-vectors.json — both pricing modules must pass every case. All times Asia/Kolkata. 2026-09-28 is a Monday.",
+  "offers": {
+    "happyHour": { "id": "hh", "name": "Happy hour", "kind": "PERCENT", "value": 20, "items": ["cold_coffee", "mojito"], "priority": 1, "schedule": { "days": [0, 1, 2, 3, 4, 5, 6], "from": "17:00", "to": "19:00" } },
+    "lateNight": { "id": "ln", "name": "Late night", "kind": "FLAT", "value": 50, "items": ["mojito"], "priority": 1, "schedule": { "from": "23:00", "to": "02:00" } },
+    "weekdayLunch": { "id": "wl", "name": "Lunch", "kind": "FIXED_PRICE", "value": 199, "items": ["thali"], "priority": 0, "schedule": { "days": [1, 2, 3, 4, 5], "from": "12:00", "to": "15:00" } },
+    "festival": { "id": "fe", "name": "Diwali", "kind": "PERCENT", "value": 10, "all": true, "priority": 5, "schedule": { "startsAt": "2026-10-01T00:00:00+05:30", "endsAt": "2026-10-05T00:00:00+05:30" } },
+    "alwaysFlat": { "id": "af", "name": "Flat 30", "kind": "FLAT", "value": 30, "all": true, "priority": 5, "schedule": {} },
+    "tieFlat": { "id": "tf", "name": "Flat 20", "kind": "FLAT", "value": 20, "items": ["mojito"], "priority": 1, "schedule": {} },
+    "bigFlat": { "id": "bf", "name": "Flat 500", "kind": "FLAT", "value": 500, "all": true, "priority": 0, "schedule": {} }
+  },
+  "cases": [
+    { "name": "inside happy hour", "offers": ["happyHour"], "now": "2026-09-28T17:00:00+05:30", "dish": { "name": "Cold_Coffee", "price": 250 }, "expect": { "final": 200, "offerId": "hh" } },
+    { "name": "happy hour end is exclusive", "offers": ["happyHour"], "now": "2026-09-28T19:00:00+05:30", "dish": { "name": "cold_coffee", "price": 250 }, "expect": null },
+    { "name": "before happy hour", "offers": ["happyHour"], "now": "2026-09-28T16:59:00+05:30", "dish": { "name": "cold_coffee", "price": 250 }, "expect": null },
+    { "name": "dish not targeted", "offers": ["happyHour"], "now": "2026-09-28T18:00:00+05:30", "dish": { "name": "paneer_tikka", "price": 300 }, "expect": null },
+    { "name": "percent rounds to the rupee", "offers": ["happyHour"], "now": "2026-09-28T18:00:00+05:30", "dish": { "name": "mojito", "price": 249 }, "expect": { "final": 199, "offerId": "hh" } },
+    { "name": "past midnight, before midnight", "offers": ["lateNight"], "now": "2026-09-28T23:30:00+05:30", "dish": { "name": "mojito", "price": 180 }, "expect": { "final": 130, "offerId": "ln" } },
+    { "name": "past midnight, after midnight", "offers": ["lateNight"], "now": "2026-09-29T01:30:00+05:30", "dish": { "name": "mojito", "price": 180 }, "expect": { "final": 130, "offerId": "ln" } },
+    { "name": "past midnight, window over", "offers": ["lateNight"], "now": "2026-09-29T02:00:00+05:30", "dish": { "name": "mojito", "price": 180 }, "expect": null },
+    { "name": "IST, not UTC: 17:30 UTC is 23:00 IST", "offers": ["lateNight"], "now": "2026-09-28T17:30:00Z", "dish": { "name": "mojito", "price": 180 }, "expect": { "final": 130, "offerId": "ln" } },
+    { "name": "weekday lunch on Monday", "offers": ["weekdayLunch"], "now": "2026-09-28T13:00:00+05:30", "dish": { "name": "thali", "price": 280 }, "expect": { "final": 199, "offerId": "wl" } },
+    { "name": "weekday lunch not on Sunday", "offers": ["weekdayLunch"], "now": "2026-09-27T13:00:00+05:30", "dish": { "name": "thali", "price": 280 }, "expect": null },
+    { "name": "date range: before start", "offers": ["festival"], "now": "2026-09-30T23:59:00+05:30", "dish": { "name": "thali", "price": 300 }, "expect": null },
+    { "name": "date range: inside", "offers": ["festival"], "now": "2026-10-03T12:00:00+05:30", "dish": { "name": "thali", "price": 300 }, "expect": { "final": 270, "offerId": "fe" } },
+    { "name": "date range: end is exclusive", "offers": ["festival"], "now": "2026-10-05T00:00:00+05:30", "dish": { "name": "thali", "price": 300 }, "expect": null },
+    { "name": "overlap: lower priority number wins, even if smaller discount", "offers": ["happyHour", "alwaysFlat"], "now": "2026-09-28T18:00:00+05:30", "dish": { "name": "mojito", "price": 100 }, "expect": { "final": 80, "offerId": "hh" } },
+    { "name": "overlap on a priority tie: bigger discount wins (listed second)", "offers": ["tieFlat", "happyHour"], "now": "2026-09-28T18:00:00+05:30", "dish": { "name": "mojito", "price": 180 }, "expect": { "final": 144, "offerId": "hh" } },
+    { "name": "same tie outside happy hour: the other offer applies", "offers": ["tieFlat", "happyHour"], "now": "2026-09-28T20:00:00+05:30", "dish": { "name": "mojito", "price": 180 }, "expect": { "final": 160, "offerId": "tf" } },
+    { "name": "never stacks: one offer's price only (not 400-40-30)", "offers": ["alwaysFlat", "festival"], "now": "2026-10-03T12:00:00+05:30", "dish": { "name": "thali", "price": 400 }, "expect": { "final": 360, "offerId": "fe" } },
+    { "name": "a discount to zero or below does not apply; next offer does", "offers": ["bigFlat", "alwaysFlat"], "now": "2026-09-28T12:00:00+05:30", "dish": { "name": "chai", "price": 40 }, "expect": { "final": 10, "offerId": "af" } },
+    { "name": "fixed price above base does not apply", "offers": ["weekdayLunch"], "now": "2026-09-28T13:00:00+05:30", "dish": { "name": "thali", "price": 150 }, "expect": null },
+    { "name": "no price, no discount", "offers": ["alwaysFlat"], "now": "2026-09-28T12:00:00+05:30", "dish": { "name": "water", "price": 0 }, "expect": null }
+  ]
+}

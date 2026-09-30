@@ -317,6 +317,7 @@ export async function buildWeeklyReport(
     qrScans,
     arViews,
     productViews: num(kpis.productViews),
+    offerViews: num((summary.totalsByType ?? {}).offer_viewed),
     // Every delta rides on the menu-view base: a week too small to compare
     // views on is too small to compare anything on.
     deltaPct: {

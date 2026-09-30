@@ -42,8 +42,20 @@ import {
   updateProductSchema,
   reportPrefsSchema,
   weeklyReportParamSchema,
+  offerActiveSchema,
+  offerInputSchema,
 } from '@/validation/catalogSchemas';
 import { listCatalogActivity } from '@/services/catalogActivityService';
+import {
+  createOffer,
+  deleteOffer,
+  listOffers,
+  offersForProduct,
+  previewOffer,
+  setOfferActive,
+  updateOffer,
+  type OfferWriteResult,
+} from '@/services/catalogOffersService';
 import {
   getWeeklyReport,
   listWeeklyReports,
@@ -2240,6 +2252,105 @@ router.get(
       return fail(res, 404, 'REPORT_NOT_FOUND', 'There is no report for that week.');
     }
     res.status(200).json({ status: 'success', report: result.report });
+  })
+);
+
+// ── Offers, combos, happy hour (more-customization Stage 10) ─────────────────
+//
+// Every write bumps draftRevision: an offer goes live on Publish, and its time
+// window then runs by itself on the public page.
+
+function respondToOfferWrite(res: Response, result: OfferWriteResult, created = false): void {
+  switch (result.outcome) {
+    case 'NO_CATALOG':
+      return noCatalog(res);
+    case 'NOT_FOUND':
+      return fail(res, 404, 'OFFER_NOT_FOUND', 'That offer was not found.');
+    case 'REJECTED':
+      return fail(res, result.code === 'TOO_MANY_OFFERS' ? 409 : 400, result.code, result.message);
+    case 'OK':
+      res.status(created ? 201 : 200).json({ status: 'success', offer: result.offer });
+      return;
+  }
+}
+
+/** GET /catalog/offers — every offer with its status chip. */
+router.get(
+  '/offers',
+  asyncHandler(async (req, res) => {
+    const result = await listOffers(req.user!.userId);
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    res.status(200).json({ status: 'success', offers: result.offers, maxActive: result.maxActive });
+  })
+);
+
+/** POST /catalog/offers/preview — three dishes old → new, nothing saved. Declared before /:id. */
+router.post(
+  '/offers/preview',
+  asyncHandler(async (req, res) => {
+    const parsed = offerInputSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    const result = await previewOffer(req.user!.userId, parsed.data);
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    if (result.outcome === 'REJECTED') return fail(res, 400, result.code, result.message);
+    res.status(200).json({ status: 'success', preview: result.preview });
+  })
+);
+
+/** GET /catalog/offers/for-product/:productId — the product editor's "On offer" line. */
+router.get(
+  '/offers/for-product/:productId',
+  asyncHandler(async (req, res) => {
+    const result = await offersForProduct(req.user!.userId, req.params.productId);
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'PRODUCT_NOT_FOUND', 'That product was not found.');
+    }
+    res.status(200).json({ status: 'success', offers: result.offers });
+  })
+);
+
+router.post(
+  '/offers',
+  asyncHandler(async (req, res) => {
+    const parsed = offerInputSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    respondToOfferWrite(res, await createOffer(req.user!.userId, parsed.data), true);
+  })
+);
+
+/** PUT /catalog/offers/:id — the editor always sends the whole offer. */
+router.put(
+  '/offers/:id',
+  asyncHandler(async (req, res) => {
+    const parsed = offerInputSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    respondToOfferWrite(res, await updateOffer(req.user!.userId, req.params.id, parsed.data));
+  })
+);
+
+/** PATCH /catalog/offers/:id/active — the list's pause / resume toggle. */
+router.patch(
+  '/offers/:id/active',
+  asyncHandler(async (req, res) => {
+    const parsed = offerActiveSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+    respondToOfferWrite(
+      res,
+      await setOfferActive(req.user!.userId, req.params.id, parsed.data.active)
+    );
+  })
+);
+
+router.delete(
+  '/offers/:id',
+  asyncHandler(async (req, res) => {
+    const result = await deleteOffer(req.user!.userId, req.params.id);
+    if (result.outcome === 'NO_CATALOG') return noCatalog(res);
+    if (result.outcome === 'NOT_FOUND') {
+      return fail(res, 404, 'OFFER_NOT_FOUND', 'That offer was not found.');
+    }
+    res.status(200).json({ status: 'success' });
   })
 );
 

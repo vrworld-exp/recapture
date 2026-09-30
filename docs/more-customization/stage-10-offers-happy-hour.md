@@ -1,4 +1,45 @@
-# Stage 10 — Offers, combos and happy-hour pricing
+# ✅ Stage 10 — Offers, combos and happy-hour pricing
+
+> **Status (2026-09-30): built, uncommitted.** Typecheck / analyze / lint clean on all four sides.
+> Tests (only the necessary ones): the SHARED vector file `offer-vectors.json` (21 cases: windows,
+> past midnight, IST vs UTC, date-range ends, priority, tie → bigger discount, no stacking,
+> non-discounts skipped) runs against BOTH pricing copies — `mirage-fe/src/features/menu/offers.test.tsx`
+> (26, passing) and `recapture-api/tests/catalog-offers.test.ts` (29, passing, also save-time rules,
+> the 20-active cap, draftRevision bumps, and the publish block). Full suite not run.
+>
+> **API** — `models/CatalogOffer.ts` + `types/offer.types.ts`; `services/offers/offerPricing.ts`
+> (the pure copy: window, price, status chip); `services/catalogOffersService.ts` (CRUD, checks,
+> preview, the product editor's list); `services/catalog/offersBlock.ts` (`restaurant.offers` for
+> the publish). Routes: `GET/POST /catalog/offers`, `PUT/DELETE /catalog/offers/:id`,
+> `PATCH /catalog/offers/:id/active`, `POST /catalog/offers/preview`,
+> `GET /catalog/offers/for-product/:productId`. Weekly report gains `offerViews`.
+> **Mirage-be** — `helper/offersFields.js`, `restaurant.offers` (Mixed), accepted on create/update
+> restaurant, returned in the public payload; `offer_viewed` event. **Mirage-fe** — `offers.ts`
+> (the diner's copy), `OfferViews.tsx` (price tag, top strip, combo card), `useOfferViews` in
+> `useTracking.ts`; MenuScreen: per-minute prices on card / row / detail sheet, the strip under the
+> announcement, an **Offers** pill (only while something is on offer) with combo cards on top;
+> en + hi strings. **Flutter** — `domain/catalog/offer.dart`, `data/repositories/offers_repository.dart`,
+> `screens/catalog/offers_screen.dart` (list + editor), `widgets/catalog/product_offers_line.dart`;
+> routes `/catalog/offers`, `/catalog/offers/new`, `/catalog/offers/:offerId`; "Offers & happy
+> hour" in the catalog's ⋮ menu (NOT behind `appearanceEnabled` — nothing reaches the menu until
+> an offer exists and is published).
+>
+> **Differs from the text below:**
+> - **No Mirage `offerModel.js`, no CRUD routes, no replace-all publish step.** Offers travel as
+>   one `restaurant.offers` JSON block on the branding sync, dishes by published NAME — the Stage 7
+>   spotlight pattern. Ids would need every dish to exist on Mirage first; names do not. Any offer
+>   edit bumps `draftRevision`, which already re-sends branding, so it is also a full replace.
+> - Category targets are **expanded to dish names at publish** (plus `targetLabel`, e.g.
+>   "Drinks", for the strip). A dish added to the section later joins at its own publish.
+> - Only switched-on, not-ended offers are sent; the page still checks every window each minute.
+> - **No variants**: ReCapture products have none, so the variant rules do not apply.
+> - Fixed price is dishes-only (a section-wide "₹199" makes no sense); percent must be < 100.
+>   Category / whole-menu offers silently skip a dish they cannot discount (both sides agree).
+> - Percent rounds to the whole rupee. Combo image not built (the card shows the dishes' photos).
+> - Editor is one scrolling form with the four numbered steps, not a paged wizard.
+> - An offer whose chosen dish was deleted cannot be re-saved until the dish is re-picked
+>   (`TARGET_NOT_FOUND`); the publish already drops the missing dish.
+> - Not plan-gated (Stage 8's table has no row for it).
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 4 (time rules in `Asia/Kolkata`), Stage 5 badges are nice-to-have.

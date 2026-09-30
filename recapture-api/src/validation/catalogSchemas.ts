@@ -1070,3 +1070,70 @@ export const reportPrefsSchema = z
   .refine((v) => v.weekly !== undefined || v.channels !== undefined, {
     message: 'Nothing to update',
   });
+
+// ── Offers, combos, happy hour (more-customization Stage 10) ─────────────────
+
+const offerHhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:mm');
+const objectIdString = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid id');
+
+export const offerInputSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Give the offer a name').max(30),
+    kind: z.enum(['PERCENT', 'FLAT', 'FIXED_PRICE', 'COMBO']),
+    value: z.number().positive().max(1_000_000).optional(),
+    target: z
+      .object({
+        type: z.enum(['PRODUCTS', 'CATEGORIES', 'ALL']),
+        ids: z.array(objectIdString).max(300).default([]),
+      })
+      .optional(),
+    combo: z
+      .object({
+        productIds: z.array(objectIdString).min(2, 'A combo needs at least two dishes').max(10),
+        price: z.number().positive().max(1_000_000),
+        title: z.string().trim().max(40).optional(),
+      })
+      .optional(),
+    schedule: z
+      .object({
+        startsAt: z.string().datetime({ offset: true }).nullable().optional(),
+        endsAt: z.string().datetime({ offset: true }).nullable().optional(),
+        days: z.array(z.number().int().min(0).max(6)).max(7).optional(),
+        from: offerHhmm.nullable().optional(),
+        to: offerHhmm.nullable().optional(),
+      })
+      .optional(),
+    active: z.boolean().optional(),
+    priority: z.number().int().min(0).max(100).optional(),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    const issue = (path: string, message: string): void =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+    if (v.kind === 'COMBO') {
+      if (!v.combo) issue('combo', 'Choose the dishes and the combo price');
+    } else {
+      if (v.value === undefined) issue('value', 'Enter the discount');
+      if (v.kind === 'PERCENT' && v.value !== undefined && v.value >= 100) {
+        issue('value', 'A percentage must be below 100');
+      }
+      if (!v.target) issue('target', 'Choose which dishes the offer is on');
+      else if (v.target.type !== 'ALL' && v.target.ids.length === 0) {
+        issue('target', 'Choose at least one dish or section');
+      }
+      // A fixed price only makes sense per dish.
+      if (v.kind === 'FIXED_PRICE' && v.target && v.target.type !== 'PRODUCTS') {
+        issue('target', 'A fixed price can only be set on chosen dishes');
+      }
+    }
+    const s = v.schedule;
+    if (s) {
+      if (Boolean(s.from) !== Boolean(s.to)) issue('schedule', 'Give both a start and an end time');
+      if (s.from && s.to && s.from === s.to) issue('schedule', 'Start and end time must differ');
+      if (s.startsAt && s.endsAt && Date.parse(s.endsAt) <= Date.parse(s.startsAt)) {
+        issue('schedule', 'The end date must be after the start date');
+      }
+    }
+  });
+
+export const offerActiveSchema = z.object({ active: z.boolean() }).strict();

@@ -81,6 +81,7 @@ class WeeklyReport {
     required this.uniqueVisitors,
     required this.qrScans,
     required this.arViews,
+    this.offerViews = 0,
     required this.menuViewsDelta,
     required this.visitorsDelta,
     required this.arViewsDelta,
@@ -100,6 +101,9 @@ class WeeklyReport {
   final int uniqueVisitors;
   final int qrScans;
   final int arViews;
+
+  /// Stage 10: diners shown an offer price or combo. 0 on older reports.
+  final int offerViews;
 
   /// Percent vs the previous week; null when that week was too small to compare.
   final double? menuViewsDelta;
@@ -128,6 +132,7 @@ class WeeklyReport {
       uniqueVisitors: _int(metrics['uniqueVisitors']),
       qrScans: _int(metrics['qrScans']),
       arViews: _int(metrics['arViews']),
+      offerViews: _int(metrics['offerViews']),
       menuViewsDelta: _pct(delta['menuViews']),
       visitorsDelta: _pct(delta['uniqueVisitors']),
       arViewsDelta: _pct(delta['arViews']),

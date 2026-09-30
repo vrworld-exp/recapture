@@ -282,6 +282,8 @@ export interface CreateRestaurantInput {
   /** Stage 7: JSON blocks (services/catalog/menuExtras.ts); `''` clears each. */
   arBranding?: string;
   spotlight?: string;
+  /** Stage 10: JSON list of offers and combos (dishes by name), or `''` to clear. */
+  offers?: string;
   engagement?: string;
   /** Stage 8.2: the menu subdomain; `''` clears. */
   slug?: string;
@@ -345,6 +347,8 @@ export interface UpdateRestaurantInput {
   /** Stage 7: JSON blocks (services/catalog/menuExtras.ts); `''` clears each. */
   arBranding?: string;
   spotlight?: string;
+  /** Stage 10: JSON list of offers and combos (dishes by name), or `''` to clear. */
+  offers?: string;
   engagement?: string;
   /** Stage 8.2: the menu subdomain; `''` clears. */
   slug?: string;

@@ -27,7 +27,11 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
    Mirage endpoints the report still goes out, just with no busiest hour and no "scroll past" tip.
    Turn it on for one test catalog's environment, check Monday's numbers against the analytics
    screen, then everyone. The first Monday after switching on, every published owner gets one.
-7. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
+7. **Offers (Stage 10)**: deploy mirage-be (accepts and returns `restaurant.offers`) and mirage-fe
+   (renders them) BEFORE the ReCapture API — an older Mirage silently drops the field, so offers
+   saved and published against it never show. No flag: a catalog with no offers sends `''` and
+   renders exactly as before.
+8. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
    2–3 presets — once Stage 3 is live.
 
 ## Per stage
@@ -43,3 +47,4 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 | 7 AR / pairings / buttons / QR | | | Dishes published by NAME, not Mirage id; `jsqr` now a runtime dependency; no tests (user). |
 | 8 Plan gating / subdomain / rollout | | | Rollout flag served on `GET /catalog/entitlements`, not the strict remote-config payload; no tests (user). |
 | 9 Weekly value report | | | Off until `WEEKLY_REPORTS_ENABLED=true`; Mirage adds `/hourly` beside `/item-funnel`; "AR views" = `ar_view_clicked`; notification opens `/catalog/reports/<week>`. |
+| 10 Offers / combos / happy hour | | | One `restaurant.offers` block on the branding sync (dishes by name), not a Mirage offer collection; no variants; not flag-gated. |

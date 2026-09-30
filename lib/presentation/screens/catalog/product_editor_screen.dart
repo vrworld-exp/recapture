@@ -23,6 +23,7 @@ import '../../../domain/catalog/dish_details.dart';
 import '../../widgets/catalog/dish_details_section.dart';
 import '../../widgets/catalog/dish_translations_tile.dart';
 import '../../widgets/catalog/dish_pairings_tile.dart';
+import '../../widgets/catalog/product_offers_line.dart';
 import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
@@ -664,6 +665,8 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
             style: theme.textTheme.bodySmall
                 ?.copyWith(color: AppColors.textMuted),
           ),
+          // Stage 10: "On offer: Happy hour (−20%)" — nothing when on no offer.
+          ProductOffersLine(productId: widget.product.id),
           const SizedBox(height: AppSpacing.lg),
           _DirtyLabel(
             label: 'Description',

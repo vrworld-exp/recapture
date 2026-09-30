@@ -57,6 +57,8 @@ export interface WeeklyReportMetrics {
   qrScans: number;
   arViews: number;
   productViews: number;
+  /** Stage 10: diners shown an offer price or combo (`offer_viewed`). Absent on older reports. */
+  offerViews?: number;
   /**
    * Percent change against the previous week, one decimal. Null — not 0, not
    * "▲ 400%" — when the previous week had fewer than

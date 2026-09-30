@@ -272,6 +272,7 @@ class _SummaryCard extends StatelessWidget {
               _Kpi(label: 'Visitors', value: report.uniqueVisitors, delta: report.visitorsDelta),
               _Kpi(label: 'QR scans', value: report.qrScans),
               _Kpi(label: 'AR views', value: report.arViews, delta: report.arViewsDelta),
+              if (report.offerViews > 0) _Kpi(label: 'Offer views', value: report.offerViews),
             ],
           ),
           if (top != null || report.busiestLabel != null) const SizedBox(height: AppSpacing.lg),

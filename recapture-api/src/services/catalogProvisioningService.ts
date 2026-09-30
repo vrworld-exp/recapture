@@ -58,6 +58,7 @@ import {
   mirageEngagementField,
   mirageSpotlightField,
 } from '@/services/catalog/menuExtras';
+import { mirageOffersField } from '@/services/catalog/offersBlock';
 import {
   announcementTranslations,
   mirageLanguagesField,
@@ -377,11 +378,13 @@ function mirageDishSettings(catalog: ICatalog): {
  */
 async function mirageStage7Fields(
   catalog: ICatalog
-): Promise<{ arBranding: string; spotlight: string; engagement: string }> {
+): Promise<{ arBranding: string; spotlight: string; engagement: string; offers: string }> {
   return {
     arBranding: mirageArBrandingField(catalog),
     spotlight: await mirageSpotlightField(catalog),
     engagement: mirageEngagementField(catalog),
+    // Stage 10: the switched-on offers and combos, dishes by published name.
+    offers: await mirageOffersField(catalog),
   };
 }
 
