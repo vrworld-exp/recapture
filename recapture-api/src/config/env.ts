@@ -159,6 +159,19 @@ const envSchema = z.object({
   MESHY_API_KEY: z.string().min(1).optional(),
   MESHY_BASE_URL: z.string().url().default('https://api.meshy.ai'),
   /**
+   * more-customization Stage 13: menu import from photos, dish descriptions.
+   * Claude, through the official SDK. ABSENT = OFF: every AI button is hidden
+   * (GET /catalog/ai/status) and the AI routes answer 503 — the same
+   * "absent = off" rule as RAZORPAY_*.
+   */
+  AI_API_KEY: z.string().min(1).optional(),
+  /** The Claude model. Opus 5.5 reads printed menus best; change here, not in code. */
+  AI_MODEL: z.string().min(1).default('claude-opus-5-5'),
+  /** Hard monthly cap across every restaurant (decided 2026-09-30: ₹2,000). */
+  AI_MONTHLY_BUDGET_INR: z.coerce.number().positive().default(2000),
+  /** For turning the API's USD token prices into the INR budget. */
+  AI_USD_TO_INR: z.coerce.number().positive().default(84),
+  /**
    * How often a running Meshy task is polled (ms). Each poll doubles as the
    * worker's claim-lease renewal, so this MUST stay well below
    * WORKER_CLAIM_TIMEOUT_MS or a live generation gets re-claimed mid-flight.

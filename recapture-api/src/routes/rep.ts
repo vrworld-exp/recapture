@@ -112,6 +112,7 @@ import {
 } from '@/validation/subscriptionSchemas';
 import { notifyOwnerToPay, nudgeNextAllowedAt } from '@/services/subscription/nudgeService';
 import { getWeeklyReport, listWeeklyReports } from '@/services/weeklyReportService';
+import { aiCatalogRouter } from '@/routes/aiCatalogRoutes';
 import { weeklyReportParamSchema } from '@/validation/catalogSchemas';
 import { lowContrastBody } from '@/utils/colorContrast';
 import {
@@ -2283,6 +2284,16 @@ router.get(
     }
     res.status(200).json({ status: 'success', report: result.report });
   })
+);
+
+// ── AI on a delegated catalog (Stage 13) — import is the rep's time saver ───
+router.use(
+  '/catalogs/:id',
+  aiCatalogRouter(
+    async (req) =>
+      resolveDelegatedCatalog(new Types.ObjectId(req.user!.userId), String(req.params.id)),
+    notDelegated
+  )
 );
 
 export default router;

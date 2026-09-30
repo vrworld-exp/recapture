@@ -1,4 +1,58 @@
-# Stage 13 — Menu from a photo + AI content help
+# ✅ Stage 13 — Menu from a photo + AI content help
+
+> **Status (2026-09-30): built, uncommitted.** Q7 answered 2026-09-30: **Claude** (official
+> `@anthropic-ai/sdk`, model `claude-opus-5-5` via `AI_MODEL`), **₹2,000/month** hard cap across all
+> restaurants, **reps + owners on every plan**. Typecheck / lint / analyze clean (Flutter: all of
+> `lib`). Tests: `recapture-api/tests/menu-import-ai.test.ts` (12 — messy output cleaned, per-page
+> draft with a declined page skipped, no-dish failure, apply = one draftRevision bump + price
+> updates instead of duplicates + existing section reused, undo removes only unedited rows and
+> restores untouched prices, 5/day cap, AI off, budget charged + enforced, descriptions scoped +
+> capped, prompt guardrails) — provider faked and S3 mocked, no network;
+> `test/catalog/stage13_import_test.dart` (2). Regression: product-sync / publish / offers /
+> customers suites pass (131).
+>
+> **AI module** (`src/modules/ai/`): `provider.ts` — one interface, the Claude implementation, and a
+> `setAiProvider` test seam; structured outputs via `client.beta.messages.parse` +
+> `betaZodOutputFormat` (zod/v4 schemas), re-validated and sanitised after; server-side refusal
+> fallback on (`fallbacks: 'default'`, beta `server-side-fallback-2026-07-01`); effort `medium` for
+> reading menus, `low` for descriptions. `budget.ts` + `models/AiUsage.ts` — per-month INR spend
+> from each response's token usage (Opus 5.5 $4/$20 per M, `AI_USD_TO_INR`), checked before every
+> call. Env: `AI_API_KEY` (absent = every AI button hidden, routes 503), `AI_MODEL`,
+> `AI_MONTHLY_BUDGET_INR` (2000), `AI_USD_TO_INR` (84).
+>
+> **13.1 import** — `models/MenuImport.ts`, `services/menuImport/{sanitize,menuImportService}.ts`,
+> job `MENU_IMPORT` (reserved lane), processor, hourly 30-day photo purge. Routes (owner
+> `/catalog/…`, rep `/rep/catalogs/:id/…`, one router `routes/aiCatalogRoutes.ts`):
+> `POST /imports`, `POST /imports/:id/pages/:n` (raw body), `POST /imports/:id/start`,
+> `GET /imports/:id`, `POST /imports/:id/apply`, `POST /imports/:id/undo`, `GET /imports`.
+> Products/categories carry `importId`. Flutter `screens/catalog/menu_import_screen.dart` at
+> `/catalog/import` and `/rep/catalogs/:id/import` (camera / gallery / PDF → upload → progress →
+> review → apply → undo); entry in the catalog ⋮ menu and on the rep's restaurant screen.
+> **13.2** — `services/aiContentService.ts`, `POST …/ai/descriptions`, `PUT …/ai/tone`,
+> `Catalog.aiTone`; ✨ "Write description" in the product editor (3 options, fills the field only);
+> `/catalog/ai-descriptions` bulk screen. **13.3** — `POST …/images/enhance {productId}` (sharp:
+> upright, 4:3 attention crop, normalise, warmth, sharpen) → new staged key; "Enhance photo" in the
+> editor shows original vs enhanced; "Use enhanced" commits through the normal image commit.
+>
+> **Differs from the text below:**
+> - **Pages go through our API** (`POST …/pages/:n`, raw body), not presigned S3 PUTs — the web
+>   build cannot PUT cross-origin to the bucket (the product-photo precedent).
+> - **One AI call per page**; sections with the same name on different pages are merged; a dish
+>   name seen twice is kept once (Mirage refuses duplicate names) and listed.
+> - **Variants**: dishes have one price, so the first variant is the price and all of them are
+>   written into the description ("Half ₹120 · Full ₹220").
+> - **Photo-less dishes publish**: new opt-in `allowNoImage` on Mirage `create-item` (mirage-be
+>   `adminController.js`), sent by `productSync.ts` only for an image-only dish with no photo;
+>   Mirage shows its default dish image. Every other caller still needs a photo or a model.
+> - **Undo** judges "edited since" by a fingerprint of the editable fields (name, price,
+>   description, section, veg), not `updatedAt` — a publish also touches `updatedAt`.
+> - Review screen: edit / untick / tick-all per section, "update price?" for existing dishes.
+>   "Move to category" and "merge duplicates" are not built (the draft is already de-duplicated).
+> - No blur check on the photos (the capture camera's blur module is not reused).
+> - An import stuck in PROCESSING for 30 minutes (job retries exhausted) reads as FAILED
+>   `TIMED_OUT`.
+> - The ✨ button is in the owner's product editor; the rep's dish editor does not have it yet
+>   (reps get import). Enhance is owner-only.
 
 **Side:** recapture-api (new AI module + worker) + Flutter.
 **Depends on:** nothing. Stage 6 translations can reuse the same AI provider module.

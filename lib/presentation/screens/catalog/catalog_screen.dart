@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../data/repositories/ai_repository.dart';
 import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
@@ -844,6 +845,8 @@ class _CatalogHeaderCard extends ConsumerWidget {
     // Stage 8.3 rollout: the customization entry points appear once ops set
     // `appearanceEnabled` (see customizationVisibleProvider).
     final customizing = ref.watch(customizationVisibleProvider);
+    // Stage 13: AI items only when the server has an AI key (absent = off).
+    final aiOn = ref.watch(aiStatusProvider(null)).valueOrNull?.enabled ?? false;
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -918,6 +921,9 @@ class _CatalogHeaderCard extends ConsumerWidget {
                   _CatalogMenuAction.plate => context.pushNamed(AppRouteNames.catalogPlate),
                   _CatalogMenuAction.customers => context.pushNamed(AppRouteNames.catalogCustomers),
                   _CatalogMenuAction.links => context.pushNamed(AppRouteNames.catalogLinks),
+                  _CatalogMenuAction.import => context.pushNamed(AppRouteNames.catalogImport),
+                  _CatalogMenuAction.aiDescriptions =>
+                    context.pushNamed(AppRouteNames.catalogAiDescriptions),
                   _CatalogMenuAction.address => context.pushNamed(AppRouteNames.catalogAddress),
                   _CatalogMenuAction.delete => onDeleteCatalog(),
                 },
@@ -987,6 +993,37 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       ],
                     ),
                   ),
+                  // Stage 13: AI menu import and descriptions.
+                  if (aiOn)
+                    PopupMenuItem(
+                      key: const Key('catalog-open-import'),
+                      value: _CatalogMenuAction.import,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.document_scanner_outlined, size: 18, color: AppColors.textSecondary),
+                          const SizedBox(width: AppSpacing.sm),
+                          Text(
+                            'Import menu from photos',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (aiOn)
+                    PopupMenuItem(
+                      key: const Key('catalog-open-ai-descriptions'),
+                      value: _CatalogMenuAction.aiDescriptions,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.auto_awesome, size: 18, color: AppColors.textSecondary),
+                          const SizedBox(width: AppSpacing.sm),
+                          Text(
+                            'AI descriptions',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
                   // Stage 12: the WhatsApp-offers list and the order / booking links.
                   PopupMenuItem(
                     key: const Key('catalog-open-customers'),
@@ -1271,7 +1308,18 @@ Color _subscriptionColor(SubscriptionSummary? summary) =>
 /// The header's overflow menu. An enum with one entry rather than a bare
 /// callback because this menu is where the next catalog-level action lands, and
 /// a `switch` over it is a compile error the day one is added without a branch.
-enum _CatalogMenuAction { translations, extras, offers, plate, customers, links, address, delete }
+enum _CatalogMenuAction {
+  translations,
+  extras,
+  offers,
+  plate,
+  customers,
+  links,
+  import,
+  aiDescriptions,
+  address,
+  delete,
+}
 
 class _Chip extends StatelessWidget {
   const _Chip({required this.label, required this.color});

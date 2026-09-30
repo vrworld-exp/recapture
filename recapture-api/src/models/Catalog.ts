@@ -104,6 +104,8 @@ export interface ICatalog extends Document {
    * with the branding; Mirage treats its own absent value as off.
    */
   plate?: { enabled: boolean; showTotal: boolean };
+  /** Stage 13.2: the voice of AI dish descriptions. Absent = casual. ReCapture-only. */
+  aiTone?: 'casual' | 'premium' | 'fun';
   /** Stage 12.3: delivery / booking links. Absent = none shown. Published. */
   links?: CatalogLinks;
   /** Stage 12.2: the WhatsApp-offers sign-up card. Absent = off. Published. */
@@ -365,6 +367,7 @@ const CatalogSchema = new Schema<ICatalog>(
       type: new Schema({ optInEnabled: { type: Boolean, default: false } }, { _id: false }),
     },
     customersSyncedAt: { type: Date },
+    aiTone: { type: String, enum: ['casual', 'premium', 'fun'] },
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },

@@ -22,6 +22,7 @@ import { restaurantExecutor } from '@/services/catalogPublishService';
 import { runSubscriptionSweep } from '@/services/subscription/lifecycleSweep';
 import { reconcileOpenOrders } from '@/services/subscription/reconcileService';
 import { runWeeklyReportSweep } from '@/services/weeklyReportJobs';
+import { purgeOldImportFiles } from '@/services/menuImport/menuImportService';
 import { registerProcessor } from '@/worker/processorRegistry';
 import { captureProcessingProcessor } from '@/worker/processors/captureProcessingProcessor';
 import { meshyModelProcessor } from '@/worker/processors/meshyModelProcessor';
@@ -30,6 +31,7 @@ import { modelOptimizationProcessor } from '@/worker/processors/modelOptimizatio
 import { subscriptionArEntitlementProcessor } from '@/worker/processors/subscriptionArEntitlementProcessor';
 import { subscriptionPageStateProcessor } from '@/worker/processors/subscriptionPageStateProcessor';
 import { weeklyReportProcessor } from '@/worker/processors/weeklyReportProcessor';
+import { menuImportProcessor } from '@/worker/processors/menuImportProcessor';
 import { startWorker } from '@/worker/worker';
 import {
   DEFAULT_JOB_TYPE,
@@ -39,6 +41,7 @@ import {
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
   SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
   WEEKLY_REPORT_JOB_TYPE,
+  MENU_IMPORT_JOB_TYPE,
 } from '@/worker/workerTypes';
 
 /**
@@ -77,6 +80,9 @@ export function registerAllProcessors(): void {
   // The owner's Monday value report (more-customization Stage 9). Mirage reads
   // plus two idempotent writes; no credential beyond the analytics one.
   registerProcessor(WEEKLY_REPORT_JOB_TYPE, weeklyReportProcessor);
+  // Reading a printed menu with the AI provider (Stage 13.1). A rep is waiting
+  // at the table, so it rides the reserved lane like a publish.
+  registerProcessor(MENU_IMPORT_JOB_TYPE, menuImportProcessor);
   registerPublishExecutors();
 }
 
@@ -143,6 +149,7 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
         // A restaurant that just paid to get its page back is refreshing the
         // link and watching, exactly as an owner waits on a 3D resume.
         SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
+        MENU_IMPORT_JOB_TYPE,
       ],
       slots: env.WORKER_PUBLISH_LANE_SLOTS,
     },
@@ -171,6 +178,12 @@ export async function runWorkerRuntime(workerId: string): Promise<void> {
         name: 'weekly-report-sweep',
         intervalMs: env.WEEKLY_REPORT_SWEEP_INTERVAL_MS,
         run: runWeeklyReportSweep,
+      },
+      // Stage 13.1: menu photos are kept at most 30 days. Hourly is plenty.
+      {
+        name: 'menu-import-file-purge',
+        intervalMs: 60 * 60 * 1000,
+        run: purgeOldImportFiles,
       },
     ],
   });

@@ -144,6 +144,8 @@ export interface ICatalogProduct extends Document {
   /** The diff basis — see ProductPublishedSnapshot. */
   publishedSnapshot?: ProductPublishedSnapshot;
   /** Hidden from the catalog (and deleted from Mirage on the next publish). */
+  /** Stage 13: the menu import that created it — what "Undo import" removes. */
+  importId?: Types.ObjectId;
   archivedAt?: Date;
   deletedAt?: Date;
   createdAt: Date;
@@ -221,6 +223,7 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
     // diffed field — which the planner would then read back as "unchanged" and
     // skip, publishing nothing. Same reasoning as ModelGenerationTrace.selection.
     publishedSnapshot: { type: Schema.Types.Mixed },
+    importId: { type: Schema.Types.ObjectId, ref: 'MenuImport' },
     archivedAt: { type: Date },
     deletedAt: { type: Date },
   },

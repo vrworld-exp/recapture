@@ -46,6 +46,7 @@ import {
   offerInputSchema,
 } from '@/validation/catalogSchemas';
 import { listCatalogActivity } from '@/services/catalogActivityService';
+import { aiCatalogRouter } from '@/routes/aiCatalogRoutes';
 import {
   deleteCustomer,
   exportCustomersCsv,
@@ -2415,6 +2416,12 @@ router.delete(
     }
     res.status(200).json({ status: 'success' });
   })
+);
+
+// ── AI: menu import, descriptions, photo enhance (Stage 13) ─────────────────
+router.use(
+  '/',
+  aiCatalogRouter(async (req) => findOwnedCatalog(req.user!.userId), noCatalog)
 );
 
 export default router;

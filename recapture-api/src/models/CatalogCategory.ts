@@ -48,6 +48,8 @@ export interface ICatalogCategory extends Document {
   syncStatus: SyncStatus;
   syncError?: SyncError;
   lastSyncedAt?: Date;
+  /** Stage 13: the menu import that created it — what "Undo import" removes. */
+  importId?: Types.ObjectId;
   deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -78,6 +80,7 @@ const CatalogCategorySchema = new Schema<ICatalogCategory>(
     // Soft-delete, house convention. The unique index below filters on the same
     // `deletedAt: null` form the queries use, which matches an unset field too —
     // so a live row is covered whether it stores null or nothing.
+    importId: { type: Schema.Types.ObjectId, ref: 'MenuImport' },
     deletedAt: { type: Date },
   },
   { timestamps: true }

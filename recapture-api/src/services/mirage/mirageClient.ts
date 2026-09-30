@@ -992,6 +992,7 @@ export const mirageClient: MirageClient = {
         availability: input.availability,
         featured: input.featured,
         sortPosition: input.sortPosition,
+        ...(input.allowNoImage ? { allowNoImage: 'true' } : {}),
         // URL transfer mode (M1). Serialised like any other field; the
         // current Mirage handlers ignore them, which is exactly why the
         // default transfer mode still sends bytes.

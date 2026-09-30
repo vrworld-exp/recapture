@@ -46,6 +46,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../data/repositories/ai_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
@@ -105,6 +106,19 @@ class RepCatalogDetailScreen extends ConsumerWidget {
             onPressed: () =>
                 context.push('${AppRoutes.repCatalogs}/$catalogId/preview'),
           ),
+          // Stage 13: read the restaurant's printed menu instead of typing it.
+          if (ref.watch(aiStatusProvider(catalogId)).valueOrNull?.enabled ?? false)
+            IconButton(
+              key: const ValueKey('rep_import_menu'),
+              icon: const Icon(Icons.document_scanner_outlined),
+              tooltip: 'Import menu from photos',
+              onPressed: () async {
+                await context.push('${AppRoutes.repCatalogs}/$catalogId/import');
+                if (!context.mounted) return;
+                ref.invalidate(repCatalogDocumentProvider(catalogId));
+                await ref.read(repCatalogProductsProvider(catalogId).notifier).refresh();
+              },
+            ),
           // Stage 9: "your menu got 1,240 views last week" — the renewal pitch.
           IconButton(
             key: const ValueKey('rep_weekly_reports'),

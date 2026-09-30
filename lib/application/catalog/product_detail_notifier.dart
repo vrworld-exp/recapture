@@ -161,6 +161,13 @@ class ProductDetailNotifier
     return _commit(key);
   }
 
+  /// Stage 13.3: commits an enhanced copy the server already stored (its key
+  /// came from `POST …/images/enhance`), through the same commit path.
+  Future<CatalogProduct> useStagedImage(String key) {
+    _uncommittedImageKey = key;
+    return _commit(key);
+  }
+
   /// Finishes an image replacement whose commit failed. No-op when there is
   /// nothing pending.
   Future<CatalogProduct?> retryCommitImage() async {

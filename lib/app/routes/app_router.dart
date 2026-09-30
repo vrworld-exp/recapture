@@ -69,6 +69,8 @@ import '../../presentation/screens/catalog/offers_screen.dart';
 import '../../presentation/screens/catalog/plate_settings_screen.dart';
 import '../../presentation/screens/catalog/customers_screen.dart';
 import '../../presentation/screens/catalog/order_links_screen.dart';
+import '../../presentation/screens/catalog/menu_import_screen.dart';
+import '../../presentation/screens/catalog/ai_descriptions_screen.dart';
 import '../../presentation/widgets/catalog/publish_body.dart'
     show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
@@ -222,6 +224,10 @@ abstract final class AppRoutes {
   static const catalogCustomers = '/catalog/customers';
   static const catalogLinks = '/catalog/links';
 
+  /// Stage 13: menu import from photos, and bulk AI descriptions.
+  static const catalogImport = '/catalog/import';
+  static const catalogAiDescriptions = '/catalog/ai-descriptions';
+
   // ── Rep (the field surface, /rep) ─────────────────────────────────────────
   // Gated on isSalesRep in the router's redirect below, not inside the screens:
   // a USER who deep-links here must land somewhere real, never on a screen that
@@ -278,6 +284,9 @@ abstract final class AppRoutes {
   /// A delegated restaurant's weekly reports, read-only (Stage 9).
   static const repCatalogReports = '/rep/catalogs/:id/reports';
   static const repCatalogReport = '/rep/catalogs/:id/reports/:weekStart';
+
+  /// Stage 13: menu import on a delegated catalog — the rep's time saver.
+  static const repCatalogImport = '/rep/catalogs/:id/import';
 
   /// The restaurant's whole page as a customer will meet it.
   static const repCatalogPreview = '/rep/catalogs/:id/preview';
@@ -411,6 +420,8 @@ abstract final class AppRouteNames {
   static const catalogPlate = 'catalogPlate';
   static const catalogCustomers = 'catalogCustomers';
   static const catalogLinks = 'catalogLinks';
+  static const catalogImport = 'catalogImport';
+  static const catalogAiDescriptions = 'catalogAiDescriptions';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repStandees = 'repStandees';
@@ -423,6 +434,7 @@ abstract final class AppRouteNames {
   static const repCatalogHours = 'repCatalogHours';
   static const repCatalogReports = 'repCatalogReports';
   static const repCatalogReport = 'repCatalogReport';
+  static const repCatalogImport = 'repCatalogImport';
   static const repCatalogPreview = 'repCatalogPreview';
   static const repCatalogCategories = 'repCatalogCategories';
   static const repCatalogQr = 'repCatalogQr';
@@ -749,6 +761,16 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         ),
       ),
       GoRoute(
+        path: AppRoutes.catalogImport,
+        name: AppRouteNames.catalogImport,
+        builder: (_, __) => const FlowBackScope(child: MenuImportScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogAiDescriptions,
+        name: AppRouteNames.catalogAiDescriptions,
+        builder: (_, __) => const FlowBackScope(child: AiDescriptionsScreen()),
+      ),
+      GoRoute(
         path: AppRoutes.catalogCustomers,
         name: AppRouteNames.catalogCustomers,
         builder: (_, __) => const FlowBackScope(child: CustomersScreen()),
@@ -912,6 +934,12 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (context, state) => OpeningHoursScreen.delegated(
           catalogId: state.pathParameters['id'] ?? '',
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.repCatalogImport,
+        name: AppRouteNames.repCatalogImport,
+        builder: (context, state) =>
+            MenuImportScreen(repCatalogId: state.pathParameters['id'] ?? ''),
       ),
       GoRoute(
         path: AppRoutes.repCatalogReports,

@@ -18,6 +18,7 @@ import {
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
   SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
   WEEKLY_REPORT_JOB_TYPE,
+  MENU_IMPORT_JOB_TYPE,
   type ExecutableStage,
   type JobState,
   type StageProgress,
@@ -37,6 +38,7 @@ export {
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
   SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
   WEEKLY_REPORT_JOB_TYPE,
+  MENU_IMPORT_JOB_TYPE,
 };
 
 /** Fallback for job documents created before the worker fields existed. */

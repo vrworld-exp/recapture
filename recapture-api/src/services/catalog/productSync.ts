@@ -266,6 +266,8 @@ async function createProduct(
     pairsWith: miragePairsField(product.pairsWith),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
+    // Stage 13: a photo-less dish (menu import) is a real menu row, not an error.
+    ...(product.type === 'IMAGE_ONLY' && !product.imageKey ? { allowNoImage: true } : {}),
   };
 
   const client = getMirageClient();

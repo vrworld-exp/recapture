@@ -73,7 +73,7 @@ Not about looks: these bring the owner money, save them time, or prove the subsc
 | ✅ 10 | [Offers, combos, happy-hour pricing](stage-10-offers-happy-hour.md) | BE + FE + Mirage | 4 | M |
 | ✅ 11 | ["My plate" list — show to waiter](stage-11-my-plate.md) | Mirage-fe (+ small BE) | — | S–M |
 | ✅ 12 | [Google reviews, customer opt-in list, delivery & booking links](stage-12-reviews-customers-links.md) | BE + FE + Mirage | 7.3 | M |
-| 13 | [Menu from a photo + AI descriptions + photo enhance](stage-13-ai-menu-import-content.md) | BE (AI module, worker) + FE | — | L |
+| ✅ 13 | [Menu from a photo + AI descriptions + photo enhance](stage-13-ai-menu-import-content.md) | BE (AI module, worker) + FE | — | L |
 | 14 | [Quick edit, bulk prices, staff access, printable PDF menu](stage-14-quick-edit-staff-pdf.md) | BE + FE | — | M |
 | 15 | [⭐ Instagram-ready 3D spin videos](stage-15-3d-spin-videos.md) | BE (render worker) + FE | 3D models | L |
 | 16 | [Multi-branch restaurants — design only](stage-16-multi-branch-design.md) | data model + all | 14 | XL |
@@ -107,6 +107,6 @@ every new onboarding; Stage 15 is the feature owners show off. Stage 16 only aft
 | Q5 | ~~Custom domain: subdomain only, or the client's own domain too?~~ **Answered 2026-09-30:** our subdomain only (phase 1); own domains later, separate design. | Stage 8 |
 | Q6 | ~~Weekly report: in-app only at first, or wait for the WhatsApp channel?~~ **Answered 2026-09-30:** in-app now, WhatsApp when that channel ships; `WEEKLY_REPORTS_ENABLED` goes on for one test catalog first, then everyone. | Stage 9 |
 | Q10 | ~~Plan gating for offers and My plate?~~ **Answered 2026-09-30:** both Signature (Pro) and above; Taste = held back at publish. My plate stays ON by default (on covered plans). | Stages 10–11 |
-| Q7 | AI provider + monthly budget for menu import / descriptions / translations. | Stage 13 |
+| Q7 | ~~AI provider + monthly budget?~~ **Answered 2026-09-30:** Claude (`claude-opus-5-5`), ₹2,000/month hard cap, reps + owners on every plan. Stage 12 stays ungated. | Stage 13 |
 | Q8 | Where does the video render worker run (needs Chromium + ffmpeg, ~1 GB RAM per render)? | Stage 15 |
 | Q9 | Multi-branch: how many clients asked, and billing per outlet or per brand? | Stage 16 |

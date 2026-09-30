@@ -15,6 +15,7 @@ import {
   SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE,
   SUBSCRIPTION_PAGE_STATE_JOB_TYPE,
   WEEKLY_REPORT_JOB_TYPE,
+  MENU_IMPORT_JOB_TYPE,
   JobState,
   StageProgress,
   StageTimestamps,
@@ -319,7 +320,8 @@ const JobSchema = new Schema<IJob>(
           this.jobType !== MIRAGE_CATALOG_PUBLISH_JOB_TYPE &&
           this.jobType !== SUBSCRIPTION_AR_ENTITLEMENT_JOB_TYPE &&
           this.jobType !== SUBSCRIPTION_PAGE_STATE_JOB_TYPE &&
-          this.jobType !== WEEKLY_REPORT_JOB_TYPE
+          this.jobType !== WEEKLY_REPORT_JOB_TYPE &&
+          this.jobType !== MENU_IMPORT_JOB_TYPE
         );
       },
     },

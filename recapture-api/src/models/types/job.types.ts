@@ -87,6 +87,12 @@ export const SUBSCRIPTION_PAGE_STATE_JOB_TYPE = 'SUBSCRIPTION_PAGE_STATE';
  * so a sweep that runs every few minutes enqueues each week once.
  */
 export const WEEKLY_REPORT_JOB_TYPE = 'WEEKLY_REPORT';
+/**
+ * Reading a printed menu's pages with the AI provider (more-customization
+ * Stage 13.1). Carries `payload.{importId}`; the MenuImport row holds the
+ * pages, the progress and the draft.
+ */
+export const MENU_IMPORT_JOB_TYPE = 'MENU_IMPORT';
 
 /**
  * Claim priority for the jobs a PERSON is standing and waiting on — a catalog

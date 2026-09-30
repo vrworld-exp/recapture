@@ -39,7 +39,12 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
    the restaurant), then mirage-fe (the `/:restaurant/offers-notice` page must exist before any
    owner switches sign-ups on), then the API + app. Tell owners with a non-Google review link that
    they will need to replace it the next time they save their customer buttons.
-10. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
+10. **Stage 13 (AI)**: deploy mirage-be first (`allowNoImage` on create-item — without it, photo-less
+    imported dishes fail to publish). Then set `AI_API_KEY` (an Anthropic API key) on BOTH the API
+    and the worker; leave it unset anywhere AI should stay off. Optional: `AI_MODEL`,
+    `AI_MONTHLY_BUDGET_INR` (default 2000), `AI_USD_TO_INR` (default 84). Check spend in the
+    `aiusages` collection (one row per month, split by purpose).
+11. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
    2–3 presets — once Stage 3 is live.
 
 ## Per stage
@@ -58,3 +63,4 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 | 10 Offers / combos / happy hour | | | One `restaurant.offers` block on the branding sync (dishes by name), not a Mirage offer collection; no variants; not flag-gated. |
 | 11 My plate | | | Mirage absent = off; ReCapture default on → appears at each owner's next publish; own ungated settings screen. |
 | 12 Reviews / customers / links | | | Opt-in under `/analytics/*`, pulled on read; review link Google-only; no Places search; not plan-gated. |
+| 13 AI menu import / descriptions / enhance | | | Pages via API not presigned; one call per page; `allowNoImage` on Mirage create-item; fingerprint undo. |

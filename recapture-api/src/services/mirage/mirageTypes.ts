@@ -428,8 +428,13 @@ export interface CreateItemInput {
   i18n?: string;
   /** Stage 7 — the partners' stored names as a JSON array; `''` clears. */
   pairsWith?: string;
-  /** The product photo. At least one of `image`/`object` is required. */
+  /** The product photo. At least one of `image`/`object` is required, unless `allowNoImage`. */
   image?: MirageFileUpload;
+  /**
+   * Stage 13: an image-only dish that has no photo yet (imported from a
+   * printed menu). Mirage keeps its default dish image until one is added.
+   */
+  allowNoImage?: boolean;
   /** The GLB. */
   object?: MirageFileUpload;
   /** The USDZ twin, written to `model.iosSrc`. */

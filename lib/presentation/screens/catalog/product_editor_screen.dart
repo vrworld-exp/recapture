@@ -24,6 +24,7 @@ import '../../widgets/catalog/dish_details_section.dart';
 import '../../widgets/catalog/dish_translations_tile.dart';
 import '../../widgets/catalog/dish_pairings_tile.dart';
 import '../../widgets/catalog/product_offers_line.dart';
+import '../../widgets/catalog/ai_editor_actions.dart';
 import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
@@ -681,6 +682,15 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
               textInputAction: TextInputAction.newline,
             ),
           ),
+          // Stage 13.2: three AI suggestions; picking one only fills the field.
+          AiDescriptionButton(
+            productId: widget.product.id,
+            enabled: !busy,
+            onPicked: (text) {
+              _description.text = text;
+              _recomputeDirty();
+            },
+          ),
           const SizedBox(height: AppSpacing.lg),
           _CategoryField(
             categoryId: _categoryId,
@@ -1074,6 +1084,9 @@ class _AssetPanel extends StatelessWidget {
             icon: Icons.add_photo_alternate_outlined,
             onPressed: busy ? null : onReplaceImage,
           ),
+          // Stage 13.3: brighter, 4:3 copy — the original is kept; the owner picks.
+          if ((product.thumbnailUrl ?? '').isNotEmpty)
+            AiEnhancePhotoButton(product: product, enabled: !busy),
           const SizedBox(height: AppSpacing.sm),
           AppButton.secondary(
             label: 'Use a 3D model instead',
