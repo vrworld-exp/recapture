@@ -4,6 +4,7 @@ Goal: every Mirage menu should look and feel like **its own restaurant**, not li
 Basalt page with a different logo. The owner (or the rep on their behalf) controls all of it from
 ReCapture; Mirage only renders what it is sent.
 
+**Summary of everything built (Stages 1–16), for reviewers:** [IMPLEMENTATION-SUMMARY.md](IMPLEMENTATION-SUMMARY.md).
 **Conventions source of truth:** [`../../AGENTS.md`](../../AGENTS.md). Every stage defers to it.
 **This folder:** *what to build, in what order, in which file, and how you know it worked.*
 
