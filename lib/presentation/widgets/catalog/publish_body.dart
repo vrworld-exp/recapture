@@ -29,11 +29,14 @@
 //   4. Never let the user press Publish into a guaranteed failure. The gate
 //      checklist is the server's own, and each row goes to the fix.
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/publish_flow.dart';
 import '../../../data/repositories/catalog_failure.dart' show CatalogErrorCodes;
+import '../../../domain/catalog/menu_entitlements.dart';
 import '../../../domain/catalog/publish_gate.dart';
 import '../../../domain/catalog/publish_status.dart';
 import '../../../domain/catalog/subscription_copy.dart';
@@ -432,6 +435,10 @@ class PublishBody extends StatelessWidget {
                     onFix: onFixGate,
                     onOpenPreview: onOpenPreview,
                   ),
+                ],
+                if (status.heldBack.isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _HeldBackCard(items: status.heldBack),
                 ],
                 const SizedBox(height: AppSpacing.xl),
                 _Actions(
@@ -888,6 +895,65 @@ class _SuccessCard extends StatelessWidget {
 
 /// The pre-flight checklist — the server's own gates, each with the way to fix
 /// it (feature 36).
+/// Stage 8.1: the looks the plan does not cover. Informational, never a
+/// blocker — publishing goes ahead with the defaults for these, and upgrading
+/// then publishing again brings the owner's own choices back.
+class _HeldBackCard extends StatelessWidget {
+  const _HeldBackCard({required this.items});
+
+  final List<HeldBackItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Container(
+      key: const ValueKey('publish_held_back'),
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        color: AppColors.royalGold.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.royalGold.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.lock_outline, size: 16, color: AppColors.royalGold),
+              const SizedBox(width: AppSpacing.sm),
+              Text(
+                'Held back on your plan',
+                style: textTheme.titleMedium?.copyWith(color: AppColors.royalGold),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Text(
+            'Your menu publishes with the standard look for these. Your choices are saved — '
+            'upgrade and publish again to show them.',
+            style: textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          for (final item in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+              child: Text('• ${item.message}', style: textTheme.bodySmall),
+            ),
+          const SizedBox(height: AppSpacing.sm),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const ValueKey('publish_held_back_plans'),
+              onPressed: () => context.pushNamed(AppRouteNames.catalogSubscription),
+              child: const Text('See plans'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GateChecklist extends StatelessWidget {
   const _GateChecklist({
     required this.gates,

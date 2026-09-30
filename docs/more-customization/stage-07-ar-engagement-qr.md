@@ -1,4 +1,52 @@
-# Stage 7 — AR branding, pairings, engagement buttons, branded QR
+# ✅ Stage 7 — AR branding, pairings, engagement buttons, branded QR
+
+> **Status (2026-09-30): built, uncommitted. NO tests written or run — the user asked for
+> none from Stage 7 on; tests are written and run in the final pass.** Type-check /
+> analyze of the touched files is clean.
+>
+> **7.1 viewer branding** — API `Catalog.arBranding` (profile PATCH, replace; null = plain);
+> Mirage `restaurant.arBranding` (helper/extrasFields.js), also sent with
+> `get-single-product` (+ `restaurantIcon`). Mirage-fe `ViewerBranding.tsx` (context, logo
+> loader ring in `--c-primary`, watermark, name + price label) + `NewModelViewer` prop
+> `branded` (detail sheet + AR page; grid cards get the loader only) + 4 SVG stage textures
+> in `public/stages/` used as the viewer's backdrop (no model-viewer ground texture).
+> Flutter `ar_style_screen.dart`, reached from a tile on the Appearance screen (owner only;
+> it saves on its own, not with the appearance draft).
+>
+> **7.2 spotlight + pairings** — `Catalog.spotlight`, `CatalogProduct.pairsWith` (≤ 4,
+> filtered on write to live dishes of the catalog, never itself). **Deviation: dishes are
+> published by their stored NAME, not by Mirage item id** (`services/catalog/menuExtras.ts`) —
+> names are unique per restaurant and known at plan time, so a pairing / spotlight dish
+> created later in the same run still resolves; a rename changes the key and republishes.
+> `pairsWith` is a new diffed product field (empty on an old snapshot → no republish).
+> Mirage-fe resolves names from the loaded list (`itemsByName`). Flutter:
+> `menu_extras_screen.dart` (Spotlight section) + `dish_pairings_tile.dart` in the editor.
+>
+> **7.3 customer buttons** — `Catalog.engagement` {reviewUrl (https), whatsappOrder,
+> callWaiter, wifi, feedbackForm}. WhatsApp buttons need `contact.socials.whatsapp` (hidden
+> without it). Rate-us prompt once per visitor after 60 s; call waiter reads `?t=`.
+> Feedback: Mirage `feedbackModel` + `POST /analytics/feedback` (open like /collect, own
+> limiter, 1 per visitor per day, refused unless the restaurant switched the form on) +
+> admin `GET /analytics/feedback-report?restaurant=` (restaurant REQUIRED) +
+> `/me/feedback-report`; API proxy `GET /catalog/analytics/feedback`. New event types
+> `review_click`, `whatsapp_order`, `call_waiter`, `feedback_submitted` (Mirage enum + FE
+> types) and KPIs `reviewClicks/whatsappOrders/waiterCalls/feedbackCount`. Flutter:
+> `analytics_engagement_card.dart` (hidden when nothing happened).
+>
+> **7.4 branded QR** — `Catalog.qrStyle` (ReCapture-only; not a public field), Zod refuses
+> light-on-dark and contrast < 4. `services/brandedQr.ts`: coloured PNG (+ frame-text band),
+> owner logo in the well, PDF templates classic / minimal / bold (theme-primary band + cover)
+> / tent (two faces, one turned 180°), code drawn as an `/ImageMask` in the fg colour. Every
+> styled render is DECODED with jsQR first; failure → plain square + `X-Qr-Style-Fallback: 1`.
+> `jsqr` moved from devDependencies to dependencies (lockfile `dev` flag removed). Plain
+> squares (default style, reps, admin, standee batches) take the untouched byte-identical
+> path. `POST /catalog/qr/preview` for the editor. Owner standee download: same counting,
+> branded artwork. Flutter `qr_style_screen.dart` (presets, colours, logo, frame text,
+> template, server preview), app-bar button on the QR screen.
+>
+> **Open / not done:** the frame-text band is rendered through librsvg — the server image
+> needs a sans font installed or the text draws as boxes (check the Docker image); rep
+> surfaces have no Stage 7 editing (owner only); scan with 3 phones is a manual check.
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 2. Independent parts — ship 7.1–7.4 separately.

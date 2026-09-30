@@ -246,6 +246,77 @@ export function effectiveLanguages(catalog: { languages?: CatalogLanguages | nul
   return { primary: l.primary ?? 'en', extra: [...(l.extra ?? [])] };
 }
 
+// ── AR branding, spotlight, engagement, branded QR (Stage 7) ───────────────
+
+/** The ground under the dish in the in-page 3D viewer (never inside AR itself). */
+export const AR_STAGES = ['none', 'plate', 'wood', 'marble', 'dark'] as const;
+export type ArStage = (typeof AR_STAGES)[number];
+export const AR_LOADER_STYLES = ['default', 'logo'] as const;
+export type ArLoaderStyle = (typeof AR_LOADER_STYLES)[number];
+
+/**
+ * How the 3D viewer carries the restaurant's brand → Mirage `restaurant.arBranding`.
+ * Only the in-page viewer: Scene Viewer / Quick Look cannot be overlaid, and
+ * nothing here appears while the 3D entitlement is off.
+ */
+export interface CatalogArBranding {
+  watermarkLogo: boolean;
+  loaderStyle: ArLoaderStyle;
+  stage: ArStage;
+  showDishName: boolean;
+}
+
+export const MAX_SPOTLIGHT_DISHES = 6;
+export const MAX_SPOTLIGHT_TITLE = 40;
+export const MAX_PAIRINGS = 4;
+
+/**
+ * The carousel at the top of the menu → Mirage `restaurant.spotlight`. Holds
+ * PRODUCT ids; the publish step resolves them to the dishes' stored names,
+ * which are unique per restaurant on Mirage — so the page finds them in the
+ * item list it already has, and a dish created later in the same run is found
+ * too. An archived or deleted dish simply drops out.
+ */
+export interface CatalogSpotlight {
+  enabled: boolean;
+  productIds: string[];
+  title?: string;
+}
+
+/** Customer-facing buttons → Mirage `restaurant.engagement`. */
+export interface CatalogEngagement {
+  /** A Google review link; shows "Rate us". */
+  reviewUrl?: string;
+  /** "Order on WhatsApp" on each dish — needs the WhatsApp number in the profile. */
+  whatsappOrder: boolean;
+  /** A "Call waiter" button that messages the restaurant's WhatsApp. */
+  callWaiter: boolean;
+  /** The Wi-Fi chip in the contact sheet. The password is shown to anyone with the menu. */
+  wifi?: { ssid: string; password?: string };
+  /** A 1–5 rating + comment form; replies are read back in the analytics screen. */
+  feedbackForm: boolean;
+}
+
+export const QR_TEMPLATES = ['classic', 'minimal', 'tent', 'bold'] as const;
+export type QrTemplate = (typeof QR_TEMPLATES)[number];
+export const MAX_QR_FRAME_TEXT = 30;
+/** Lower than the text rule on purpose: a scanner needs contrast, not reading comfort. */
+export const MIN_QR_CONTRAST = 4;
+
+/**
+ * The printed QR's look (services/brandedQr.ts). ReCapture-only — Mirage never
+ * sees it. Dark modules on a light ground ONLY: an inverted code fails on many
+ * phones' stock cameras, which is refused at the API.
+ */
+export interface CatalogQrStyle {
+  fg: string;
+  bg: string;
+  /** The restaurant's own logo in the centre instead of the Mayasabha mark. */
+  logoCenter: boolean;
+  frameText?: string;
+  template: QrTemplate;
+}
+
 // ── Time-based menu fields (more-customization Stage 4) ────────────────────
 //
 // All PUBLISHED to Mirage, and all evaluated ON THE PUBLIC PAGE in the
@@ -488,6 +559,11 @@ export interface ProductPublishedSnapshot {
    * on a snapshot written before the field, which the planner reads as "none".
    */
   i18n?: string;
+  /**
+   * Stage 7: the "goes well with" dishes as last pushed (their stored names,
+   * as JSON). Absent on an older snapshot, which the planner reads as "none".
+   */
+  pairsWith?: string;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;

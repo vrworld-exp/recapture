@@ -17,6 +17,13 @@ import {
   BADGE_COLORS,
   BADGE_ICONS,
   MENU_LANGUAGES,
+  AR_LOADER_STYLES,
+  AR_STAGES,
+  QR_TEMPLATES,
+  type CatalogArBranding,
+  type CatalogEngagement,
+  type CatalogQrStyle,
+  type CatalogSpotlight,
   type CatalogBadge,
   type CatalogAnnouncement,
   type CatalogLanguages,
@@ -61,6 +68,28 @@ export interface ICatalog extends Document {
    * published until the language is back on.
    */
   i18n?: CatalogTranslations;
+  /** Stage 7: the 3D viewer's branding. Absent = today's plain viewer. */
+  arBranding?: CatalogArBranding;
+  /** Stage 7: the carousel at the top of the menu. Absent = none. */
+  spotlight?: CatalogSpotlight;
+  /** Stage 7: review / WhatsApp / waiter / Wi-Fi / feedback buttons. Absent = none. */
+  engagement?: CatalogEngagement;
+  /** Stage 7: the printed QR's look. ReCapture-only. Absent = black on white, classic. */
+  qrStyle?: CatalogQrStyle;
+  /**
+   * Stage 8.2: the menu's pretty address, `https://<slug>.<menu domain>` — an
+   * ADDITIONAL address beside `publicUrl`, which never changes. Unique among
+   * catalogs; published to Mirage only on a plan that covers it.
+   */
+  slug?: string;
+  /**
+   * Stage 8.1: the entitlements key (customizationEntitlements.entitlementsKey)
+   * the restaurant was last pushed under. Worker-owned. When the plan changes,
+   * the planner sees the difference and re-pushes branding and sections even
+   * with no edit, so a downgrade takes gated looks off the menu (and an
+   * upgrade puts them back).
+   */
+  publishedEntitlementsKey?: string;
   status: CatalogStatus;
   /**
    * The Mirage restaurant this catalog is projected into. Written ONCE, at
@@ -233,6 +262,62 @@ const CatalogSchema = new Schema<ICatalog>(
     // Mixed: keyed by language, shape and bounds checked by the Zod schema.
     // Written with dotted `i18n.<lang>` paths, so no markModified is needed.
     i18n: { type: Schema.Types.Mixed },
+    // Stage 7. Bounds only — colour contrast and URL shape are the Zod schema's.
+    arBranding: {
+      type: new Schema<CatalogArBranding>(
+        {
+          watermarkLogo: { type: Boolean, default: false },
+          loaderStyle: { type: String, enum: AR_LOADER_STYLES, default: 'default' },
+          stage: { type: String, enum: AR_STAGES, default: 'none' },
+          showDishName: { type: Boolean, default: false },
+        },
+        { _id: false }
+      ),
+    },
+    spotlight: {
+      type: new Schema<CatalogSpotlight>(
+        {
+          enabled: { type: Boolean, default: false },
+          productIds: { type: [String], default: [] },
+          title: { type: String, trim: true, maxlength: 40 },
+        },
+        { _id: false }
+      ),
+    },
+    engagement: {
+      type: new Schema<CatalogEngagement>(
+        {
+          reviewUrl: { type: String, trim: true, maxlength: 300 },
+          whatsappOrder: { type: Boolean, default: false },
+          callWaiter: { type: Boolean, default: false },
+          wifi: {
+            type: new Schema(
+              {
+                ssid: { type: String, trim: true, maxlength: 32, required: true },
+                password: { type: String, maxlength: 63 },
+              },
+              { _id: false }
+            ),
+          },
+          feedbackForm: { type: Boolean, default: false },
+        },
+        { _id: false }
+      ),
+    },
+    qrStyle: {
+      type: new Schema<CatalogQrStyle>(
+        {
+          fg: { type: String, match: /^#[0-9a-fA-F]{6}$/, default: '#000000' },
+          bg: { type: String, match: /^#[0-9a-fA-F]{6}$/, default: '#FFFFFF' },
+          logoCenter: { type: Boolean, default: false },
+          frameText: { type: String, trim: true, maxlength: 30 },
+          template: { type: String, enum: QR_TEMPLATES, default: 'classic' },
+        },
+        { _id: false }
+      ),
+    },
+    slug: { type: String, trim: true, lowercase: true, maxlength: 40 },
+    publishedEntitlementsKey: { type: String },
     status: { type: String, enum: CATALOG_STATUSES, required: true, default: 'DRAFT' },
     mirageRestaurantId: { type: String },
     mirageProvisionedAt: { type: Date },
@@ -276,6 +361,13 @@ CatalogSchema.index({ status: 1, updatedAt: -1 });
 CatalogSchema.index(
   { mirageRestaurantId: 1 },
   { unique: true, partialFilterExpression: { mirageRestaurantId: { $type: 'string' } } }
+);
+
+// Stage 8.2: one catalog per menu address. Partial so catalogs without one
+// hold no slot.
+CatalogSchema.index(
+  { slug: 1 },
+  { unique: true, partialFilterExpression: { slug: { $type: 'string' } } }
 );
 
 export const Catalog = model<ICatalog>('Catalog', CatalogSchema);

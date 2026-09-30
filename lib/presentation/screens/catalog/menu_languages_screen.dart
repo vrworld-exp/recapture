@@ -22,6 +22,7 @@ import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/plan_lock_chip.dart';
 
 class MenuLanguagesScreen extends ConsumerWidget {
   const MenuLanguagesScreen({super.key});
@@ -169,6 +170,14 @@ class _LanguagePickerState extends ConsumerState<_LanguagePicker> {
               ),
               const SizedBox(height: AppSpacing.xl),
               Text('Also offer (up to $kMaxExtraLanguages)', style: text.titleMedium),
+              EntitlementLimitNote(
+                text: (e) => e.entitlements.extraLanguages >= kMaxExtraLanguages
+                    ? null
+                    : e.entitlements.extraLanguages == 0
+                        ? 'Your plan shows your menu in one language. Extra languages need Signature.'
+                        : 'Your plan shows ${e.entitlements.extraLanguages} extra language on the menu; '
+                            'more need MasterChef.',
+              ),
               const SizedBox(height: AppSpacing.sm),
               Wrap(
                 spacing: AppSpacing.sm,

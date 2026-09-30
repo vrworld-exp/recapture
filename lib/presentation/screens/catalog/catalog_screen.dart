@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
@@ -809,7 +810,7 @@ class _GraceBanner extends StatelessWidget {
 }
 
 /// The catalog's identity and publish state at a glance (features 4, 37, 38).
-class _CatalogHeaderCard extends StatelessWidget {
+class _CatalogHeaderCard extends ConsumerWidget {
   const _CatalogHeaderCard({
     required this.catalog,
     required this.onDeleteCatalog,
@@ -837,9 +838,12 @@ class _CatalogHeaderCard extends StatelessWidget {
   final VoidCallback onOpenSubscription;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final textTheme = Theme.of(context).textTheme;
     final stacked = MediaQuery.sizeOf(context).width <= _kStackedHeaderWidth;
+    // Stage 8.3 rollout: the customization entry points appear once ops set
+    // `appearanceEnabled` (see customizationVisibleProvider).
+    final customizing = ref.watch(customizationVisibleProvider);
 
     return Container(
       padding: const EdgeInsets.all(AppSpacing.lg),
@@ -867,6 +871,7 @@ class _CatalogHeaderCard extends StatelessWidget {
               ),
               // The menu's look — preset and colours (more-customization
               // Stage 2). push, like the profile: a sub-screen of the shell.
+              if (customizing)
               IconButton(
                 key: const Key('catalog-open-appearance'),
                 tooltip: 'Appearance — colours & style',
@@ -879,6 +884,7 @@ class _CatalogHeaderCard extends StatelessWidget {
                     context.pushNamed(AppRouteNames.catalogAppearance),
               ),
               // Stage 5: the badge library.
+              if (customizing)
               IconButton(
                 key: const Key('catalog-open-badges'),
                 tooltip: 'Badges',
@@ -907,11 +913,14 @@ class _CatalogHeaderCard extends StatelessWidget {
                 onSelected: (action) => switch (action) {
                   _CatalogMenuAction.translations =>
                     context.pushNamed(AppRouteNames.catalogTranslations),
+                  _CatalogMenuAction.extras => context.pushNamed(AppRouteNames.catalogExtras),
+                  _CatalogMenuAction.address => context.pushNamed(AppRouteNames.catalogAddress),
                   _CatalogMenuAction.delete => onDeleteCatalog(),
                 },
                 itemBuilder: (context) => [
                   // Stage 6: here rather than as a fifth header icon, which
                   // would squeeze the catalog name on a phone.
+                  if (customizing)
                   PopupMenuItem(
                     key: const Key('catalog-open-translations'),
                     value: _CatalogMenuAction.translations,
@@ -926,6 +935,38 @@ class _CatalogHeaderCard extends StatelessWidget {
                       ],
                     ),
                   ),
+                  // Stage 7: the spotlight carousel and the customer buttons.
+                  if (customizing)
+                  PopupMenuItem(
+                    key: const Key('catalog-open-extras'),
+                    value: _CatalogMenuAction.extras,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.auto_awesome_outlined, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'Spotlight & customer buttons',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Stage 8.2: the menu's pretty web address.
+                  if (customizing)
+                    PopupMenuItem(
+                      key: const Key('catalog-open-address'),
+                      value: _CatalogMenuAction.address,
+                      child: Row(
+                        children: [
+                          const Icon(Icons.link, size: 18, color: AppColors.textSecondary),
+                          const SizedBox(width: AppSpacing.sm),
+                          Text(
+                            'Menu web address',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
                   PopupMenuItem(
                     value: _CatalogMenuAction.delete,
                     child: Row(
@@ -1165,7 +1206,7 @@ Color _subscriptionColor(SubscriptionSummary? summary) =>
 /// The header's overflow menu. An enum with one entry rather than a bare
 /// callback because this menu is where the next catalog-level action lands, and
 /// a `switch` over it is a compile error the day one is added without a branch.
-enum _CatalogMenuAction { translations, delete }
+enum _CatalogMenuAction { translations, extras, address, delete }
 
 class _Chip extends StatelessWidget {
   const _Chip({required this.label, required this.color});

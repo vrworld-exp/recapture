@@ -40,6 +40,8 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/menu_theme_preview.dart';
+import '../../widgets/catalog/plan_lock_chip.dart';
+import '../../../data/repositories/menu_extras_repository.dart';
 
 /// Width at or above which the controls and the preview sit side by side.
 const double kAppearanceTwoColumnWidth = 900;
@@ -229,7 +231,7 @@ Future<bool> _confirmDiscard(BuildContext context) async {
   return discard == true;
 }
 
-class _Controls extends StatelessWidget {
+class _Controls extends ConsumerWidget {
   const _Controls({
     required this.scope,
     required this.presets,
@@ -251,9 +253,16 @@ class _Controls extends StatelessWidget {
   final AppearanceNotifier notifier;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final selected = MenuThemePreset.resolve(state.draft.presetId, presets);
     final canSave = state.isDirty && problem == null && !state.saving;
+    // Stage 8.1: lock chips on what the owner's plan does not cover. Owner only —
+    // the entitlements endpoint is the owner's.
+    final ents = scope.delegatedCatalogId == null
+        ? ref.watch(catalogEntitlementsProvider).valueOrNull
+        : null;
+    final layoutLock = ents?.lockFor('layoutAndFonts', covered: ents.entitlements.layoutAndFonts);
+    final colourLock = ents?.lockFor('customColors', covered: ents.entitlements.customColors);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -273,7 +282,7 @@ class _Controls extends StatelessWidget {
           ],
         ),
         const SizedBox(height: AppSpacing.xxl),
-        _Label('Layout'),
+        _Label('Layout', lock: layoutLock),
         const SizedBox(height: AppSpacing.md),
         SegmentedButton<MenuLayout>(
           key: const Key('appearance-layout'),
@@ -306,7 +315,7 @@ class _Controls extends StatelessWidget {
           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
         ),
         const SizedBox(height: AppSpacing.xxl),
-        _Label('Fonts'),
+        _Label('Fonts', lock: layoutLock),
         const SizedBox(height: AppSpacing.md),
         Wrap(
           spacing: AppSpacing.sm,
@@ -344,6 +353,21 @@ class _Controls extends StatelessWidget {
           value: state.draft.showFilters,
           onChanged: state.saving ? null : notifier.setShowFilters,
         ),
+        // Stage 7: the 3D viewer's branding lives on its own screen (it saves on
+        // its own, not with this draft). Owner only for now.
+        if (scope.delegatedCatalogId == null)
+          ListTile(
+            key: const Key('appearance-open-ar-style'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.view_in_ar_outlined),
+            title: const Text('3D & AR style'),
+            subtitle: Text(
+              'Your logo while dishes load, a watermark, and the surface under the dish.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.textMuted),
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.pushNamed(AppRouteNames.catalogArStyle),
+          ),
         if (!hasCover) ...[
           const SizedBox(height: AppSpacing.lg),
           Text(
@@ -359,7 +383,15 @@ class _Controls extends StatelessWidget {
             key: const Key('appearance-customize'),
             tilePadding: EdgeInsets.zero,
             initiallyExpanded: state.draft.primary != null || state.draft.accent != null,
-            title: const Text('Customize colours'),
+            title: Row(
+              children: [
+                const Flexible(child: Text('Customize colours')),
+                if (colourLock != null) ...[
+                  const SizedBox(width: AppSpacing.sm),
+                  PlanLockChip(plan: colourLock),
+                ],
+              ],
+            ),
             subtitle: Text(
               'Optional — your brand colour for buttons and prices, and an accent.',
               style: Theme.of(context)
@@ -451,19 +483,28 @@ class _Controls extends StatelessWidget {
 }
 
 class _Label extends StatelessWidget {
-  const _Label(this.text);
+  const _Label(this.text, {this.lock});
 
   final String text;
 
+  /// Stage 8.1: the plan that covers this section, when the owner's does not.
+  final String? lock;
+
   @override
-  Widget build(BuildContext context) => Text(
-        text.toUpperCase(),
-        style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: AppColors.textMuted,
-              letterSpacing: 1.2,
-              fontWeight: FontWeight.w700,
-            ),
-      );
+  Widget build(BuildContext context) {
+    final label = Text(
+      text.toUpperCase(),
+      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            color: AppColors.textMuted,
+            letterSpacing: 1.2,
+            fontWeight: FontWeight.w700,
+          ),
+    );
+    if (lock == null) return label;
+    return Row(
+      children: [label, const SizedBox(width: AppSpacing.sm), PlanLockChip(plan: lock!)],
+    );
+  }
 }
 
 /// One preset: a mini menu — page, a card, the primary button — and its name.

@@ -104,6 +104,11 @@ export interface MirageClient {
   analyticsTimeseries(query: MirageAnalyticsQuery): Promise<MirageTimeseriesPoint[]>;
   /** M29 */
   analyticsTopProducts(query: MirageAnalyticsQuery): Promise<MirageTopProductRow[]>;
+  /**
+   * Stage 7: the diner feedback report. Optional so every test fake of this
+   * interface keeps compiling; the service treats its absence as UNAVAILABLE.
+   */
+  analyticsFeedback?(query: MirageAnalyticsQuery): Promise<unknown>;
 }
 
 /**
@@ -805,6 +810,10 @@ export const mirageClient: MirageClient = {
         badges: input.badges,
         showFilters: input.showFilters,
         languages: input.languages,
+        arBranding: input.arBranding,
+        spotlight: input.spotlight,
+        engagement: input.engagement,
+        slug: input.slug,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -850,6 +859,10 @@ export const mirageClient: MirageClient = {
         badges: input.badges,
         showFilters: input.showFilters,
         languages: input.languages,
+        arBranding: input.arBranding,
+        spotlight: input.spotlight,
+        engagement: input.engagement,
+        slug: input.slug,
       },
       ...(input.image ? { files: { image: input.image } } : {}),
     });
@@ -955,6 +968,7 @@ export const mirageClient: MirageClient = {
         servesCount: input.servesCount,
         prepMinutes: input.prepMinutes,
         i18n: input.i18n,
+        pairsWith: input.pairsWith,
         tags: input.tags,
         availability: input.availability,
         featured: input.featured,
@@ -1005,6 +1019,7 @@ export const mirageClient: MirageClient = {
         servesCount: input.servesCount,
         prepMinutes: input.prepMinutes,
         i18n: input.i18n,
+        pairsWith: input.pairsWith,
         tags: input.tags,
         availability: input.availability,
         featured: input.featured,
@@ -1120,6 +1135,16 @@ export const mirageClient: MirageClient = {
       query: analyticsParams(query),
     });
     return Array.isArray(data) ? (data as MirageTopProductRow[]) : [];
+  },
+
+  async analyticsFeedback(query: MirageAnalyticsQuery): Promise<unknown> {
+    return send<unknown>({
+      method: 'get',
+      path: '/analytics/feedback-report',
+      context: 'analytics feedback',
+      requiresAdmin: true,
+      query: analyticsParams(query),
+    });
   },
 };
 

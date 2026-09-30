@@ -34,6 +34,7 @@
 // user did not choose is a worse failure than reporting one.
 import { EMPTY_DISH_DETAILS_KEY, mirageDishFields } from '@/services/catalog/dishDetails';
 import { mirageTranslationsField } from '@/services/catalog/menuTranslations';
+import { miragePairsField } from '@/services/catalog/menuExtras';
 import { Types } from 'mongoose';
 
 import { CatalogProduct } from '@/models/CatalogProduct';
@@ -184,6 +185,7 @@ function snapshotOf(
     foodType: product.foodType,
     details: product.details,
     i18n: product.i18n,
+    pairsWith: product.pairsWith,
     glbUrl: product.glbUrl,
     usdzUrl: product.usdzUrl,
     thumbnailUrl: product.thumbnailUrl,
@@ -260,6 +262,8 @@ async function createProduct(
     ...mirageDishFields(product.details ?? EMPTY_DISH_DETAILS_KEY),
     // Stage 6: translations, always sent on a create (`''` = none).
     i18n: mirageTranslationsField(product.i18n),
+    // Stage 7: "goes well with", always sent on a create (`''` = none).
+    pairsWith: miragePairsField(product.pairsWith),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };
@@ -422,6 +426,7 @@ async function applyUpdate(
       : {}),
     ...(changed('details') ? mirageDishFields(product.details ?? EMPTY_DISH_DETAILS_KEY) : {}),
     ...(changed('i18n') ? { i18n: mirageTranslationsField(product.i18n) } : {}),
+    ...(changed('pairsWith') ? { pairsWith: miragePairsField(product.pairsWith) } : {}),
     ...assets.files,
     ...(assets.urls ? { assetUrls: assets.urls } : {}),
   };

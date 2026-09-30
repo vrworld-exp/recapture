@@ -89,6 +89,8 @@ export interface ProductDto {
    * kept, just not published). `{}` when none.
    */
   i18n: ProductTranslations;
+  /** Stage 7: "goes well with" — other product ids of this catalog, in order. */
+  pairsWith: string[];
   position: number;
   /** OUR CloudFront URLs, frozen at create time. Null for an image-only row. */
   glbUrl: string | null;
@@ -156,6 +158,7 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     servesCount: p.servesCount ?? null,
     prepMinutes: p.prepMinutes ?? null,
     i18n: productTranslationsDto(p.i18n),
+    pairsWith: (p.pairsWith ?? []).map((id) => id.toHexString()),
     position: p.position,
     glbUrl: p.assets?.glbUrl ?? null,
     usdzUrl: p.assets?.usdzUrl ?? null,
@@ -197,6 +200,33 @@ function productTranslationsDto(raw: unknown): ProductTranslations {
     if (Object.keys(t).length > 0) out[lang as keyof ProductTranslations] = t;
   }
   return out;
+}
+
+/**
+ * Stage 7: the "goes well with" ids a write keeps — live products of THIS
+ * catalog, never the dish itself, in the order sent. Anything else is dropped
+ * silently, the same way a pairing to a dish archived later drops out at publish:
+ * the picker only offers valid dishes, so a stranger id is a stale client, not
+ * something to refuse the whole save over.
+ */
+async function validPairings(
+  catalogId: Types.ObjectId,
+  ids: readonly string[] | undefined,
+  selfId?: Types.ObjectId
+): Promise<Types.ObjectId[] | undefined> {
+  if (ids === undefined) return undefined;
+  const wanted = ids.filter((id) => !selfId || id !== selfId.toHexString());
+  if (wanted.length === 0) return [];
+  const found = await CatalogProduct.find({
+    _id: { $in: wanted.map((id) => new Types.ObjectId(id)) },
+    catalogId,
+    deletedAt: null,
+  })
+    .select('_id')
+    .lean()
+    .exec();
+  const live = new Set(found.map((p) => (p._id as Types.ObjectId).toHexString()));
+  return wanted.filter((id) => live.has(id)).map((id) => new Types.ObjectId(id));
 }
 
 // ── List ────────────────────────────────────────────────────────────────────
@@ -500,6 +530,9 @@ export async function createProduct(
     ...dishDetailWrites(input),
     // Stage 6: text in other languages may be typed before the first save.
     ...(translationsForCreate(input.i18n) ? { i18n: translationsForCreate(input.i18n) } : {}),
+    ...(input.pairsWith !== undefined
+      ? { pairsWith: await validPairings(catalogId, input.pairsWith) }
+      : {}),
     position,
     ...(sourceProjectId ? { sourceProjectId } : {}),
     ...(sourceModelId ? { sourceModelId } : {}),
@@ -725,6 +758,9 @@ export async function updateProduct(
   // Stage 6: merged per language — saving Hindi never touches the Tamil text.
   const translations = translationWrites(input.i18n);
   Object.assign(set, translations.set);
+  if (input.pairsWith !== undefined) {
+    set.pairsWith = await validPairings(catalogId, input.pairsWith, id);
+  }
   if (input.position !== undefined) set.position = input.position;
 
   // ── Assets: replace a model (15), replace an image (16), convert a type (17)

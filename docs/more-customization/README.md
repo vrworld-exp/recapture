@@ -60,8 +60,8 @@ last stage, and manual phone checks may still be open — see the stage's *Done 
 | ✅ 4 | [Opening hours, announcement strip, time-windowed categories](stage-04-hours-announcements.md) | BE + FE + Mirage | 2 | M |
 | ✅ 5 | [Custom badges and dietary / allergen info](stage-05-badges-dietary.md) | BE + FE + Mirage | 2 | M |
 | ✅ 6 | [Multi-language menu](stage-06-multi-language.md) | BE + FE + Mirage | 2 | L |
-| 7 | [AR branding, pairings ("goes well with"), engagement buttons, branded QR](stage-07-ar-engagement-qr.md) | BE + FE + Mirage | 2 | L |
-| 8 | [Plan gating, custom domain, rollout](stage-08-plan-gating-rollout.md) | BE + FE + infra | 1–7 | M |
+| ✅ 7 | [AR branding, pairings ("goes well with"), engagement buttons, branded QR](stage-07-ar-engagement-qr.md) | BE + FE + Mirage | 2 | L |
+| ✅ 8 | [Plan gating, custom domain, rollout](stage-08-plan-gating-rollout.md) | BE + FE + infra | 1–7 | M |
 
 ### Part 2 — features that make Mirage more useful to clients (Stages 9–16)
 
@@ -103,8 +103,8 @@ every new onboarding; Stage 15 is the feature owners show off. Stage 16 only aft
 | Q1 | Final preset list and names — the 8 in Stage 1 are a proposal. | Stage 1 |
 | Q2 | Does the rep get the Appearance screen on delegated catalogs, or owner only? (Proposal: both.) | Stage 2 |
 | Q3 | ~~Which regional languages first? Machine-translate as a draft, or owner types everything?~~ **Answered 2026-09-30:** all 9 selectable (up to 3 per menu); the owner types everything — no translate endpoint. | Stage 6 |
-| Q4 | Which features are paid-tier only? (Proposal table in Stage 8.) | Stage 8 |
-| Q5 | Custom domain: subdomain of ours (`cafe.mirage.menu`) only, or the client's own domain too? | Stage 8 |
+| Q4 | ~~Which features are paid-tier only?~~ **Answered 2026-09-30:** the proposed split — Basic = Taste, Pro = Signature, Premium = MasterChef. | Stage 8 |
+| Q5 | ~~Custom domain: subdomain only, or the client's own domain too?~~ **Answered 2026-09-30:** our subdomain only (phase 1); own domains later, separate design. | Stage 8 |
 | Q6 | Weekly report: in-app only at first, or wait for the WhatsApp channel? | Stage 9 |
 | Q7 | AI provider + monthly budget for menu import / descriptions / translations. | Stage 13 |
 | Q8 | Where does the video render worker run (needs Chromium + ffmpeg, ~1 GB RAM per render)? | Stage 15 |

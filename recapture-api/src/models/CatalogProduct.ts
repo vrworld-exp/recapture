@@ -102,6 +102,12 @@ export interface ICatalogProduct extends Document {
    */
   i18n?: ProductTranslations;
   /**
+   * Stage 7 — PUBLISHED. "Goes well with": up to four other products of this
+   * catalog, in the owner's order. Published as the dishes' stored names
+   * (unique per restaurant on Mirage); an archived or deleted one drops out.
+   */
+  pairsWith?: Types.ObjectId[];
+  /**
    * Display order within the catalog. ReCapture honours it everywhere; Mirage
    * has no sort field at all, so on the public page order is by creation date.
    * That gap is real and is stated in the publish UI rather than papered over.
@@ -200,6 +206,7 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
     // Mixed, keyed by language; bounds are the Zod schema's. Written through
     // dotted `i18n.<lang>` paths so one language never overwrites another.
     i18n: { type: Schema.Types.Mixed },
+    pairsWith: { type: [{ type: Schema.Types.ObjectId, ref: 'CatalogProduct' }], default: undefined },
     position: { type: Number, required: true, default: 0 },
     sourceProjectId: { type: Schema.Types.ObjectId, ref: 'Project' },
     sourceModelId: { type: Schema.Types.ObjectId, ref: 'ProjectModel' },

@@ -89,6 +89,23 @@ export interface AnalyticsKpisDto {
   productPageViews: number;
   modelLoads: number;
   modelFailures: number;
+  /** Stage 7: taps on the customer buttons, and feedback forms sent. */
+  reviewClicks: number;
+  whatsappOrders: number;
+  waiterCalls: number;
+  feedbackCount: number;
+}
+
+/** Stage 7: what diners said through the feedback form. */
+export interface FeedbackReportDto {
+  range: AnalyticsRange & { timezone: string };
+  count: number;
+  /** One decimal, null with no ratings. */
+  average: number | null;
+  /** How many 1★ … 5★, in that order. */
+  distribution: number[];
+  /** The newest twenty, newest first. */
+  recent: { rating: number; comment: string; lang: string; at: string }[];
 }
 
 /** One step of "menu opened → product viewed → AR launched → contact clicked". */
@@ -401,6 +418,10 @@ const ZERO_KPIS: AnalyticsKpisDto = {
   productPageViews: 0,
   modelLoads: 0,
   modelFailures: 0,
+  reviewClicks: 0,
+  whatsappOrders: 0,
+  waiterCalls: 0,
+  feedbackCount: 0,
 };
 
 /** Mirage's own SLOW_MODEL_LOAD_MS, for a body that does not state one. */
@@ -450,6 +471,10 @@ function toKpis(raw: unknown): AnalyticsKpisDto {
     productPageViews: field('productPageViews'),
     modelLoads: field('modelLoads'),
     modelFailures: field('modelFailures'),
+    reviewClicks: field('reviewClicks'),
+    whatsappOrders: field('whatsappOrders'),
+    waiterCalls: field('waiterCalls'),
+    feedbackCount: field('feedbackCount'),
   };
 }
 
@@ -644,6 +669,53 @@ export async function getCatalogAnalyticsSummary(
     data: {
       range: { from: range.from, to: range.to, days, timezone: ANALYTICS_TIMEZONE },
       ...toSummary(result.data, scope.restaurantId, local),
+    },
+  };
+}
+
+// ── Feedback (Stage 7) ──────────────────────────────────────────────────────
+
+/**
+ * The feedback form's replies for the caller's restaurant. Field by field like
+ * every report here; an older Mirage without the report is UNAVAILABLE, which
+ * the screen already renders as "not right now".
+ */
+export async function getCatalogFeedbackReport(
+  userId: string,
+  input: RangeInput
+): Promise<AnalyticsResult<FeedbackReportDto>> {
+  const scope = await scopeFor(userId);
+  if (scope.outcome !== 'OK') return scope;
+  if (!isMirageConfigured()) return { outcome: 'UNAVAILABLE', code: ANALYTICS_UNAVAILABLE };
+  const client = getMirageClient();
+  if (!client.analyticsFeedback) return { outcome: 'UNAVAILABLE', code: ANALYTICS_UNAVAILABLE };
+
+  const range = resolveRange(input);
+  const result = await report(
+    cacheKey('feedback', scope.catalogId, range),
+    (query) => client.analyticsFeedback!(query),
+    { restaurantId: scope.restaurantId, from: range.from, to: range.to, tz: ANALYTICS_TIMEZONE }
+  );
+  if (result.outcome !== 'OK') return result;
+
+  const raw = (result.data ?? {}) as Record<string, unknown>;
+  const distribution = list<unknown>(raw.distribution).slice(0, 5).map(num);
+  while (distribution.length < 5) distribution.push(0);
+  return {
+    outcome: 'OK',
+    data: {
+      range: { ...range, timezone: ANALYTICS_TIMEZONE },
+      count: num(raw.count),
+      average: typeof raw.average === 'number' ? raw.average : null,
+      distribution,
+      recent: list<Record<string, unknown>>(raw.recent)
+        .slice(0, 20)
+        .map((r) => ({
+          rating: num(r.rating),
+          comment: str(r.comment).slice(0, 500),
+          lang: str(r.lang).slice(0, 8),
+          at: str(r.at),
+        })),
     },
   };
 }

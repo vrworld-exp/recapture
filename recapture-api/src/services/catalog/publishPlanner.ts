@@ -23,6 +23,7 @@
 //     and dropped keys are invisible failures.
 import { EMPTY_DISH_DETAILS_KEY } from '@/services/catalog/dishDetails';
 import { EMPTY_TRANSLATIONS_KEY } from '@/services/catalog/menuTranslations';
+import { EMPTY_PAIRINGS_KEY } from '@/services/catalog/menuExtras';
 import { isModelPending } from '@/models/types/catalog.types';
 import type {
   ProductPublishedSnapshot,
@@ -50,6 +51,8 @@ export const PUBLISH_STEP_REASONS = [
   'NO_MIRAGE_ID',
   /** Branding may have moved: the catalog's draft is ahead of its published revision. */
   'DRAFT_AHEAD_OF_PUBLISHED',
+  /** Stage 8.1: the plan's customization entitlements changed since the last push. */
+  'PLAN_CHANGED',
   /** At least one diffed field differs from `publishedSnapshot`. */
   'FIELDS_CHANGED',
   /** The row was edited after its last successful sync. */
@@ -107,6 +110,9 @@ export const PRODUCT_DIFF_FIELDS = [
   // (menuTranslations.ts). A snapshot without it reads as "none", so only dishes
   // that actually got a translation plan an UPDATE — no republish on deploy.
   'i18n',
+  // Stage 7: "goes well with", as the partners' names (menuExtras.ts). An old
+  // snapshot reads as "none", so only dishes that got pairings plan an UPDATE.
+  'pairsWith',
   'glbUrl',
   'usdzUrl',
   'thumbnailUrl',
@@ -195,6 +201,10 @@ const PRODUCT_DIFF_ACCESSORS: Record<ProductDiffField, DiffAccessor> = {
     current: (p) => p.i18n ?? EMPTY_TRANSLATIONS_KEY,
     published: (s) => s.i18n ?? EMPTY_TRANSLATIONS_KEY,
   },
+  pairsWith: {
+    current: (p) => p.pairsWith ?? EMPTY_PAIRINGS_KEY,
+    published: (s) => s.pairsWith ?? EMPTY_PAIRINGS_KEY,
+  },
   glbUrl: { current: (p) => p.glbUrl, published: (s) => s.glbUrl },
   usdzUrl: { current: (p) => p.usdzUrl, published: (s) => s.usdzUrl },
   thumbnailUrl: { current: (p) => p.thumbnailUrl, published: (s) => s.thumbnailUrl },
@@ -258,19 +268,29 @@ function planRestaurant(snapshot: CatalogSnapshot, mode: PublishMode): PublishSt
   // branding at all (§7.6 — the restaurant document is what the QR depends on).
   if (mode !== 'FULL') return null;
 
-  return {
-    target: 'RESTAURANT',
-    targetName: catalog.name,
-    action: catalog.draftRevision > catalog.publishedRevision ? 'UPDATE' : 'SKIP',
-    reason:
-      catalog.draftRevision > catalog.publishedRevision
-        ? 'DRAFT_AHEAD_OF_PUBLISHED'
-        : 'UP_TO_DATE',
-  };
+  if (catalog.draftRevision > catalog.publishedRevision) {
+    return { target: 'RESTAURANT', targetName: catalog.name, action: 'UPDATE', reason: 'DRAFT_AHEAD_OF_PUBLISHED' };
+  }
+  // Stage 8.1: an upgrade or a downgrade with no edit still has to reach the
+  // menu — the gated looks come off (or go back on) with this push.
+  if (planChanged(snapshot)) {
+    return { target: 'RESTAURANT', targetName: catalog.name, action: 'UPDATE', reason: 'PLAN_CHANGED' };
+  }
+  return { target: 'RESTAURANT', targetName: catalog.name, action: 'SKIP', reason: 'UP_TO_DATE' };
+}
+
+/**
+ * Stage 8.1: whether the plan's entitlements differ from the ones the menu was
+ * last pushed under. A catalog pushed before Stage 8 has no recorded key; that
+ * reads as "unchanged" so the deploy itself does not re-push every menu.
+ */
+function planChanged(snapshot: CatalogSnapshot): boolean {
+  const published = snapshot.catalog.publishedEntitlementsKey;
+  return published !== undefined && published !== snapshot.catalog.entitlementsKey;
 }
 
 /** CATEGORY. Always planned before any product — see the ordering note below. */
-function planCategory(category: CatalogSnapshotCategory): PublishStep {
+function planCategory(category: CatalogSnapshotCategory, plan = false): PublishStep {
   const base = {
     target: 'CATEGORY' as const,
     targetId: category.id,
@@ -286,6 +306,8 @@ function planCategory(category: CatalogSnapshotCategory): PublishStep {
   if (!category.lastSyncedAt || category.updatedAt > category.lastSyncedAt) {
     return { ...base, action: 'UPDATE', reason: 'EDITED_SINCE_SYNC' };
   }
+  // A section's timing is gated (Stage 8.1): a plan change re-sends it.
+  if (plan) return { ...base, action: 'UPDATE', reason: 'PLAN_CHANGED' };
   return { ...base, action: 'SKIP', reason: 'UP_TO_DATE' };
 }
 
@@ -418,7 +440,8 @@ export function planPublish(
   // under to exist first.
   if (mode !== 'UNPUBLISH') {
     const needed = neededCategories(snapshot, mode, selectedProducts, categoriesById);
-    steps.push(...needed.sort(byPositionThenId).map(planCategory));
+    const plan = planChanged(snapshot);
+    steps.push(...needed.sort(byPositionThenId).map((c) => planCategory(c, plan)));
   }
 
   steps.push(...productSteps);

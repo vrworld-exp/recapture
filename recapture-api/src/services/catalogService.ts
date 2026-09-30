@@ -46,6 +46,10 @@ import type {
   CatalogLanguages,
   CatalogTranslations,
   CatalogStatus,
+  CatalogArBranding,
+  CatalogEngagement,
+  CatalogQrStyle,
+  CatalogSpotlight,
 } from '@/models/types/catalog.types';
 import { effectiveLanguages } from '@/models/types/catalog.types';
 import { translationWrites } from '@/services/catalog/menuTranslations';
@@ -360,6 +364,13 @@ async function applyCatalogPatch(
   const translations = translationWrites(input.i18n);
   Object.assign(set, translations.set);
   Object.assign(unset, translations.unset);
+  // Stage 7: each REPLACES its block; null removes it.
+  for (const key of ['arBranding', 'spotlight', 'engagement', 'qrStyle'] as const) {
+    const value = input[key];
+    if (value === undefined) continue;
+    if (value === null) unset[key] = 1;
+    else set[key] = value;
+  }
 
   const updated = await Catalog.findOneAndUpdate(
     { userId: ownerId, deletedAt: null },
@@ -477,6 +488,11 @@ export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   // The menu's languages and the text in them (Stage 6).
   'languages',
   'i18n',
+  // The 3D viewer's branding, the spotlight carousel and the customer buttons
+  // (Stage 7). `qrStyle` is not here: it changes what is PRINTED, not the menu.
+  'arBranding',
+  'spotlight',
+  'engagement',
 ];
 
 /**
@@ -512,6 +528,17 @@ export interface BusinessProfileDto {
    * language, including one switched off. `{}` when none.
    */
   i18n: CatalogTranslations;
+  /** Stage 7: null = the plain viewer / no carousel / no buttons / black-on-white QR. */
+  arBranding: CatalogArBranding | null;
+  spotlight: CatalogSpotlight | null;
+  engagement: CatalogEngagement | null;
+  qrStyle: CatalogQrStyle | null;
+  /**
+   * Stage 8.2: the menu's pretty address and its full URL (null when no
+   * subdomain host is configured). Additional to `publicUrl`, never instead.
+   */
+  slug: string | null;
+  slugUrl: string | null;
   /** See {@link PUBLIC_PROFILE_FIELDS}. */
   publicFields: readonly string[];
   updatedAt: string;
@@ -603,6 +630,48 @@ export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
     badges: (c.badges ?? []).map((b) => ({ id: b.id, label: b.label, icon: b.icon, color: b.color })),
     languages: effectiveLanguages(c),
     i18n: catalogTranslationsDto(c.i18n),
+    arBranding: c.arBranding
+      ? {
+          watermarkLogo: c.arBranding.watermarkLogo === true,
+          loaderStyle: c.arBranding.loaderStyle ?? 'default',
+          stage: c.arBranding.stage ?? 'none',
+          showDishName: c.arBranding.showDishName === true,
+        }
+      : null,
+    spotlight: c.spotlight
+      ? {
+          enabled: c.spotlight.enabled === true,
+          productIds: [...(c.spotlight.productIds ?? [])],
+          ...(c.spotlight.title ? { title: c.spotlight.title } : {}),
+        }
+      : null,
+    engagement: c.engagement
+      ? {
+          ...(c.engagement.reviewUrl ? { reviewUrl: c.engagement.reviewUrl } : {}),
+          whatsappOrder: c.engagement.whatsappOrder === true,
+          callWaiter: c.engagement.callWaiter === true,
+          ...(c.engagement.wifi?.ssid
+            ? {
+                wifi: {
+                  ssid: c.engagement.wifi.ssid,
+                  ...(c.engagement.wifi.password ? { password: c.engagement.wifi.password } : {}),
+                },
+              }
+            : {}),
+          feedbackForm: c.engagement.feedbackForm === true,
+        }
+      : null,
+    qrStyle: c.qrStyle
+      ? {
+          fg: c.qrStyle.fg,
+          bg: c.qrStyle.bg,
+          logoCenter: c.qrStyle.logoCenter === true,
+          ...(c.qrStyle.frameText ? { frameText: c.qrStyle.frameText } : {}),
+          template: c.qrStyle.template ?? 'classic',
+        }
+      : null,
+    slug: c.slug ?? null,
+    slugUrl: c.slug && env.MENU_SUBDOMAIN_BASE ? `https://${c.slug}.${env.MENU_SUBDOMAIN_BASE}` : null,
     publicFields: PUBLIC_PROFILE_FIELDS,
     updatedAt: c.updatedAt.toISOString(),
   };

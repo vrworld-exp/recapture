@@ -418,6 +418,16 @@ const envSchema = z.object({
     .optional()
     .transform((v) => (v ? v.replace(/\/+$/, '') : v)),
   /**
+   * More-customization Stage 8.2: the wildcard host menus get a subdomain on
+   * — `menu.example.com` gives `https://<slug>.menu.example.com`. A bare host,
+   * no scheme. Unset = no pretty address is offered (the slug is still saved).
+   * This is an ADDITIONAL address only; it never touches `publicUrl`.
+   */
+  MENU_SUBDOMAIN_BASE: z
+    .string()
+    .regex(/^[a-z0-9.-]+\.[a-z]{2,}$/i, 'A bare host such as menu.example.com')
+    .optional(),
+  /**
    * The S3 bucket and CDN host Mirage should write ITS copy of our assets to.
    *
    * These are not our buckets and not a ReCapture concern in the usual sense —

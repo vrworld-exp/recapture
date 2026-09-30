@@ -50,6 +50,10 @@ import '../../presentation/screens/catalog/appearance_screen.dart';
 import '../../presentation/screens/catalog/badge_manager_screen.dart';
 import '../../presentation/screens/catalog/menu_languages_screen.dart';
 import '../../presentation/screens/catalog/translations_screen.dart';
+import '../../presentation/screens/catalog/ar_style_screen.dart';
+import '../../presentation/screens/catalog/menu_extras_screen.dart';
+import '../../presentation/screens/catalog/qr_style_screen.dart';
+import '../../presentation/screens/catalog/menu_address_screen.dart';
 import '../../presentation/screens/catalog/opening_hours_screen.dart';
 import '../../presentation/screens/catalog/business_profile_screen.dart';
 import '../../presentation/screens/catalog/catalog_screen.dart';
@@ -144,6 +148,18 @@ abstract final class AppRoutes {
 
   /// Every dish, section and badge label per language, with progress (Stage 6).
   static const catalogTranslations = '/catalog/translations';
+
+  /// Stage 7: the 3D viewer's branding.
+  static const catalogArStyle = '/catalog/ar-style';
+
+  /// Stage 7: the spotlight carousel and the customer buttons.
+  static const catalogExtras = '/catalog/extras';
+
+  /// Stage 7: the branded QR editor.
+  static const catalogQrStyle = '/catalog/qr-style';
+
+  /// Stage 8.2: the menu's pretty web address.
+  static const catalogAddress = '/catalog/address';
 
   /// The draft rendered in the public page's shape, before publishing.
   static const catalogPreview = '/catalog/preview';
@@ -345,6 +361,10 @@ abstract final class AppRouteNames {
   static const catalogBadges = 'catalogBadges';
   static const catalogLanguages = 'catalogLanguages';
   static const catalogTranslations = 'catalogTranslations';
+  static const catalogArStyle = 'catalogArStyle';
+  static const catalogExtras = 'catalogExtras';
+  static const catalogQrStyle = 'catalogQrStyle';
+  static const catalogAddress = 'catalogAddress';
   static const catalogPreview = 'catalogPreview';
   static const catalogPublish = 'catalogPublish';
   static const catalogQr = 'catalogQr';
@@ -583,6 +603,27 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.catalogTranslations,
         name: AppRouteNames.catalogTranslations,
         builder: (_, __) => const FlowBackScope(child: TranslationsScreen()),
+      ),
+      // Stage 7. STATIC, before the product routes.
+      GoRoute(
+        path: AppRoutes.catalogArStyle,
+        name: AppRouteNames.catalogArStyle,
+        builder: (_, __) => const FlowBackScope(child: ArStyleScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogExtras,
+        name: AppRouteNames.catalogExtras,
+        builder: (_, __) => const FlowBackScope(child: MenuExtrasScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogQrStyle,
+        name: AppRouteNames.catalogQrStyle,
+        builder: (_, __) => const FlowBackScope(child: QrStyleScreen()),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogAddress,
+        name: AppRouteNames.catalogAddress,
+        builder: (_, __) => const FlowBackScope(child: MenuAddressScreen()),
       ),
       // The catalog preview — the draft in the public page's shape (feature 5).
       // STATIC, declared before the product routes for the same reason the

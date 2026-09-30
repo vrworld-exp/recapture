@@ -104,6 +104,10 @@ class AnalyticsKpis {
     this.productPageViews = 0,
     this.modelLoads = 0,
     this.modelFailures = 0,
+    this.reviewClicks = 0,
+    this.whatsappOrders = 0,
+    this.waiterCalls = 0,
+    this.feedbackCount = 0,
   });
 
   /// Catalog opens — the public page loaded. The top of the funnel.
@@ -137,6 +141,16 @@ class AnalyticsKpis {
   /// 3D models that gave up.
   final int modelFailures;
 
+  /// Stage 7: taps on "Rate us", "Order on WhatsApp", "Call waiter", and
+  /// feedback forms sent. Zero on an older server.
+  final int reviewClicks;
+  final int whatsappOrders;
+  final int waiterCalls;
+  final int feedbackCount;
+
+  bool get hasEngagement =>
+      reviewClicks > 0 || whatsappOrders > 0 || waiterCalls > 0 || feedbackCount > 0;
+
   static const zero = AnalyticsKpis();
 
   bool get isAllZero =>
@@ -166,6 +180,10 @@ class AnalyticsKpis {
         productPageViews: catalogCount(map?['productPageViews']),
         modelLoads: catalogCount(map?['modelLoads']),
         modelFailures: catalogCount(map?['modelFailures']),
+        reviewClicks: catalogCount(map?['reviewClicks']),
+        whatsappOrders: catalogCount(map?['whatsappOrders']),
+        waiterCalls: catalogCount(map?['waiterCalls']),
+        feedbackCount: catalogCount(map?['feedbackCount']),
       );
 }
 

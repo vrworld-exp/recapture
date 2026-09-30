@@ -1,6 +1,7 @@
 // lib/domain/entities/business_profile.dart
 import '../catalog/appearance.dart';
 import '../catalog/dish_details.dart';
+import '../catalog/menu_extras.dart';
 import '../catalog/menu_languages.dart';
 import '../catalog/menu_time.dart';
 import '../catalog/catalog_names.dart';
@@ -167,6 +168,12 @@ class BusinessProfile {
     this.badges = const [],
     this.languages = MenuLanguages.englishOnly,
     this.i18n = const {},
+    this.arBranding = ArBranding.plain,
+    this.spotlight = MenuSpotlight.off,
+    this.engagement = MenuEngagement.off,
+    this.qrStyle = QrStyle.plain,
+    this.slug,
+    this.slugUrl,
     this.updatedAt,
   });
 
@@ -224,6 +231,18 @@ class BusinessProfile {
   /// language, including one switched off. Empty when none.
   final Map<MenuLanguage, CatalogLanguageText> i18n;
 
+  /// Stage 7: the 3D viewer's branding, the spotlight carousel, the customer
+  /// buttons and the printed QR's look. Each "off" on an older server.
+  final ArBranding arBranding;
+  final MenuSpotlight spotlight;
+  final MenuEngagement engagement;
+  final QrStyle qrStyle;
+
+  /// Stage 8.2: the menu's pretty address (`cafe`) and its full URL (null when
+  /// the server has no subdomain host). ADDITIONAL to the QR's link, never instead.
+  final String? slug;
+  final String? slugUrl;
+
   /// Dotted paths (`name`, `contact.phone`, `contact.address`, `logoUrl`, …) of
   /// the fields that actually reach the published public catalog.
   ///
@@ -270,6 +289,12 @@ class BusinessProfile {
       // Absent on an older server — English only, nothing translated.
       languages: MenuLanguages.fromMap(map['languages']),
       i18n: parseCatalogTranslations(map['i18n']),
+      arBranding: ArBranding.fromMap(map['arBranding']),
+      spotlight: MenuSpotlight.fromMap(map['spotlight']),
+      engagement: MenuEngagement.fromMap(map['engagement']),
+      qrStyle: QrStyle.fromMap(map['qrStyle']),
+      slug: catalogText(map['slug']),
+      slugUrl: catalogText(map['slugUrl']),
       // An absent list means "we know of nothing public" — the UI then marks
       // everything ReCapture-only, which understates rather than overpromises.
       publicFields: catalogStringList(rawPublic),
@@ -302,6 +327,12 @@ class BusinessProfile {
         badges: badges,
         languages: languages,
         i18n: i18n,
+        arBranding: arBranding,
+        spotlight: spotlight,
+        engagement: engagement,
+        qrStyle: qrStyle,
+        slug: slug,
+        slugUrl: slugUrl,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
@@ -327,6 +358,12 @@ class BusinessProfile {
         badges: badges,
         languages: languages,
         i18n: i18n,
+        arBranding: arBranding,
+        spotlight: spotlight,
+        engagement: engagement,
+        qrStyle: qrStyle,
+        slug: slug,
+        slugUrl: slugUrl,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
@@ -346,6 +383,12 @@ class BusinessProfile {
         badges: next,
         languages: languages,
         i18n: i18n,
+        arBranding: arBranding,
+        spotlight: spotlight,
+        engagement: engagement,
+        qrStyle: qrStyle,
+        slug: slug,
+        slugUrl: slugUrl,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );
@@ -367,6 +410,12 @@ class BusinessProfile {
         badges: badges,
         languages: languages,
         i18n: i18n,
+        arBranding: arBranding,
+        spotlight: spotlight,
+        engagement: engagement,
+        qrStyle: qrStyle,
+        slug: slug,
+        slugUrl: slugUrl,
         publicFields: publicFields,
         updatedAt: updatedAt,
       );

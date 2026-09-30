@@ -24,6 +24,7 @@ import {
   catalogAnalyticsQuerySchema,
   catalogEntityIdParamsSchema,
   catalogQrQuerySchema,
+  catalogQrPreviewSchema,
   catalogStandeeDownloadSchema,
   catalogTopProductsQuerySchema,
   createCatalogSchema,
@@ -47,10 +48,42 @@ import {
   getCatalogAnalyticsSummary,
   getCatalogAnalyticsTimeseries,
   getCatalogAnalyticsTopProducts,
+  getCatalogFeedbackReport,
   resolveRange,
   type AnalyticsResult,
 } from '@/services/catalogAnalyticsService';
 import { clampQrSize, renderCatalogQr } from '@/services/catalogQrService';
+import { resolveQrStyle, type BrandingSource } from '@/services/brandedQr';
+import {
+  heldBackForCatalog,
+  REQUIRED_PLAN,
+  resolveCustomizationEntitlements,
+} from '@/services/subscription/customizationEntitlements';
+import { setCatalogSlug } from '@/services/catalogSlugService';
+import { getServerFlag } from '@/services/remoteConfigService';
+import { z } from 'zod';
+import { Types as MongooseTypes } from 'mongoose';
+
+/**
+ * Stage 8.1: the style to PRINT. A plan without the branded QR prints the
+ * plain square — the style stays saved and comes back with an upgrade.
+ */
+async function printableQrStyle(doc: ICatalog | null) {
+  if (!doc?.qrStyle) return resolveQrStyle(null);
+  const { entitlements } = await resolveCustomizationEntitlements(doc._id as MongooseTypes.ObjectId);
+  return entitlements.brandedQr ? resolveQrStyle(doc.qrStyle) : resolveQrStyle(null);
+}
+import type { ICatalog } from '@/models/Catalog';
+
+/** Stage 7: what a branded render reads off the catalog document. */
+function brandingOf(doc: ICatalog): BrandingSource {
+  return {
+    catalogName: doc.name,
+    appearance: doc.appearance ?? null,
+    ...(doc.logoKey ? { logoKey: doc.logoKey } : {}),
+    ...(doc.coverImageKey ? { coverImageKey: doc.coverImageKey } : {}),
+  };
+}
 import { ifNoneMatchSatisfied, strongETag } from '@/utils/etag';
 import {
   getPublishStatus,
@@ -1767,12 +1800,25 @@ router.get(
     }
     const clamped = clampQrSize(size);
 
+    // Stage 7: the owner's branded look, when they chose one.
+    const doc = await findOwnedCatalog(userId);
+    const style = await printableQrStyle(doc);
+
     // Keyed on everything that can change the bytes and nothing that cannot.
     // The catalog's revision is deliberately ABSENT: editing a product does not
     // change the code, and including it would invalidate a cache on every save.
     // `logo` IS in the key: the mark changes the pattern, so a client holding
-    // the plain square from before it was drawn must not get a 304 for it.
-    const etag = strongETag({ url, name: catalog.name, format, size: clamped, logo: true });
+    // the plain square from before it was drawn must not get a 304 for it. So
+    // is the style (and the logo it may draw), for the same reason.
+    const etag = strongETag({
+      url,
+      name: catalog.name,
+      format,
+      size: clamped,
+      logo: true,
+      style,
+      ...(style.logoCenter ? { logoKey: doc?.logoKey ?? null } : {}),
+    });
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=3600');
     if (ifNoneMatchSatisfied(req.header('If-None-Match'), etag)) {
@@ -1789,7 +1835,11 @@ router.get(
       // one look for every code of ours on a table. See the `logo` note on
       // `renderCatalogQr` for what this does to the pattern.
       logo: true,
+      style,
+      ...(doc ? { branding: brandingOf(doc) } : {}),
     });
+
+    if (rendered.styleFellBack) res.setHeader('X-Qr-Style-Fallback', '1');
 
     track(AnalyticsEvent.CATALOG_QR_RENDERED, {
       user_id_hash: hashIdentifier(userId),
@@ -1800,6 +1850,122 @@ router.get(
 
     res.setHeader('Content-Type', rendered.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${rendered.filename}"`);
+    res.status(200).send(rendered.body);
+  })
+);
+
+/**
+ * GET /catalog/entitlements — Stage 8.1: what the catalog's plan covers, for
+ * the app's lock chips, and what is being held back right now. `enforced:
+ * false` (the gates flag is off, or a trial / comp) means everything is on.
+ */
+router.get(
+  '/entitlements',
+  asyncHandler(async (req, res) => {
+    const doc = await findOwnedCatalog(req.user!.userId);
+    if (!doc) return noCatalog(res);
+    const resolved = await resolveCustomizationEntitlements(doc._id as MongooseTypes.ObjectId);
+    // Stage 8.3 rollout flag: the app shows the customization entry points only
+    // once ops set `appearanceEnabled: true` on client_configs. Absent = hidden;
+    // an unreadable store also reads as hidden (a rollout switch fails closed).
+    let appearanceEnabled = false;
+    try {
+      appearanceEnabled = (await getServerFlag('appearanceEnabled')) === true;
+    } catch {
+      appearanceEnabled = false;
+    }
+    res.status(200).json({
+      status: 'success',
+      appearanceEnabled,
+      enforced: resolved.enforced,
+      planId: resolved.planId,
+      entitlements: resolved.entitlements,
+      requiredPlan: REQUIRED_PLAN,
+      heldBack: await heldBackForCatalog(doc, resolved),
+    });
+  })
+);
+
+/**
+ * PUT /catalog/slug { slug: string | null } — Stage 8.2: the menu's pretty
+ * address. An ADDITIONAL address; the printed QR's URL is never touched.
+ * Saved on any plan, published only on one that covers it.
+ */
+const slugBodySchema = z.object({ slug: z.string().trim().max(40).nullable() }).strict();
+
+router.put(
+  '/slug',
+  asyncHandler(async (req, res) => {
+    const parsed = slugBodySchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const result = await setCatalogSlug(req.user!.userId, parsed.data.slug);
+    switch (result.outcome) {
+      case 'NO_CATALOG':
+        return noCatalog(res);
+      case 'INVALID':
+        return fail(
+          res,
+          400,
+          'SLUG_INVALID',
+          'Use 3–40 lowercase letters, numbers and single hyphens, starting and ending with a letter or number.'
+        );
+      case 'RESERVED':
+        return fail(res, 400, 'SLUG_RESERVED', 'That address is reserved. Please pick another.');
+      case 'TAKEN':
+        return fail(res, 409, 'SLUG_TAKEN', 'Another menu already uses that address.');
+      case 'SAVED':
+        res.status(200).json({ status: 'success', slug: result.slug, url: result.url });
+        return;
+    }
+  })
+);
+
+/**
+ * POST /catalog/qr/preview { style, size? } — the QR screen's live preview of a
+ * style that has NOT been saved: the same renderer, the same decode check, a PNG
+ * back. `X-Qr-Style-Fallback: 1` says the style did not scan and the plain
+ * square is what would print. Same rate window as the QR itself; never cached.
+ */
+router.post(
+  '/qr/preview',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogQrPreviewSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const userId = req.user!.userId;
+    const rate = await consumeRateWindow(
+      `catalog-qr:${userId}`,
+      env.CATALOG_QR_MAX_PER_WINDOW,
+      env.CATALOG_QR_WINDOW_SECONDS
+    );
+    if (rate.limited) return rateLimited(res, rate.retryAfter);
+
+    const catalog = await getCatalog(userId);
+    if (!catalog) return noCatalog(res);
+    if (!catalog.publicUrl) {
+      return fail(
+        res,
+        409,
+        'CATALOG_NOT_PUBLISHED',
+        'Publish your catalog first — the QR code is created when it goes live.'
+      );
+    }
+
+    const doc = await findOwnedCatalog(userId);
+    const rendered = await renderCatalogQr({
+      publicUrl: catalog.publicUrl,
+      catalogName: catalog.name,
+      format: 'png',
+      size: clampQrSize(parsed.data.size ?? 512),
+      logo: true,
+      style: parsed.data.style,
+      ...(doc ? { branding: brandingOf(doc) } : {}),
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    if (rendered.styleFellBack) res.setHeader('X-Qr-Style-Fallback', '1');
+    res.setHeader('Content-Type', rendered.contentType);
     res.status(200).send(rendered.body);
   })
 );
@@ -1871,12 +2037,17 @@ router.post(
     const { copies } = parsed.data;
     const catalogId = new Types.ObjectId(catalog.id);
 
+    // Stage 7: the same branded artwork the QR screen previews. The counting
+    // below is untouched — only the picture differs.
+    const doc = await findOwnedCatalog(userId);
     const rendered = await renderCatalogQr({
       publicUrl: catalog.publicUrl!,
       catalogName: catalog.name,
       format: 'pdf',
       logo: true,
       copies,
+      style: await printableQrStyle(doc),
+      ...(doc ? { branding: brandingOf(doc) } : {}),
     });
 
     const spent = await consumeStandees(catalogId, copies);
@@ -2008,6 +2179,27 @@ router.get(
         IMAGE_ONLY: { views: 0, arViews: 0, products: 0 },
         UNKNOWN: { views: 0, arViews: 0, products: 0 },
       },
+    }));
+  })
+);
+
+/**
+ * GET /catalog/analytics/feedback — Stage 7: what diners said through the
+ * feedback form (count, average, 1–5 spread, newest twenty comments).
+ */
+router.get(
+  '/analytics/feedback',
+  asyncHandler(async (req, res) => {
+    const parsed = catalogAnalyticsQuerySchema.safeParse(req.query);
+    if (!parsed.success) return badRequest(res, parsed.error);
+
+    const result = await getCatalogFeedbackReport(req.user!.userId, parsed.data);
+    respondToAnalytics(res, result, () => ({
+      range: { ...resolveRange(parsed.data), timezone: ANALYTICS_TIMEZONE },
+      count: 0,
+      average: null,
+      distribution: [0, 0, 0, 0, 0],
+      recent: [],
     }));
   })
 );

@@ -36,6 +36,8 @@
 // phone layout because it is narrow, not because it is a browser.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../widgets/catalog/analytics_engagement_card.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/routes/app_router.dart';
@@ -349,6 +351,9 @@ class _ReportBody extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.lg),
           AnalyticsTopProductsCard(topProducts: report.topProducts),
+          // Stage 7: the customer buttons and the feedback form — only when a
+          // diner has used one in this range.
+          AnalyticsEngagementCard(kpis: kpis, from: range.from, to: range.to),
           const SizedBox(height: AppSpacing.lg),
           _SplitCard(topProducts: report.topProducts),
           const SizedBox(height: AppSpacing.lg),

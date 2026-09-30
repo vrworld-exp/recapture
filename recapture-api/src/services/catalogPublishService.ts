@@ -52,6 +52,11 @@ import { hasActiveRun, releaseAbandonedRun } from '@/services/catalog/publishRun
 // same list without a require cycle; re-exported below for existing importers.
 import { publishableProducts } from '@/services/catalog/publishableProducts';
 import { CatalogSyncErrorCode, syncFailure } from '@/services/catalog/publishSyncErrors';
+import {
+  heldBackForCatalog,
+  resolveCustomizationEntitlements,
+  type HeldBackItem,
+} from '@/services/subscription/customizationEntitlements';
 import { mirageCategoryName } from '@/services/catalog/categorySync';
 import { getMirageClient, isMirageConfigured, MirageError } from '@/services/mirage';
 import type { Actor } from '@/models/types/subscription.types';
@@ -522,6 +527,19 @@ export function assertMappingImmutable(
  * rule (a failed RESTAURANT aborts the remaining steps) already stops fifty
  * products from failing individually behind it.
  */
+/**
+ * Stage 8.1: records which entitlements the restaurant was just pushed under,
+ * so the next plan change is noticed (publishPlanner `PLAN_CHANGED`). A mapping
+ * write — `timestamps: false`, no draft bump.
+ */
+async function rememberEntitlements(catalogId: Types.ObjectId, key: string): Promise<void> {
+  await Catalog.updateOne(
+    { _id: catalogId },
+    { $set: { publishedEntitlementsKey: key } },
+    { timestamps: false }
+  ).exec();
+}
+
 export const restaurantExecutor: PublishStepExecutor = async (step, context) => {
   const catalogId = new Types.ObjectId(context.catalogId);
 
@@ -532,6 +550,7 @@ export const restaurantExecutor: PublishStepExecutor = async (step, context) => 
       case 'ADOPTED':
       case 'CREATED':
         context.mirageRestaurantId = result.mapping.mirageRestaurantId;
+        await rememberEntitlements(catalogId, context.snapshot.catalog.entitlementsKey);
         return { outcome: 'SUCCEEDED' };
       case 'NAME_TAKEN':
         return {
@@ -556,6 +575,7 @@ export const restaurantExecutor: PublishStepExecutor = async (step, context) => 
   const branding = await syncCatalogBranding(catalogId);
   switch (branding.outcome) {
     case 'SYNCED':
+      await rememberEntitlements(catalogId, context.snapshot.catalog.entitlementsKey);
       return { outcome: 'SUCCEEDED' };
     case 'NAME_TAKEN':
       // The rename is refused; the page, the URL and every published product
@@ -1035,6 +1055,13 @@ export interface PublishStatusDto {
   products: PublishProductStatusDto[];
   /** What would block a publish right now — the same set POST /publish uses. */
   gates: PublishGate[];
+  /**
+   * More-customization Stage 8.1: what the owner designed that their plan does
+   * not cover. NEVER a blocker — the publish goes out with the defaults for
+   * these, and upgrading + republishing brings them back. Empty while the
+   * subscription gates are off.
+   */
+  heldBack: HeldBackItem[];
 }
 
 /**
@@ -1069,6 +1096,10 @@ export async function getPublishStatus(
   ]);
 
   const gates = await evaluatePublishGates(catalog, products);
+  const heldBack = await heldBackForCatalog(
+    catalog,
+    await resolveCustomizationEntitlements(catalogId)
+  );
 
   return {
     outcome: 'OK',
@@ -1123,6 +1154,7 @@ export async function getPublishStatus(
           : {}),
       })),
       gates,
+      heldBack,
     },
   };
 }

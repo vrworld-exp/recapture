@@ -14,6 +14,7 @@
 // sentence comes from `sync_error_copy.dart`. That is what makes "no raw Mirage
 // prose can reach the UI" a property of the code rather than a rule somebody
 // has to keep remembering — there is no field the text could arrive in.
+import 'menu_entitlements.dart';
 import 'catalog_names.dart';
 import '../entities/catalog_json.dart';
 import '../entities/catalog_status.dart';
@@ -259,6 +260,7 @@ class PublishStatus {
     required this.run,
     required this.products,
     required this.gates,
+    this.heldBack = const [],
   });
 
   final CatalogStatus status;
@@ -295,6 +297,11 @@ class PublishStatus {
   /// What would block a publish right now — the same set `POST /publish`
   /// evaluates, so the checklist cannot disagree with the button.
   final List<PublishGate> gates;
+
+  /// Stage 8.1: what the owner designed that their plan does not cover. NEVER
+  /// a blocker — the publish goes out with the defaults for these. Empty on an
+  /// older server and while the subscription gates are off.
+  final List<HeldBackItem> heldBack;
 
   /// A run is holding the catalog right now.
   bool get isPublishing => activeRunId != null;
@@ -360,6 +367,7 @@ class PublishStatus {
               PublishProductStatus.fromMap(item),
       ],
       gates: PublishGate.listFrom(map['gates']),
+      heldBack: HeldBackItem.listFrom(map['heldBack']),
     );
   }
 }

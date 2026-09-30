@@ -195,6 +195,30 @@ export interface PlanDefinition {
   /** Complimentary standees bundled into the price (§3a). */
   includedStandeeCount: number;
   features: readonly PlanFeature[];
+  /**
+   * More-customization Stage 8: an ops override of this plan's menu
+   * customization entitlements (services/subscription/customizationEntitlements.ts
+   * holds the defaults). Optional, so every override written before it exists
+   * stays valid; keys it names replace the default's.
+   */
+  entitlements?: Partial<CustomizationEntitlements>;
+}
+
+/** What menu customization a plan covers — see customizationEntitlements.ts. */
+export interface CustomizationEntitlements {
+  customColors: boolean;
+  layoutAndFonts: boolean;
+  categorySchedules: boolean;
+  /** How many badges from the library reach the menu (library order). */
+  maxBadges: number;
+  /** How many extra languages reach the menu (the owner's order). */
+  extraLanguages: number;
+  /** 3D viewer branding, the spotlight carousel and "goes well with". */
+  arBrandingAndSpotlight: boolean;
+  /** `review` = only the Rate-us link; `all` = every customer button. */
+  engagement: 'review' | 'all';
+  brandedQr: boolean;
+  customDomain: boolean;
 }
 
 /** The three plans plus the shared constants, as served by the plan catalog. */

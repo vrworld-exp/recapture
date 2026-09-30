@@ -20,6 +20,14 @@ import {
   MAX_BADGES,
   MAX_EXTRA_LANGUAGES,
   MENU_LANGUAGES,
+  AR_LOADER_STYLES,
+  AR_STAGES,
+  MAX_PAIRINGS,
+  MAX_QR_FRAME_TEXT,
+  MAX_SPOTLIGHT_DISHES,
+  MAX_SPOTLIGHT_TITLE,
+  MIN_QR_CONTRAST,
+  QR_TEMPLATES,
   MAX_PRODUCT_BADGES,
   OUTSIDE_WINDOW_MODES,
   PRODUCT_ALLERGENS,
@@ -37,7 +45,7 @@ import {
   THEME_MODES,
   THEME_PRESET_IDS,
 } from '@/config/themePresets';
-import { HEX_COLOR_RE } from '@/utils/colorContrast';
+import { contrastRatio, HEX_COLOR_RE, isDarkOnLight } from '@/utils/colorContrast';
 
 // A Mongo ObjectId as a 24-char hex string. Validated here so a malformed id is
 // a 400 that never reaches the DB, and mongoose stays out of the validation
@@ -365,6 +373,84 @@ export const catalogI18nSchema = perLanguage(
     .strict()
 );
 
+// ── AR branding, spotlight, engagement, branded QR (Stage 7) ──────────────
+
+/** The 3D viewer's branding. REPLACES the block; `null` = the plain viewer. */
+export const arBrandingSchema = z
+  .object({
+    watermarkLogo: z.boolean().default(false),
+    loaderStyle: z.enum(AR_LOADER_STYLES).default('default'),
+    stage: z.enum(AR_STAGES).default('none'),
+    showDishName: z.boolean().default(false),
+  })
+  .strict();
+
+/**
+ * The spotlight carousel. Ids are only shape-checked here; one that is not a
+ * live dish of this catalog is dropped at publish, which is the same thing that
+ * happens when a spotlighted dish is later archived.
+ */
+export const spotlightSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    productIds: z
+      .array(objectId('product id'))
+      .max(MAX_SPOTLIGHT_DISHES)
+      .default([])
+      .transform((ids) => [...new Set(ids)]),
+    title: z.string().trim().max(MAX_SPOTLIGHT_TITLE).optional(),
+  })
+  .strict();
+
+const httpsUrl = z
+  .string()
+  .trim()
+  .max(300)
+  .regex(/^https:\/\//i, 'Link must start with https://');
+
+/** The customer buttons. REPLACES the block; `null` switches them all off. */
+export const engagementSchema = z
+  .object({
+    reviewUrl: httpsUrl.optional(),
+    whatsappOrder: z.boolean().default(false),
+    callWaiter: z.boolean().default(false),
+    wifi: z
+      .object({
+        ssid: z.string().trim().min(1).max(32),
+        password: z.string().max(63).optional(),
+      })
+      .strict()
+      .optional(),
+    feedbackForm: z.boolean().default(false),
+  })
+  .strict();
+
+/**
+ * The printed QR's look. Colours are refused unless the code stays readable:
+ * dark modules on a light ground, and at least MIN_QR_CONTRAST apart. The
+ * renderer still decodes every square before returning it (brandedQr.ts) — this
+ * is the first gate, that is the last.
+ */
+export const qrStyleSchema = z
+  .object({
+    fg: hexColor.default('#000000'),
+    bg: hexColor.default('#FFFFFF'),
+    logoCenter: z.boolean().default(false),
+    frameText: z.string().trim().max(MAX_QR_FRAME_TEXT).optional(),
+    template: z.enum(QR_TEMPLATES).default('classic'),
+  })
+  .strict()
+  .refine((q) => isDarkOnLight(q.fg, q.bg), {
+    message: 'The code must be darker than its background — inverted codes fail on many phones',
+    path: ['fg'],
+  })
+  .refine((q) => contrastRatio(q.fg, q.bg) >= MIN_QR_CONTRAST, {
+    message: 'Those two colours are too close — phones may not read the code',
+    path: ['fg'],
+  });
+
+export type QrStyleInput = z.infer<typeof qrStyleSchema>;
+
 /** Product-side detail fields, shared by create and update. `null` clears a number. */
 const dishDetailFields = {
   badgeIds: z.array(z.string().trim().min(1).max(40)).max(MAX_PRODUCT_BADGES).optional(),
@@ -376,6 +462,12 @@ const dishDetailFields = {
   prepMinutes: z.number().int().min(0).max(600).nullable().optional(),
   /** Stage 6: the dish in other languages, merged per language. */
   i18n: productI18nSchema.optional(),
+  /** Stage 7: "goes well with" — other dishes of this catalog, in order. */
+  pairsWith: z
+    .array(objectId('product id'))
+    .max(MAX_PAIRINGS)
+    .transform((ids) => [...new Set(ids)])
+    .optional(),
 };
 
 /**
@@ -433,6 +525,11 @@ export const updateCatalogSchema = z
     languages: languagesSchema.optional(),
     /** Stage 6: announcement + badge labels, merged per language. */
     i18n: catalogI18nSchema.optional(),
+    /** Stage 7: each REPLACES its block; `null` removes it. */
+    arBranding: arBrandingSchema.nullable().optional(),
+    spotlight: spotlightSchema.nullable().optional(),
+    engagement: engagementSchema.nullable().optional(),
+    qrStyle: qrStyleSchema.nullable().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {
@@ -885,6 +982,14 @@ export type CatalogCategoryParams = z.infer<typeof catalogCategoryParamsSchema>;
  * IS rejected is a non-numeric size, because that is a bug in the caller rather
  * than a preference.
  */
+/** POST /catalog/qr/preview — a style that has not been saved yet. */
+export const catalogQrPreviewSchema = z
+  .object({
+    style: qrStyleSchema,
+    size: z.number().int().positive().optional(),
+  })
+  .strict();
+
 export const catalogQrQuerySchema = z
   .object({
     format: z.enum(['png', 'pdf']).default('png'),

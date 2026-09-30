@@ -29,6 +29,10 @@
 // with the same widget rather than with two copies that could drift.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../../app/routes/app_router.dart';
+import '../../../data/repositories/menu_extras_repository.dart';
 
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
@@ -99,6 +103,16 @@ class _CatalogQrScreenState extends ConsumerState<CatalogQrScreen> {
           onPressed: () => navigateBack(context),
         ),
         title: Text('QR code', style: Theme.of(context).textTheme.titleLarge),
+        actions: [
+          // Stage 7: colours, the logo in the centre, frame text, standee template.
+          if (ref.watch(customizationVisibleProvider))
+          IconButton(
+            key: const Key('qr_open_style'),
+            tooltip: 'QR style',
+            icon: const Icon(Icons.palette_outlined),
+            onPressed: () => context.pushNamed(AppRouteNames.catalogQrStyle),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Center(

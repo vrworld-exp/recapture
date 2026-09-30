@@ -279,6 +279,12 @@ export interface CreateRestaurantInput {
   showFilters?: boolean;
   /** Stage 6: `{ primary, extra }` as JSON (helper/i18nFields.js). */
   languages?: string;
+  /** Stage 7: JSON blocks (services/catalog/menuExtras.ts); `''` clears each. */
+  arBranding?: string;
+  spotlight?: string;
+  engagement?: string;
+  /** Stage 8.2: the menu subdomain; `''` clears. */
+  slug?: string;
   image?: MirageFileUpload;
 }
 
@@ -336,6 +342,12 @@ export interface UpdateRestaurantInput {
   showFilters?: boolean;
   /** Stage 6: `{ primary, extra }` as JSON (helper/i18nFields.js). */
   languages?: string;
+  /** Stage 7: JSON blocks (services/catalog/menuExtras.ts); `''` clears each. */
+  arBranding?: string;
+  spotlight?: string;
+  engagement?: string;
+  /** Stage 8.2: the menu subdomain; `''` clears. */
+  slug?: string;
   image?: MirageFileUpload;
 }
 
@@ -400,6 +412,8 @@ export interface CreateItemInput {
   prepMinutes?: string;
   /** Stage 6 — `{ hi: { name, description } }` as JSON (menuTranslations.ts); `''` clears. */
   i18n?: string;
+  /** Stage 7 — the partners' stored names as a JSON array; `''` clears. */
+  pairsWith?: string;
   /** The product photo. At least one of `image`/`object` is required. */
   image?: MirageFileUpload;
   /** The GLB. */
@@ -447,6 +461,8 @@ export interface UpdateItemInput {
   prepMinutes?: string;
   /** Stage 6 — `{ hi: { name, description } }` as JSON (menuTranslations.ts); `''` clears. */
   i18n?: string;
+  /** Stage 7 — the partners' stored names as a JSON array; `''` clears. */
+  pairsWith?: string;
   image?: MirageFileUpload;
   object?: MirageFileUpload;
   objectIos?: MirageFileUpload;

@@ -18,10 +18,12 @@ import '../../../application/catalog/business_profile_notifier.dart';
 import '../../../data/repositories/business_profile_repository.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/catalog/dish_details.dart';
+import '../../../domain/catalog/menu_entitlements.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/plan_lock_chip.dart';
 import '../../widgets/catalog/dish_badge_chip.dart';
 
 class BadgeManagerScreen extends ConsumerWidget {
@@ -181,6 +183,12 @@ class _BadgeEditorState extends ConsumerState<_BadgeEditor> {
                     ? 'Here are some to start with — edit, delete or add your own, then save.'
                     : 'Design a badge once, then put it on any dish. A dish card shows two.',
                 style: text.bodySmall?.copyWith(color: AppColors.textMuted),
+              ),
+              EntitlementLimitNote(
+                text: (e) => e.entitlements.maxBadges >= kMaxBadges
+                    ? null
+                    : 'Your plan shows your first ${e.entitlements.maxBadges} badges on the menu; '
+                        'all $kMaxBadges need ${planLabel(e.requiredPlan['badges'])}.',
               ),
               const SizedBox(height: AppSpacing.lg),
               for (var i = 0; i < _badges.length; i++)

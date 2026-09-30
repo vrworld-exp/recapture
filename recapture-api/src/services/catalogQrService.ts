@@ -58,6 +58,13 @@ import {
   type RgbBitmap,
 } from '@/services/pdfPrimitives';
 import { qrLogoForPdf, qrLogoOverlay } from '@/services/qrLogo';
+import {
+  brandedPdf,
+  brandedPng,
+  isDefaultQrStyle,
+  type BrandingSource,
+} from '@/services/brandedQr';
+import type { CatalogQrStyle } from '@/models/types/catalog.types';
 
 // Re-exported because this module was their home before the split, and all are
 // part of "what every issued code looks like" rather than of PDF plumbing.
@@ -261,6 +268,11 @@ export interface RenderedQr {
   contentType: string;
   /** `<slug>-qr.png`. Derived from the catalog name, never from the URL. */
   filename: string;
+  /**
+   * Stage 7: a style was asked for but its square did not decode, so the plain
+   * one was drawn instead. The app says so rather than printing a surprise.
+   */
+  styleFellBack?: boolean;
 }
 
 /** ASCII-safe, filesystem-safe, and deterministic. */
@@ -322,11 +334,50 @@ export async function renderCatalogQr(params: {
    * step this removes. Ignored for PNG, which is one picture by definition.
    */
   copies?: number;
+  /**
+   * Stage 7: the owner's branded look. Absent, or the default style, renders
+   * the plain square through the unchanged path below — so every existing
+   * caller, and every owner who never chose a style, gets the same bytes.
+   */
+  style?: CatalogQrStyle;
+  /** What a branded render reads: logo / cover keys, theme, display name. */
+  branding?: BrandingSource;
 }): Promise<RenderedQr> {
   const size = clampQrSize(params.size);
   const logo = params.logo === true;
-  const png = await renderPng(params.publicUrl, size, logo);
   const slug = filenameSlug(params.catalogName);
+
+  if (params.style && !isDefaultQrStyle(params.style)) {
+    const source = params.branding ?? { catalogName: params.catalogName };
+    // The PNG is rendered (and DECODED) for both formats: a style that does
+    // not scan must not reach a printed PDF either.
+    const checked = await brandedPng({
+      url: params.publicUrl,
+      size: params.format === 'png' ? size : 1024,
+      style: params.style,
+      source,
+      plain: () => renderPng(params.publicUrl, size, logo),
+    });
+    if (!checked.fellBack) {
+      if (params.format === 'png') {
+        return { body: checked.png, contentType: 'image/png', filename: `${slug}-qr.png` };
+      }
+      return {
+        body: await brandedPdf({
+          url: params.publicUrl,
+          style: params.style,
+          source,
+          pages: params.copies,
+        }),
+        contentType: 'application/pdf',
+        filename: `${slug}-qr.pdf`,
+      };
+    }
+    const plain = await renderCatalogQr({ ...params, style: undefined });
+    return { ...plain, styleFellBack: true };
+  }
+
+  const png = await renderPng(params.publicUrl, size, logo);
 
   if (params.format === 'png') {
     return { body: png, contentType: 'image/png', filename: `${slug}-qr.png` };

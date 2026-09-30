@@ -16,6 +16,12 @@
 // identical plan" untestable, and the freeze turns an accidental write into a
 // TypeError in dev rather than a wrong plan in production.
 import { dishDetailsKey, dishDetailsOf } from '@/services/catalog/dishDetails';
+import { pairingsKey } from '@/services/catalog/menuExtras';
+import { entitledView } from '@/services/catalog/entitledView';
+import {
+  entitlementsKey,
+  resolveCustomizationEntitlements,
+} from '@/services/subscription/customizationEntitlements';
 import {
   badgeTranslations,
   categoryTranslations,
@@ -59,6 +65,13 @@ export interface CatalogSnapshotRoot {
    */
   mirageUncategorizedCategoryId?: string;
   publicUrl?: string;
+  /**
+   * Stage 8.1: the plan's customization entitlements as a key, and the key the
+   * restaurant was last pushed under. A difference means the plan changed —
+   * the planner re-pushes branding and sections even with no edit.
+   */
+  entitlementsKey: string;
+  publishedEntitlementsKey?: string;
   /**
    * The revision this run is publishing. Copied here so the finalize step sets
    * `publishedRevision` to what was read at plan time, not to whatever the user
@@ -118,6 +131,8 @@ export interface CatalogSnapshotProduct {
    * see services/catalog/menuTranslations.ts.
    */
   i18n?: string;
+  /** Stage 7: "goes well with" as the partners' stored names — see menuExtras.ts. */
+  pairsWith?: string;
   glbUrl?: string;
   usdzUrl?: string;
   thumbnailUrl?: string;
@@ -211,10 +226,21 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
       .exec(),
   ]);
 
+  // Stage 8.1: everything below is published AS THE PLAN ALLOWS — fewer badges,
+  // fewer languages, no pairings or section timings on a plan without them.
+  const { entitlements } = await resolveCustomizationEntitlements(catalogId);
+  const view = entitledView(catalog as unknown as Parameters<typeof entitledView>[0], entitlements);
+
   // Stage 6: only the enabled extra languages are published; text kept for a
   // language the owner switched off stays in ReCapture.
-  const languages = publishedLanguages(catalog);
+  const languages = publishedLanguages(view);
   const badgeLabels = badgeTranslations(catalog.i18n, languages);
+  // Stage 7: pairings resolve against the dishes still on the menu.
+  const liveNames = new Map(
+    products
+      .filter((p) => !p.deletedAt && !p.archivedAt)
+      .map((p) => [idOf(p._id as Types.ObjectId), p.name] as const)
+  );
 
   const snapshot: CatalogSnapshot = {
     catalog: compact({
@@ -246,6 +272,8 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
       mirageRestaurantId: catalog.mirageRestaurantId,
       mirageUncategorizedCategoryId: catalog.mirageUncategorizedCategoryId,
       publicUrl: catalog.publicUrl,
+      entitlementsKey: entitlementsKey(entitlements),
+      publishedEntitlementsKey: catalog.publishedEntitlementsKey,
       draftRevision: catalog.draftRevision,
       publishedRevision: catalog.publishedRevision,
     }),
@@ -255,7 +283,7 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
         name: category.name,
         position: category.position,
         mirageCategoryId: category.mirageCategoryId,
-        schedule: category.schedule
+        schedule: category.schedule && entitlements.categorySchedules
           ? {
               days: [...category.schedule.days],
               from: category.schedule.from,
@@ -279,8 +307,12 @@ export async function takeCatalogSnapshot(catalogId: Types.ObjectId): Promise<Ca
         categoryId: product.categoryId ? idOf(product.categoryId) : null,
         position: product.position,
         foodType: effectiveFoodType(product),
-        details: dishDetailsKey(dishDetailsOf(product, catalog.badges, badgeLabels)),
+        details: dishDetailsKey(dishDetailsOf(product, view.badges, badgeLabels)),
         i18n: productTranslationsKey(product, languages),
+        pairsWith: pairingsKey(
+          entitlements.arBrandingAndSpotlight ? product.pairsWith : [],
+          liveNames
+        ),
         glbUrl: product.assets?.glbUrl,
         usdzUrl: product.assets?.usdzUrl,
         thumbnailUrl: product.assets?.thumbnailUrl,

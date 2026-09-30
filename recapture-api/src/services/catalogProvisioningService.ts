@@ -51,6 +51,13 @@ import { appendSlugSuffix, toCatalogSlug } from '@/utils/catalogNames';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
 import { parseProductImageKey, productImageContentTypeFor } from '@/utils/productImageKeys';
+import { entitledView } from '@/services/catalog/entitledView';
+import { resolveCustomizationEntitlements } from '@/services/subscription/customizationEntitlements';
+import {
+  mirageArBrandingField,
+  mirageEngagementField,
+  mirageSpotlightField,
+} from '@/services/catalog/menuExtras';
 import {
   announcementTranslations,
   mirageLanguagesField,
@@ -363,6 +370,21 @@ function mirageDishSettings(catalog: ICatalog): {
   };
 }
 
+/**
+ * Stage 7: the viewer branding, the spotlight (resolved to the dishes' current
+ * names) and the customer buttons. Always sent, `''` to clear, like every
+ * other block here.
+ */
+async function mirageStage7Fields(
+  catalog: ICatalog
+): Promise<{ arBranding: string; spotlight: string; engagement: string }> {
+  return {
+    arBranding: mirageArBrandingField(catalog),
+    spotlight: await mirageSpotlightField(catalog),
+    engagement: mirageEngagementField(catalog),
+  };
+}
+
 function mirageCoverUrl(catalog: ICatalog): string {
   return catalog.coverImageKey ? `${CLOUDFRONT_BASE}/${catalog.coverImageKey}` : '';
 }
@@ -658,6 +680,10 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
   const logo = await loadLogoUpload(catalog);
   const phoneNo = mirageDigits(catalog.contact?.phone);
   const links = mirageLinks(catalog);
+  const view = entitledView(
+    catalog,
+    (await resolveCustomizationEntitlements(catalog._id as Types.ObjectId)).entitlements
+  );
 
   let created: MirageRestaurant;
   try {
@@ -667,10 +693,15 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
       ...(phoneNo !== undefined ? { phoneNo } : {}),
       website: links.website,
       socialLinks: links.socialLinks,
-      theme: mirageTheme(catalog),
+      // Stage 8.1: every block as the PLAN allows it (entitledView) — gated
+      // looks go out as their defaults, the saved choices stay in ReCapture.
+      theme: mirageTheme(view),
       coverUrl: mirageCoverUrl(catalog),
-      ...mirageTimeFields(catalog),
-      ...mirageDishSettings(catalog),
+      ...mirageTimeFields(view),
+      ...mirageDishSettings(view),
+      ...(await mirageStage7Fields(view)),
+      // Stage 8.2: the menu's subdomain, `''` when none or not covered.
+      slug: view.slug ?? '',
       ...(logo ? { image: logo } : {}),
     });
   } catch (err) {
@@ -732,6 +763,10 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
   const logo = await loadLogoUpload(catalog);
   const phoneNo = mirageDigits(catalog.contact?.phone);
   const links = mirageLinks(catalog);
+  const view = entitledView(
+    catalog,
+    (await resolveCustomizationEntitlements(catalog._id as Types.ObjectId)).entitlements
+  );
 
   try {
     await client.updateRestaurant(catalog.mirageRestaurantId, {
@@ -740,10 +775,15 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
       ...(phoneNo !== undefined ? { phoneNo } : {}),
       website: links.website,
       socialLinks: links.socialLinks,
-      theme: mirageTheme(catalog),
+      // Stage 8.1: every block as the PLAN allows it (entitledView) — gated
+      // looks go out as their defaults, the saved choices stay in ReCapture.
+      theme: mirageTheme(view),
       coverUrl: mirageCoverUrl(catalog),
-      ...mirageTimeFields(catalog),
-      ...mirageDishSettings(catalog),
+      ...mirageTimeFields(view),
+      ...mirageDishSettings(view),
+      ...(await mirageStage7Fields(view)),
+      // Stage 8.2: the menu's subdomain, `''` when none or not covered.
+      slug: view.slug ?? '',
       ...(logo ? { image: logo } : {}),
     });
 

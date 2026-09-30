@@ -66,6 +66,8 @@ const corsOptions: CorsOptions = {
     // The owner's standee download: what is left of the plan's allowance
     // after this file, so the web client can say so without a second request.
     'X-Standees-Remaining',
+    // Stage 7: the branded QR did not scan and the plain square was sent.
+    'X-Qr-Style-Fallback',
     'X-Standees-Included',
   ],
 };

@@ -79,6 +79,24 @@ const planDefinitionSchema = z
     threeDDishCap: z.number().int().positive(),
     includedStandeeCount: z.number().int().positive(),
     features: z.array(z.enum(PLAN_FEATURES)).readonly(),
+    // More-customization Stage 8: an override of this plan's customization
+    // entitlements. OPTIONAL — an override written before it existed must not
+    // be refused (and the defaults served) for lacking it.
+    entitlements: z
+      .object({
+        customColors: z.boolean(),
+        layoutAndFonts: z.boolean(),
+        categorySchedules: z.boolean(),
+        maxBadges: z.number().int().min(0).max(12),
+        extraLanguages: z.number().int().min(0).max(3),
+        arBrandingAndSpotlight: z.boolean(),
+        engagement: z.enum(['review', 'all']),
+        brandedQr: z.boolean(),
+        customDomain: z.boolean(),
+      })
+      .partial()
+      .strict()
+      .optional(),
   })
   .strict();
 

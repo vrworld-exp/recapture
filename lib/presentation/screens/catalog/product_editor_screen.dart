@@ -22,6 +22,8 @@ import '../../../application/catalog/business_profile_notifier.dart';
 import '../../../domain/catalog/dish_details.dart';
 import '../../widgets/catalog/dish_details_section.dart';
 import '../../widgets/catalog/dish_translations_tile.dart';
+import '../../widgets/catalog/dish_pairings_tile.dart';
+import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
@@ -722,7 +724,11 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
           ),
           const SizedBox(height: AppSpacing.lg),
           // Stage 6: the dish in the menu's other languages (saved on its own).
-          DishTranslationsTile(product: widget.product, enabled: !busy),
+          if (ref.watch(customizationVisibleProvider)) ...[
+            DishTranslationsTile(product: widget.product, enabled: !busy),
+            // Stage 7: "goes well with" (saved on its own).
+            DishPairingsTile(product: widget.product, enabled: !busy),
+          ],
           const SizedBox(height: AppSpacing.lg),
           _AvailabilityField(
             value: _availability,

@@ -49,6 +49,19 @@ export function contrastRatio(a: string, b: string): number {
   return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
 }
 
+/**
+ * Stage 7: is [fg] darker than [bg]? A QR must be dark modules on a light
+ * ground — many phones' stock cameras do not read an inverted code.
+ */
+export function isDarkOnLight(fg: string, bg: string): boolean {
+  return luminance(fg) < luminance(bg);
+}
+
+/** `#RRGGBB` → `[r, g, b]` in 0–255, for renderers. */
+export function hexToRgb(hex: string): [number, number, number] {
+  return toRgb(hex);
+}
+
 function mix(hex: string, target: string, amount: number): string {
   const from = toRgb(hex);
   const to = toRgb(target);
