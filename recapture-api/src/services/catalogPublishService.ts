@@ -68,6 +68,7 @@ import {
 import { countThreeDDishes } from '@/services/subscription/threeDDishCount';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { isValidCatalogSlug } from '@/utils/catalogNames';
+import { ownerCatalogFilter } from '@/services/catalog/outletScope';
 
 // ── Gates ───────────────────────────────────────────────────────────────────
 
@@ -761,7 +762,7 @@ async function openRun(
 
 /** Loads the caller's catalog. An absent one is indistinguishable from another user's. */
 async function ownCatalog(userId: string): Promise<ICatalog | null> {
-  return Catalog.findOne({ userId: new Types.ObjectId(userId), deletedAt: null }).exec();
+  return Catalog.findOne(ownerCatalogFilter(userId)).exec();
 }
 
 /**

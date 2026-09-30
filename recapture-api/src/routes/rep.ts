@@ -688,6 +688,14 @@ router.patch(
 
     const result = await updateBusinessProfile(String(catalog.userId), parsed.data);
     if (result.outcome === 'NOT_FOUND') return notDelegated(res);
+    if (result.outcome === 'BRAND_WIDE') {
+      return fail(
+        res,
+        409,
+        'BRAND_WIDE_FIELD',
+        'This is set on your main outlet and applies to every branch. Switch to the main outlet to change it.'
+      );
+    }
     if (result.outcome === 'LOW_CONTRAST') {
       res.status(400).json(lowContrastBody(result.problem));
       return;
@@ -875,6 +883,14 @@ router.put(
 
     const result = await commitBrandingImage(String(catalog.userId), parsed.data);
     if (result.outcome === 'NOT_FOUND') return notDelegated(res);
+    if (result.outcome === 'BRAND_WIDE') {
+      return fail(
+        res,
+        409,
+        'BRAND_WIDE_FIELD',
+        'This is set on your main outlet and applies to every branch. Switch to the main outlet to change it.'
+      );
+    }
     if (result.outcome !== 'COMMITTED') {
       // INVALID_KEY / FORBIDDEN / OBJECT_NOT_FOUND / TOO_LARGE — all one thing
       // to a rep, who has no way to act on the difference and should not be

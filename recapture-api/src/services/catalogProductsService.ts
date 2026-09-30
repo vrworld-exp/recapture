@@ -56,6 +56,7 @@ import type {
   ProductImageUploadUrlInput,
   UpdateProductInput,
 } from '@/validation/catalogSchemas';
+import { overriddenFields } from '@/services/brand/copyDown';
 
 /**
  * Owner-facing product shape. Built field by field — never a spread of the
@@ -122,6 +123,12 @@ export interface ProductDto {
   isArchived: boolean;
   updatedAt: string;
   createdAt: string;
+  /**
+   * Stage 16 — present only on a branch dish that follows the main outlet:
+   * `overriddenFields` are the ones this outlet changed itself (the rest show
+   * "From main outlet" in the editor).
+   */
+  branch?: { followsMain: true; overriddenFields: string[] };
 }
 
 /**
@@ -179,6 +186,18 @@ export function toProductDto(p: ICatalogProduct): ProductDto {
     isArchived: Boolean(p.archivedAt),
     updatedAt: p.updatedAt.toISOString(),
     createdAt: p.createdAt.toISOString(),
+    ...(p.masterProductId
+      ? {
+          branch: {
+            followsMain: true as const,
+            overriddenFields: overriddenFields(
+              (typeof p.toObject === 'function' ? p.toObject() : p) as unknown as Parameters<
+                typeof overriddenFields
+              >[0]
+            ),
+          },
+        }
+      : {}),
   };
 }
 

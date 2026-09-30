@@ -176,4 +176,4 @@ mirage cutome more --------------------------->>>
 before connected : 
     dev.mirage-be ----> development
     dev.mirage-fe ----> development
-    recapture-dev ----> Live branch
+    recapture-dev ----> Live branch or pahse 2 url.

@@ -138,6 +138,8 @@ describe('business profile', () => {
       'contact.socials.facebook',
       'contact.socials.youtube',
       'contact.socials.whatsapp',
+      // more-customization Stage 3 publishes the cover as the menu's hero banner.
+      'coverImageUrl',
     ]) {
       expect(res.body.profile.publicFields).toContain(carried);
     }
@@ -148,7 +150,6 @@ describe('business profile', () => {
       'businessName',
       'contact.email',
       'contact.socials',
-      'coverImageUrl',
     ]) {
       expect(res.body.profile.publicFields).not.toContain(local);
     }

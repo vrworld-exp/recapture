@@ -151,6 +151,14 @@ export interface ICatalogProduct extends Document {
    * back IN_STOCK at this instant (05:00 IST) and publishes. Absent = stays as set.
    */
   availabilityResetAt?: Date;
+  /** Stage 16 — BRANCH rows only: the main outlet's product this one follows. */
+  masterProductId?: Types.ObjectId;
+  /**
+   * Stage 16 — BRANCH rows only: the master's values as last copied down. A
+   * field whose branch value differs from this is one the branch changed
+   * itself (an override), and copy-down leaves it alone.
+   */
+  masterSync?: Record<string, unknown>;
   archivedAt?: Date;
   deletedAt?: Date;
   createdAt: Date;
@@ -230,6 +238,8 @@ const CatalogProductSchema = new Schema<ICatalogProduct>(
     publishedSnapshot: { type: Schema.Types.Mixed },
     importId: { type: Schema.Types.ObjectId, ref: 'MenuImport' },
     availabilityResetAt: { type: Date },
+    masterProductId: { type: Schema.Types.ObjectId, ref: 'CatalogProduct' },
+    masterSync: { type: Schema.Types.Mixed },
     archivedAt: { type: Date },
     deletedAt: { type: Date },
   },
@@ -267,5 +277,13 @@ CatalogProductSchema.index({ sourceModelId: 1, modelStatus: 1 });
 // top-products rows into 3D vs image-only, and by reconciliation. Sparse: only
 // published products carry one.
 CatalogProductSchema.index({ mirageItemId: 1 }, { sparse: true });
+
+// Stage 16: "every branch row that follows this master product" — and at most
+// one per branch, so two overlapping copy-downs cannot both clone a dish.
+CatalogProductSchema.index({ masterProductId: 1 }, { sparse: true });
+CatalogProductSchema.index(
+  { catalogId: 1, masterProductId: 1 },
+  { unique: true, partialFilterExpression: { masterProductId: { $type: 'objectId' } } }
+);
 
 export const CatalogProduct = model<ICatalogProduct>('CatalogProduct', CatalogProductSchema);

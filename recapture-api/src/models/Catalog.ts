@@ -169,6 +169,22 @@ export interface ICatalog extends Document {
    * non-atomic, non-idempotent writes.
    */
   activePublishRunId?: Types.ObjectId | null;
+  /**
+   * Stage 16 — multi-branch. Absent on a standalone catalog (everyone before
+   * Stage 16). MASTER = the owner's main outlet once it has a branch; BRANCH =
+   * another outlet of the same owner, kept in sync with the MASTER by copy-down.
+   */
+  brandRole?: 'MASTER' | 'BRANCH';
+  /** BRANCH only — the owner's main outlet. */
+  masterCatalogId?: Types.ObjectId;
+  /** The outlet's own label, e.g. "Koregaon Park". BRANCH required, MASTER optional. */
+  outletName?: string;
+  /**
+   * BRANCH only — the lower-cased outlet name. Absent on the main / standalone
+   * catalog, which is what makes `{ userId, branchKey }` unique mean "one main
+   * catalog per owner, and unique branch names under it".
+   */
+  branchKey?: string;
   deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -383,16 +399,29 @@ const CatalogSchema = new Schema<ICatalog>(
     // slot — restore, don't re-create. That is deliberate: "delete my catalog"
     // is the explicitly-confirmed destructive action that also gives up the
     // public URL, and it must not be reachable by accident.
+    brandRole: { type: String, enum: ['MASTER', 'BRANCH'] },
+    masterCatalogId: { type: Schema.Types.ObjectId, ref: 'Catalog' },
+    outletName: { type: String, trim: true, maxlength: 40 },
+    branchKey: { type: String, trim: true, lowercase: true, maxlength: 40 },
     deletedAt: { type: Date },
   },
   { timestamps: true }
 );
 
 // ── Indexes ────────────────────────────────────────────────────────────────
-// One catalog per user. This index IS the rule — services must not try to
+// One MAIN catalog per user. This index IS the rule — services must not try to
 // enforce it with a read-then-write, which two concurrent creates would both
 // pass. The loser gets E11000 and replays the winner.
-CatalogSchema.index({ userId: 1 }, { unique: true });
+//
+// Stage 16: `branchKey` is absent on the main / standalone catalog (a missing
+// field indexes as null, so every owner still gets exactly one of those) and
+// is the lower-cased outlet name on a branch (so branch names are unique per
+// owner). Compound rather than a `$ne` partial index — Atlas refuses `$ne` in a
+// partial filter — and needs no back-fill. It replaces the old `{ userId: 1 }`
+// unique index; `config/legacyIndexes.ts` drops that one once this exists.
+CatalogSchema.index({ userId: 1, branchKey: 1 }, { unique: true });
+// "This main outlet's branches."
+CatalogSchema.index({ masterCatalogId: 1 }, { sparse: true });
 
 // Operational query path: "published catalogs, most recently touched first" —
 // staff/ops listing and any future backfill sweep.

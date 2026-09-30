@@ -31,6 +31,7 @@ import { ProjectModel } from '@/models/ProjectModel';
 import type { ProductAssets } from '@/models/types/catalog.types';
 import { bumpDraftRevision, isDuplicateKeyError } from '@/services/catalogService';
 import { requestPublish, type PublishGate } from '@/services/catalogPublishService';
+import { withOutlet } from '@/services/catalog/outletScope';
 
 export interface PromotionResult {
   /** Products whose assets were written by THIS call. */
@@ -139,7 +140,8 @@ async function tryPublish(
       .exec();
     if (!catalog) return false;
 
-    const result = await requestPublish(String(catalog.userId));
+    // Stage 16: this outlet, not the owner's main one (worker — no request scope).
+    const result = await withOutlet(catalogId, () => requestPublish(String(catalog.userId)));
     if (result.outcome === 'QUEUED') return true;
 
     console.info(

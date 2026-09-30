@@ -17,6 +17,7 @@ import { Catalog } from '@/models/Catalog';
 import { CustomerContact, type ICustomerContact } from '@/models/CustomerContact';
 import { getMirageClient, isMirageConfigured, MirageError } from '@/services/mirage';
 import { track, AnalyticsEvent } from '@/utils/analytics';
+import { ownerCatalogFilter } from '@/services/catalog/outletScope';
 
 /** Contacts with no activity (sign-up / re-sign-up) for this long are deleted. */
 export const CUSTOMER_RETENTION_MS = 24 * 30 * 24 * 60 * 60 * 1000;
@@ -126,7 +127,7 @@ export async function syncCustomers(catalog: {
 // ── Owner reads / writes ───────────────────────────────────────────────────
 
 async function ownedCatalog(userId: string) {
-  return Catalog.findOne({ userId: new Types.ObjectId(userId), deletedAt: null })
+  return Catalog.findOne(ownerCatalogFilter(userId))
     .select({ _id: 1, mirageRestaurantId: 1, customersSyncedAt: 1, customers: 1 })
     .lean<{
       _id: Types.ObjectId;

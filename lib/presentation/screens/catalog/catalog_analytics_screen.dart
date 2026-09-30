@@ -84,7 +84,13 @@ class CatalogAnalyticsScreen extends ConsumerWidget {
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Analytics', style: Theme.of(context).textTheme.titleLarge),
+            Flexible(
+              child: Text(
+                'Analytics',
+                style: Theme.of(context).textTheme.titleLarge,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
             const AnalyticsInfoHint(section: AnalyticsSection.overview),
           ],
         ),

@@ -21,6 +21,7 @@ import {
   type ActorRole,
   type CatalogPermission,
 } from '@/services/staff/staffPermissions';
+import { pinOutlet } from '@/services/catalog/outletScope';
 
 type StaffKind = Exclude<DelegationKind, 'REP'>;
 const STAFF_KINDS: StaffKind[] = ['MANAGER', 'STAFF'];
@@ -239,5 +240,8 @@ export async function resolveStaffCatalog(
     .exec();
   if (!grant) return null;
   const catalog = await Catalog.findOne({ _id: grant.catalogId, deletedAt: null }).exec();
-  return catalog ? { catalog, role: grant.kind as StaffKind } : null;
+  if (!catalog) return null;
+  // Stage 16: a grant is per outlet — pin it for the owner services below.
+  pinOutlet(catalog._id as Types.ObjectId);
+  return { catalog, role: grant.kind as StaffKind };
 }

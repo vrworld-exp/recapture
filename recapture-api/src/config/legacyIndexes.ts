@@ -24,6 +24,12 @@ interface LegacyIndex {
   name: string;
   key: Record<string, 1 | -1>;
   why: string;
+  /**
+   * Drop only once this index (by name) exists on the same collection — for a
+   * legacy UNIQUE index whose replacement must be in place first, so the rule
+   * is never unenforced in between.
+   */
+  requiresIndex?: string;
 }
 
 export const LEGACY_INDEXES: readonly LegacyIndex[] = [
@@ -32,6 +38,13 @@ export const LEGACY_INDEXES: readonly LegacyIndex[] = [
     name: 'providerOrderId_1',
     key: { providerOrderId: 1 },
     why: 'replaced by kind_1_providerOrderId_1 (Stage 03); blocks every PAID row',
+  },
+  {
+    collection: 'catalogs',
+    name: 'userId_1',
+    key: { userId: 1 },
+    why: 'replaced by userId_1_branchKey_1 (Stage 16); blocks every branch outlet',
+    requiresIndex: 'userId_1_branchKey_1',
   },
 ];
 
@@ -57,6 +70,13 @@ export async function dropLegacyIndexes(
     const indexes = await coll.indexes();
     const found = indexes.find((ix) => ix.name === legacy.name);
     if (!found || !sameKey(found.key, legacy.key)) continue;
+    if (legacy.requiresIndex && !indexes.some((ix) => ix.name === legacy.requiresIndex)) {
+      console.warn(
+        `⚠️ Kept legacy index ${legacy.collection}.${legacy.name}: its replacement ` +
+          `${legacy.requiresIndex} does not exist yet (run scripts/multi-branch/migrate-catalog-index.ts)`
+      );
+      continue;
+    }
     await coll.dropIndex(legacy.name);
     console.log(`🧹 Dropped legacy index ${legacy.collection}.${legacy.name} — ${legacy.why}`);
     dropped.push(`${legacy.collection}.${legacy.name}`);

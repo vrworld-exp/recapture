@@ -67,6 +67,8 @@ import type {
   UpdateBusinessProfileInput,
   UpdateCatalogInput,
 } from '@/validation/catalogSchemas';
+import { ownerCatalogFilter } from '@/services/catalog/outletScope';
+import { afterAuthoringWrite } from '@/services/brand/copyDown';
 
 /** Headline counts for the catalog screen. */
 export interface CatalogCountsDto {
@@ -126,6 +128,11 @@ export interface CatalogDto {
    * neither pays a second request. The full picture is GET /catalog/subscription.
    */
   subscription: SubscriptionSummaryDto | null;
+  /**
+   * Stage 16 — present only for an outlet of a multi-branch restaurant: MAIN
+   * sets the brand-wide look, BRANCH follows it. Absent = standalone.
+   */
+  outlet?: { role: 'MAIN' | 'BRANCH'; outletName: string | null; mainCatalogId: string | null };
   updatedAt: string;
   createdAt: string;
 }
@@ -137,10 +144,9 @@ export interface CatalogDto {
  * call starts by resolving the caller's catalog this way.
  */
 export async function findOwnedCatalog(userId: string): Promise<ICatalog | null> {
-  return Catalog.findOne({
-    userId: new Types.ObjectId(userId),
-    deletedAt: null,
-  }).exec();
+  // Stage 16: the outlet this request is scoped to (X-Outlet-Id, a rep /
+  // staff grant), else the main / only catalog — see outletScope.ts.
+  return Catalog.findOne(ownerCatalogFilter(userId)).exec();
 }
 
 /**
@@ -152,7 +158,16 @@ export async function findOwnedCatalog(userId: string): Promise<ICatalog | null>
  * `updatedAt` moves with it via `timestamps`.
  */
 export async function bumpDraftRevision(catalogId: Types.ObjectId): Promise<void> {
-  await Catalog.updateOne({ _id: catalogId }, { $inc: { draftRevision: 1 } }).exec();
+  // Stage 16: the same round trip returns `brandRole`, so a MASTER's edit is
+  // copied down to its branches without an extra read for everyone else.
+  const bumped = await Catalog.findOneAndUpdate(
+    { _id: catalogId },
+    { $inc: { draftRevision: 1 } },
+    { projection: { brandRole: 1 } }
+  )
+    .lean<{ _id: Types.ObjectId; brandRole?: string }>()
+    .exec();
+  await afterAuthoringWrite(bumped);
 }
 
 /** Live counts for one catalog. Three counts, one round trip. */
@@ -202,6 +217,15 @@ export function toCatalogDto(
       c.draftRevision > publishSnapshotRevision,
     counts,
     subscription,
+    ...(c.brandRole
+      ? {
+          outlet: {
+            role: c.brandRole === 'BRANCH' ? ('BRANCH' as const) : ('MAIN' as const),
+            outletName: c.outletName ?? null,
+            mainCatalogId: c.masterCatalogId ? c.masterCatalogId.toHexString() : null,
+          },
+        }
+      : {}),
     updatedAt: c.updatedAt.toISOString(),
     createdAt: c.createdAt.toISOString(),
   };
@@ -288,7 +312,7 @@ export async function createCatalog(
     if (!isDuplicateKeyError(err)) throw err;
 
     // Lost the race (or a plain retry): return the winner.
-    const existing = await Catalog.findOne({ userId: ownerId }).exec();
+    const existing = await Catalog.findOne({ userId: ownerId, branchKey: null }).exec();
     if (!existing) throw err; // the unique index fired but no row — genuinely broken
 
     return {
@@ -305,6 +329,8 @@ export async function createCatalog(
 
 export type UpdateCatalogResult =
   | { outcome: 'NOT_FOUND' }
+  /** Stage 16: a branch tried to change the brand-wide look. */
+  | { outcome: 'BRAND_WIDE'; field: string }
   | { outcome: 'LOW_CONTRAST'; problem: AppearanceContrastProblem }
   | { outcome: 'UPDATED'; catalog: CatalogDto };
 
@@ -384,7 +410,7 @@ async function applyCatalogPatch(
   if (input.customers !== undefined) set.customers = input.customers;
 
   const updated = await Catalog.findOneAndUpdate(
-    { userId: ownerId, deletedAt: null },
+    ownerCatalogFilter(ownerId),
     // The draft bump rides along in the SAME update rather than going through
     // bumpDraftRevision: this write already targets the catalog document, and
     // folding it in keeps the edit and its revision atomic.
@@ -427,16 +453,55 @@ async function applyCatalogPatch(
  * deep merge is the wrong shape here. The write itself, and the reason it is
  * shared with the profile endpoint, live in {@link applyCatalogPatch}.
  */
+/**
+ * Stage 16 (Q3 — brand-wide look): the fields a BRANCH outlet cannot set. They
+ * are copied from the main outlet (brand/copyDown.ts), so a branch write would
+ * only be overwritten by the next copy. The review link is the exception inside
+ * `engagement` — each outlet has its own Google page — so on a branch the
+ * engagement input is narrowed to it.
+ */
+const BRANCH_LOCKED_INPUT_KEYS = [
+  'appearance',
+  'badges',
+  'languages',
+  'i18n',
+  'arBranding',
+  'qrStyle',
+  'plate',
+  'spotlight',
+] as const;
+
+async function brandWideRefusal(
+  userId: string,
+  input: Record<string, unknown>
+): Promise<string | null> {
+  const touches =
+    BRANCH_LOCKED_INPUT_KEYS.some((k) => input[k] !== undefined) || input.engagement !== undefined;
+  if (!touches) return null;
+  const target = await findOwnedCatalog(userId);
+  if (!target || target.brandRole !== 'BRANCH') return null;
+  const locked = BRANCH_LOCKED_INPUT_KEYS.find((k) => input[k] !== undefined);
+  if (locked) return locked;
+  const eng = input.engagement as { reviewUrl?: string } | null | undefined;
+  const current = target.engagement ? JSON.parse(JSON.stringify(target.engagement)) : {};
+  input.engagement = { ...current, reviewUrl: eng?.reviewUrl };
+  if (!eng?.reviewUrl) delete (input.engagement as Record<string, unknown>).reviewUrl;
+  return null;
+}
+
 export async function updateCatalog(
   userId: string,
   input: UpdateCatalogInput
 ): Promise<UpdateCatalogResult> {
   const problem = appearanceRefusal(input);
   if (problem) return { outcome: 'LOW_CONTRAST', problem };
+  const brandField = await brandWideRefusal(userId, input as Record<string, unknown>);
+  if (brandField) return { outcome: 'BRAND_WIDE', field: brandField };
 
   const updated = await applyCatalogPatch(userId, input);
 
   if (!updated) return { outcome: 'NOT_FOUND' };
+  await afterAuthoringWrite(updated);
 
   return {
     outcome: 'UPDATED',
@@ -715,6 +780,7 @@ export async function getBusinessProfile(userId: string): Promise<BusinessProfil
 
 export type UpdateBusinessProfileResult =
   | { outcome: 'NOT_FOUND' }
+  | { outcome: 'BRAND_WIDE'; field: string }
   | { outcome: 'LOW_CONTRAST'; problem: AppearanceContrastProblem }
   | { outcome: 'UPDATED'; profile: BusinessProfileDto };
 
@@ -732,9 +798,12 @@ export async function updateBusinessProfile(
 ): Promise<UpdateBusinessProfileResult> {
   const problem = appearanceRefusal(input);
   if (problem) return { outcome: 'LOW_CONTRAST', problem };
+  const brandField = await brandWideRefusal(userId, input as Record<string, unknown>);
+  if (brandField) return { outcome: 'BRAND_WIDE', field: brandField };
 
   const updated = await applyCatalogPatch(userId, input);
   if (!updated) return { outcome: 'NOT_FOUND' };
+  await afterAuthoringWrite(updated);
 
   return { outcome: 'UPDATED', profile: toBusinessProfileDto(updated) };
 }
@@ -837,6 +906,7 @@ export async function storeBrandingImageBytes(
 }
 
 export type CommitBrandingResult =
+  | { outcome: 'BRAND_WIDE'; field: string }
   | { outcome: 'NOT_FOUND' }
   | { outcome: 'INVALID_KEY' }
   | { outcome: 'FORBIDDEN' }
@@ -861,6 +931,8 @@ export async function commitBrandingImage(
 ): Promise<CommitBrandingResult> {
   const catalog = await findOwnedCatalog(userId);
   if (!catalog) return { outcome: 'NOT_FOUND' };
+  // Stage 16: logo and cover are brand-wide — set on the main outlet.
+  if (catalog.brandRole === 'BRANCH') return { outcome: 'BRAND_WIDE', field: input.slot };
 
   const catalogId = catalog._id as Types.ObjectId;
   const check = await checkCatalogImageKey(catalogId, input.key);
@@ -875,6 +947,7 @@ export async function commitBrandingImage(
     { new: true, runValidators: true }
   ).exec();
   if (!updated) return { outcome: 'NOT_FOUND' };
+  await afterAuthoringWrite(updated);
 
   await sweepSupersededImages(input.key, previousKey);
 
@@ -893,6 +966,8 @@ export async function commitBrandingImage(
  */
 export type DeleteCatalogResult =
   | { outcome: 'NOT_FOUND' }
+  /** Stage 16: a main outlet with live branches — delete the branches first. */
+  | { outcome: 'HAS_BRANCHES' }
   /** A publish run holds the catalog. Deleting under it would race the worker. */
   | { outcome: 'PUBLISH_IN_PROGRESS'; runId: string }
   /** Mirage would not let go of the restaurant. NOTHING was deleted. */
@@ -947,6 +1022,14 @@ export async function deleteCatalog(userId: string): Promise<DeleteCatalogResult
   if (!catalog) return { outcome: 'NOT_FOUND' };
 
   const catalogId = catalog._id as Types.ObjectId;
+
+  // Stage 16: the branches follow this catalog's menu — never orphan them.
+  if (
+    catalog.brandRole === 'MASTER' &&
+    (await Catalog.countDocuments({ masterCatalogId: catalogId, brandRole: 'BRANCH', deletedAt: null })) > 0
+  ) {
+    return { outcome: 'HAS_BRANCHES' };
+  }
 
   // A run in flight is mid-way through writing this catalog into Mirage. Let it
   // finish or fail on its own terms rather than deleting the rows underneath it.

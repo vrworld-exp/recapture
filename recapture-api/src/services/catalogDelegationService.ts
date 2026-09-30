@@ -19,6 +19,7 @@ import {
   type SubscriptionSummaryDto,
 } from '@/services/subscription/subscriptionService';
 import type { CatalogStatus } from '@/models/types/catalog.types';
+import { pinOutlet } from '@/services/catalog/outletScope';
 
 /**
  * A delegated catalog as the rep's picker shows it.
@@ -176,5 +177,10 @@ export async function resolveDelegatedCatalog(
     .exec();
   if (!grant) return null;
 
-  return Catalog.findOne({ _id: id, deletedAt: null }).exec();
+  const catalog = await Catalog.findOne({ _id: id, deletedAt: null }).exec();
+  // Stage 16: the rest of this request acts on THIS outlet — the rep routes
+  // pass the owner's userId to the owner services, which would otherwise
+  // resolve the owner's main catalog, not the branch the grant is for.
+  if (catalog) pinOutlet(catalog._id as Types.ObjectId);
+  return catalog;
 }

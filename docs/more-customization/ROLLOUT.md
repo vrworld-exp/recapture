@@ -47,7 +47,13 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 11. **Stage 14**: API + app only (no Mirage change). Staff sign in with the invited phone number
     through the normal OTP login; tell owners that is how their team gets in. The worker must run
     for "sold out until tomorrow" to come back at 5 am.
-12. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
+12. **Stage 16 (multi-branch)**: API + app only. **Before deploying the API**, run
+    `npx tsx scripts/multi-branch/migrate-catalog-index.ts` (dry run, then `--apply`) — rehearse on
+    a restored production copy first (16a). If the API boots first, the old `catalogs.userId_1`
+    index is kept until `userId_1_branchKey_1` exists, so nothing breaks, but no branch can be added
+    until the migration runs. Multi-outlet discounts: give them by hand with the comp / manual
+    payment tools (each outlet is billed on its own).
+13. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
    2–3 presets — once Stage 3 is live.
 
 ## Per stage
@@ -68,3 +74,5 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 | 12 Reviews / customers / links | | | Opt-in under `/analytics/*`, pulled on read; review link Google-only; no Places search; not plan-gated. |
 | 13 AI menu import / descriptions / enhance | | | Pages via API not presigned; one call per page; `allowNoImage` on Mirage create-item; fingerprint undo. |
 | 14 Today / staff / PDF | | | Ordinary diffed publish (no targeted mode); managers = stock + prices only; PDF Latin-only; not plan-gated. |
+| 15 3D spin videos | — | — | Deferred by the owner (2026-09-30). |
+| 16 Multi-branch | | | `branchKey` compound index (no `$ne`/`isBranch`); copy-down via the draft bump + `masterSync` snapshot; outlet scope via AsyncLocalStorage; rep `branchName` on activation. |

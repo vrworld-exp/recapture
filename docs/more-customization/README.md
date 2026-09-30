@@ -76,7 +76,7 @@ Not about looks: these bring the owner money, save them time, or prove the subsc
 | ✅ 13 | [Menu from a photo + AI descriptions + photo enhance](stage-13-ai-menu-import-content.md) | BE (AI module, worker) + FE | — | L |
 | ✅ 14 | [Quick edit, bulk prices, staff access, printable PDF menu](stage-14-quick-edit-staff-pdf.md) | BE + FE | — | M |
 | ⏸ 15 | [⭐ Instagram-ready 3D spin videos](stage-15-3d-spin-videos.md) | BE (render worker) + FE | 3D models | L |
-| 16 | [Multi-branch restaurants — design only](stage-16-multi-branch-design.md) | data model + all | 14 | XL |
+| ✅ 16 | [Multi-branch restaurants](stage-16-multi-branch-design.md) — built as 16a/16b/16c | data model + all | 14 | XL |
 
 Stages 3–7 are independent of each other once Stage 2 ships — pick them in business order.
 **Recommended order (both parts together):**
@@ -109,4 +109,4 @@ every new onboarding; Stage 15 is the feature owners show off. Stage 16 only aft
 | Q10 | ~~Plan gating for offers and My plate?~~ **Answered 2026-09-30:** both Signature (Pro) and above; Taste = held back at publish. My plate stays ON by default (on covered plans). | Stages 10–11 |
 | Q7 | ~~AI provider + monthly budget?~~ **Answered 2026-09-30:** Claude (`claude-opus-5-5`), ₹2,000/month hard cap, reps + owners on every plan. Stage 12 stays ungated. | Stage 13 |
 | Q8 | Where does the video render worker run (needs Chromium + ffmpeg, ~1 GB RAM per render)? **Stage 15 deferred 2026-09-30** — answer when it is picked up again. | Stage 15 |
-| Q9 | Multi-branch: how many clients asked, and billing per outlet or per brand? | Stage 16 |
+| Q9 | ~~Multi-branch demand and billing?~~ **Answered 2026-09-30:** 2–5 clients; billing per outlet; brand-wide theme; standee pool per outlet. Design + prompts 16a/16b/16c written. | Stage 16 |

@@ -869,6 +869,20 @@ class _CatalogHeaderCard extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Stage 16: which outlet is being edited (only once branches exist).
+          if (catalog.outlet != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+              child: ActionChip(
+                key: const Key('catalog-outlet-switcher'),
+                avatar: const Icon(Icons.place_outlined, size: 16),
+                label: Text(
+                  '${catalog.outlet!.isBranch ? (catalog.outlet!.outletName ?? 'Branch') : (catalog.outlet!.outletName ?? 'Main outlet')} ▾',
+                  overflow: TextOverflow.ellipsis,
+                ),
+                onPressed: () => context.pushNamed(AppRouteNames.catalogOutlets),
+              ),
+            ),
           Row(
             children: [
               Expanded(
@@ -935,6 +949,7 @@ class _CatalogHeaderCard extends ConsumerWidget {
                   _CatalogMenuAction.import => context.pushNamed(AppRouteNames.catalogImport),
                   _CatalogMenuAction.today => context.pushNamed(AppRouteNames.catalogToday),
                   _CatalogMenuAction.staff => context.pushNamed(AppRouteNames.catalogStaff),
+                  _CatalogMenuAction.outlets => context.pushNamed(AppRouteNames.catalogOutlets),
                   _CatalogMenuAction.printMenu => showPrintableMenuDialog(context, ref),
                   _CatalogMenuAction.aiDescriptions =>
                     context.pushNamed(AppRouteNames.catalogAiDescriptions),
@@ -952,9 +967,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.translate, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Languages & translations',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Languages & translations',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -968,9 +986,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.auto_awesome_outlined, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Spotlight & customer buttons',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Spotlight & customer buttons',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -985,9 +1006,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.local_offer_outlined, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Offers & happy hour',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Offers & happy hour',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1000,9 +1024,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.restaurant_menu, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'My plate',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'My plate',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1015,9 +1042,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.today_outlined, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Today: stock & prices',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Today: stock & prices',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1029,9 +1059,30 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.group_outlined, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Staff',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Staff',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Stage 16: main outlet + branches.
+                  PopupMenuItem(
+                    key: const Key('catalog-open-outlets'),
+                    value: _CatalogMenuAction.outlets,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.store_mall_directory_outlined, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Flexible(
+                          child: Text(
+                            'Outlets & branches',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1043,9 +1094,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.print_outlined, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Printable menu',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Printable menu',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1059,9 +1113,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                         children: [
                           const Icon(Icons.document_scanner_outlined, size: 18, color: AppColors.textSecondary),
                           const SizedBox(width: AppSpacing.sm),
-                          Text(
-                            'Import menu from photos',
-                            style: Theme.of(context).textTheme.bodyMedium,
+                          Flexible(
+                            child: Text(
+                              'Import menu from photos',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         ],
                       ),
@@ -1074,9 +1131,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                         children: [
                           const Icon(Icons.auto_awesome, size: 18, color: AppColors.textSecondary),
                           const SizedBox(width: AppSpacing.sm),
-                          Text(
-                            'AI descriptions',
-                            style: Theme.of(context).textTheme.bodyMedium,
+                          Flexible(
+                            child: Text(
+                              'AI descriptions',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         ],
                       ),
@@ -1089,9 +1149,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.people_outline, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Customers',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Customers',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1103,9 +1166,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       children: [
                         const Icon(Icons.delivery_dining_outlined, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Order & booking links',
-                          style: Theme.of(context).textTheme.bodyMedium,
+                        Flexible(
+                          child: Text(
+                            'Order & booking links',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1119,9 +1185,12 @@ class _CatalogHeaderCard extends ConsumerWidget {
                         children: [
                           const Icon(Icons.link, size: 18, color: AppColors.textSecondary),
                           const SizedBox(width: AppSpacing.sm),
-                          Text(
-                            'Menu web address',
-                            style: Theme.of(context).textTheme.bodyMedium,
+                          Flexible(
+                            child: Text(
+                              'Menu web address',
+                              style: Theme.of(context).textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         ],
                       ),
@@ -1136,12 +1205,15 @@ class _CatalogHeaderCard extends ConsumerWidget {
                           color: AppColors.error,
                         ),
                         const SizedBox(width: AppSpacing.sm),
-                        Text(
-                          'Delete catalog',
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.copyWith(color: AppColors.error),
+                        Flexible(
+                          child: Text(
+                            'Delete catalog',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(color: AppColors.error),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -1376,6 +1448,7 @@ enum _CatalogMenuAction {
   aiDescriptions,
   today,
   staff,
+  outlets,
   printMenu,
   address,
   delete,

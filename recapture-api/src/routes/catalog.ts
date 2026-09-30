@@ -165,12 +165,38 @@ import { validateBody } from '@/middleware/validate';
 import { lowContrastBody } from '@/utils/colorContrast';
 import type { Response } from 'express';
 import type { ZodError } from 'zod';
+import { Catalog } from '@/models/Catalog';
+import { OUTLET_HEADER } from '@/services/catalog/outletScope';
+import { outletRoutes } from '@/routes/outletRoutes';
 
 const router = Router();
 
 // Every route here requires a valid access token; ownership is derived from it
 // and NEVER from the body or query.
 router.use(requireAuth);
+
+// Stage 16: `X-Outlet-Id` names which of the owner's outlets this request is
+// about. The services already scope by it (outletScope.ts keeps `userId` in
+// every filter, so a foreign id matches nothing); this check only turns a bad
+// one into a clear 404 instead of a confusing "no catalog".
+router.use(
+  asyncHandler(async (req, res, next) => {
+    const outletId = req.header(OUTLET_HEADER);
+    if (!outletId) return next();
+    const owned =
+      Types.ObjectId.isValid(outletId) &&
+      (await Catalog.exists({
+        _id: new Types.ObjectId(outletId),
+        userId: new Types.ObjectId(req.user!.userId),
+        deletedAt: null,
+      }));
+    if (!owned) {
+      return fail(res, 404, 'OUTLET_NOT_FOUND', 'That outlet is not one of yours.');
+    }
+    next();
+  })
+);
+router.use('/outlets', outletRoutes());
 
 // ── Response helpers ────────────────────────────────────────────────────────
 // One envelope, built in one place, so a new route cannot invent a shape.
@@ -402,6 +428,14 @@ router.patch(
     const result = await updateCatalog(userId, parsed.data);
 
     if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome === 'BRAND_WIDE') {
+      return fail(
+        res,
+        409,
+        'BRAND_WIDE_FIELD',
+        'This is set on your main outlet and applies to every branch. Switch to the main outlet to change it.'
+      );
+    }
     if (result.outcome === 'LOW_CONTRAST') {
       res.status(400).json(lowContrastBody(result.problem));
       return;
@@ -449,6 +483,15 @@ router.delete(
     const result = await deleteCatalog(userId);
 
     if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+
+    if (result.outcome === 'HAS_BRANCHES') {
+      return fail(
+        res,
+        409,
+        'HAS_BRANCHES',
+        'This is your main outlet and it still has branches. Delete the branches first.'
+      );
+    }
 
     if (result.outcome === 'PUBLISH_IN_PROGRESS') {
       return publishInProgress(res, result.runId);
@@ -604,6 +647,14 @@ router.put(
     const result = await commitBrandingImage(userId, parsed.data);
 
     if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome === 'BRAND_WIDE') {
+      return fail(
+        res,
+        409,
+        'BRAND_WIDE_FIELD',
+        'This is set on your main outlet and applies to every branch. Switch to the main outlet to change it.'
+      );
+    }
     if (result.outcome !== 'COMMITTED') return failImageKey(res, result.outcome);
 
     track(AnalyticsEvent.CATALOG_UPDATED, {
@@ -652,6 +703,14 @@ router.patch(
     const result = await updateBusinessProfile(userId, parsed.data);
 
     if (result.outcome === 'NOT_FOUND') return noCatalog(res);
+    if (result.outcome === 'BRAND_WIDE') {
+      return fail(
+        res,
+        409,
+        'BRAND_WIDE_FIELD',
+        'This is set on your main outlet and applies to every branch. Switch to the main outlet to change it.'
+      );
+    }
     if (result.outcome === 'LOW_CONTRAST') {
       res.status(400).json(lowContrastBody(result.problem));
       return;

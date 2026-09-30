@@ -19,6 +19,7 @@ import { CatalogProduct } from '@/models/CatalogProduct';
 import { bumpDraftRevision } from '@/services/catalogService';
 import { requestPublish } from '@/services/catalogPublishService';
 import { can, type ActorRole } from '@/services/staff/staffPermissions';
+import { withOutlet } from '@/services/catalog/outletScope';
 
 export interface Actor {
   userId: string;
@@ -183,7 +184,8 @@ async function logChange(
 /** Requests a publish of the owner's catalog; never throws (the draft is saved either way). */
 async function publishQuietly(catalog: CatalogRef): Promise<string> {
   try {
-    const result = await requestPublish(String(catalog.userId));
+    // Stage 16: publish THIS outlet — the sweep runs outside any request.
+    const result = await withOutlet(catalog._id, () => requestPublish(String(catalog.userId)));
     return result.outcome;
   } catch {
     return 'FAILED';

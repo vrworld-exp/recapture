@@ -50,6 +50,77 @@ const CatalogErrorCopy kCatalogUnknownError = CatalogErrorCopy(
 /// actually take from where they are. A `null` action only where there is
 /// genuinely nothing to do but wait.
 const Map<String, CatalogErrorCopy> _copy = {
+  // ── Stage 16: outlets ────────────────────────────────────────────────────
+  'OUTLET_NOT_FOUND': CatalogErrorCopy(
+    'That outlet is no longer available.',
+    'Open Outlets and pick one again.',
+  ),
+  'BRAND_WIDE_FIELD': CatalogErrorCopy(
+    'This is set on your main outlet and applies to every branch.',
+    'Switch to the main outlet to change it.',
+  ),
+  'HAS_BRANCHES': CatalogErrorCopy(
+    'This is your main outlet and it still has branches.',
+    'Delete the branches first.',
+  ),
+  'BRANCH_LIMIT': CatalogErrorCopy(
+    'You have reached the most branches one restaurant can have.',
+    'Contact us if you need more.',
+  ),
+  'DUPLICATE_OUTLET': CatalogErrorCopy(
+    'You already have an outlet with that name.',
+    'Pick a different name.',
+  ),
+  'NOT_LINKED': CatalogErrorCopy(
+    'This dish was added on this outlet only.',
+    'There is no main-outlet version to go back to.',
+  ),
+  // ── more-customization Stages 5–14 ────────────────────────────────────────
+  'PRODUCT_NOT_FOUND': CatalogErrorCopy(
+    'That dish is no longer in your catalog.',
+    'Refresh to see what changed.',
+  ),
+  'UNKNOWN_BADGE': CatalogErrorCopy(
+    'One of those badges no longer exists.',
+    'Refresh, then pick the badges again.',
+  ),
+  'DIET_CONFLICT': CatalogErrorCopy(
+    'Those diet labels contradict each other (for example Vegan with Dairy).',
+    'Remove one of them and save again.',
+  ),
+  'SLUG_INVALID': CatalogErrorCopy(
+    'That web address has characters we cannot use.',
+    'Use 3–40 lowercase letters, numbers and single hyphens.',
+  ),
+  'SLUG_RESERVED': CatalogErrorCopy(
+    'That web address is reserved.',
+    'Try a different one, such as your restaurant name.',
+  ),
+  'SLUG_TAKEN': CatalogErrorCopy(
+    'Another restaurant already uses that web address.',
+    'Try a different one.',
+  ),
+  'REPORT_NOT_FOUND': CatalogErrorCopy(
+    'There is no report for that week.',
+    'Reports are made every Monday for the week before.',
+  ),
+  'OFFER_NOT_FOUND': CatalogErrorCopy(
+    'That offer no longer exists.',
+    'Refresh your offers.',
+  ),
+  'CUSTOMER_NOT_FOUND': CatalogErrorCopy(
+    'That customer is no longer on your list.',
+    'Refresh your customers.',
+  ),
+  'CUSTOMERS_UNAVAILABLE': CatalogErrorCopy(
+    'Your customer list could not be reached just now.',
+    'Please try again in a minute.',
+  ),
+  'STAFF_NOT_FOUND': CatalogErrorCopy(
+    'That person no longer has access.',
+    'Refresh your staff list.',
+  ),
+
   // ── Catalog root ──────────────────────────────────────────────────────────
   'CATALOG_NOT_FOUND': CatalogErrorCopy(
     "You don't have a catalog yet.",

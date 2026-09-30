@@ -4,6 +4,7 @@ import 'business_profile.dart';
 import 'catalog_json.dart';
 import 'catalog_status.dart';
 import 'catalog_subscription.dart';
+import '../catalog/outlet.dart';
 
 /// Headline counts shown on the catalog screen.
 class CatalogCounts {
@@ -68,6 +69,7 @@ class Catalog {
     this.lastPublishedAt,
     this.counts = const CatalogCounts(),
     this.subscription,
+    this.outlet,
     this.updatedAt,
     this.createdAt,
   });
@@ -131,6 +133,13 @@ class Catalog {
   /// subscription row yet ("No plan"). Server-built; the full picture is
   /// `CatalogRepository.subscription()`.
   final SubscriptionSummary? subscription;
+
+  /// Stage 16: which outlet this is, when the restaurant has branches. Null
+  /// for a standalone restaurant.
+  final CatalogOutletInfo? outlet;
+
+  /// True on a branch outlet — its look is set on the main outlet.
+  bool get isBranch => outlet?.isBranch ?? false;
   final DateTime? updatedAt;
   final DateTime? createdAt;
 
@@ -170,6 +179,7 @@ class Catalog {
           ? CatalogCounts.fromMap(rawCounts)
           : const CatalogCounts(),
       subscription: SubscriptionSummary.fromMapOrNull(map['subscription']),
+      outlet: CatalogOutletInfo.fromMapOrNull(map['outlet']),
       updatedAt: catalogDate(map['updatedAt']),
       createdAt: catalogDate(map['createdAt']),
     );
@@ -192,6 +202,7 @@ class Catalog {
         'lastPublishedAt': lastPublishedAt?.toIso8601String(),
         'counts': counts.toMap(),
         'subscription': subscription?.toMap(),
+        if (outlet != null) 'outlet': outlet!.toMap(),
         'updatedAt': updatedAt?.toIso8601String(),
         'createdAt': createdAt?.toIso8601String(),
       };
@@ -226,6 +237,7 @@ class Catalog {
         lastPublishedAt: lastPublishedAt,
         counts: counts ?? this.counts,
         subscription: subscription,
+        outlet: outlet,
         updatedAt: updatedAt ?? this.updatedAt,
         createdAt: createdAt,
       );

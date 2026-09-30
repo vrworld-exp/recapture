@@ -40,6 +40,11 @@ export const repActivationSchema = z
     restaurantPhone: phoneField,
     businessName: businessNameField.optional(),
     contact: contactSchema.optional(),
+    /**
+     * Stage 16 (Q4): activate this standee on a NEW BRANCH of the restaurant
+     * that already owns an account — its own outlet, standee pool and page.
+     */
+    branchName: z.string().trim().min(2).max(40).optional(),
   })
   .strict();
 

@@ -95,6 +95,7 @@ import '../../presentation/screens/capture/ar_preview_screen.dart';
 import 'auth_router_notifier.dart';
 import 'flow_back.dart';
 import 'route_error_screen.dart';
+import '../../presentation/screens/catalog/outlets_screen.dart';
 
 /// Observes route pushes/pops on the app's root navigator so screens can react
 /// to becoming visible again after a pushed screen pops.
@@ -233,6 +234,7 @@ abstract final class AppRoutes {
   /// Stage 14: the Today screen, staff management, and the helper's own list.
   static const catalogToday = '/catalog/today';
   static const catalogStaff = '/catalog/staff';
+  static const catalogOutlets = '/catalog/outlets';
   static const staffHome = '/staff';
 
   // ── Rep (the field surface, /rep) ─────────────────────────────────────────
@@ -431,6 +433,7 @@ abstract final class AppRouteNames {
   static const catalogAiDescriptions = 'catalogAiDescriptions';
   static const catalogToday = 'catalogToday';
   static const catalogStaff = 'catalogStaff';
+  static const catalogOutlets = 'catalogOutlets';
   static const staffHome = 'staffHome';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
@@ -641,7 +644,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogAppearance,
         name: AppRouteNames.catalogAppearance,
-        builder: (_, __) => const FlowBackScope(child: AppearanceScreen()),
+        // Stage 16: brand-wide — on a branch it is set on the main outlet.
+        builder: (_, __) => const FlowBackScope(
+          child: BrandWideGate(title: 'Appearance', child: AppearanceScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogHours,
@@ -651,13 +657,19 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogBadges,
         name: AppRouteNames.catalogBadges,
-        builder: (_, __) => const FlowBackScope(child: BadgeManagerScreen()),
+        // Stage 16: brand-wide — on a branch it is set on the main outlet.
+        builder: (_, __) => const FlowBackScope(
+          child: BrandWideGate(title: 'Badges', child: BadgeManagerScreen()),
+        ),
       ),
       // Stage 6: languages + translations. STATIC, before the product routes.
       GoRoute(
         path: AppRoutes.catalogLanguages,
         name: AppRouteNames.catalogLanguages,
-        builder: (_, __) => const FlowBackScope(child: MenuLanguagesScreen()),
+        // Stage 16: brand-wide — on a branch it is set on the main outlet.
+        builder: (_, __) => const FlowBackScope(
+          child: BrandWideGate(title: 'Languages', child: MenuLanguagesScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogTranslations,
@@ -668,7 +680,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogArStyle,
         name: AppRouteNames.catalogArStyle,
-        builder: (_, __) => const FlowBackScope(child: ArStyleScreen()),
+        // Stage 16: brand-wide — on a branch it is set on the main outlet.
+        builder: (_, __) => const FlowBackScope(
+          child: BrandWideGate(title: 'AR style', child: ArStyleScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogExtras,
@@ -678,7 +693,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogQrStyle,
         name: AppRouteNames.catalogQrStyle,
-        builder: (_, __) => const FlowBackScope(child: QrStyleScreen()),
+        // Stage 16: brand-wide — on a branch it is set on the main outlet.
+        builder: (_, __) => const FlowBackScope(
+          child: BrandWideGate(title: 'QR style', child: QrStyleScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogAddress,
@@ -780,6 +798,12 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogStaff,
         builder: (_, __) => const FlowBackScope(child: StaffScreen()),
       ),
+      // Stage 16: the restaurant's outlets.
+      GoRoute(
+        path: AppRoutes.catalogOutlets,
+        name: AppRouteNames.catalogOutlets,
+        builder: (_, __) => const FlowBackScope(child: OutletsScreen()),
+      ),
       GoRoute(
         path: AppRoutes.staffHome,
         name: AppRouteNames.staffHome,
@@ -808,7 +832,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogPlate,
         name: AppRouteNames.catalogPlate,
-        builder: (_, __) => const FlowBackScope(child: PlateSettingsScreen()),
+        // Stage 16: brand-wide — on a branch it is set on the main outlet.
+        builder: (_, __) => const FlowBackScope(
+          child: BrandWideGate(title: 'My plate', child: PlateSettingsScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogReports,

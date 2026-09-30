@@ -8,6 +8,7 @@ import 'product_food_type.dart';
 import 'product_model_status.dart';
 import 'product_sync_status.dart';
 import 'product_type.dart';
+import '../catalog/outlet.dart';
 
 /// Bounds mirrored from the backend Zod schema so the editor rejects an
 /// over-long value locally instead of after a 400.
@@ -51,9 +52,13 @@ class CatalogProduct {
     this.syncStatus = ProductSyncStatus.never,
     this.syncError,
     this.isArchived = false,
+    this.branch,
     this.updatedAt,
     this.createdAt,
   });
+
+  /// Stage 16: set on a branch dish that follows the main outlet.
+  final BranchLink? branch;
 
   final String id;
   final ProductType type;
@@ -211,6 +216,7 @@ class CatalogProduct {
             ProductSyncStatusX.fromApiValue((map['syncStatus'] ?? '').toString()),
         syncError: catalogText(map['syncError']),
         isArchived: map['isArchived'] == true,
+        branch: BranchLink.fromMapOrNull(map['branch']),
         updatedAt: catalogDate(map['updatedAt']),
         createdAt: catalogDate(map['createdAt']),
       );
@@ -238,6 +244,7 @@ class CatalogProduct {
         'thumbnailUrl': thumbnailUrl,
         'sourceProjectId': sourceProjectId,
         'sourceModelId': sourceModelId,
+        if (branch != null) 'branch': branch!.toMap(),
         'modelStatus': modelStatus.apiValue,
         'syncStatus': syncStatus.apiValue,
         'syncError': syncError,
@@ -304,6 +311,7 @@ class CatalogProduct {
         syncStatus: syncStatus ?? this.syncStatus,
         syncError: syncError ?? this.syncError,
         isArchived: isArchived ?? this.isArchived,
+        branch: branch,
         updatedAt: updatedAt ?? this.updatedAt,
         createdAt: createdAt,
       );

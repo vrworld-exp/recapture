@@ -37,6 +37,7 @@ import type {
 } from '@/models/types/catalog.types';
 import { messageForSyncCode } from '@/services/catalog/publishSyncErrors';
 import { decodeCursor, encodeCursor } from '@/utils/cursor';
+import { ownerCatalogFilter } from '@/services/catalog/outletScope';
 
 export interface ActivityEntryDto {
   target: PublishTargetKind;
@@ -105,7 +106,7 @@ export async function listCatalogActivity(
   userId: string,
   options: { cursor?: string; limit?: number } = {}
 ): Promise<ListActivityResult> {
-  const catalog = await Catalog.findOne({ userId: new Types.ObjectId(userId), deletedAt: null })
+  const catalog = await Catalog.findOne(ownerCatalogFilter(userId))
     .select({ _id: 1 })
     .lean()
     .exec();

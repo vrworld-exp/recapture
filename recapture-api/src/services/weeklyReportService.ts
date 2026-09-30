@@ -35,6 +35,7 @@ import type {
 import { ANALYTICS_TIMEZONE, dayStringInZone } from '@/services/catalogAnalyticsService';
 import { pickTips, type InsightContext, type InsightDishStats } from '@/services/insights/rules';
 import { getMirageClient, MirageError } from '@/services/mirage';
+import { ownerCatalogFilter } from '@/services/catalog/outletScope';
 
 /** Below this many menu views the week is "quiet": stored, but no numbers notification. */
 export const WEEKLY_REPORT_MIN_VIEWS = 10;
@@ -569,6 +570,11 @@ export interface WeeklyReportDto {
   /** "Saturday 8–9 pm", or null — preformatted so every client says it the same way. */
   busiestLabel: string | null;
   createdAt: string;
+  /**
+   * Stage 16 — on a main outlet with branches only: "All outlets: 3,410 menu
+   * views (▲ 12%)", summed from every outlet's stored report for the week.
+   */
+  allOutlets?: { outlets: number; menuViews: number; deltaPct: number | null };
 }
 
 export interface WeeklyReportSummaryDto {
@@ -599,10 +605,7 @@ function toDto(row: ReportLean): WeeklyReportDto {
 }
 
 async function catalogIdForOwner(ownerUserId: string): Promise<Types.ObjectId | null> {
-  const catalog = await Catalog.findOne({
-    userId: new Types.ObjectId(ownerUserId),
-    deletedAt: null,
-  })
+  const catalog = await Catalog.findOne(ownerCatalogFilter(ownerUserId))
     .select({ _id: 1 })
     .lean()
     .exec();
@@ -615,10 +618,7 @@ export type ReportListResult =
 
 /** The last {@link WEEKLY_REPORT_HISTORY_WEEKS} reports, newest first, plus the prefs. */
 export async function listWeeklyReports(ownerUserId: string): Promise<ReportListResult> {
-  const catalog = await Catalog.findOne({
-    userId: new Types.ObjectId(ownerUserId),
-    deletedAt: null,
-  })
+  const catalog = await Catalog.findOne(ownerCatalogFilter(ownerUserId))
     .select({ _id: 1, reportPrefs: 1 })
     .lean<{ _id: Types.ObjectId; reportPrefs?: CatalogReportPrefs }>()
     .exec();
@@ -658,7 +658,37 @@ export async function getWeeklyReport(
       ? await WeeklyReport.findOne({ catalogId }).sort({ weekStart: -1 }).lean<ReportLean>().exec()
       : await WeeklyReport.findOne({ catalogId, weekStart }).lean<ReportLean>().exec();
   if (!row) return { outcome: 'NOT_FOUND' };
-  return { outcome: 'OK', report: toDto(row) };
+  const report = toDto(row);
+  const allOutlets = await allOutletsRollup(catalogId, row.weekStart);
+  return { outcome: 'OK', report: allOutlets ? { ...report, allOutlets } : report };
+}
+
+/** Stage 16: the brand line on a MASTER's report; null for everyone else. */
+async function allOutletsRollup(
+  catalogId: Types.ObjectId,
+  weekStart: string
+): Promise<WeeklyReportDto['allOutlets'] | null> {
+  const catalog = await Catalog.findOne({ _id: catalogId }).select({ brandRole: 1 }).lean().exec();
+  if (catalog?.brandRole !== 'MASTER') return null;
+  const branches = await Catalog.find({ masterCatalogId: catalogId, brandRole: 'BRANCH', deletedAt: null })
+    .select({ _id: 1 })
+    .lean()
+    .exec();
+  if (branches.length === 0) return null;
+  const ids = [catalogId, ...branches.map((b) => b._id as Types.ObjectId)];
+  const prevWeek = addDaysToKey(weekStart, -7);
+  const rows = await WeeklyReport.find({ catalogId: { $in: ids }, weekStart: { $in: [weekStart, prevWeek] } })
+    .select({ weekStart: 1, 'metrics.menuViews': 1 })
+    .lean<{ weekStart: string; metrics: { menuViews: number } }[]>()
+    .exec();
+  const sum = (week: string): number =>
+    rows.filter((r) => r.weekStart === week).reduce((acc, r) => acc + (r.metrics?.menuViews ?? 0), 0);
+  const hadPrev = rows.some((r) => r.weekStart === prevWeek);
+  return {
+    outlets: ids.length,
+    menuViews: sum(weekStart),
+    deltaPct: deltaPct(sum(weekStart), hadPrev ? sum(prevWeek) : null),
+  };
 }
 
 /** The owner's on/off switch. ReCapture-only — no draftRevision bump, nothing to publish. */
@@ -666,10 +696,7 @@ export async function updateReportPrefs(
   ownerUserId: string,
   patch: Partial<CatalogReportPrefs>
 ): Promise<{ outcome: 'OK'; prefs: CatalogReportPrefs } | { outcome: 'NOT_FOUND' }> {
-  const catalog = await Catalog.findOne({
-    userId: new Types.ObjectId(ownerUserId),
-    deletedAt: null,
-  })
+  const catalog = await Catalog.findOne(ownerCatalogFilter(ownerUserId))
     .select({ _id: 1, reportPrefs: 1 })
     .lean<{ _id: Types.ObjectId; reportPrefs?: CatalogReportPrefs }>()
     .exec();

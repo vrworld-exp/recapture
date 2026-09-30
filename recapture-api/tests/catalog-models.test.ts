@@ -353,7 +353,7 @@ describe('CatalogPublishRun', () => {
 describe('Indexes — every named query path is index-backed', () => {
   it('declares the catalog indexes', async () => {
     const keys = await indexKeys(Catalog);
-    expect(keys).toContain(JSON.stringify({ userId: 1 }));
+    expect(keys).toContain(JSON.stringify({ userId: 1, branchKey: 1 }));
     expect(keys).toContain(JSON.stringify({ status: 1, updatedAt: -1 }));
   });
 

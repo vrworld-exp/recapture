@@ -32,6 +32,7 @@ import {
   uploadImportPage,
 } from '@/services/menuImport/menuImportService';
 import { asyncHandler } from '@/utils/asyncHandler';
+import { afterAuthoringWrite } from '@/services/brand/copyDown';
 
 export type CatalogResolver = (req: Request) => Promise<ICatalog | null>;
 
@@ -171,6 +172,7 @@ export function aiCatalogRouter(
       if (!parsed.success)
         return fail(res, 400, 'INVALID_REQUEST', 'Choose casual, premium or fun.');
       await Catalog.updateOne({ _id: catalog._id }, { $set: { aiTone: parsed.data.tone } }).exec();
+      await afterAuthoringWrite(catalog); // Stage 16: tone is brand-wide
       res.status(200).json({ status: 'success', tone: parsed.data.tone });
     })
   );

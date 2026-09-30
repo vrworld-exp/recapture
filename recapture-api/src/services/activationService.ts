@@ -29,6 +29,7 @@ import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import type { CatalogContact } from '@/models/types/catalog.types';
 import { randomUUID } from 'crypto';
+import { addBranch } from '@/services/brand/branchService';
 
 export type ActivationResult =
   | { outcome: 'ACTIVATED'; catalog: ICatalog; code: string; publicUrl: string }
@@ -101,7 +102,7 @@ async function resolveOrCreateCatalog(
   ownerId: Types.ObjectId,
   input: { name: string; businessName?: string; contact?: CatalogContact }
 ): Promise<{ catalog: ICatalog; isNewCatalog: boolean }> {
-  const existing = await Catalog.findOne({ userId: ownerId }).exec();
+  const existing = await Catalog.findOne({ userId: ownerId, branchKey: null }).exec();
   if (existing) return { catalog: existing, isNewCatalog: false };
 
   try {
@@ -114,10 +115,35 @@ async function resolveOrCreateCatalog(
     return { catalog: created, isNewCatalog: true };
   } catch (err) {
     if (!isDuplicateKeyError(err)) throw err;
-    const winner = await Catalog.findOne({ userId: ownerId }).exec();
+    const winner = await Catalog.findOne({ userId: ownerId, branchKey: null }).exec();
     if (!winner) throw err;
     return { catalog: winner, isNewCatalog: false };
   }
+}
+
+/** Stage 16: the owner's branch with this name, created (with its menu) if new. */
+async function resolveOrCreateBranch(
+  ownerId: Types.ObjectId,
+  branchName: string,
+  contact?: CatalogContact
+): Promise<ICatalog> {
+  const find = () =>
+    Catalog.findOne({
+      userId: ownerId,
+      branchKey: branchName.trim().toLowerCase(),
+      brandRole: 'BRANCH',
+      deletedAt: null,
+    }).exec();
+  const existing = await find();
+  if (existing) return existing;
+  const added = await addBranch(ownerId.toHexString(), {
+    outletName: branchName,
+    ...(contact?.phone ? { phone: contact.phone } : {}),
+    ...(contact?.address ? { address: contact.address } : {}),
+  });
+  const branch = await find();
+  if (!branch) throw new Error(`branch activation failed: ${added.outcome}`);
+  return branch;
 }
 
 /**
@@ -231,6 +257,8 @@ export async function activate(params: {
   restaurantPhone: string;
   businessName?: string;
   contact?: CatalogContact;
+  /** Stage 16: activate on a (new or existing) branch with this outlet name. */
+  branchName?: string;
 }): Promise<ActivationResult> {
   // ── 1) Configuration, before anything is written ──────────────────────────
   if (!env.PUBLIC_RESOLVER_BASE_URL) return { outcome: 'RESOLVER_NOT_CONFIGURED' };
@@ -271,11 +299,20 @@ export async function activate(params: {
   // ── 4/5) The restaurant and its catalog ───────────────────────────────────
   const { user } = await resolveOrCreateRestaurantUser(params.restaurantPhone);
   const ownerId = user._id as Types.ObjectId;
-  const { catalog } = await resolveOrCreateCatalog(ownerId, {
+  const { catalog: main, isNewCatalog } = await resolveOrCreateCatalog(ownerId, {
     name: params.restaurantName,
     businessName: params.businessName,
     contact: params.contact,
   });
+  // Stage 16 (Q4): "Add as a branch" — the standee goes to that outlet, which
+  // gets its own standee pool, delegation and public page. A re-run with the
+  // same branch name lands on the same branch.
+  // A restaurant created by this very call simply gets the standee on its
+  // main outlet — there is nothing yet to branch from.
+  const catalog =
+    params.branchName && !isNewCatalog
+      ? await resolveOrCreateBranch(ownerId, params.branchName, params.contact)
+      : main;
   const catalogId = catalog._id as Types.ObjectId;
 
   // ── 6) THE CLAIM. The guard IS the mutual exclusion ───────────────────────

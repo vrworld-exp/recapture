@@ -45,6 +45,7 @@ import {
   type MirageAnalyticsQuery,
   type MirageAnalyticsSummary,
 } from '@/services/mirage';
+import { ownerCatalogFilter } from '@/services/catalog/outletScope';
 
 /**
  * The zone every day on the dashboard is a day IN.
@@ -377,7 +378,7 @@ async function scopeFor(
   | { outcome: 'NOT_FOUND' }
   | { outcome: 'EMPTY' }
 > {
-  const catalog = await Catalog.findOne({ userId: new Types.ObjectId(userId), deletedAt: null })
+  const catalog = await Catalog.findOne(ownerCatalogFilter(userId))
     .select({ _id: 1, mirageRestaurantId: 1 })
     .lean()
     .exec();

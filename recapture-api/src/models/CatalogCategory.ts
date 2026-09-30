@@ -50,6 +50,10 @@ export interface ICatalogCategory extends Document {
   lastSyncedAt?: Date;
   /** Stage 13: the menu import that created it — what "Undo import" removes. */
   importId?: Types.ObjectId;
+  /** Stage 16 — BRANCH rows only: the main outlet's category this one follows. */
+  masterCategoryId?: Types.ObjectId;
+  /** Stage 16 — the master's values as last copied down (see CatalogProduct). */
+  masterSync?: Record<string, unknown>;
   deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -81,6 +85,8 @@ const CatalogCategorySchema = new Schema<ICatalogCategory>(
     // `deletedAt: null` form the queries use, which matches an unset field too —
     // so a live row is covered whether it stores null or nothing.
     importId: { type: Schema.Types.ObjectId, ref: 'MenuImport' },
+    masterCategoryId: { type: Schema.Types.ObjectId, ref: 'CatalogCategory' },
+    masterSync: { type: Schema.Types.Mixed },
     deletedAt: { type: Date },
   },
   { timestamps: true }
@@ -101,6 +107,15 @@ CatalogCategorySchema.index({ catalogId: 1, position: 1, _id: 1 });
 CatalogCategorySchema.index(
   { catalogId: 1, name: 1 },
   { unique: true, partialFilterExpression: { deletedAt: null } }
+);
+
+// Stage 16: at most one live branch row per master category, per branch.
+CatalogCategorySchema.index(
+  { catalogId: 1, masterCategoryId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { masterCategoryId: { $type: 'objectId' }, deletedAt: null },
+  }
 );
 
 export const CatalogCategory = model<ICatalogCategory>(

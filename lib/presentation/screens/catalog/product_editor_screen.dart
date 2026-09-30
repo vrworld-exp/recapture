@@ -53,6 +53,7 @@ import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/food_type_field.dart';
 import '../../widgets/catalog/product_actions.dart';
 import '../../widgets/model_picker_field.dart' show kModelPickerMaxWidth;
+import 'outlets_screen.dart';
 
 /// Width at or above which the form splits into two columns.
 ///
@@ -613,6 +614,11 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _LiveStateBanner(product: widget.product, dirty: _isDirty),
+          // Stage 16: a branch dish that follows the main outlet.
+          if (widget.product.branch != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            BranchLinkCard(productId: widget.product.id, link: widget.product.branch!),
+          ],
           const SizedBox(height: AppSpacing.xxl),
           _DirtyLabel(
             label: 'Product name',
