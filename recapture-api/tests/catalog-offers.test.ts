@@ -25,6 +25,13 @@ import {
   type PricedOffer,
 } from '@/services/offers/offerPricing';
 import vectors from './fixtures/offer-vectors.json';
+import { entitledView } from '@/services/catalog/entitledView';
+import {
+  DEFAULT_PLAN_ENTITLEMENTS,
+  FULL_CUSTOMIZATION,
+  entitlementsKey,
+  heldBackFor,
+} from '@/services/subscription/customizationEntitlements';
 
 // ── Shared vectors ──────────────────────────────────────────────────────────
 
@@ -241,6 +248,46 @@ describe('publish block (restaurant.offers)', () => {
 
     expect(await mirageOffersField({ _id: s.catalogId }, new Date('2026-09-28T12:00:00Z'))).toBe(
       ''
+    );
+  });
+});
+
+// ── Plan gating (decided 2026-09-30: offers and My plate are Signature and above) ──
+
+describe('plan gating for offers and My plate', () => {
+  it('Taste sends the plate as off; Signature keeps the owner choice', () => {
+    const catalog = {
+      appearance: undefined,
+      badges: [],
+      languages: undefined,
+      arBranding: undefined,
+      spotlight: undefined,
+      engagement: undefined,
+      slug: undefined,
+      plate: { enabled: true, showTotal: false },
+    };
+    expect(entitledView(catalog, DEFAULT_PLAN_ENTITLEMENTS.TASTE).plate).toEqual({
+      enabled: false,
+      showTotal: false,
+    });
+    expect(entitledView(catalog, DEFAULT_PLAN_ENTITLEMENTS.SIGNATURE).plate).toEqual(catalog.plate);
+  });
+
+  it('lists offers and an owner-enabled plate as held back on Taste only', () => {
+    const catalog = { plate: { enabled: true, showTotal: true } } as never;
+    const extras = { hasCategorySchedules: false, hasPairings: false, hasOffers: true };
+    expect(
+      heldBackFor(catalog, DEFAULT_PLAN_ENTITLEMENTS.TASTE, extras).map((h) => h.feature)
+    ).toEqual(['offers', 'plate']);
+    expect(heldBackFor(catalog, DEFAULT_PLAN_ENTITLEMENTS.SIGNATURE, extras)).toEqual([]);
+  });
+
+  it('keeps the fully covered entitlements key unchanged (no fleet-wide re-push)', () => {
+    expect(entitlementsKey(FULL_CUSTOMIZATION)).toBe(
+      JSON.stringify([true, true, true, 12, 3, true, 'all', true, true])
+    );
+    expect(entitlementsKey(DEFAULT_PLAN_ENTITLEMENTS.TASTE)).not.toBe(
+      JSON.stringify([false, false, false, 3, 0, false, 'review', false, false])
     );
   });
 });

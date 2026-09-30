@@ -82,6 +82,9 @@ class WeeklyReport {
     required this.qrScans,
     required this.arViews,
     this.offerViews = 0,
+    this.platesBuilt = 0,
+    this.avgPlateValue = 0,
+    this.topPlateDish,
     required this.menuViewsDelta,
     required this.visitorsDelta,
     required this.arViewsDelta,
@@ -104,6 +107,11 @@ class WeeklyReport {
 
   /// Stage 10: diners shown an offer price or combo. 0 on older reports.
   final int offerViews;
+
+  /// Stage 11: My plate — plates built, their average value, the most-added dish.
+  final int platesBuilt;
+  final int avgPlateValue;
+  final String? topPlateDish;
 
   /// Percent vs the previous week; null when that week was too small to compare.
   final double? menuViewsDelta;
@@ -133,6 +141,11 @@ class WeeklyReport {
       qrScans: _int(metrics['qrScans']),
       arViews: _int(metrics['arViews']),
       offerViews: _int(metrics['offerViews']),
+      platesBuilt: _int(_map(metrics['plates'])['built']),
+      avgPlateValue: _int(_map(metrics['plates'])['avgValue']),
+      topPlateDish: _map(metrics['plates'])['topDish'] is String
+          ? _map(metrics['plates'])['topDish'] as String
+          : null,
       menuViewsDelta: _pct(delta['menuViews']),
       visitorsDelta: _pct(delta['uniqueVisitors']),
       arViewsDelta: _pct(delta['arViews']),

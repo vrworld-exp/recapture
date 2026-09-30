@@ -284,6 +284,8 @@ export interface CreateRestaurantInput {
   spotlight?: string;
   /** Stage 10: JSON list of offers and combos (dishes by name), or `''` to clear. */
   offers?: string;
+  /** Stage 11: `{ enabled, showTotal }` as JSON. */
+  plate?: string;
   engagement?: string;
   /** Stage 8.2: the menu subdomain; `''` clears. */
   slug?: string;
@@ -349,6 +351,8 @@ export interface UpdateRestaurantInput {
   spotlight?: string;
   /** Stage 10: JSON list of offers and combos (dishes by name), or `''` to clear. */
   offers?: string;
+  /** Stage 11: `{ enabled, showTotal }` as JSON. */
+  plate?: string;
   engagement?: string;
   /** Stage 8.2: the menu subdomain; `''` clears. */
   slug?: string;

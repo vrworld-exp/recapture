@@ -31,7 +31,11 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
    (renders them) BEFORE the ReCapture API — an older Mirage silently drops the field, so offers
    saved and published against it never show. No flag: a catalog with no offers sends `''` and
    renders exactly as before.
-8. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
+8. **My plate (Stage 11)** is ON by default in ReCapture, so every menu gains + buttons at its
+   owner's next publish after the release. Deploy mirage-be + mirage-fe first (an older Mirage
+   drops `plate`, which just means no plate). If you would rather roll it out gradually, flip the
+   default in `Catalog.plate` / the profile DTO before shipping.
+9. **Marketing site** (mayasabhaxr-fe): "Make it yours" section with before/after screenshots of
    2–3 presets — once Stage 3 is live.
 
 ## Per stage
@@ -48,3 +52,4 @@ prompt. Everything below is **built, uncommitted and untested** as of 2026-09-30
 | 8 Plan gating / subdomain / rollout | | | Rollout flag served on `GET /catalog/entitlements`, not the strict remote-config payload; no tests (user). |
 | 9 Weekly value report | | | Off until `WEEKLY_REPORTS_ENABLED=true`; Mirage adds `/hourly` beside `/item-funnel`; "AR views" = `ar_view_clicked`; notification opens `/catalog/reports/<week>`. |
 | 10 Offers / combos / happy hour | | | One `restaurant.offers` block on the branding sync (dishes by name), not a Mirage offer collection; no variants; not flag-gated. |
+| 11 My plate | | | Mirage absent = off; ReCapture default on → appears at each owner's next publish; own ungated settings screen. |

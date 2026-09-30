@@ -1,4 +1,39 @@
-# Stage 11 — "My plate" list (pre-order list, not an order)
+# ✅ Stage 11 — "My plate" list (pre-order list, not an order)
+
+> **Status (2026-09-30): built, uncommitted.** Typecheck / analyze / lint clean on all four sides
+> (Flutter: all of `lib`). Tests: `mirage-fe/src/features/plate/plate.test.tsx` (11 — lines, notes,
+> reload, 4-hour clear, storage-blocked fallback, pruning, totals with / without offers, settings,
+> waiter view in the primary language); `recapture-api/tests/weekly-report.test.ts` extended
+> (plates recorded, another restaurant's row ignored). All mirage-fe feature tests pass (89) — one
+> pre-existing Stage 3 test bug fixed (`MenuLayouts.test.tsx`: two ₹320 dishes, `getByText` →
+> `getAllByText`). Full suites not run.
+>
+> **Mirage-fe** — `src/features/plate/plateStore.ts` (pure store + `usePlate` hook + settings
+> resolver), `src/features/plate/MyPlate.tsx` (+ / stepper, pill, sheet, waiter view); + on grid /
+> large cards, list rows and the detail sheet (`MenuList.plateFor`, `MenuItemCardProps.plate`);
+> totals use the Stage 10 offer price; "Send on WhatsApp" when Stage 7's WhatsApp ordering is on;
+> table number from `?t=`; 4 events. **Mirage-be** — the 4 events, `restaurant.plate`
+> (`{ enabled, showTotal }`, parsed in `helper/offersFields.js`), public payload, `plateStats` in
+> the summary (cache key → `v3`). **API** — `Catalog.plate` on the profile patch (bumps
+> draftRevision), profile DTO, always sent with branding; analytics summary `plateStats` (rows
+> scope-checked like every per-dish panel); weekly report `metrics.plates`. **Flutter** —
+> `MenuPlate` entity, `updatePlate`, `screens/catalog/plate_settings_screen.dart` at `/catalog/plate`
+> (⋮ "My plate"), `AnalyticsPlateCard`, weekly report line "🍽 86 customers built a plate, average ₹640".
+>
+> **Differs from the text below:**
+> - **Mirage treats an absent `plate` as OFF** (D5: the menu looks the same until the restaurant's
+>   next publish). ReCapture's default is ON as written, so it appears at each owner's next publish.
+> - Because it is on by default, its switches are on their **own ungated screen**, not in
+>   "Spotlight & customer buttons" (hidden behind `appearanceEnabled`) — owners can always turn it off.
+> - No variants (ReCapture dishes have none). No + on sold-out dishes.
+> - A plate's value in stats = the largest total its session reported; one plate per session.
+> - The waiter view is black on white whatever the theme; names use Stage 6's `primaryName`.
+> - Stored per restaurant slug in localStorage (`mirage_plate:<slug>`), memory fallback.
+> - **Plan-gated (decided 2026-09-30): Signature and above.** New `plate` entitlement; on Taste the
+>   publish sends `enabled: false`. It is listed as held back only if the owner switched it on
+>   themselves. Default stays ON (confirmed) on covered plans. Lock chip on the My plate screen.
+>   `entitlementsKey` gains the two fields only when not both covered, so fully covered catalogs
+>   do not all read as "plan changed" after this release.
 
 **Side:** Mirage-fe mainly; small Mirage-be analytics + ReCapture toggle.
 **Depends on:** nothing (Stage 10 prices used if present, Stage 7.3 table number if present).

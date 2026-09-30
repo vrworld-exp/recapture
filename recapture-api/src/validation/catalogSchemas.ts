@@ -529,6 +529,8 @@ export const updateCatalogSchema = z
     spotlight: spotlightSchema.nullable().optional(),
     engagement: engagementSchema.nullable().optional(),
     qrStyle: qrStyleSchema.nullable().optional(),
+    /** Stage 11: My plate. Replaces the block. */
+    plate: z.object({ enabled: z.boolean(), showTotal: z.boolean() }).strict().optional(),
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0, {

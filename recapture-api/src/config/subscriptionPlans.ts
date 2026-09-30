@@ -93,6 +93,8 @@ const planDefinitionSchema = z
         engagement: z.enum(['review', 'all']),
         brandedQr: z.boolean(),
         customDomain: z.boolean(),
+        offers: z.boolean(),
+        plate: z.boolean(),
       })
       .partial()
       .strict()

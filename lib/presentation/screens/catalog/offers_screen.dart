@@ -30,6 +30,7 @@ import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
+import '../../widgets/catalog/plan_lock_chip.dart';
 
 const double _kMaxWidth = 720;
 const _kDayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -79,7 +80,19 @@ class OffersScreen extends ConsumerWidget {
     final async = ref.watch(offersListProvider);
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
-      appBar: AppBar(backgroundColor: Colors.transparent, elevation: 0, title: const Text('Offers')),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        // Signature and above: saved offers on a lower plan are held back at publish.
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Offers'),
+            const SizedBox(width: AppSpacing.sm),
+            EntitlementLock(feature: 'offers', covered: (e) => e.offers),
+          ],
+        ),
+      ),
       floatingActionButton: FloatingActionButton.extended(
         key: const Key('offers-new'),
         onPressed: () async {

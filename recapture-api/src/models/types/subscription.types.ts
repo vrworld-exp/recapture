@@ -219,6 +219,10 @@ export interface CustomizationEntitlements {
   engagement: 'review' | 'all';
   brandedQr: boolean;
   customDomain: boolean;
+  /** Stage 10: offers, combos and happy hour reach the menu. */
+  offers: boolean;
+  /** Stage 11: "My plate" on the menu. */
+  plate: boolean;
 }
 
 /** The three plans plus the shared constants, as served by the plan catalog. */

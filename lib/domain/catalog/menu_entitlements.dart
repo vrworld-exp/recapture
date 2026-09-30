@@ -28,6 +28,8 @@ class CustomizationEntitlements {
     this.allEngagement = true,
     this.brandedQr = true,
     this.customDomain = true,
+    this.offers = true,
+    this.plate = true,
   });
 
   final bool customColors;
@@ -41,6 +43,10 @@ class CustomizationEntitlements {
   final bool allEngagement;
   final bool brandedQr;
   final bool customDomain;
+
+  /// Stage 10 / 11 — Signature and above.
+  final bool offers;
+  final bool plate;
 
   /// Everything — flag off, a trial, a comp, or an older server.
   static const full = CustomizationEntitlements();
@@ -59,6 +65,8 @@ class CustomizationEntitlements {
       allEngagement: raw['engagement'] != 'review',
       brandedQr: b('brandedQr'),
       customDomain: b('customDomain'),
+      offers: b('offers'),
+      plate: b('plate'),
     );
   }
 }

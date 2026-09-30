@@ -175,6 +175,26 @@ export interface ModelHealthDto {
   failingProducts: FailingProductDto[];
 }
 
+/** Stage 11: "My plate" — lists diners built to show the waiter. */
+export interface PlateStatsDto {
+  /** Sessions that added at least one dish. */
+  plates: number;
+  /** Average plate value in rupees, at the prices shown (offers included). */
+  avgValue: number;
+  shownToWaiter: number;
+  sentWhatsapp: number;
+  /** Most-added dishes, most first (≤ 5). */
+  topDishes: { productId: string; catalogProductId: string | null; name: string; adds: number }[];
+}
+
+export const EMPTY_PLATE_STATS: PlateStatsDto = {
+  plates: 0,
+  avgValue: 0,
+  shownToWaiter: 0,
+  sentWhatsapp: 0,
+  topDishes: [],
+};
+
 export interface AnalyticsRangeDto {
   from: string;
   to: string;
@@ -196,6 +216,8 @@ export interface AnalyticsSummaryDto {
   topZoomed: ZoomedItemDto[];
   topSearches: SearchQueryDto[];
   modelHealth: ModelHealthDto;
+  /** Stage 11. Zeros on an older Mirage. */
+  plateStats: PlateStatsDto;
 }
 
 export interface AnalyticsTimeseriesPointDto {
@@ -495,6 +517,10 @@ function productIdsIn(summary: MirageAnalyticsSummary, restaurantId: string): st
   const rows: ProductRowLike[] = [
     ...ownRows(list<ProductRowLike>(summary.topZoomed), restaurantId),
     ...ownRows(list<ProductRowLike>(summary.modelHealth?.failingProducts), restaurantId),
+    ...ownRows(
+      list<ProductRowLike>((summary.plateStats as { topDishes?: unknown } | undefined)?.topDishes),
+      restaurantId
+    ),
   ];
   return [...new Set(rows.map((row) => str(row.productId)).filter((id) => id.length > 0))];
 }
@@ -552,6 +578,7 @@ function toSummary(
   local: Map<string, LocalProduct>
 ): Omit<AnalyticsSummaryDto, 'range'> {
   const health = (raw.modelHealth ?? {}) as Record<string, unknown>;
+  const plate = (raw.plateStats ?? {}) as Record<string, unknown>;
   const totalsByType = (raw.totalsByType ?? {}) as Record<string, unknown>;
 
   return {
@@ -635,6 +662,18 @@ function toSummary(
         ...joinProduct(row, local),
         failures: num(row.failures),
       })),
+    },
+    plateStats: {
+      plates: num(plate.plates),
+      avgValue: num(plate.avgValue),
+      shownToWaiter: num(plate.shownToWaiter),
+      sentWhatsapp: num(plate.sentWhatsapp),
+      topDishes: ownRows(
+        list<{ productId?: unknown; name?: unknown; adds?: unknown; restaurantId?: unknown }>(
+          plate.topDishes
+        ),
+        restaurantId
+      ).map((row) => ({ ...joinProduct(row, local), adds: num(row.adds) })),
     },
   };
 }
@@ -864,4 +903,5 @@ export const EMPTY_SUMMARY = (range: AnalyticsRange): AnalyticsSummaryDto => ({
   topZoomed: [],
   topSearches: [],
   modelHealth: EMPTY_MODEL_HEALTH,
+  plateStats: EMPTY_PLATE_STATS,
 });

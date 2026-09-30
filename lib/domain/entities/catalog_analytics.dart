@@ -453,6 +453,7 @@ class AnalyticsSummary {
     this.topZoomed = const <ZoomedItem>[],
     this.topSearches = const <SearchQuery>[],
     this.modelHealth = ModelHealth.empty,
+    this.plateStats = PlateStats.empty,
   });
 
   final AnalyticsWindow window;
@@ -475,6 +476,9 @@ class AnalyticsSummary {
   final List<ZoomedItem> topZoomed;
   final List<SearchQuery> topSearches;
   final ModelHealth modelHealth;
+
+  /// Stage 11: "My plate". Zeros on an older server.
+  final PlateStats plateStats;
 
   static const empty = AnalyticsSummary(window: AnalyticsWindow.empty);
 
@@ -524,6 +528,48 @@ class AnalyticsSummary {
       topZoomed: _listOf(map?['topZoomed'], ZoomedItem.fromMap),
       topSearches: _listOf(map?['topSearches'], SearchQuery.fromMap),
       modelHealth: ModelHealth.fromMap(_mapOf(map?['modelHealth'])),
+      plateStats: PlateStats.fromMap(_mapOf(map?['plateStats'])),
+    );
+  }
+}
+
+/// Stage 11: lists diners built with "My plate" to show the waiter.
+class PlateStats {
+  const PlateStats({
+    this.plates = 0,
+    this.avgValue = 0,
+    this.shownToWaiter = 0,
+    this.sentWhatsapp = 0,
+    this.topDishes = const [],
+  });
+
+  /// Diners (sessions) who added at least one dish.
+  final int plates;
+
+  /// Average plate value in rupees, at the prices shown.
+  final int avgValue;
+  final int shownToWaiter;
+  final int sentWhatsapp;
+
+  /// Most-added dishes (name, adds), most first.
+  final List<({String name, int adds})> topDishes;
+
+  static const empty = PlateStats();
+
+  factory PlateStats.fromMap(Map<String, dynamic>? map) {
+    final m = map ?? const <String, dynamic>{};
+    final rows = m['topDishes'];
+    return PlateStats(
+      plates: catalogCount(m['plates']),
+      avgValue: catalogCount(m['avgValue']),
+      shownToWaiter: catalogCount(m['shownToWaiter']),
+      sentWhatsapp: catalogCount(m['sentWhatsapp']),
+      topDishes: [
+        if (rows is List)
+          for (final r in rows)
+            if (r is Map<String, dynamic>)
+              (name: r['name'] is String ? r['name'] as String : '', adds: catalogCount(r['adds'])),
+      ],
     );
   }
 }

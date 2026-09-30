@@ -29,6 +29,7 @@ import '../../../app/theme/app_spacing.dart';
 import '../../../application/catalog/catalog_qr_service.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/weekly_report_repository.dart';
+import '../../../domain/catalog/catalog_names.dart';
 import '../../../domain/catalog/weekly_report.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/catalog/catalog_message.dart';
@@ -273,6 +274,7 @@ class _SummaryCard extends StatelessWidget {
               _Kpi(label: 'QR scans', value: report.qrScans),
               _Kpi(label: 'AR views', value: report.arViews, delta: report.arViewsDelta),
               if (report.offerViews > 0) _Kpi(label: 'Offer views', value: report.offerViews),
+              if (report.platesBuilt > 0) _Kpi(label: 'Plates built', value: report.platesBuilt),
             ],
           ),
           if (top != null || report.busiestLabel != null) const SizedBox(height: AppSpacing.lg),
@@ -282,6 +284,13 @@ class _SummaryCard extends StatelessWidget {
           if (report.busiestLabel != null)
             Text('⏰ Busiest: ${report.busiestLabel}',
                 style: text.bodyMedium?.copyWith(color: AppColors.textSecondary)),
+          if (report.platesBuilt > 0)
+            Text(
+              '🍽 ${_count(report.platesBuilt)} customers built a plate'
+              '${report.avgPlateValue > 0 ? ', average ₹${_count(report.avgPlateValue)}' : ''}'
+              '${report.topPlateDish != null ? ' · most added: ${catalogDisplayName(report.topPlateDish)}' : ''}',
+              style: text.bodyMedium?.copyWith(color: AppColors.textSecondary),
+            ),
         ],
       ),
     );

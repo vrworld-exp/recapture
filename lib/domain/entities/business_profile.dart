@@ -171,6 +171,7 @@ class BusinessProfile {
     this.arBranding = ArBranding.plain,
     this.spotlight = MenuSpotlight.off,
     this.engagement = MenuEngagement.off,
+    this.plate = MenuPlate.defaults,
     this.qrStyle = QrStyle.plain,
     this.slug,
     this.slugUrl,
@@ -238,6 +239,9 @@ class BusinessProfile {
   final MenuEngagement engagement;
   final QrStyle qrStyle;
 
+  /// Stage 11: My plate. On, with totals, on an older server.
+  final MenuPlate plate;
+
   /// Stage 8.2: the menu's pretty address (`cafe`) and its full URL (null when
   /// the server has no subdomain host). ADDITIONAL to the QR's link, never instead.
   final String? slug;
@@ -292,6 +296,7 @@ class BusinessProfile {
       arBranding: ArBranding.fromMap(map['arBranding']),
       spotlight: MenuSpotlight.fromMap(map['spotlight']),
       engagement: MenuEngagement.fromMap(map['engagement']),
+      plate: MenuPlate.fromMap(map['plate']),
       qrStyle: QrStyle.fromMap(map['qrStyle']),
       slug: catalogText(map['slug']),
       slugUrl: catalogText(map['slugUrl']),
@@ -330,6 +335,7 @@ class BusinessProfile {
         arBranding: arBranding,
         spotlight: spotlight,
         engagement: engagement,
+        plate: plate,
         qrStyle: qrStyle,
         slug: slug,
         slugUrl: slugUrl,
@@ -361,6 +367,7 @@ class BusinessProfile {
         arBranding: arBranding,
         spotlight: spotlight,
         engagement: engagement,
+        plate: plate,
         qrStyle: qrStyle,
         slug: slug,
         slugUrl: slugUrl,
@@ -386,6 +393,7 @@ class BusinessProfile {
         arBranding: arBranding,
         spotlight: spotlight,
         engagement: engagement,
+        plate: plate,
         qrStyle: qrStyle,
         slug: slug,
         slugUrl: slugUrl,
@@ -413,6 +421,7 @@ class BusinessProfile {
         arBranding: arBranding,
         spotlight: spotlight,
         engagement: engagement,
+        plate: plate,
         qrStyle: qrStyle,
         slug: slug,
         slugUrl: slugUrl,

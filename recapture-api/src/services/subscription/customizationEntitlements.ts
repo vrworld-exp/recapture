@@ -17,6 +17,9 @@
 //   customer buttons                review link     all               all
 //   branded QR                      —               ✓                 ✓
 //   custom subdomain                —               —                 ✓
+//   offers / happy hour (Stage 10)  —               ✓                 ✓
+//   My plate (Stage 11)             —               ✓                 ✓
+//   (decided 2026-09-30: both Pro and above)
 //
 // RULES (stage-08 §8.1):
 //   • Enforced AT PUBLISH, never at save. The owner designs anything; the
@@ -34,6 +37,7 @@
 import { Types } from 'mongoose';
 
 import { CatalogCategory } from '@/models/CatalogCategory';
+import { CatalogOffer } from '@/models/CatalogOffer';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { CatalogSubscription } from '@/models/CatalogSubscription';
 import type { ICatalog } from '@/models/Catalog';
@@ -53,6 +57,8 @@ export const FULL_CUSTOMIZATION: CustomizationEntitlements = {
   engagement: 'all',
   brandedQr: true,
   customDomain: true,
+  offers: true,
+  plate: true,
 };
 
 export const DEFAULT_PLAN_ENTITLEMENTS: Record<PlanId, CustomizationEntitlements> = {
@@ -66,6 +72,8 @@ export const DEFAULT_PLAN_ENTITLEMENTS: Record<PlanId, CustomizationEntitlements
     engagement: 'review',
     brandedQr: false,
     customDomain: false,
+    offers: false,
+    plate: false,
   },
   SIGNATURE: {
     ...FULL_CUSTOMIZATION,
@@ -88,6 +96,8 @@ export const REQUIRED_PLAN: Record<HeldBackFeature, PlanId> = {
   engagement: 'SIGNATURE',
   brandedQr: 'SIGNATURE',
   customDomain: 'MASTERCHEF',
+  offers: 'SIGNATURE',
+  plate: 'SIGNATURE',
 };
 
 export type HeldBackFeature =
@@ -101,7 +111,9 @@ export type HeldBackFeature =
   | 'pairings'
   | 'engagement'
   | 'brandedQr'
-  | 'customDomain';
+  | 'customDomain'
+  | 'offers'
+  | 'plate';
 
 export interface HeldBackItem {
   feature: HeldBackFeature;
@@ -129,6 +141,11 @@ export function entitlementsKey(e: CustomizationEntitlements): string {
     e.engagement,
     e.brandedQr,
     e.customDomain,
+    // Stages 10–11, appended ONLY when not both covered: a fully covered key
+    // stays byte-identical to the pre-Stage-10 one, so this release does not
+    // make every catalog read as "plan changed". A Taste catalog's key does
+    // change — correctly, since offers and the plate now come off its menu.
+    ...(e.offers !== false && e.plate !== false ? [] : [e.offers, e.plate]),
   ]);
 }
 
@@ -196,7 +213,7 @@ export async function heldBackForCatalog(
 ): Promise<HeldBackItem[]> {
   if (!resolved.enforced) return [];
   const catalogId = catalog._id as Types.ObjectId;
-  const [schedule, pairing] = await Promise.all([
+  const [schedule, pairing, offer] = await Promise.all([
     CatalogCategory.exists({ catalogId, deletedAt: null, schedule: { $ne: null } }).exec(),
     CatalogProduct.exists({
       catalogId,
@@ -204,10 +221,12 @@ export async function heldBackForCatalog(
       archivedAt: null,
       'pairsWith.0': { $exists: true },
     }).exec(),
+    CatalogOffer.exists({ catalogId, deletedAt: null, active: true }).exec(),
   ]);
   return heldBackFor(catalog, resolved.entitlements, {
     hasCategorySchedules: schedule !== null,
     hasPairings: pairing !== null,
+    hasOffers: offer !== null,
   });
 }
 
@@ -226,9 +245,9 @@ export function heldBackFor(
   catalog: Pick<
     ICatalog,
     'appearance' | 'badges' | 'languages' | 'arBranding' | 'spotlight' | 'engagement' | 'qrStyle' | 'slug'
-  >,
+  > & Partial<Pick<ICatalog, 'plate'>>,
   e: CustomizationEntitlements,
-  extras: { hasCategorySchedules: boolean; hasPairings: boolean }
+  extras: { hasCategorySchedules: boolean; hasPairings: boolean; hasOffers?: boolean }
 ): HeldBackItem[] {
   const out: HeldBackItem[] = [];
   const add = (feature: HeldBackFeature, what: string) =>
@@ -275,5 +294,9 @@ export function heldBackFor(
   }
   if (!e.brandedQr && catalog.qrStyle) add('brandedQr', 'The branded QR');
   if (!e.customDomain && catalog.slug) add('customDomain', 'Your menu web address');
+  if (e.offers === false && extras.hasOffers) add('offers', 'Offers and happy hour');
+  // Only when the owner switched it on themselves — the default-on plate is not
+  // something they chose, so it is not "held back" from them.
+  if (e.plate === false && catalog.plate?.enabled === true) add('plate', 'My plate');
   return out;
 }

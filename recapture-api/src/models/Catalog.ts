@@ -97,6 +97,12 @@ export interface ICatalog extends Document {
    * until they switch it off.
    */
   reportPrefs?: CatalogReportPrefs;
+  /**
+   * Stage 11: "My plate" on the public menu. Absent = ON with totals — every
+   * owner gets it at their next publish unless they switch it off. Published
+   * with the branding; Mirage treats its own absent value as off.
+   */
+  plate?: { enabled: boolean; showTotal: boolean };
   status: CatalogStatus;
   /**
    * The Mirage restaurant this catalog is projected into. Written ONCE, at
@@ -333,6 +339,15 @@ const CatalogSchema = new Schema<ICatalog>(
             type: [{ type: String, enum: ['IN_APP', 'WHATSAPP'] }],
             default: ['IN_APP'],
           },
+        },
+        { _id: false }
+      ),
+    },
+    plate: {
+      type: new Schema(
+        {
+          enabled: { type: Boolean, default: true },
+          showTotal: { type: Boolean, default: true },
         },
         { _id: false }
       ),

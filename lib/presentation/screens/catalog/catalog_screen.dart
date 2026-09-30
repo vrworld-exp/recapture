@@ -915,6 +915,7 @@ class _CatalogHeaderCard extends ConsumerWidget {
                     context.pushNamed(AppRouteNames.catalogTranslations),
                   _CatalogMenuAction.extras => context.pushNamed(AppRouteNames.catalogExtras),
                   _CatalogMenuAction.offers => context.pushNamed(AppRouteNames.catalogOffers),
+                  _CatalogMenuAction.plate => context.pushNamed(AppRouteNames.catalogPlate),
                   _CatalogMenuAction.address => context.pushNamed(AppRouteNames.catalogAddress),
                   _CatalogMenuAction.delete => onDeleteCatalog(),
                 },
@@ -964,6 +965,21 @@ class _CatalogHeaderCard extends ConsumerWidget {
                         const SizedBox(width: AppSpacing.sm),
                         Text(
                           'Offers & happy hour',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Stage 11: My plate — ungated, because it is on by default.
+                  PopupMenuItem(
+                    key: const Key('catalog-open-plate'),
+                    value: _CatalogMenuAction.plate,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.restaurant_menu, size: 18, color: AppColors.textSecondary),
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          'My plate',
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ],
@@ -1224,7 +1240,7 @@ Color _subscriptionColor(SubscriptionSummary? summary) =>
 /// The header's overflow menu. An enum with one entry rather than a bare
 /// callback because this menu is where the next catalog-level action lands, and
 /// a `switch` over it is a compile error the day one is added without a branch.
-enum _CatalogMenuAction { translations, extras, offers, address, delete }
+enum _CatalogMenuAction { translations, extras, offers, plate, address, delete }
 
 class _Chip extends StatelessWidget {
   const _Chip({required this.label, required this.color});

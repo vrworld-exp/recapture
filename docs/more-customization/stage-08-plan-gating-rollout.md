@@ -64,6 +64,8 @@ Proposed split:
 | Engagement buttons (7.3) | review link | ✅ | ✅ |
 | Branded QR (7.4) | — | ✅ | ✅ |
 | Custom domain (8.2) | — | — | ✅ |
+| Offers / happy hour (Stage 10) | — | ✅ | ✅ |
+| My plate (Stage 11) | — | ✅ | ✅ |
 
 Rules:
 

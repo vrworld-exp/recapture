@@ -66,6 +66,7 @@ import '../../presentation/screens/catalog/publish_screen.dart';
 import '../../presentation/screens/catalog/subscription_screen.dart';
 import '../../presentation/screens/catalog/weekly_report_screen.dart';
 import '../../presentation/screens/catalog/offers_screen.dart';
+import '../../presentation/screens/catalog/plate_settings_screen.dart';
 import '../../presentation/widgets/catalog/publish_body.dart'
     show kPublishStartQuery;
 import '../../presentation/screens/profile/profile_screen.dart';
@@ -211,6 +212,9 @@ abstract final class AppRoutes {
   static const catalogOffers = '/catalog/offers';
   static const catalogOfferNew = '/catalog/offers/new';
   static const catalogOfferDetail = '/catalog/offers/:offerId';
+
+  /// The "My plate" switches (Stage 11).
+  static const catalogPlate = '/catalog/plate';
 
   // ── Rep (the field surface, /rep) ─────────────────────────────────────────
   // Gated on isSalesRep in the router's redirect below, not inside the screens:
@@ -398,6 +402,7 @@ abstract final class AppRouteNames {
   static const catalogOffers = 'catalogOffers';
   static const catalogOfferNew = 'catalogOfferNew';
   static const catalogOfferDetail = 'catalogOfferDetail';
+  static const catalogPlate = 'catalogPlate';
   static const repCatalogs = 'repCatalogs';
   static const repActivate = 'repActivate';
   static const repStandees = 'repStandees';
@@ -734,6 +739,11 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         builder: (_, state) => FlowBackScope(
           child: OfferEditorScreen(offerId: state.pathParameters['offerId']),
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.catalogPlate,
+        name: AppRouteNames.catalogPlate,
+        builder: (_, __) => const FlowBackScope(child: PlateSettingsScreen()),
       ),
       GoRoute(
         path: AppRoutes.catalogReports,

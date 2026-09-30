@@ -333,3 +333,24 @@ class FeedbackReport {
 }
 
 const Object _keep = Object();
+
+/// Stage 11: "My plate" on the public menu — a list diners show the waiter,
+/// never an order. On (with totals) unless the owner switches it off.
+class MenuPlate {
+  const MenuPlate({this.enabled = true, this.showTotal = true});
+
+  final bool enabled;
+  final bool showTotal;
+
+  static const MenuPlate defaults = MenuPlate();
+
+  factory MenuPlate.fromMap(Object? raw) {
+    if (raw is! Map) return defaults;
+    return MenuPlate(enabled: raw['enabled'] != false, showTotal: raw['showTotal'] != false);
+  }
+
+  Map<String, dynamic> toMap() => {'enabled': enabled, 'showTotal': showTotal};
+
+  MenuPlate copyWith({bool? enabled, bool? showTotal}) =>
+      MenuPlate(enabled: enabled ?? this.enabled, showTotal: showTotal ?? this.showTotal);
+}

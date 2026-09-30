@@ -59,6 +59,8 @@ export interface WeeklyReportMetrics {
   productViews: number;
   /** Stage 10: diners shown an offer price or combo (`offer_viewed`). Absent on older reports. */
   offerViews?: number;
+  /** Stage 11: "My plate" — plates built, their average value, the most-added dish. */
+  plates?: { built: number; avgValue: number; topDish: string | null };
   /**
    * Percent change against the previous week, one decimal. Null — not 0, not
    * "▲ 400%" — when the previous week had fewer than

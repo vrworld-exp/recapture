@@ -206,6 +206,22 @@ async function qrScansFor(catalogId: Types.ObjectId, weekStart: string): Promise
   return rows[0]?.total ?? 0;
 }
 
+/** Stage 11: the week's plates, the most-added dish by OUR name where it still maps. */
+function platesOf(
+  raw: unknown,
+  restaurantId: string,
+  byMirageId: Map<string, ProductRow>
+): WeeklyReportMetrics['plates'] {
+  const p = (raw ?? {}) as Record<string, unknown>;
+  const top = ownRows(list(p.topDishes), restaurantId)[0];
+  const local = top ? byMirageId.get(str(top.productId)) : undefined;
+  return {
+    built: num(p.plates),
+    avgValue: num(p.avgValue),
+    topDish: top ? (local?.name ?? (str(top.name) || null)) : null,
+  };
+}
+
 export interface BuiltWeeklyReport {
   metrics: WeeklyReportMetrics;
   tips: WeeklyReportTip[];
@@ -318,6 +334,7 @@ export async function buildWeeklyReport(
     arViews,
     productViews: num(kpis.productViews),
     offerViews: num((summary.totalsByType ?? {}).offer_viewed),
+    plates: platesOf(summary.plateStats, restaurantId, byMirageId),
     // Every delta rides on the menu-view base: a week too small to compare
     // views on is too small to compare anything on.
     deltaPct: {

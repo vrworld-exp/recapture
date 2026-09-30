@@ -52,7 +52,10 @@ import { track, AnalyticsEvent } from '@/utils/analytics';
 import { hashIdentifier } from '@/utils/otp';
 import { parseProductImageKey, productImageContentTypeFor } from '@/utils/productImageKeys';
 import { entitledView } from '@/services/catalog/entitledView';
-import { resolveCustomizationEntitlements } from '@/services/subscription/customizationEntitlements';
+import {
+  resolveCustomizationEntitlements,
+  type CustomizationEntitlements,
+} from '@/services/subscription/customizationEntitlements';
 import {
   mirageArBrandingField,
   mirageEngagementField,
@@ -377,14 +380,27 @@ function mirageDishSettings(catalog: ICatalog): {
  * other block here.
  */
 async function mirageStage7Fields(
-  catalog: ICatalog
-): Promise<{ arBranding: string; spotlight: string; engagement: string; offers: string }> {
+  catalog: ICatalog,
+  entitlements: CustomizationEntitlements
+): Promise<{
+  arBranding: string;
+  spotlight: string;
+  engagement: string;
+  offers: string;
+  plate: string;
+}> {
   return {
     arBranding: mirageArBrandingField(catalog),
     spotlight: await mirageSpotlightField(catalog),
     engagement: mirageEngagementField(catalog),
     // Stage 10: the switched-on offers and combos, dishes by published name.
-    offers: await mirageOffersField(catalog),
+    // Stage 10: '' when the plan does not cover offers (held back, not deleted).
+    offers: entitlements.offers === false ? '' : await mirageOffersField(catalog),
+    // Stage 11: always sent — absent on the catalog = on, with totals.
+    plate: JSON.stringify({
+      enabled: catalog.plate?.enabled !== false,
+      showTotal: catalog.plate?.showTotal !== false,
+    }),
   };
 }
 
@@ -683,10 +699,9 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
   const logo = await loadLogoUpload(catalog);
   const phoneNo = mirageDigits(catalog.contact?.phone);
   const links = mirageLinks(catalog);
-  const view = entitledView(
-    catalog,
-    (await resolveCustomizationEntitlements(catalog._id as Types.ObjectId)).entitlements
-  );
+  const entitlements = (await resolveCustomizationEntitlements(catalog._id as Types.ObjectId))
+    .entitlements;
+  const view = entitledView(catalog, entitlements);
 
   let created: MirageRestaurant;
   try {
@@ -702,7 +717,7 @@ export async function provisionCatalog(catalogId: Types.ObjectId): Promise<Provi
       coverUrl: mirageCoverUrl(catalog),
       ...mirageTimeFields(view),
       ...mirageDishSettings(view),
-      ...(await mirageStage7Fields(view)),
+      ...(await mirageStage7Fields(view, entitlements)),
       // Stage 8.2: the menu's subdomain, `''` when none or not covered.
       slug: view.slug ?? '',
       ...(logo ? { image: logo } : {}),
@@ -766,10 +781,9 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
   const logo = await loadLogoUpload(catalog);
   const phoneNo = mirageDigits(catalog.contact?.phone);
   const links = mirageLinks(catalog);
-  const view = entitledView(
-    catalog,
-    (await resolveCustomizationEntitlements(catalog._id as Types.ObjectId)).entitlements
-  );
+  const entitlements = (await resolveCustomizationEntitlements(catalog._id as Types.ObjectId))
+    .entitlements;
+  const view = entitledView(catalog, entitlements);
 
   try {
     await client.updateRestaurant(catalog.mirageRestaurantId, {
@@ -784,7 +798,7 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
       coverUrl: mirageCoverUrl(catalog),
       ...mirageTimeFields(view),
       ...mirageDishSettings(view),
-      ...(await mirageStage7Fields(view)),
+      ...(await mirageStage7Fields(view, entitlements)),
       // Stage 8.2: the menu's subdomain, `''` when none or not covered.
       slug: view.slug ?? '',
       ...(logo ? { image: logo } : {}),

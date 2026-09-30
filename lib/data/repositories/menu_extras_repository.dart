@@ -34,6 +34,9 @@ abstract interface class MenuExtrasRepository {
   Future<BusinessProfile> updateArBranding(ArBranding branding);
   Future<BusinessProfile> updateSpotlight(MenuSpotlight spotlight);
   Future<BusinessProfile> updateEngagement(MenuEngagement engagement);
+
+  /// Stage 11: My plate on / off, totals on / off.
+  Future<BusinessProfile> updatePlate(MenuPlate plate);
   Future<BusinessProfile> updateQrStyle(QrStyle style);
 
   /// A dish's "goes well with" list (≤ [kMaxPairings] other products).
@@ -84,6 +87,9 @@ class RemoteMenuExtrasRepository implements MenuExtrasRepository {
         !map.containsKey('wifi');
     return _patch({'engagement': off ? null : map});
   }
+
+  @override
+  Future<BusinessProfile> updatePlate(MenuPlate plate) => _patch({'plate': plate.toMap()});
 
   @override
   Future<BusinessProfile> updateQrStyle(QrStyle style) =>

@@ -371,6 +371,8 @@ async function applyCatalogPatch(
     if (value === null) unset[key] = 1;
     else set[key] = value;
   }
+  // Stage 11: My plate — replaced whole.
+  if (input.plate !== undefined) set.plate = input.plate;
 
   const updated = await Catalog.findOneAndUpdate(
     { userId: ownerId, deletedAt: null },
@@ -493,6 +495,8 @@ export const PUBLIC_PROFILE_FIELDS: readonly string[] = [
   'arBranding',
   'spotlight',
   'engagement',
+  // "My plate" (Stage 11).
+  'plate',
 ];
 
 /**
@@ -533,6 +537,8 @@ export interface BusinessProfileDto {
   spotlight: CatalogSpotlight | null;
   engagement: CatalogEngagement | null;
   qrStyle: CatalogQrStyle | null;
+  /** Stage 11: My plate. Always present — absent on the catalog reads as on, with totals. */
+  plate: { enabled: boolean; showTotal: boolean };
   /**
    * Stage 8.2: the menu's pretty address and its full URL (null when no
    * subdomain host is configured). Additional to `publicUrl`, never instead.
@@ -661,6 +667,10 @@ export function toBusinessProfileDto(c: ICatalog): BusinessProfileDto {
           feedbackForm: c.engagement.feedbackForm === true,
         }
       : null,
+    plate: {
+      enabled: c.plate?.enabled !== false,
+      showTotal: c.plate?.showTotal !== false,
+    },
     qrStyle: c.qrStyle
       ? {
           fg: c.qrStyle.fg,

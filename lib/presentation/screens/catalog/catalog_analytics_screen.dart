@@ -38,6 +38,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../widgets/catalog/analytics_engagement_card.dart';
+import '../../widgets/catalog/analytics_plate_card.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/routes/app_router.dart';
@@ -363,6 +364,8 @@ class _ReportBody extends StatelessWidget {
           // Stage 7: the customer buttons and the feedback form — only when a
           // diner has used one in this range.
           AnalyticsEngagementCard(kpis: kpis, from: range.from, to: range.to),
+          // Stage 11: My plate — only once a diner has built one in this range.
+          AnalyticsPlateCard(stats: summary.plateStats),
           const SizedBox(height: AppSpacing.lg),
           _SplitCard(topProducts: report.topProducts),
           const SizedBox(height: AppSpacing.lg),

@@ -39,7 +39,9 @@
 > - Editor is one scrolling form with the four numbered steps, not a paged wizard.
 > - An offer whose chosen dish was deleted cannot be re-saved until the dish is re-picked
 >   (`TARGET_NOT_FOUND`); the publish already drops the missing dish.
-> - Not plan-gated (Stage 8's table has no row for it).
+> - **Plan-gated (decided 2026-09-30): Signature and above.** New `offers` entitlement; on Taste the
+>   publish sends no offers and the publish screen lists them as held back (saved offers are kept).
+>   Lock chip on the Offers screen.
 
 **Side:** recapture-api + Flutter + Mirage BE/FE.
 **Depends on:** Stage 4 (time rules in `Asia/Kolkata`), Stage 5 badges are nice-to-have.

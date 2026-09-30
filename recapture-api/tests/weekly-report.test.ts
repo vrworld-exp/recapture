@@ -246,6 +246,7 @@ describe('insight rules', () => {
 
 class ReportMirage extends FakeMirage {
   pageViews = 1240;
+  restaurantId = '';
 
   async analyticsSummary(query: MirageAnalyticsQuery) {
     const base = await super.analyticsSummary(query);
@@ -254,6 +255,18 @@ class ReportMirage extends FakeMirage {
       kpis: { ...base.kpis, pageViews: this.pageViews, visitors: 800, arViews: 310 },
       previousKpis: { ...base.kpis, pageViews: 1051, visitors: 700, arViews: 300 },
       topSearches: [],
+      // Stage 11: grouped by restaurant like every per-dish panel; the second row
+      // names someone else and must never surface as this owner's "most added".
+      plateStats: {
+        plates: 86,
+        avgValue: 640,
+        shownToWaiter: 40,
+        sentWhatsapp: 3,
+        topDishes: [
+          { productId: 'other', restaurantId: 'someone-else', name: 'Not ours', adds: 99 },
+          { productId: 'mi-1', restaurantId: this.restaurantId, name: 'Paneer Tikka', adds: 12 },
+        ],
+      },
     };
   }
 
@@ -329,6 +342,7 @@ describe('deliverWeeklyReport', () => {
   it('run twice → one report, one notification', async () => {
     const catalogId = await seedCatalog();
 
+    mirage.restaurantId = (await Catalog.findById(catalogId).lean())!.mirageRestaurantId!;
     const first = await deliverWeeklyReport(catalogId, '2026-09-21', NOW);
     const second = await deliverWeeklyReport(catalogId, '2026-09-21', NOW);
 
@@ -344,6 +358,10 @@ describe('deliverWeeklyReport', () => {
     expect(notes[0].message).toContain('▲ 18%');
     expect(notes[0].message).toContain('Busiest: Saturday 8–9 pm');
     expect(notes[0].action?.url).toBe('/catalog/reports/2026-09-21');
+
+    // Stage 11: the week's plates, scoped to this restaurant.
+    const stored = await WeeklyReport.findOne({ catalogId }).lean();
+    expect(stored!.metrics.plates).toEqual({ built: 86, avgValue: 640, topDish: 'Paneer Tikka' });
   });
 
   it('skips a catalog whose owner switched weekly reports off', async () => {

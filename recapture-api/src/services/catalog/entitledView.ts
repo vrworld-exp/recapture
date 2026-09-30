@@ -15,7 +15,8 @@ import type { CustomizationEntitlements } from '@/models/types/subscription.type
 export type EntitledCatalogFields = Pick<
   ICatalog,
   'appearance' | 'badges' | 'languages' | 'arBranding' | 'spotlight' | 'engagement' | 'slug'
->;
+> &
+  Partial<Pick<ICatalog, 'plate'>>;
 
 export function entitledView<T extends EntitledCatalogFields>(
   catalog: T,
@@ -63,6 +64,15 @@ export function entitledView<T extends EntitledCatalogFields>(
     spotlight: { value: e.arBrandingAndSpotlight ? catalog.spotlight : undefined, enumerable: true },
     engagement: { value: engagement, enumerable: true },
     slug: { value: e.customDomain ? catalog.slug : undefined, enumerable: true },
+    // Stage 11: not covered = sent as off. (Offers are a collection, not a
+    // field; the branding sync drops them itself — see mirageStage7Fields.)
+    plate: {
+      value:
+        e.plate === false
+          ? { enabled: false, showTotal: catalog.plate?.showTotal !== false }
+          : catalog.plate,
+      enumerable: true,
+    },
   });
   return view;
 }
