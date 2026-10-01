@@ -125,6 +125,10 @@ thisnking to fix it --------------------->>>
 
 
 
+    11. User role with admin (this time only admin) able to see all published catalogs, so inside profile page create one more section called all catalogs. when admin click on this the open catalogs page there all catalog preseent in a grid layout (two catalogs in one row) with name and icons of that catalog. if admin click on any catalog then open like a normal catalog page like we have now for every users, and also admin able to edit any catalog by clicking one the banner and open it and able to edit and publish changes directly (admin feature).
+
+
+
 
 
     Once app is ready for production ------------------>>>>>>>>
