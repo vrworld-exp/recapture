@@ -124,6 +124,7 @@ class CatalogPreviewPage extends StatefulWidget {
     required this.preview,
     required this.noticeBody,
     this.onFix,
+    this.onHeaderTap,
   });
 
   final CatalogPreview preview;
@@ -134,6 +135,12 @@ class CatalogPreviewPage extends StatefulWidget {
   /// Opens the product a warning is about. Null hides the Fix affordance — for
   /// a surface that can show the problem but not take the reader to it.
   final ValueChanged<CatalogProduct>? onFix;
+
+  /// Makes the page's banner (cover, logo, name) a button, with a small
+  /// "Edit" pill on it so the affordance is visible rather than discovered.
+  /// The ADMIN's "All catalogs" page uses it to open the editor; null — the
+  /// owner and rep previews — keeps the banner exactly what a customer sees.
+  final VoidCallback? onHeaderTap;
 
   @override
   State<CatalogPreviewPage> createState() => CatalogPreviewPageState();
@@ -333,7 +340,10 @@ class CatalogPreviewPageState extends State<CatalogPreviewPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _PageHeader(preview: preview),
+                        _PageHeader(
+                          preview: preview,
+                          onTap: widget.onHeaderTap,
+                        ),
                         if (preview.isEmpty)
                           const _BrandedEmptyPage()
                         else if (sections.isEmpty)
@@ -991,9 +1001,12 @@ class _PageFrame extends StatelessWidget {
 /// change — and one that never carried a field cannot be previewed into
 /// existence.
 class _PageHeader extends StatelessWidget {
-  const _PageHeader({required this.preview});
+  const _PageHeader({required this.preview, this.onTap});
 
   final CatalogPreview preview;
+
+  /// See [CatalogPreviewPage.onHeaderTap].
+  final VoidCallback? onTap;
 
   /// Tall enough for a photo to be a photo; short enough that the first card is
   /// still on screen under it on a small phone.
@@ -1018,89 +1031,111 @@ class _PageHeader extends StatelessWidget {
         profile, 'contact.address', preview.catalog.contact?.address);
     final hasCover = coverUrl != null && coverUrl.isNotEmpty;
 
+    final hero = SizedBox(
+      height: hasCover ? _heroWithCover : _heroWithoutCover,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Tested inline rather than through `hasCover` so the null
+          // check promotes the url for Image.network.
+          if (coverUrl != null && coverUrl.isNotEmpty)
+            Image.network(
+              coverUrl,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => const _HeaderBackdrop(),
+            )
+          else
+            const _HeaderBackdrop(),
+          // Same scrim job as a card: the branding sits on the photo, so
+          // the photo has to give way underneath it.
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.bottomCenter,
+                end: Alignment.topCenter,
+                colors: [
+                  Color(0xF20B0B0E),
+                  Color(0x8C0B0B0E),
+                  Color(0x1A0B0B0E),
+                ],
+                stops: [0.0, 0.55, 1.0],
+              ),
+            ),
+          ),
+          Positioned(
+            left: AppSpacing.lg,
+            right: AppSpacing.lg,
+            bottom: AppSpacing.lg,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (logoUrl != null && logoUrl.isNotEmpty) ...[
+                  _Logo(url: logoUrl),
+                  const SizedBox(width: AppSpacing.md),
+                ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        preview.catalog.displayName,
+                        style: textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                          height: 1.15,
+                          shadows: _legibility,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (preview.catalog.businessName case final business?
+                          when business.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.xs),
+                        Text(
+                          business,
+                          style: textTheme.bodySmall?.copyWith(
+                            color: AppColors.textSecondary,
+                            shadows: _legibility,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (onTap != null)
+            const Positioned(
+              top: AppSpacing.md,
+              right: AppSpacing.md,
+              child: _EditPill(),
+            ),
+        ],
+      ),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(
-          height: hasCover ? _heroWithCover : _heroWithoutCover,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              // Tested inline rather than through `hasCover` so the null
-              // check promotes the url for Image.network.
-              if (coverUrl != null && coverUrl.isNotEmpty)
-                Image.network(
-                  coverUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const _HeaderBackdrop(),
-                )
-              else
-                const _HeaderBackdrop(),
-              // Same scrim job as a card: the branding sits on the photo, so
-              // the photo has to give way underneath it.
-              const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Color(0xF20B0B0E),
-                      Color(0x8C0B0B0E),
-                      Color(0x1A0B0B0E),
-                    ],
-                    stops: [0.0, 0.55, 1.0],
-                  ),
-                ),
+        if (onTap case final tap?)
+          Semantics(
+            button: true,
+            label: 'Edit this catalog',
+            child: Material(
+              type: MaterialType.transparency,
+              child: InkWell(
+                key: const ValueKey('preview_header_edit'),
+                onTap: tap,
+                child: hero,
               ),
-              Positioned(
-                left: AppSpacing.lg,
-                right: AppSpacing.lg,
-                bottom: AppSpacing.lg,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    if (logoUrl != null && logoUrl.isNotEmpty) ...[
-                      _Logo(url: logoUrl),
-                      const SizedBox(width: AppSpacing.md),
-                    ],
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            preview.catalog.displayName,
-                            style: textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.3,
-                              height: 1.15,
-                              shadows: _legibility,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (preview.catalog.businessName case final business?
-                              when business.isNotEmpty) ...[
-                            const SizedBox(height: AppSpacing.xs),
-                            Text(
-                              business,
-                              style: textTheme.bodySmall?.copyWith(
-                                color: AppColors.textSecondary,
-                                shadows: _legibility,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
+            ),
+          )
+        else
+          hero,
         // The one gold rule this screen is allowed — it marks the seam between
         // the branding and the menu, which is the only seam that matters here.
         const SizedBox(
@@ -1145,6 +1180,36 @@ class _PageHeader extends StatelessWidget {
     if (profile == null || value == null || value.isEmpty) return null;
     return profile.isPublic(field) ? value : null;
   }
+}
+
+/// The "this banner is a button" marker for [CatalogPreviewPage.onHeaderTap].
+class _EditPill extends StatelessWidget {
+  const _EditPill();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.sm, vertical: AppSpacing.xs),
+        decoration: BoxDecoration(
+          color: const Color(0xCC0B0B0E),
+          borderRadius: BorderRadius.circular(AppRadius.xs),
+          border: Border.all(color: const Color(0x2EFFFFFF)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.edit_outlined, size: 14, color: AppColors.textPrimary),
+            SizedBox(width: AppSpacing.xs),
+            Text(
+              'Edit',
+              style: TextStyle(
+                fontSize: AppTypography.sizeLabel,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          ],
+        ),
+      );
 }
 
 /// The backdrop behind the branding when there is no cover photo — and behind a

@@ -533,7 +533,8 @@ class RemoteCatalogRepository implements CatalogRepository {
       });
 
   @override
-  Future<CatalogCategory> createCategory(String name) => mapCatalogErrors(() async {
+  Future<CatalogCategory> createCategory(String name) =>
+      mapCatalogErrors(() async {
         final res = await _dio.post<Map<String, dynamic>>(
           '/catalog/categories',
           data: {'name': name},
@@ -577,7 +578,8 @@ class RemoteCatalogRepository implements CatalogRepository {
       });
 
   @override
-  Future<void> reorderCategories(List<String> orderedIds) => mapCatalogErrors(() async {
+  Future<void> reorderCategories(List<String> orderedIds) =>
+      mapCatalogErrors(() async {
         await _dio.post<Map<String, dynamic>>(
           '/catalog/categories/reorder',
           data: {'ids': orderedIds},
@@ -617,28 +619,8 @@ class RemoteCatalogRepository implements CatalogRepository {
       });
 
   @override
-  Future<UnpublishResult> unpublish() async {
-    try {
-      final res = await _dio.post<Map<String, dynamic>>('/catalog/unpublish');
-      final body = res.data;
-      // `unpublished: false` is the 200 for a catalog that was never live.
-      if (body?['unpublished'] != true) return const UnpublishNotPublished();
-
-      final runId = body?['runId'];
-      return runId is String && runId.isNotEmpty
-          ? UnpublishQueued(runId)
-          : const UnpublishNotPublished();
-    } on DioException catch (error) {
-      final body = error.response?.data;
-      if (body is Map && body['code'] == 'PUBLISH_IN_PROGRESS') {
-        final runId = body['runId'];
-        if (runId is String && runId.isNotEmpty) {
-          return UnpublishAlreadyRunning(runId);
-        }
-      }
-      throw CatalogFailure.fromDio(error);
-    }
-  }
+  Future<UnpublishResult> unpublish() =>
+      postUnpublishRequest(_dio, '/catalog/unpublish');
 
   @override
   Future<CatalogQrImage> fetchQr({
@@ -686,8 +668,7 @@ class RemoteCatalogRepository implements CatalogRepository {
 
   @override
   Future<StandeeQuota> fetchStandeeQuota() => mapCatalogErrors(() async {
-        final res =
-            await _dio.get<Map<String, dynamic>>('/catalog/standees');
+        final res = await _dio.get<Map<String, dynamic>>('/catalog/standees');
         return StandeeQuota.fromMap(res.data);
       });
 
@@ -711,15 +692,16 @@ class RemoteCatalogRepository implements CatalogRepository {
       return StandeeDownload(
         file: CatalogQrImage(
           bytes: Uint8List.fromList(data),
-          contentType: res.headers.value(Headers.contentTypeHeader) ??
-              'application/pdf',
+          contentType:
+              res.headers.value(Headers.contentTypeHeader) ?? 'application/pdf',
           fileName: fileNameFromDisposition(
                   res.headers.value('content-disposition')) ??
               'standees-x$copies.pdf',
           format: CatalogQrFormat.pdf,
         ),
         copies: copies,
-        remaining: int.tryParse(res.headers.value('x-standees-remaining') ?? ''),
+        remaining:
+            int.tryParse(res.headers.value('x-standees-remaining') ?? ''),
       );
     } on DioException catch (error) {
       // Bytes mode applies to the failure body too — decode it, or

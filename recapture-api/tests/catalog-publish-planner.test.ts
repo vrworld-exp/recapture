@@ -151,6 +151,23 @@ describe('planPublish — restaurant', () => {
     expect(plan.steps[0]).toMatchObject({ target: 'RESTAURANT', action: 'SKIP' });
   });
 
+  it('plans an UPDATE after an unpublish even with nothing edited — the page must come back on', () => {
+    // An unpublish switched the restaurant off (`isPublished: false`) and only
+    // the branding UPDATE switches it back on. Revisions equal = SKIP used to
+    // leave a "successful" republish showing a 404.
+    const plan = planPublish(snapshot({ catalog: { status: 'UNPUBLISHED' } }), 'FULL');
+    expect(plan.steps[0]).toMatchObject({
+      target: 'RESTAURANT',
+      action: 'UPDATE',
+      reason: 'REPUBLISH',
+    });
+  });
+
+  it('an UNPUBLISH run itself never touches the restaurant', () => {
+    const plan = planPublish(snapshot({ catalog: { status: 'UNPUBLISHED' } }), 'UNPUBLISH');
+    expect(plan.steps.some((s) => s.target === 'RESTAURANT')).toBe(false);
+  });
+
   it('omits the restaurant entirely on RETRY_FAILED once provisioned', () => {
     const plan = planPublish(snapshot({}), 'RETRY_FAILED');
     expect(plan.steps.some((s) => s.target === 'RESTAURANT')).toBe(false);

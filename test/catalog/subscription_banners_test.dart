@@ -17,6 +17,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_link_service.dart';
 import 'package:recapture/application/connectivity/connectivity_providers.dart';
@@ -102,6 +103,7 @@ class FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
 Widget repHarness(FakeRepRepository repo) => ProviderScope(
       overrides: [
         authProvider.overrideWith(_StubAuth.new),
+        isAdminProvider.overrideWithValue(false),
         repRepositoryProvider.overrideWithValue(repo),
         isOnlineProvider.overrideWithValue(true),
         catalogLinkActionsProvider.overrideWithValue(FakeLinkActions()),

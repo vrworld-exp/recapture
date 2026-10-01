@@ -181,3 +181,19 @@ export const adminModelIdParamsSchema = z
     modelId: z.string().regex(OBJECT_ID_RE, 'Invalid model id'),
   })
   .strict();
+
+/**
+ * GET /admin/catalogs query — the ADMIN's "All catalogs" grid. A page of LIVE
+ * catalogs in name order; `q` narrows by restaurant or business name
+ * (substring, case-insensitive, separator-agnostic). Bounded like the
+ * subscriptions search so a pasted paragraph is a 400, not a regex.
+ */
+export const adminCatalogsQuerySchema = z
+  .object({
+    limit: z.coerce.number().int().min(1).max(60).default(30),
+    cursor: z.string().min(1).max(512).optional(),
+    q: z.string().trim().min(1).max(60).optional(),
+  })
+  .strict();
+
+export type AdminCatalogsQuery = z.infer<typeof adminCatalogsQuerySchema>;

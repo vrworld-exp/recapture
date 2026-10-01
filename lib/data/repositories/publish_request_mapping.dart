@@ -106,3 +106,35 @@ Future<PublishStatus> getPublishStatus(Dio dio, String path) =>
       }
       return PublishStatus.fromMap(publish);
     });
+
+/// POSTs an unpublish and maps the answer — the owner's `/catalog/unpublish`
+/// and the admin's `/rep/catalogs/:id/unpublish/admin` answer with the same
+/// shapes, so they share one reading of them. A 409 PUBLISH_IN_PROGRESS with a
+/// run id is a value (wait for that run); every other failure throws
+/// [CatalogFailure].
+Future<UnpublishResult> postUnpublishRequest(
+  Dio dio,
+  String path, {
+  Map<String, dynamic>? data,
+}) async {
+  try {
+    final res = await dio.post<Map<String, dynamic>>(path, data: data);
+    final body = res.data;
+    // `unpublished: false` is the 200 for a catalog that was never live.
+    if (body?['unpublished'] != true) return const UnpublishNotPublished();
+
+    final runId = body?['runId'];
+    return runId is String && runId.isNotEmpty
+        ? UnpublishQueued(runId)
+        : const UnpublishNotPublished();
+  } on DioException catch (error) {
+    final body = error.response?.data;
+    if (body is Map && body['code'] == 'PUBLISH_IN_PROGRESS') {
+      final runId = body['runId'];
+      if (runId is String && runId.isNotEmpty) {
+        return UnpublishAlreadyRunning(runId);
+      }
+    }
+    throw CatalogFailure.fromDio(error);
+  }
+}

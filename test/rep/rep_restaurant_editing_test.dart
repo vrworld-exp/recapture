@@ -111,6 +111,17 @@ class FakeRepRepository implements RepRepository {
 
   CatalogProduct dish;
 
+  @override
+  Future<PublishRequestResult> adminPublish(
+    String catalogId, {
+    String? idempotencyKey,
+  }) =>
+      throw UnimplementedError('adminPublish');
+
+  @override
+  Future<UnpublishResult> adminUnpublish(String catalogId, String reason) =>
+      throw UnimplementedError('adminUnpublish');
+
   // `storedProfile` / `storedCategories` rather than `profile` / `categories`:
   // those names are METHODS on the interface, and a field cannot share a name
   // with the member it is meant to serve.

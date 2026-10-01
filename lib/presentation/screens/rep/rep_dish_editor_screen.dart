@@ -29,6 +29,7 @@ import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
 import '../../../application/rep/rep_dish_notifier.dart';
+import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
@@ -88,8 +89,7 @@ class RepDishEditorScreen extends ConsumerWidget {
             icon: Icons.no_meals_outlined,
             title: "We couldn't open that dish",
             body: isDelegationGone(error)
-                ? 'This restaurant is no longer assigned to you. Go back to '
-                    'your restaurants to see what is.'
+                ? delegationGoneBody(isAdmin: ref.watch(isAdminProvider))
                 : error is CatalogFailure
                     ? CatalogFeedback.failureText(error)
                     : CatalogFeedback.textForCode(null),
@@ -429,8 +429,7 @@ class _DishFormState extends ConsumerState<_DishForm> {
   }
 
   Widget _formColumn(BuildContext context) {
-    final categoriesAsync =
-        ref.watch(repCategoriesProvider(widget.catalogId));
+    final categoriesAsync = ref.watch(repCategoriesProvider(widget.catalogId));
 
     return Form(
       key: _formKey,
@@ -444,9 +443,8 @@ class _DishFormState extends ConsumerState<_DishForm> {
             enabled: !_saving,
             maxLength: 120,
             textInputAction: TextInputAction.next,
-            validator: (value) => (value ?? '').trim().isEmpty
-                ? "Enter the dish's name."
-                : null,
+            validator: (value) =>
+                (value ?? '').trim().isEmpty ? "Enter the dish's name." : null,
           ),
           const SizedBox(height: AppSpacing.lg),
           AppTextField(

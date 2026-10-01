@@ -25,6 +25,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
+import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/rep/rep_catalog_qr_notifier.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
@@ -133,11 +134,18 @@ class _QrUnavailable extends StatelessWidget {
     final gone = failure != null && isDelegationGone(failure!);
 
     if (gone) {
-      return const CatalogMessage(
-        fillsViewport: false,
-        icon: Icons.person_off_outlined,
-        title: 'This restaurant is no longer assigned to you',
-        body: 'Go back to your restaurants to see what is.',
+      return Consumer(
+        builder: (_, ref, __) {
+          final isAdmin = ref.watch(isAdminProvider);
+          return CatalogMessage(
+            fillsViewport: false,
+            icon: Icons.person_off_outlined,
+            title: delegationGoneTitle(isAdmin: isAdmin),
+            body: isAdmin
+                ? delegationGoneBody(isAdmin: true)
+                : 'Go back to your restaurants to see what is.',
+          );
+        },
       );
     }
 

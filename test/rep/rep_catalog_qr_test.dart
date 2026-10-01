@@ -24,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_link_service.dart';
 import 'package:recapture/application/catalog/catalog_qr_service.dart';
@@ -173,7 +174,7 @@ class _FakeRepo with RepRepoCatalogDefaults implements RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
-  ProductFoodType? foodType,
+    ProductFoodType? foodType,
   }) async =>
       throw UnimplementedError();
 
@@ -205,13 +206,16 @@ Widget _qrHarness(
   _FakeRepo repo, {
   FakeQrDeliverer? deliverer,
   FakeLinkActions? links,
+  bool isAdmin = false,
 }) =>
     ProviderScope(
       overrides: [
         authProvider.overrideWith(_StubAuth.new),
+        isAdminProvider.overrideWithValue(isAdmin),
         repRepositoryProvider.overrideWithValue(repo),
         qrDelivererProvider.overrideWithValue(deliverer ?? FakeQrDeliverer()),
-        catalogLinkActionsProvider.overrideWithValue(links ?? FakeLinkActions()),
+        catalogLinkActionsProvider
+            .overrideWithValue(links ?? FakeLinkActions()),
       ],
       child: const MaterialApp(
         home: RepCatalogQrScreen(catalogId: kLiveId),
@@ -297,7 +301,8 @@ void main() {
       // The QR is an ADDITION to the row, not a replacement for it: the button
       // sits inside the same InkWell, and an icon that swallowed the row tap
       // would take the rep's way into the dishes with it.
-      final repo = _FakeRepo(rows: [_summary(kLiveId, CatalogStatus.published)]);
+      final repo =
+          _FakeRepo(rows: [_summary(kLiveId, CatalogStatus.published)]);
       await tester.pumpWidget(_listHarness(repo));
       await tester.pumpAndSettle();
 
@@ -388,6 +393,23 @@ void main() {
         find.text('This restaurant is no longer assigned to you'),
         findsOneWidget,
       );
+      expect(find.text('Try again'), findsNothing);
+    });
+
+    testWidgets('for an ADMIN, the same 404 means the catalog is gone',
+        (tester) async {
+      // An admin reaches this screen from "All catalogs" with no delegation,
+      // so "no longer assigned to you" would describe a grant they never had.
+      final repo = _FakeRepo()
+        ..qrFailure = const CatalogFailure(
+          code: 'CATALOG_NOT_FOUND',
+          message: 'That catalog was not found.',
+        );
+      await tester.pumpWidget(_qrHarness(repo, isAdmin: true));
+      await tester.pumpAndSettle();
+
+      expect(find.text('This catalog is no longer available'), findsOneWidget);
+      expect(find.textContaining('assigned to you'), findsNothing);
       expect(find.text('Try again'), findsNothing);
     });
 

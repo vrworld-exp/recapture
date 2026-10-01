@@ -12,9 +12,12 @@
 // details screens, resolved from the catalog id in the path rather than from
 // a token — and the words for a restaurant that is not theirs.
 //
-// NO "TAKE OFFLINE". A customer page going dark is the owner's decision; the
-// rep's router has no unpublish route and the gateway says so, so the body
-// hides the control rather than offering one that would answer 404.
+// NO "TAKE OFFLINE" FOR A REP. A customer page going dark is the owner's
+// decision; the rep's gateway says so, so the body hides the control.
+//
+// AN ADMIN GETS TWO MORE BUTTONS at the foot of the screen ([AdminPublishBar]):
+// "Publish by admin" (any menu, whatever its plan) and "Unpublish by admin"
+// (behind a reason the owner is shown). Same flow, same progress, same toasts.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,6 +25,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
 import '../../../app/theme/app_colors.dart';
+import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/catalog/publish_flow.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
 import '../../../application/rep/rep_publish_notifier.dart';
@@ -34,6 +38,7 @@ import '../../widgets/app_loading_indicator.dart';
 import '../../widgets/catalog/catalog_feedback.dart';
 import '../../widgets/catalog/catalog_message.dart';
 import '../../widgets/catalog/publish_body.dart';
+import '../../widgets/rep/admin_publish_bar.dart';
 
 class RepPublishScreen extends ConsumerStatefulWidget {
   const RepPublishScreen({
@@ -55,6 +60,46 @@ class RepPublishScreen extends ConsumerStatefulWidget {
 class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
   String get _catalogId => widget.catalogId;
   String get _base => '${AppRoutes.repCatalogs}/$_catalogId';
+
+  /// What the admin last asked for, so a failure toast names the right
+  /// action — "could not be taken offline" is not "could not be published".
+  bool _lastActionWasUnpublish = false;
+
+  /// "Publish by admin": straight into the run, whose progress this screen
+  /// already shows.
+  void _adminPublish() {
+    _lastActionWasUnpublish = false;
+    ref.read(repPublishProvider(_catalogId).notifier).adminPublish();
+  }
+
+  /// "Unpublish by admin": the reason dialog, then the takedown.
+  Future<void> _adminUnpublish() async {
+    final name = ref
+            .read(repCatalogDocumentProvider(_catalogId))
+            .valueOrNull
+            ?.displayName ??
+        'This restaurant';
+    await showAdminUnpublishDialog(
+      context,
+      restaurantName: name,
+      onSubmit: (reason) async {
+        _lastActionWasUnpublish = true;
+        final notifier = ref.read(repPublishProvider(_catalogId).notifier);
+        if (await notifier.adminUnpublish(reason)) return null;
+        final failure = ref.read(repPublishProvider(_catalogId)).actionFailure;
+        return switch (failure?.code) {
+          // Someone (the owner, another admin) took it down first, or it was
+          // never live. The status underneath has been re-read already.
+          'CATALOG_NOT_LIVE' =>
+            'This menu is not live any more, so there is nothing to take down.',
+          // The server's own validation sentence is the useful one here.
+          'INVALID_REQUEST' => failure?.message,
+          null => CatalogFeedback.textForCode(null),
+          _ => CatalogFeedback.failureText(failure!),
+        };
+      },
+    );
+  }
 
   /// One attempt per open, decided on the first status — the owner's rule,
   /// for the owner's reason (see `PublishScreen._maybeAutoStart`).
@@ -192,6 +237,9 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
 
       final messenger = CatalogFeedback.of(context);
       if (failure != null) {
+        // The admin's unpublish dialog shows its own failure, inline, where
+        // the reason they typed still is; a toast behind it would say it twice.
+        if (_lastActionWasUnpublish) return;
         CatalogFeedback.failure(
           messenger,
           failure,
@@ -220,8 +268,21 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
       }
     });
 
+    final isAdmin = ref.watch(isAdminProvider);
+    final loadedStatus = state.status.valueOrNull;
+
     return Scaffold(
       backgroundColor: AppColors.bgPrimary,
+      // ADMIN ONLY, and only once there is a status to decide the buttons by.
+      bottomNavigationBar: isAdmin && loadedStatus != null
+          ? AdminPublishBar(
+              state: state,
+              status: loadedStatus,
+              isOnline: isOnline,
+              onPublish: _adminPublish,
+              onUnpublish: _adminUnpublish,
+            )
+          : null,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -263,7 +324,10 @@ class _RepPublishScreenState extends ConsumerState<RepPublishScreen> {
                 ?.subscription,
             subscriptionCheck: subscriptionCheck,
             onOpenSubscription: _openSubscription,
-            onPublish: () => ref.read(provider.notifier).publish(),
+            onPublish: () {
+              _lastActionWasUnpublish = false;
+              ref.read(provider.notifier).publish();
+            },
             onRetryFailed: () => ref.read(provider.notifier).retryFailed(),
             // No onUnpublish: see the file header.
             onFixGate: _fix,

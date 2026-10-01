@@ -260,9 +260,9 @@ final repPreviewProvider = AsyncNotifierProvider.autoDispose
 /// at each call site. Same provider, same state, same notifier — the scope IS
 /// the difference.
 AsyncNotifierFamilyProvider<BusinessProfileNotifier, BusinessProfile?,
-        CatalogScope>
-    repProfileProvider(String catalogId) =>
-        businessProfileFor(CatalogScope.delegated(catalogId));
+    CatalogScope> repProfileProvider(
+        String catalogId) =>
+    businessProfileFor(CatalogScope.delegated(catalogId));
 
 /// Whether a delegated read failed because the delegation is gone.
 ///
@@ -274,3 +274,18 @@ AsyncNotifierFamilyProvider<BusinessProfileNotifier, BusinessProfile?,
 /// will fail identically.
 bool isDelegationGone(Object error) =>
     error is CatalogFailure && error.code == RepErrorCodes.catalogNotFound;
+
+/// What to say about [isDelegationGone], for the reader actually holding it.
+///
+/// An ADMIN opens these screens from "All catalogs" with no delegation at all
+/// (the server admits them for any live catalog), so for them the same 404
+/// can only mean the catalog is gone — "no longer assigned to you" would be
+/// describing a grant they never had.
+String delegationGoneTitle({required bool isAdmin}) => isAdmin
+    ? 'This catalog is no longer available'
+    : 'This restaurant is no longer assigned to you';
+
+String delegationGoneBody({required bool isAdmin}) => isAdmin
+    ? 'It may have been deleted. Go back to All catalogs to see what is live.'
+    : 'This restaurant is no longer assigned to you. Go back to '
+        'your restaurants to see what is.';

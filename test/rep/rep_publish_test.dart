@@ -23,6 +23,7 @@ import 'package:flutter/foundation.dart' show Uint8List;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_link_service.dart';
 import 'package:recapture/application/catalog/qr_download_file.dart';
@@ -87,6 +88,35 @@ class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
   CatalogFailure? publishFailure;
 
   void setStatus(Map<String, dynamic> status) => _status = status;
+
+  // ── The ADMIN doors ───────────────────────────────────────────────────────
+  int adminPublishCalls = 0;
+  final List<String> adminUnpublishReasons = [];
+  UnpublishResult adminUnpublishResult = const UnpublishQueued('run-2');
+  CatalogFailure? adminUnpublishFailure;
+
+  @override
+  Future<PublishRequestResult> adminPublish(
+    String catalogId, {
+    String? idempotencyKey,
+  }) async {
+    catalogIds.add(catalogId);
+    adminPublishCalls++;
+    idempotencyKeys.add(idempotencyKey);
+    if (publishFailure != null) throw publishFailure!;
+    return publishResult;
+  }
+
+  @override
+  Future<UnpublishResult> adminUnpublish(
+    String catalogId,
+    String reason,
+  ) async {
+    catalogIds.add(catalogId);
+    adminUnpublishReasons.add(reason);
+    if (adminUnpublishFailure != null) throw adminUnpublishFailure!;
+    return adminUnpublishResult;
+  }
 
   @override
   Future<PublishStatus> publishStatus(String catalogId) async {
@@ -163,7 +193,7 @@ class _FakeRepRepository with RepRepoCatalogDefaults implements RepRepository {
     String? sourceModelId,
     String? imageKey,
     String? categoryId,
-  ProductFoodType? foodType,
+    ProductFoodType? foodType,
   }) async =>
       throw UnimplementedError();
 
@@ -209,10 +239,12 @@ Widget _harness(
   _FakeRepRepository repo, {
   bool online = true,
   bool startPublish = false,
+  bool admin = false,
 }) =>
     ProviderScope(
       overrides: [
         authProvider.overrideWith(_StubAuth.new),
+        isAdminProvider.overrideWithValue(admin),
         repRepositoryProvider.overrideWithValue(repo),
         isOnlineProvider.overrideWithValue(online),
         catalogLinkActionsProvider.overrideWithValue(FakeLinkActions()),
@@ -741,7 +773,8 @@ void main() {
         // them failed.
         run: runPayload(state: 'PARTIAL', total: 12, synced: 8, failed: 3),
         products: [
-          for (var i = 0; i < 7; i++) productPayload(id: 'ok$i', name: 'soup $i'),
+          for (var i = 0; i < 7; i++)
+            productPayload(id: 'ok$i', name: 'soup $i'),
           for (var i = 0; i < 3; i++)
             productPayload(
               id: 'bad$i',
@@ -765,6 +798,165 @@ void main() {
         findsOneWidget,
       );
       await tester.pumpAndSettle();
+    });
+  });
+
+  group('the ADMIN buttons at the foot of the screen', () {
+    // Wide enough that the two buttons sit side by side, tall enough that the
+    // bar and the body both fit.
+    setUp(() {
+      final view =
+          TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.physicalSize = const Size(800, 1600);
+      view.devicePixelRatio = 1;
+    });
+    tearDown(() {
+      final view =
+          TestWidgetsFlutterBinding.instance.platformDispatcher.views.first;
+      view.resetPhysicalSize();
+      view.resetDevicePixelRatio();
+    });
+
+    ButtonStyleButton buttonOf(WidgetTester tester, String key) =>
+        tester.widget<ButtonStyleButton>(find.descendant(
+          of: find.byKey(ValueKey(key)),
+          matching: find.byWidgetPredicate((w) => w is ButtonStyleButton),
+        ));
+
+    Finder reasonField() =>
+        find.byKey(const ValueKey('admin_unpublish_reason'));
+    Finder dialog() => find.byKey(const ValueKey('admin_unpublish_dialog'));
+
+    testWidgets('are not there for a rep', (tester) async {
+      final repo = _FakeRepRepository(
+          status: statusPayload(status: 'PUBLISHED', hasDraftChanges: false));
+      await tester.pumpWidget(_harness(repo));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('admin_publish_bar')), findsNothing);
+    });
+
+    testWidgets('Publish by admin uses the admin door, past the paywall',
+        (tester) async {
+      final repo = _FakeRepRepository(
+        status: statusPayload(gates: [
+          gatePayload(code: 'SUBSCRIPTION_REQUIRED', message: 'Choose a plan.'),
+        ]),
+      );
+      await tester.pumpWidget(_harness(repo, admin: true));
+      await tester.pumpAndSettle();
+
+      expect(buttonOf(tester, 'admin_publish_button').onPressed, isNotNull);
+      await tester.tap(find.text('Publish by admin'));
+      await tester.pumpAndSettle();
+
+      expect(repo.adminPublishCalls, 1);
+      expect(repo.publishCalls, 0, reason: 'not the rep door');
+      expect(repo.idempotencyKeys.single, isNotNull);
+      expect(repo.catalogIds, everyElement(kCatalogId));
+      // The run it started is read back, like any publish.
+      expect(repo.statusCalls, greaterThan(1));
+    });
+
+    testWidgets('is off, and says why, while a CONTENT gate stands',
+        (tester) async {
+      final repo = _FakeRepRepository(
+        status: statusPayload(gates: [
+          gatePayload(code: 'CATALOG_EMPTY', message: 'Add a dish.'),
+        ]),
+      );
+      await tester.pumpWidget(_harness(repo, admin: true));
+      await tester.pumpAndSettle();
+
+      expect(buttonOf(tester, 'admin_publish_button').onPressed, isNull);
+      expect(find.byKey(const ValueKey('admin_publish_hint')), findsOneWidget);
+    });
+
+    testWidgets('Unpublish is only offered for a LIVE menu', (tester) async {
+      final draft = _FakeRepRepository(status: statusPayload(status: 'DRAFT'));
+      await tester.pumpWidget(_harness(draft, admin: true));
+      await tester.pumpAndSettle();
+      expect(buttonOf(tester, 'admin_unpublish_button').onPressed, isNull);
+    });
+
+    testWidgets('Unpublish asks for a reason, then takes the menu down',
+        (tester) async {
+      final repo = _FakeRepRepository(
+          status: statusPayload(status: 'PUBLISHED', hasDraftChanges: false));
+      await tester.pumpWidget(_harness(repo, admin: true));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Unpublish by admin'));
+      await tester.pumpAndSettle();
+      expect(dialog(), findsOneWidget);
+
+      FilledButton confirm() => tester.widget<FilledButton>(
+          find.byKey(const ValueKey('admin_unpublish_confirm')));
+      expect(confirm().onPressed, isNull, reason: 'no reason yet');
+
+      await tester.enterText(reasonField(), 'abc');
+      await tester.pump();
+      expect(confirm().onPressed, isNull, reason: 'too short');
+
+      await tester.enterText(reasonField(), '  Prices are out of date  ');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('admin_unpublish_confirm')));
+      await tester.pumpAndSettle();
+
+      expect(repo.adminUnpublishReasons, ['Prices are out of date']);
+      expect(dialog(), findsNothing);
+      expect(find.text('Taking the menu offline…'), findsOneWidget);
+    });
+
+    testWidgets('a refused takedown keeps the dialog open, with the reason',
+        (tester) async {
+      final repo = _FakeRepRepository(
+          status: statusPayload(status: 'PUBLISHED', hasDraftChanges: false))
+        ..adminUnpublishFailure = const CatalogFailure(
+          code: 'CATALOG_NOT_LIVE',
+          message: 'This menu is not live.',
+        );
+      await tester.pumpWidget(_harness(repo, admin: true));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Unpublish by admin'));
+      await tester.pumpAndSettle();
+      await tester.enterText(reasonField(), 'Prices are out of date');
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('admin_unpublish_confirm')));
+      await tester.pumpAndSettle();
+
+      expect(dialog(), findsOneWidget);
+      expect(find.textContaining('not live any more'), findsOneWidget);
+      expect(find.text('Prices are out of date'), findsOneWidget);
+    });
+
+    testWidgets('Cancel takes nothing down', (tester) async {
+      final repo = _FakeRepRepository(
+          status: statusPayload(status: 'PUBLISHED', hasDraftChanges: false));
+      await tester.pumpWidget(_harness(repo, admin: true));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Unpublish by admin'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('admin_unpublish_cancel')));
+      await tester.pumpAndSettle();
+      expect(repo.adminUnpublishReasons, isEmpty);
+      expect(dialog(), findsNothing);
+    });
+
+    testWidgets('the takedown reason is shown on the screen afterwards',
+        (tester) async {
+      final repo = _FakeRepRepository(
+        status: statusPayload(status: 'UNPUBLISHED')
+          ..['adminUnpublish'] = {
+            'reason': 'Prices are out of date',
+            'at': '2026-10-01T10:00:00.000Z',
+          },
+      );
+      await tester.pumpWidget(_harness(repo));
+      await tester.pumpAndSettle();
+      expect(find.text('Taken offline by an administrator'), findsOneWidget);
+      expect(find.text('Reason: Prices are out of date'), findsOneWidget);
     });
   });
 }

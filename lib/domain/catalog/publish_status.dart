@@ -91,7 +91,8 @@ extension PublishModeX on PublishMode {
         PublishMode.unknown => 'UNKNOWN',
       };
 
-  static PublishMode fromApiValue(String value) => switch (value.toUpperCase()) {
+  static PublishMode fromApiValue(String value) =>
+      switch (value.toUpperCase()) {
         'FULL' => PublishMode.full,
         'RETRY_FAILED' => PublishMode.retryFailed,
         'UNPUBLISH' => PublishMode.unpublish,
@@ -195,9 +196,8 @@ class PublishRun {
       finishedAt: catalogDate(map['finishedAt']),
       // The code, and ONLY the code — see this file's header. `suggestedName`
       // is the documented exception and is a name, not a sentence.
-      errorCode: error is Map<String, dynamic>
-          ? catalogText(error['code'])
-          : null,
+      errorCode:
+          error is Map<String, dynamic> ? catalogText(error['code']) : null,
       suggestedName: error is Map<String, dynamic>
           ? catalogText(error['suggestedName'])
           : null,
@@ -242,8 +242,8 @@ class PublishProductStatus {
         id: (map['id'] ?? '').toString(),
         name: catalogText(map['name']) ?? 'Untitled product',
         type: ProductTypeX.fromApiValue((map['type'] ?? '').toString()),
-        syncStatus:
-            ProductSyncStatusX.fromApiValue((map['syncStatus'] ?? '').toString()),
+        syncStatus: ProductSyncStatusX.fromApiValue(
+            (map['syncStatus'] ?? '').toString()),
         failureCode: catalogText(map['code']),
       );
 }
@@ -261,9 +261,14 @@ class PublishStatus {
     required this.products,
     required this.gates,
     this.heldBack = const [],
+    this.adminUnpublish,
   });
 
   final CatalogStatus status;
+
+  /// Set while an ADMIN's takedown stands — the reason they gave, shown to the
+  /// owner and the admin alike. Null otherwise, and on an older server.
+  final AdminUnpublishNote? adminUnpublish;
 
   /// Feature 38 — "Draft changes not yet live". Server-DERIVED from the draft
   /// and published revision counters, never a stored flag and never something
@@ -327,6 +332,16 @@ class PublishStatus {
   /// only avoids a press that is guaranteed to come back 422 or 409.
   bool get canPublish => !isPublishing && gates.isEmpty;
 
+  /// "Publish by admin": the server lifts the SUBSCRIPTION gate for an admin and
+  /// nothing else, so only a content gate (an empty menu, a dish with no
+  /// picture, a model still generating) still stands in the way.
+  bool get canAdminPublish =>
+      !isPublishing && gates.every((gate) => gate.code.isSubscription);
+
+  /// "Unpublish by admin": only a LIVE menu can be taken down, and not while a
+  /// run holds the catalog (the server answers 409 for both).
+  bool get canAdminUnpublish => !isPublishing && isLive;
+
   bool get isLive => status.isLive;
 
   /// The catalog has a minted URL, so the QR is worth printing — even while
@@ -334,11 +349,15 @@ class PublishStatus {
   bool get hasPublicUrl => (publicUrl?.isNotEmpty ?? false);
 
   /// Rows the user has to act on. Drives the failure list and "Retry failed".
-  List<PublishProductStatus> get failures =>
-      [for (final product in products) if (product.hasFailed) product];
+  List<PublishProductStatus> get failures => [
+        for (final product in products)
+          if (product.hasFailed) product
+      ];
 
-  List<PublishProductStatus> get published =>
-      [for (final product in products) if (product.syncStatus == ProductSyncStatus.synced) product];
+  List<PublishProductStatus> get published => [
+        for (final product in products)
+          if (product.syncStatus == ProductSyncStatus.synced) product
+      ];
 
   Map<String, List<PublishGate>> get gatesByProduct => gatesByProductId(gates);
 
@@ -368,6 +387,23 @@ class PublishStatus {
       ],
       gates: PublishGate.listFrom(map['gates']),
       heldBack: HeldBackItem.listFrom(map['heldBack']),
+      adminUnpublish: AdminUnpublishNote.fromJson(map['adminUnpublish']),
     );
+  }
+}
+
+/// Why an administrator took this menu offline. Never who.
+class AdminUnpublishNote {
+  const AdminUnpublishNote({required this.reason, this.at});
+
+  final String reason;
+  final DateTime? at;
+
+  /// Null for anything that is not a note with a reason in it.
+  static AdminUnpublishNote? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final reason = catalogText(raw['reason']);
+    if (reason == null) return null;
+    return AdminUnpublishNote(reason: reason, at: catalogDate(raw['at']));
   }
 }

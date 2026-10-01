@@ -315,6 +315,21 @@ class PublishBody extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _StatusCard(status: status, voice: voice),
+                // An ADMIN took this menu offline. Said on every publish
+                // screen — the owner's above all — so a dark page is never a
+                // mystery to the person it belongs to. Gone once a publish is
+                // accepted (the server clears it).
+                if (status.adminUnpublish case final note?
+                    when !status.isLive) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _Banner(
+                    key: const ValueKey('publish_admin_unpublish_banner'),
+                    icon: Icons.block_outlined,
+                    color: AppColors.warning,
+                    title: 'Taken offline by an administrator',
+                    body: 'Reason: ${note.reason}',
+                  ),
+                ],
                 if (!isOnline) ...[
                   const SizedBox(height: AppSpacing.md),
                   const _Banner(
@@ -354,7 +369,8 @@ class PublishBody extends StatelessWidget {
                     voice: voice,
                     onOpenSubscription: onOpenSubscription,
                   ),
-                ] else if (subscription?.status == SubscriptionStatus.grace) ...[
+                ] else if (subscription?.status ==
+                    SubscriptionStatus.grace) ...[
                   const SizedBox(height: AppSpacing.md),
                   _GraceBanner(
                     daysLeft: subscription?.daysLeft,
@@ -405,18 +421,17 @@ class PublishBody extends StatelessWidget {
                 // when there is no failed row. A rename card above has already
                 // taken the one run error that has a better answer than
                 // "try again", so this never doubles up with it.
-                if (runFailure case final failed? when suggestedName == null)
-                  ...[
+                if (runFailure case final failed?
+                    when suggestedName == null) ...[
                   const SizedBox(height: AppSpacing.md),
                   _RunFailureCard(
                     run: failed,
                     voice: voice,
                     busy: state.isRequesting,
-                    onPublish: !isOnline ||
-                            !state.canPublish ||
-                            paywallGate != null
-                        ? null
-                        : onPublish,
+                    onPublish:
+                        !isOnline || !state.canPublish || paywallGate != null
+                            ? null
+                            : onPublish,
                   ),
                 ],
                 if (!inFlight &&
@@ -919,11 +934,13 @@ class _HeldBackCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.lock_outline, size: 16, color: AppColors.royalGold),
+              const Icon(Icons.lock_outline,
+                  size: 16, color: AppColors.royalGold),
               const SizedBox(width: AppSpacing.sm),
               Text(
                 'Held back on your plan',
-                style: textTheme.titleMedium?.copyWith(color: AppColors.royalGold),
+                style:
+                    textTheme.titleMedium?.copyWith(color: AppColors.royalGold),
               ),
             ],
           ),
@@ -944,7 +961,8 @@ class _HeldBackCard extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: TextButton(
               key: const ValueKey('publish_held_back_plans'),
-              onPressed: () => context.pushNamed(AppRouteNames.catalogSubscription),
+              onPressed: () =>
+                  context.pushNamed(AppRouteNames.catalogSubscription),
               child: const Text('See plans'),
             ),
           ),
@@ -1378,8 +1396,7 @@ class _PaymentDueBanner extends StatelessWidget {
               children: [
                 Text(
                   paymentDueBannerTitle(daysLeft),
-                  style:
-                      textTheme.bodyMedium?.copyWith(color: AppColors.error),
+                  style: textTheme.bodyMedium?.copyWith(color: AppColors.error),
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
@@ -1452,8 +1469,7 @@ class _GraceBanner extends StatelessWidget {
               children: [
                 Text(
                   graceBannerLine(daysLeft, graceFrom: graceFrom),
-                  style:
-                      textTheme.bodyMedium?.copyWith(color: AppColors.error),
+                  style: textTheme.bodyMedium?.copyWith(color: AppColors.error),
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(

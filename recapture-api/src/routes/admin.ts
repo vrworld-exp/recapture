@@ -24,8 +24,10 @@ import {
   adminModelImageUploadsBodySchema,
   adminPhotoBytesQuerySchema,
   adminSubmitModelBodySchema,
+  adminCatalogsQuerySchema,
   type AdminSubmitModelBody,
 } from '@/validation/adminSchemas';
+import { listPublishedCatalogs } from '@/services/adminCatalogsService';
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
   getAdminUserDetail,
@@ -3092,6 +3094,35 @@ router.post(
           'This payment was applied and the catalog already shows it.'
         );
     }
+  })
+);
+
+/**
+ * GET /admin/catalogs — every LIVE catalog, name order, cursor-paginated: the
+ * ADMIN's "All catalogs" grid. `q` narrows by restaurant or business name.
+ *
+ * ADMIN-only, like every cross-restaurant list: a MODEL_ARTIST passes this
+ * router's gate and must not pass this route's. Opening a card goes through
+ * /rep/catalogs/:id, whose gate admits an ADMIN for any live catalog.
+ */
+router.get(
+  '/catalogs',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const query = adminCatalogsQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      return subscriptionFail(
+        res,
+        400,
+        'INVALID_REQUEST',
+        query.error.issues[0]?.message ?? 'Invalid query'
+      );
+    }
+    const result = await listPublishedCatalogs(query.data);
+    if (result.outcome === 'INVALID_CURSOR') {
+      return subscriptionFail(res, 400, 'INVALID_CURSOR', 'That cursor is not valid.');
+    }
+    res.status(200).json({ status: 'success', items: result.items, nextCursor: result.nextCursor });
   })
 );
 

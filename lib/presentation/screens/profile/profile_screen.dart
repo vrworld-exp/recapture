@@ -293,8 +293,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     try {
       lost = await ref.read(avatarImagePickerProvider).recoverLostAvatar();
     } catch (error, stack) {
-      DevUploadLog.instance
-          .add('avatar: lost-pick recovery skipped', error: error, stack: stack);
+      DevUploadLog.instance.add('avatar: lost-pick recovery skipped',
+          error: error, stack: stack);
       return;
     }
     if (lost == null) return;
@@ -313,7 +313,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   /// notifier outlives this widget, so an unmount between picking and uploading
   /// must not silently discard the user's photo. Only the analytics/snackbar
   /// that follow care whether a screen is still there.
-  Future<void> _uploadPicked(PickedAvatar picked, ProfileNotifier notifier) async {
+  Future<void> _uploadPicked(
+      PickedAvatar picked, ProfileNotifier notifier) async {
     await notifier.updateAvatar(picked.bytes, contentType: picked.contentType);
     Analytics.logEvent(AnalyticsEvents.profileAvatarUpdated, {
       'device_type': _deviceType,
@@ -470,8 +471,8 @@ Future<AvatarAction?> showAvatarActionSheet(
               leading: const Icon(Icons.delete_outline, color: AppColors.error),
               title: Text(
                 'Remove photo',
-                style: theme.textTheme.bodyLarge
-                    ?.copyWith(color: AppColors.error),
+                style:
+                    theme.textTheme.bodyLarge?.copyWith(color: AppColors.error),
               ),
               onTap: () => Navigator.of(ctx).pop(AvatarAction.remove),
             ),
@@ -499,8 +500,8 @@ class _DangerButtonTheme extends StatelessWidget {
     return Theme(
       data: theme.copyWith(
         outlinedButtonTheme: OutlinedButtonThemeData(
-          style: (theme.outlinedButtonTheme.style ?? const ButtonStyle())
-              .copyWith(
+          style:
+              (theme.outlinedButtonTheme.style ?? const ButtonStyle()).copyWith(
             // Keeps the theme's muted disabled colour — only the ENABLED
             // label/icon turns red.
             foregroundColor: WidgetStateProperty.resolveWith<Color>(
@@ -673,7 +674,8 @@ class _IdentityBlock extends ConsumerWidget {
                     ? Icons.workspace_premium
                     : Icons.workspace_premium_outlined,
                 size: 20,
-                color: onPaidPlan ? AppColors.royalGold : AppColors.textSecondary,
+                color:
+                    onPaidPlan ? AppColors.royalGold : AppColors.textSecondary,
               ),
               const SizedBox(width: AppSpacing.md),
               Expanded(
@@ -862,6 +864,46 @@ class _IdentityBlock extends ConsumerWidget {
         // it means no restaurant can be onboarded without an engineer running
         // curl. Below the rep row because an admin is usually here for that one.
         if (canMintStandees) ...[
+          // -- All catalogs ----------------------------------------------------
+          // Every live catalog, openable and editable. ADMIN-only on the same
+          // fail-closed predicate as the rows below; the router's prefix gate
+          // and the server's requireRole('ADMIN') enforce it too.
+          const SizedBox(height: AppSpacing.md),
+          AppCard(
+            key: const ValueKey('profile_admin_all_catalogs'),
+            onTap: () => context.push(AppRoutes.adminCatalogs),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.grid_view_outlined,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        // Matches the destination's own AppBar.
+                        'All catalogs',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.textPrimary),
+                      ),
+                      const SizedBox(height: AppSpacing.xs),
+                      Text(
+                        'Every published menu — open, edit and publish',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.textMuted),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: AppColors.textMuted),
+              ],
+            ),
+          ),
+
           const SizedBox(height: AppSpacing.md),
           AppCard(
             key: const ValueKey('profile_standee_inventory'),

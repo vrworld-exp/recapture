@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme/app_colors.dart';
+import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../domain/entities/catalog_product.dart';
@@ -61,7 +62,8 @@ class _RepMenuPreviewScreenState extends ConsumerState<RepMenuPreviewScreen> {
   /// Opens the dish a warning is about, then re-reads: the rep went there to
   /// change exactly the thing this screen is reporting on.
   Future<void> _openDish(CatalogProduct product) async {
-    await context.push('/rep/catalogs/${widget.catalogId}/dishes/${product.id}');
+    await context
+        .push('/rep/catalogs/${widget.catalogId}/dishes/${product.id}');
     if (!mounted) return;
     await _refresh();
   }
@@ -84,8 +86,7 @@ class _RepMenuPreviewScreenState extends ConsumerState<RepMenuPreviewScreen> {
               icon: Icons.visibility_off_outlined,
               title: "We couldn't build the preview",
               body: isDelegationGone(error)
-                  ? 'This restaurant is no longer assigned to you. Go back to '
-                      'your restaurants to see what is.'
+                  ? delegationGoneBody(isAdmin: ref.watch(isAdminProvider))
                   : error is CatalogFailure
                       ? CatalogFeedback.failureText(error)
                       : CatalogFeedback.textForCode(null),

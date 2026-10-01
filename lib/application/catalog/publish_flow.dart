@@ -523,6 +523,16 @@ class PublishFlow {
   /// Retry only the failed rows (feature 53).
   Future<void> retryFailed() => _act(gateway.retryFailed);
 
+  /// A publish through a DIFFERENT door than [gateway.publish] — the admin's
+  /// "Publish by admin" — with everything else identical: the same idempotency
+  /// key handling, the same result handling, the same poll of the run it
+  /// starts. A second copy of [_act] is how two publish buttons on one screen
+  /// start disagreeing about a 409.
+  Future<void> publishWith(
+    Future<PublishRequestResult> Function(String idempotencyKey) request,
+  ) =>
+      _act(() => request(_keyForAttempt()));
+
   Future<void> _act(Future<PublishRequestResult> Function() request) async {
     if (state.isRequesting) return;
     state = state.copyWith(
@@ -617,7 +627,22 @@ class PublishFlow {
 
   /// Takes the catalog offline (feature 39). A no-op on a door without one.
   Future<void> unpublish() async {
-    if (state.isRequesting || !gateway.canUnpublish) return;
+    if (!gateway.canUnpublish) return;
+    await unpublishWith(gateway.unpublish);
+  }
+
+  /// A takedown through [request] — the owner's [unpublish], or the admin's
+  /// "Unpublish by admin" (which a door with no owner unpublish still has).
+  ///
+  /// Returns whether the request was ANSWERED (queued, already running, or not
+  /// live); false when it failed, with the failure on [PublishScreenState.
+  /// actionFailure]. The admin's reason dialog closes on true and stays open,
+  /// with the reason the admin typed, on false.
+  Future<bool> unpublishWith(
+    Future<UnpublishResult> Function() request, {
+    String queuedNotice = 'Taking your catalog offline…',
+  }) async {
+    if (state.isRequesting) return false;
     state = state.copyWith(
       isRequesting: true,
       actionFailure: null,
@@ -625,13 +650,13 @@ class PublishFlow {
     );
 
     try {
-      final result = await gateway.unpublish();
-      if (_disposed) return;
+      final result = await request();
+      if (_disposed) return true;
 
       state = state.copyWith(
         isRequesting: false,
         notice: switch (result) {
-          UnpublishQueued() => 'Taking your catalog offline…',
+          UnpublishQueued() => queuedNotice,
           UnpublishAlreadyRunning() =>
             'Finishing the run that is already going, then try again.',
           UnpublishNotPublished() => 'This catalog was not live.',
@@ -639,9 +664,11 @@ class PublishFlow {
       );
       _pollAttempt = 0;
       await _loadStatus();
+      return true;
     } on CatalogFailure catch (failure) {
-      if (_disposed) return;
+      if (_disposed) return false;
       state = state.copyWith(isRequesting: false, actionFailure: failure);
+      return false;
     }
   }
 

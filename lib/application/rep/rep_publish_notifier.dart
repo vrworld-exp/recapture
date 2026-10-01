@@ -17,7 +17,8 @@
 // go (`/rep/catalogs/:id/publish*`, resolved through the delegation grant),
 // which document to re-read on a status read (the delegated catalog's, keyed
 // by id — never the owner provider, see `rep_draft_badge_test.dart`), and the
-// one thing a rep may NOT do, which is take the page offline.
+// one thing a rep may NOT do, which is take the page offline. (An ADMIN may,
+// through its own door with a reason — [RepPublishNotifier.adminUnpublish].)
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/rep_repository.dart';
@@ -89,6 +90,21 @@ class RepPublishNotifier
     ref.onDispose(_flow.dispose);
     return _flow.start();
   }
+
+  /// "Publish by admin" — the same run, progress and failures as [publish],
+  /// through the ADMIN door that lifts the subscription gate.
+  Future<void> adminPublish() => _flow.publishWith(
+        (key) => ref
+            .read(repRepositoryProvider)
+            .adminPublish(arg, idempotencyKey: key),
+      );
+
+  /// "Unpublish by admin". True when the server answered (the dialog closes),
+  /// false on a failure (the dialog stays open with the reason kept).
+  Future<bool> adminUnpublish(String reason) => _flow.unpublishWith(
+        () => ref.read(repRepositoryProvider).adminUnpublish(arg, reason),
+        queuedNotice: 'Taking the menu offline…',
+      );
 }
 
 /// The rep's publish screen state for one delegated catalog.

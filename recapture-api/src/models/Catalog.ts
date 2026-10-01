@@ -163,6 +163,12 @@ export interface ICatalog extends Document {
   publishedRevision: number;
   lastPublishedAt?: Date;
   /**
+   * Set when an ADMIN took this menu offline from the publish screen, with the
+   * reason they typed. Shown to the owner (status DTO + a bell notification) so
+   * a dark page is never a mystery; cleared by the next accepted publish.
+   */
+  adminUnpublish?: { reason: string; at: Date; byUserId: Types.ObjectId };
+  /**
    * The in-flight publish run, or null. Set by a conditional findOneAndUpdate
    * guarded on `activePublishRunId: null`, which is what makes a second
    * simultaneous publish a clean 409 instead of two runs racing Mirage's
@@ -393,6 +399,17 @@ const CatalogSchema = new Schema<ICatalog>(
     draftRevision: { type: Number, required: true, default: 0 },
     publishedRevision: { type: Number, required: true, default: -1 },
     lastPublishedAt: { type: Date },
+    adminUnpublish: {
+      type: new Schema(
+        {
+          reason: { type: String, required: true, trim: true, maxlength: 500 },
+          at: { type: Date, required: true },
+          byUserId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     activePublishRunId: { type: Schema.Types.ObjectId, ref: 'CatalogPublishRun', default: null },
     // Soft-delete per the house convention. NOTE the unique index below is on
     // `userId` alone, so a soft-deleted catalog still occupies its owner's one
@@ -426,6 +443,9 @@ CatalogSchema.index({ masterCatalogId: 1 }, { sparse: true });
 // Operational query path: "published catalogs, most recently touched first" —
 // staff/ops listing and any future backfill sweep.
 CatalogSchema.index({ status: 1, updatedAt: -1 });
+// The ADMIN's "All catalogs" grid: live catalogs in name order, keyset-paged
+// on (name, _id) — services/adminCatalogsService.ts.
+CatalogSchema.index({ status: 1, name: 1, _id: 1 }); // $in on status still uses it
 
 // ONE catalog per Mirage restaurant, enforced by the database.
 //

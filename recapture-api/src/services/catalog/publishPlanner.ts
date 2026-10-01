@@ -53,6 +53,8 @@ export const PUBLISH_STEP_REASONS = [
   'DRAFT_AHEAD_OF_PUBLISHED',
   /** Stage 8.1: the plan's customization entitlements changed since the last push. */
   'PLAN_CHANGED',
+  /** The catalog was taken offline; a publish must switch the page back on. */
+  'REPUBLISH',
   /** At least one diffed field differs from `publishedSnapshot`. */
   'FIELDS_CHANGED',
   /** The row was edited after its last successful sync. */
@@ -267,6 +269,14 @@ function planRestaurant(snapshot: CatalogSnapshot, mode: PublishMode): PublishSt
   // A retry is scoped to the rows that failed, and an unpublish does not touch
   // branding at all (§7.6 — the restaurant document is what the QR depends on).
   if (mode !== 'FULL') return null;
+
+  // AN UNPUBLISH LEFT THE PAGE SWITCHED OFF (`isPublished: false` at Mirage),
+  // and only the branding UPDATE switches it back on. With no edit since, the
+  // revision check below says SKIP — and the page stayed a 404 after a
+  // "successful" republish. Checked first so it can never be skipped.
+  if (catalog.status === 'UNPUBLISHED') {
+    return { target: 'RESTAURANT', targetName: catalog.name, action: 'UPDATE', reason: 'REPUBLISH' };
+  }
 
   if (catalog.draftRevision > catalog.publishedRevision) {
     return { target: 'RESTAURANT', targetName: catalog.name, action: 'UPDATE', reason: 'DRAFT_AHEAD_OF_PUBLISHED' };

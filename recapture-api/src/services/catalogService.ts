@@ -632,7 +632,7 @@ export interface BusinessProfileDto {
 }
 
 /** `null` for an unset key — never a `.../undefined` URL. */
-function cdnUrlForKey(key: string | undefined): string | null {
+export function cdnUrlForKey(key: string | undefined): string | null {
   return key ? `${CLOUDFRONT_BASE}/${key}` : null;
 }
 

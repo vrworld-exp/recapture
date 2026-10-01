@@ -213,6 +213,53 @@ do not remove it).
     Guardrails: `tests/rep-restaurant-account.test.ts` + the
     `the restaurant account number` group in
     `test/rep/rep_restaurant_editing_test.dart`.
+- **"All catalogs" — the ADMIN override on the /rep gate (Oct 2026).** An ADMIN
+  can browse every live catalog and edit/publish any of them:
+  - `GET /admin/catalogs` (`requireRole('ADMIN')`,
+    `services/adminCatalogsService.ts`): `PUBLISHED` + `UNPUBLISHED` (never drafts), undeleted catalogs in
+    `(name, _id)` keyset order (not `updatedAt` — an admin edits from this list,
+    and an edit must not reshuffle the pages), `q` matches the name
+    separator-agnostically and the business name. Cards carry name, logo
+    (CDN URL), `isBranch`, `hasDraftChanges` — **no contact, not even a mask**.
+  - Opening/editing goes through the EXISTING /rep surface.
+    `resolveCatalogAccess` (`catalogDelegationService.ts`) is the gate;
+    `resolveDelegatedCatalog` is its thin wrapper. With no live grant it does a
+    fresh role read and admits an ADMIN for any live catalog, answering
+    `via: 'ADMIN'`. **It writes nothing**: no CatalogDelegation row, so
+    `grantDelegation` is still called from exactly one place and the
+    `accountPhone` bound above stays true.
+  - The two things only a delegation justifies check `via`: the three
+    profile-returning routes answer `accountPhone: null` (and skip the audit
+    event) on `ADMIN` access, and an ADMIN-override publish passes
+    `openPendingPaymentWindow: false` to `requestPublish`, so correcting a live
+    menu never starts the pay-or-go-dark clock. The ordinary subscription gate
+    still applies. An admin who also holds a real grant gets the rep behaviour.
+  - Client: `/admin/catalogs` (two-up grid) → `/admin/catalogs/:id` (the shared
+    `CatalogPreviewPage` with `onHeaderTap`; the banner opens
+    `/rep/catalogs/:id`). Both under the ADMIN prefix gate.
+    Guardrails: `tests/admin-all-catalogs.test.ts` +
+    `test/admin/admin_all_catalogs_test.dart`.
+  - **"Publish by admin" / "Unpublish by admin"** — two buttons at the foot of
+    the rep publish screen, rendered for ADMIN only (`AdminPublishBar`), each a
+    route with its own `requireRole('ADMIN')`:
+    `POST /rep/catalogs/:id/publish/admin` = the rep publish with
+    `bypassSubscriptionGate` (the SUBSCRIPTION gate only — content gates still
+    422; plan entitlements still decide what the page shows) and no
+    pending-payment window. `POST /rep/catalogs/:id/unpublish/admin {reason}`
+    (5–500 chars) = the owner's feature-39 unpublish (restaurant, URL and QRs
+    kept) for a `PUBLISHED` catalog only (`409 CATALOG_NOT_LIVE` otherwise),
+    recording `Catalog.adminUnpublish {reason, at, byUserId}` and sending the
+    owner a bell notification ("an administrator", never who). The publish
+    status DTO carries `adminUnpublish {reason, at}` and every publish screen
+    shows it; the next accepted publish clears it. The owner is NOT locked out
+    — they can republish.
+  - **A republish turns the page back on.** Before Oct 2026 an unpublish set
+    Mirage `isPublished: false` and nothing ever set it back (the planner SKIPped
+    the restaurant when no edit had been made). Now a FULL run plans a
+    restaurant `UPDATE` (`REPUBLISH`) whenever the catalog is `UNPUBLISHED`, and
+    `syncCatalogBranding` always sends `isPublished` = "not switched off by the
+    subscription" (`!pageDeactivatedAt`, the same rule as
+    `desiredPageStateFor`). Guardrail: `tests/admin-publish-unpublish.test.ts`.
 - **`GET`/`PATCH /auth/me` are MASKED-ONLY, not PII-free.** The raw phone/email
   still never leaves the API. The account snapshot adds `contactMasked`
   (`+91 ••••• ••210` / `a•••@gmail.com`), `contactChannel`, and an optional

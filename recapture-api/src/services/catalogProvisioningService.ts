@@ -789,10 +789,20 @@ export async function syncCatalogBranding(catalogId: Types.ObjectId): Promise<Sy
   const entitlements = (await resolveCustomizationEntitlements(catalog._id as Types.ObjectId))
     .entitlements;
   const view = entitledView(catalog, entitlements);
+  // A publish means "this page should be up" — which is what switches it back
+  // on after an unpublish. The one thing that outranks it is the subscription
+  // having switched the page off for non-payment (`pageDeactivatedAt`): the
+  // same rule desiredPageStateFor applies, so the two writers never disagree.
+  const pageRow = await CatalogSubscription.findOne({ catalogId: catalog._id })
+    .select({ pageDeactivatedAt: 1 })
+    .lean<{ pageDeactivatedAt?: Date }>()
+    .exec();
+  const isPublished = !pageRow?.pageDeactivatedAt;
 
   try {
     await client.updateRestaurant(catalog.mirageRestaurantId, {
       name: catalog.name,
+      isPublished,
       location: catalog.contact?.address ?? '',
       ...(phoneNo !== undefined ? { phoneNo } : {}),
       website: links.website,

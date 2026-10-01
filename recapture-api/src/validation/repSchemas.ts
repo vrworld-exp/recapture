@@ -14,11 +14,7 @@ import { z } from 'zod';
 
 import { qrCodeParam } from '@/validation/qrSchemas';
 import { phoneField } from '@/validation/authSchemas';
-import {
-  catalogNameField,
-  businessNameField,
-  contactSchema,
-} from '@/validation/catalogSchemas';
+import { catalogNameField, businessNameField, contactSchema } from '@/validation/catalogSchemas';
 
 /**
  * POST /rep/activations.
@@ -54,3 +50,22 @@ export type RepActivationInput = z.infer<typeof repActivationSchema>;
 export const attachQrCodeSchema = z.object({ code: qrCodeParam }).strict();
 
 export type AttachQrCodeInput = z.infer<typeof attachQrCodeSchema>;
+
+/**
+ * POST /rep/catalogs/:id/unpublish/admin — an ADMIN's takedown. The reason is
+ * REQUIRED and is shown to the restaurant's owner, so it has to be a sentence,
+ * not a keystroke: 5–500 characters after trimming.
+ */
+export const ADMIN_UNPUBLISH_REASON_MIN = 5;
+export const ADMIN_UNPUBLISH_REASON_MAX = 500;
+export const adminUnpublishSchema = z
+  .object({
+    reason: z
+      .string()
+      .trim()
+      .min(ADMIN_UNPUBLISH_REASON_MIN, 'Give a reason of at least 5 characters.')
+      .max(ADMIN_UNPUBLISH_REASON_MAX, 'Keep the reason under 500 characters.'),
+  })
+  .strict();
+
+export type AdminUnpublishInput = z.infer<typeof adminUnpublishSchema>;

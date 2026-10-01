@@ -21,6 +21,8 @@ import '../../presentation/screens/auth/auth_screen.dart';
 import '../../presentation/screens/auth/otp_screen.dart';
 import '../../presentation/screens/projects/projects_screen.dart';
 import '../../presentation/screens/admin/admin_batch_detail_screen.dart';
+import '../../presentation/screens/admin/admin_catalog_page_screen.dart';
+import '../../presentation/screens/admin/admin_catalogs_screen.dart';
 import '../../presentation/screens/admin/admin_standee_qr_screen.dart';
 import '../../presentation/screens/admin/admin_standees_screen.dart';
 import '../../presentation/screens/admin/admin_subscription_detail_screen.dart';
@@ -353,6 +355,17 @@ abstract final class AppRoutes {
   /// One online payment attempt. `:orderId` = the Razorpay order id.
   static const adminPaymentAttempt = '/admin/subscriptions/payments/:orderId';
 
+  // ── Admin (all catalogs, /admin/catalogs) ──────────────────────────────────
+  // ADMIN-only, like the subtrees above; the backend's GET /admin/catalogs is
+  // requireRole('ADMIN'). Editing a card goes through /rep/catalogs/:id, whose
+  // server gate admits an ADMIN for any live catalog.
+
+  /// Every live catalog, two-up, with a search.
+  static const adminCatalogs = '/admin/catalogs';
+
+  /// One catalog's page; its banner opens the editor. `:id` = the catalog id.
+  static const adminCatalogPage = '/admin/catalogs/:id';
+
   /// Staff-only per-project Preview gallery. `:id` = the project id.
   static const previewGallery = '/admin/projects/:id/preview';
 
@@ -458,6 +471,8 @@ abstract final class AppRouteNames {
   static const adminSubscriptions = 'adminSubscriptions';
   static const adminSubscriptionDetail = 'adminSubscriptionDetail';
   static const adminPaymentAttempt = 'adminPaymentAttempt';
+  static const adminCatalogs = 'adminCatalogs';
+  static const adminCatalogPage = 'adminCatalogPage';
   static const previewGallery = 'previewGallery';
   static const modelHistory = 'modelHistory';
   static const submitModel = 'submitModel';
@@ -668,7 +683,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogLanguages,
         // Stage 16: brand-wide — on a branch it is set on the main outlet.
         builder: (_, __) => const FlowBackScope(
-          child: BrandWideGate(title: 'Languages', child: MenuLanguagesScreen()),
+          child:
+              BrandWideGate(title: 'Languages', child: MenuLanguagesScreen()),
         ),
       ),
       GoRoute(
@@ -846,7 +862,8 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         path: AppRoutes.catalogReport,
         name: AppRouteNames.catalogReport,
         builder: (_, state) => FlowBackScope(
-          child: WeeklyReportScreen(weekStart: state.pathParameters['weekStart'] ?? 'latest'),
+          child: WeeklyReportScreen(
+              weekStart: state.pathParameters['weekStart'] ?? 'latest'),
         ),
       ),
       // The category manager. STATIC, and declared before the product routes
@@ -1082,6 +1099,21 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
           catalogId: state.pathParameters['catalogId'] ?? '',
           // "Find a payment" → a pay_ id to record here (edge case #8).
           initialReference: state.uri.queryParameters['ref'],
+        ),
+      ),
+      // Static before parameterised, as with the pairs above.
+      GoRoute(
+        path: AppRoutes.adminCatalogs,
+        name: AppRouteNames.adminCatalogs,
+        builder: (_, __) => const AdminCatalogsScreen(),
+      ),
+      GoRoute(
+        path: AppRoutes.adminCatalogPage,
+        name: AppRouteNames.adminCatalogPage,
+        builder: (context, state) => AdminCatalogPageScreen(
+          catalogId: state.pathParameters['id'] ?? '',
+          // The tapped card's name, so the app bar is not blank while loading.
+          initialTitle: state.extra is String ? state.extra as String : null,
         ),
       ),
       GoRoute(
@@ -1499,11 +1531,12 @@ String? repRedirectFor(
   return AppRoutes.projects;
 }
 
-/// The ADMIN-only subtrees: standee inventory and, since Stage 3, the
-/// subscription money screens. Each is gated by PREFIX.
+/// The ADMIN-only subtrees: standee inventory, since Stage 3 the subscription
+/// money screens, and since Oct 2026 "All catalogs". Each is gated by PREFIX.
 const List<String> _adminOnlyPrefixes = [
   AppRoutes.adminStandees,
   AppRoutes.adminSubscriptions,
+  AppRoutes.adminCatalogs,
 ];
 
 /// THE ADMIN-ONLY GATE, as a pure function — same shape and same reasoning

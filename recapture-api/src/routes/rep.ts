@@ -14,8 +14,13 @@
 // through `resolveDelegatedCatalog` and through nothing else. A `null` from it
 // is answered with the SAME 404 a nonexistent catalog gives — a rep must not be
 // able to probe for catalogs they do not hold. Grep this file for
-// `resolveDelegatedCatalog`: if a catalog is ever obtained another way, that is
-// the bug.
+// `resolveDelegatedCatalog` / `resolveCatalogAccess`: if a catalog is ever
+// obtained another way, that is the bug.
+//
+// THE ONE EXCEPTION TO "A GRANT": an ADMIN may resolve ANY live catalog (the
+// "All catalogs" screen, Oct 2026). The gate reports which way it let the
+// caller in, and the two things only a delegation justifies — the raw account
+// number and opening a pending-payment window — check it.
 //
 // Standard envelope throughout (unlike routes/public.ts, whose carve-out is
 // documented in AGENTS.md and applies to that router alone).
@@ -29,6 +34,8 @@ import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
 import { QrCode } from '@/models/QrCode';
 import { User } from '@/models/User';
+import { createNotification } from '@/services/notificationsService';
+import { toDisplayName } from '@/utils/catalogNames';
 import { qrCodeParam, repPublishedQuerySchema, standeeQrQuerySchema } from '@/validation/qrSchemas';
 import {
   brandingBytesQuerySchema,
@@ -47,11 +54,17 @@ import {
   updateBusinessProfileSchema,
   updateProductSchema,
 } from '@/validation/catalogSchemas';
-import { repActivationSchema, attachQrCodeSchema } from '@/validation/repSchemas';
+import {
+  repActivationSchema,
+  attachQrCodeSchema,
+  adminUnpublishSchema,
+} from '@/validation/repSchemas';
 import { activate, attachCodeToCatalog, retireCode } from '@/services/activationService';
 import {
   listDelegatedCatalogs,
+  resolveCatalogAccess,
   resolveDelegatedCatalog,
+  type CatalogAccessVia,
 } from '@/services/catalogDelegationService';
 import {
   findRepStandee,
@@ -100,6 +113,7 @@ import {
   getPublishStatus,
   requestPublish,
   requestRetry,
+  requestUnpublish,
   type RequestPublishResult,
 } from '@/services/catalogPublishService';
 import { consumeRateWindow } from '@/utils/rateLimit';
@@ -131,8 +145,10 @@ const router = Router();
 // Router-level gates, mirroring admin.ts. requireRole re-reads the role from the
 // DB on every request, so a revoked rep loses /rep at once rather than at token
 // expiry. Role comparison is inclusive upward: MODEL_ARTIST and ADMIN pass here
-// too, which is accepted rather than overlooked — both are script-granted, and
-// every acting-on-behalf-of write leaves a CatalogDelegation row behind.
+// too, which is accepted rather than overlooked — both are script-granted. A
+// rep's or artist's write needs a CatalogDelegation row; an ADMIN's does not
+// (the "All catalogs" override in resolveCatalogAccess); the only trace of an
+// admin's edit is the actor hash on the analytics events these routes emit.
 router.use(requireAuth);
 router.use(requireRole('SALES_REP'));
 
@@ -620,8 +636,16 @@ interface RestaurantAccount {
 async function restaurantAccountFor(
   repUserId: string,
   catalogId: string,
-  ownerUserId: string
+  ownerUserId: string,
+  via: CatalogAccessVia
 ): Promise<RestaurantAccount> {
+  // AN ADMIN WHO OPENED THIS FROM "ALL CATALOGS" DID NOT TYPE THIS NUMBER. The
+  // receipt argument above holds only for a DELEGATION, so the override path
+  // gets the absent answer (the screen hides the row) and no audit event, since
+  // nothing was disclosed. An admin who needs the contact has the metered,
+  // audited door built for exactly that: GET /admin/users/:id.
+  if (via !== 'DELEGATION') return { accountPhone: null };
+
   const owner = await User.findById(ownerUserId).select('phone').lean().exec();
   const accountPhone = owner?.phone ?? null;
 
@@ -643,8 +667,9 @@ router.get(
   '/catalogs/:id/profile',
   asyncHandler(async (req, res) => {
     const repUserId = new Types.ObjectId(req.user!.userId);
-    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
-    if (!catalog) return notDelegated(res);
+    const access = await resolveCatalogAccess(repUserId, req.params.id);
+    if (!access) return notDelegated(res);
+    const { catalog } = access;
 
     const profile = await getBusinessProfile(String(catalog.userId));
     if (!profile) return notDelegated(res);
@@ -652,7 +677,8 @@ router.get(
     const account = await restaurantAccountFor(
       req.user!.userId,
       profile.id,
-      String(catalog.userId)
+      String(catalog.userId),
+      access.via
     );
 
     res.setHeader('Cache-Control', 'no-store');
@@ -673,8 +699,9 @@ router.patch(
   '/catalogs/:id/profile',
   asyncHandler(async (req, res) => {
     const repUserId = new Types.ObjectId(req.user!.userId);
-    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
-    if (!catalog) return notDelegated(res);
+    const access = await resolveCatalogAccess(repUserId, req.params.id);
+    if (!access) return notDelegated(res);
+    const { catalog } = access;
 
     const parsed = updateBusinessProfileSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -716,7 +743,8 @@ router.patch(
     const account = await restaurantAccountFor(
       req.user!.userId,
       result.profile.id,
-      String(catalog.userId)
+      String(catalog.userId),
+      access.via
     );
 
     res.setHeader('Cache-Control', 'no-store');
@@ -868,8 +896,9 @@ router.put(
   '/catalogs/:id/logo',
   asyncHandler(async (req, res) => {
     const repUserId = new Types.ObjectId(req.user!.userId);
-    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
-    if (!catalog) return notDelegated(res);
+    const access = await resolveCatalogAccess(repUserId, req.params.id);
+    if (!access) return notDelegated(res);
+    const { catalog } = access;
 
     const parsed = brandingCommitSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -910,7 +939,8 @@ router.put(
     const account = await restaurantAccountFor(
       req.user!.userId,
       result.profile.id,
-      String(catalog.userId)
+      String(catalog.userId),
+      access.via
     );
 
     res.setHeader('Cache-Control', 'no-store');
@@ -1530,8 +1560,9 @@ router.post(
   '/catalogs/:id/publish',
   asyncHandler(async (req, res) => {
     const repUserId = new Types.ObjectId(req.user!.userId);
-    const catalog = await resolveDelegatedCatalog(repUserId, req.params.id);
-    if (!catalog) return notDelegated(res);
+    const access = await resolveCatalogAccess(repUserId, req.params.id);
+    if (!access) return notDelegated(res);
+    const { catalog } = access;
 
     const catalogId = String(catalog._id);
     const ownerUserId = String(catalog.userId);
@@ -1556,6 +1587,11 @@ router.post(
     const result = await requestPublish(ownerUserId, {
       ...(idempotencyKey ? { idempotencyKey } : {}),
       publishedBy: { userId: repUserId, role: req.user!.role ?? 'SALES_REP' },
+      // An admin correcting a live menu from "All catalogs" is not signing a
+      // restaurant up, and must not start the seven-day pay-or-go-dark clock
+      // on someone else's page as a side effect of a typo fix. The ordinary
+      // subscription gate still applies; a plan is the admin panel's job.
+      ...(access.via === 'ADMIN' ? { openPendingPaymentWindow: false } : {}),
     });
     return respondToRepPublishRequest(res, catalogId, ownerUserId, 'FULL', result);
   })
@@ -1590,6 +1626,145 @@ router.post(
 
     const result = await requestRetry(ownerUserId);
     return respondToRepPublishRequest(res, catalogId, ownerUserId, 'RETRY_FAILED', result);
+  })
+);
+
+// ── ADMIN: publish and take down ANY catalog ────────────────────────────────
+//
+// Two buttons at the foot of the publish screen, ADMIN only (route-level
+// requireRole on top of this router's SALES_REP gate). Both resolve the catalog
+// through the same gate as everything else here, which admits an ADMIN for any
+// live catalog (resolveCatalogAccess).
+
+/**
+ * POST /rep/catalogs/:id/publish/admin — "Publish by admin".
+ *
+ * The rep publish with the SUBSCRIPTION gate lifted: an admin may put any menu
+ * live whatever its plan says. The content gates still apply (Mirage cannot
+ * take an empty menu or a dish with no picture), and no pending-payment window
+ * is opened — an admin is not signing anyone up. Plan entitlements still decide
+ * what the page may SHOW (3D, premium looks); this decides only that it is up.
+ * Same answers as the rep publish, including 422 with the gates still open.
+ */
+router.post(
+  '/catalogs/:id/publish/admin',
+  requireRole('ADMIN'),
+  asyncHandler(async (req, res) => {
+    const adminUserId = new Types.ObjectId(req.user!.userId);
+    const access = await resolveCatalogAccess(adminUserId, req.params.id);
+    if (!access) return notDelegated(res);
+    const { catalog } = access;
+
+    const catalogId = String(catalog._id);
+    const ownerUserId = String(catalog.userId);
+
+    // The SAME window as the rep's publish: what is protected is this
+    // restaurant's Mirage writes, whoever is pressing.
+    const rate = await consumeRateWindow(
+      `rep-publish:${catalogId}`,
+      env.PUBLISH_MAX_PER_WINDOW,
+      env.PUBLISH_WINDOW_SECONDS
+    );
+    if (rate.limited) return repRateLimited(res, rate.retryAfter);
+
+    const idempotencyKey = req.header('Idempotency-Key') ?? undefined;
+    const result = await requestPublish(ownerUserId, {
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      publishedBy: { userId: adminUserId, role: 'ADMIN' },
+      openPendingPaymentWindow: false,
+      bypassSubscriptionGate: true,
+    });
+    return respondToRepPublishRequest(res, catalogId, ownerUserId, 'FULL', result);
+  })
+);
+
+/**
+ * POST /rep/catalogs/:id/unpublish/admin {reason} — "Unpublish by admin".
+ *
+ * The owner's unpublish (feature 39) — items down, `isPublished` off, the
+ * restaurant, its URL and every printed QR KEPT — with a required reason that
+ * is recorded on the catalog and sent to the owner's bell, so a dark page is
+ * never a mystery to the person who owns it. The owner is told "an
+ * administrator", never which one.
+ *
+ * Only a LIVE menu can be taken down: a draft has nothing to take down and an
+ * already-unpublished one is already down — 409 CATALOG_NOT_LIVE for both,
+ * rather than queuing a second removal run for nothing.
+ */
+router.post(
+  '/catalogs/:id/unpublish/admin',
+  requireRole('ADMIN'),
+  validateBody(adminUnpublishSchema),
+  asyncHandler(async (req, res) => {
+    const adminUserId = new Types.ObjectId(req.user!.userId);
+    const access = await resolveCatalogAccess(adminUserId, req.params.id);
+    if (!access) return notDelegated(res);
+    const { catalog } = access;
+    const { reason } = req.body as { reason: string };
+
+    if (catalog.status !== 'PUBLISHED') {
+      return fail(
+        res,
+        409,
+        'CATALOG_NOT_LIVE',
+        'This menu is not live, so there is nothing to take down.'
+      );
+    }
+
+    const catalogId = String(catalog._id);
+    const ownerUserId = String(catalog.userId);
+
+    const rate = await consumeRateWindow(
+      `rep-publish:${catalogId}`,
+      env.PUBLISH_MAX_PER_WINDOW,
+      env.PUBLISH_WINDOW_SECONDS
+    );
+    if (rate.limited) return repRateLimited(res, rate.retryAfter);
+
+    const result = await requestUnpublish(ownerUserId, {
+      byAdmin: { userId: adminUserId, reason },
+    });
+
+    if (result.outcome === 'NOT_FOUND') return notDelegated(res);
+    if (result.outcome === 'IN_PROGRESS') {
+      res.status(409).json({
+        status: 'error',
+        code: 'PUBLISH_IN_PROGRESS',
+        message: 'A publish is already running for this catalog.',
+        runId: result.runId,
+      });
+      return;
+    }
+
+    track(AnalyticsEvent.CATALOG_UNPUBLISH_REQUESTED, {
+      user_id_hash: hashIdentifier(req.user!.userId),
+      catalog_id: catalogId,
+      outcome: result.outcome,
+    });
+
+    if (result.outcome === 'NOT_PUBLISHED') {
+      res.status(200).json({ status: 'success', unpublished: false, runId: null });
+      return;
+    }
+
+    // Best-effort: the takedown has happened whether or not the bell rings, and
+    // the reason is on the catalog either way (the owner's publish screen
+    // shows it).
+    const restaurant = catalog.businessName?.trim() || toDisplayName(catalog.name);
+    await createNotification(
+      {
+        kind: 'SYSTEM',
+        title: 'Your menu was taken offline',
+        message: `An administrator took ${restaurant} offline. Reason: ${reason}`.slice(0, 500),
+        action: { label: 'View', url: '/catalog/publish' },
+        audience: { type: 'USERS', userIds: [ownerUserId] },
+      },
+      req.user!.userId
+    ).catch((err: unknown) => {
+      console.warn('[admin-unpublish] owner notification failed', { catalogId }, err);
+    });
+
+    res.status(202).json({ status: 'success', unpublished: true, runId: result.run.runId });
   })
 );
 

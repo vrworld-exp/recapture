@@ -3,7 +3,8 @@
 // The grant, the revoke, the list — and THE GATE.
 //
 // Every /rep route that touches a catalog resolves it through
-// {@link resolveDelegatedCatalog} and through nothing else. That is the whole
+// {@link resolveCatalogAccess} (or its thin wrapper
+// {@link resolveDelegatedCatalog}) and through nothing else. That is the whole
 // authorization model for acting-on-behalf-of, in one function, so there is
 // exactly one place to audit and exactly one place a mistake could live. A
 // route that resolves a catalog any other way is the bug, whatever else it
@@ -11,6 +12,7 @@
 import { Types } from 'mongoose';
 
 import { Catalog, type ICatalog } from '@/models/Catalog';
+import { User, hasRoleAtLeast } from '@/models/User';
 import { CatalogDelegation, REP_KIND_FILTER } from '@/models/CatalogDelegation';
 import { isDuplicateKeyError } from '@/services/catalogService';
 import { customerUrl } from '@/services/customerUrl';
@@ -142,6 +144,29 @@ export async function listDelegatedCatalogs(
 }
 
 /**
+ * HOW the caller came to hold a catalog — the two answers the gate can give.
+ *
+ *   DELEGATION — a live CatalogDelegation row: the rep activated this
+ *                restaurant themselves (see `grantDelegation`).
+ *   ADMIN      — no row, but the caller is an ADMIN, who may open ANY live
+ *                catalog from the "All catalogs" screen and edit or publish it
+ *                (Oct 2026). Nothing is written to grant this: an admin does
+ *                not acquire a delegation by looking, so the restaurant never
+ *                appears on their "My restaurants" list and every bound that
+ *                rests on "a delegation means the rep typed this number"
+ *                (`accountPhone`, AGENTS.md §Roles) stays true.
+ *
+ * A route that does something only a DELEGATION justifies must check `via`;
+ * everything else just uses the catalog.
+ */
+export type CatalogAccessVia = 'DELEGATION' | 'ADMIN';
+
+export interface CatalogAccess {
+  catalog: ICatalog;
+  via: CatalogAccessVia;
+}
+
+/**
  * THE GATE. The only way a /rep route is allowed to obtain a catalog.
  *
  * Returns null for "no live delegation", for "no such catalog", for a
@@ -153,12 +178,14 @@ export async function listDelegatedCatalogs(
  *
  * The delegation is read on EVERY request rather than carried in the token, so
  * a revoke is effective immediately — the same reasoning as requireRole's fresh
- * role read.
+ * role read. The ADMIN override reads the role fresh for the same reason, and
+ * only when there is no grant: a rep's request costs nothing extra, and a
+ * demoted admin loses the override on their very next request.
  */
-export async function resolveDelegatedCatalog(
-  repUserId: Types.ObjectId,
+export async function resolveCatalogAccess(
+  actorUserId: Types.ObjectId,
   catalogId: string
-): Promise<ICatalog | null> {
+): Promise<CatalogAccess | null> {
   // A malformed id is answered with the same null as a catalog the rep does not
   // hold. Validating it here rather than at the route is what keeps that
   // promise: a 400 for "not an ObjectId" and a 404 for "not yours" would still
@@ -167,7 +194,7 @@ export async function resolveDelegatedCatalog(
 
   const id = new Types.ObjectId(catalogId);
   const grant = await CatalogDelegation.findOne({
-    repUserId,
+    repUserId: actorUserId,
     catalogId: id,
     revokedAt: null,
     // Stage 14.3: a restaurant's own staff never reach the rep surface.
@@ -175,12 +202,27 @@ export async function resolveDelegatedCatalog(
   })
     .lean()
     .exec();
-  if (!grant) return null;
+
+  let via: CatalogAccessVia = 'DELEGATION';
+  if (!grant) {
+    const actor = await User.findById(actorUserId).select('role').lean().exec();
+    if (!actor || !hasRoleAtLeast(actor.role ?? 'USER', 'ADMIN')) return null;
+    via = 'ADMIN';
+  }
 
   const catalog = await Catalog.findOne({ _id: id, deletedAt: null }).exec();
+  if (!catalog) return null;
   // Stage 16: the rest of this request acts on THIS outlet — the rep routes
   // pass the owner's userId to the owner services, which would otherwise
   // resolve the owner's main catalog, not the branch the grant is for.
-  if (catalog) pinOutlet(catalog._id as Types.ObjectId);
-  return catalog;
+  pinOutlet(catalog._id as Types.ObjectId);
+  return { catalog, via };
+}
+
+/** {@link resolveCatalogAccess} for the routes that do not care how. */
+export async function resolveDelegatedCatalog(
+  repUserId: Types.ObjectId,
+  catalogId: string
+): Promise<ICatalog | null> {
+  return (await resolveCatalogAccess(repUserId, catalogId))?.catalog ?? null;
 }

@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:recapture/application/auth/user_role_notifier.dart';
 import 'package:recapture/app/routes/app_router.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
 import 'package:recapture/application/catalog/catalog_link_service.dart';
@@ -193,6 +194,7 @@ Widget _repHarness(_FakeRepRepository repo) {
     overrides: [
       authProvider.overrideWith(_StubAuth.new),
       repRepositoryProvider.overrideWithValue(repo),
+      isAdminProvider.overrideWithValue(false),
       isOnlineProvider.overrideWithValue(true),
       catalogLinkActionsProvider.overrideWithValue(FakeLinkActions()),
     ],

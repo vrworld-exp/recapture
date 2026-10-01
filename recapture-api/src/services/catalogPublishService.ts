@@ -437,7 +437,7 @@ export async function evaluatePublishGates(
   // LAST, so the checklist's existing row order is untouched. Behind an ops
   // flag that is absent everywhere until Stage 5; a config outage reads as
   // "off" (see isSubscriptionGateEnabled), never as "no subscription".
-  if (await isSubscriptionGateEnabled()) {
+  if (!options.skipSubscriptionGate && (await isSubscriptionGateEnabled())) {
     const subscription = await CatalogSubscription.findOne({ catalogId: catalog._id })
       .lean()
       .exec();
@@ -477,6 +477,13 @@ export interface EvaluatePublishGatesOptions {
    * up — counting each of those would make the metric say nothing.
    */
   isPublishAttempt?: boolean;
+  /**
+   * Leaves the subscription gate out — ONLY for an ADMIN's "Publish by admin",
+   * whose whole point is publishing whatever the restaurant's plan says. The
+   * content gates are never skipped: Mirage cannot take an empty menu or a
+   * dish with no picture, whoever presses the button.
+   */
+  skipSubscriptionGate?: boolean;
 }
 
 // ── The immutable mapping ───────────────────────────────────────────────────
@@ -781,10 +788,20 @@ async function ownCatalog(userId: string): Promise<ICatalog | null> {
  * `openPendingPaymentWindowForPublish` below. The promotion path
  * (`catalogModelPromotionService`) passes nothing and is treated as the owner,
  * which is right: a model finishing generation is not a person at a table.
+ *
+ * `openPendingPaymentWindow: false` keeps the actor but skips the window — an
+ * ADMIN editing a live menu from "All catalogs" (not via a delegation) is
+ * correcting a page, not onboarding a restaurant.
  */
 export async function requestPublish(
   userId: string,
-  options: { idempotencyKey?: string; publishedBy?: Actor } = {}
+  options: {
+    idempotencyKey?: string;
+    publishedBy?: Actor;
+    openPendingPaymentWindow?: boolean;
+    /** "Publish by admin": see {@link EvaluatePublishGatesOptions.skipSubscriptionGate}. */
+    bypassSubscriptionGate?: boolean;
+  } = {}
 ): Promise<RequestPublishResult> {
   const catalog = await ownCatalog(userId);
   if (!catalog) return { outcome: 'NOT_FOUND' };
@@ -810,7 +827,7 @@ export async function requestPublish(
   // Best-effort by construction: the helper swallows its own failures and
   // answers false, and the gates then refuse the publish with the ordinary
   // "choose a plan" sentence rather than a 500.
-  if (options.publishedBy) {
+  if (options.publishedBy && options.openPendingPaymentWindow !== false) {
     await openPendingPaymentWindowForPublish(
       catalogId,
       catalog.userId as Types.ObjectId,
@@ -819,7 +836,10 @@ export async function requestPublish(
   }
 
   const products = await CatalogProduct.find({ catalogId, deletedAt: null }).exec();
-  const gates = await evaluatePublishGates(catalog, products, { isPublishAttempt: true });
+  const gates = await evaluatePublishGates(catalog, products, {
+    isPublishAttempt: true,
+    skipSubscriptionGate: options.bypassSubscriptionGate === true,
+  });
   if (gates.length > 0) return { outcome: 'BLOCKED', gates };
 
   // Provisioning is idempotent and returns the stored mapping without a Mirage
@@ -866,7 +886,19 @@ export async function requestPublish(
   const fresh = await ownCatalog(userId);
   if (!fresh) return { outcome: 'NOT_FOUND' };
 
-  const result = await openRun(fresh, { mode: 'FULL', ...options });
+  const result = await openRun(fresh, {
+    mode: 'FULL',
+    ...(options.idempotencyKey !== undefined ? { idempotencyKey: options.idempotencyKey } : {}),
+  });
+  // An accepted publish answers an admin takedown: the page is coming back, so
+  // the "taken offline because…" note would now be describing the past.
+  if (result.outcome === 'QUEUED' && fresh.adminUnpublish) {
+    await Catalog.updateOne(
+      { _id: catalogId },
+      { $unset: { adminUnpublish: '' } },
+      { timestamps: false }
+    ).exec();
+  }
   return result.outcome === 'QUEUED' && mapping ? { ...result, mapping } : result;
 }
 
@@ -933,7 +965,13 @@ export type UnpublishResult =
  * business's public link is a separate, explicitly-confirmed action, and it is
  * deliberately not reachable from this endpoint.
  */
-export async function requestUnpublish(userId: string): Promise<UnpublishResult> {
+export async function requestUnpublish(
+  userId: string,
+  options: {
+    /** An ADMIN's takedown: recorded on the catalog once the run is queued. */
+    byAdmin?: { userId: Types.ObjectId; reason: string };
+  } = {}
+): Promise<UnpublishResult> {
   const catalog = await ownCatalog(userId);
   if (!catalog) return { outcome: 'NOT_FOUND' };
 
@@ -999,7 +1037,24 @@ export async function requestUnpublish(userId: string): Promise<UnpublishResult>
   };
 
   const queued = await openRun(catalog, { mode: 'UNPUBLISH' });
-  if (queued.outcome === 'QUEUED') return { outcome: 'QUEUED', run: queued.run };
+  if (queued.outcome === 'QUEUED') {
+    if (options.byAdmin) {
+      await Catalog.updateOne(
+        { _id: catalogId },
+        {
+          $set: {
+            adminUnpublish: {
+              reason: options.byAdmin.reason,
+              at: new Date(),
+              byUserId: options.byAdmin.userId,
+            },
+          },
+        },
+        { timestamps: false }
+      ).exec();
+    }
+    return { outcome: 'QUEUED', run: queued.run };
+  }
 
   if (queued.outcome === 'IN_PROGRESS') {
     // Someone else's run holds the catalog. Ours never started.
@@ -1043,6 +1098,8 @@ export interface PublishStatusDto {
   /** The link to SHOW — the Mirage page, never the resolver. See services/customerUrl.ts. */
   publicUrl: string | null;
   lastPublishedAt: string | null;
+  /** Set while an ADMIN's takedown stands: the reason they gave, and when. */
+  adminUnpublish: { reason: string; at: string } | null;
   activeRunId: string | null;
   run: {
     id: string;
@@ -1117,6 +1174,14 @@ export async function getPublishStatus(
         catalog.draftRevision > run.snapshotRevision,
       publicUrl: customerUrl(catalog),
       lastPublishedAt: catalog.lastPublishedAt?.toISOString() ?? null,
+      // Why an admin took this menu offline, for the owner's screen and the
+      // admin's. Never who: the owner gets "an administrator", not an id.
+      adminUnpublish: catalog.adminUnpublish
+        ? {
+            reason: catalog.adminUnpublish.reason,
+            at: catalog.adminUnpublish.at.toISOString(),
+          }
+        : null,
       activeRunId: catalog.activePublishRunId?.toHexString() ?? null,
       run: run
         ? {

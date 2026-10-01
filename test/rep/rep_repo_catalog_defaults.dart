@@ -36,6 +36,17 @@ import 'package:recapture/domain/entities/product_food_type.dart';
 import 'package:recapture/domain/entities/subscription_nudge.dart';
 
 mixin RepRepoCatalogDefaults implements RepRepository {
+  @override
+  Future<PublishRequestResult> adminPublish(
+    String catalogId, {
+    String? idempotencyKey,
+  }) =>
+      throw UnimplementedError('adminPublish');
+
+  @override
+  Future<UnpublishResult> adminUnpublish(String catalogId, String reason) =>
+      throw UnimplementedError('adminUnpublish');
+
   /// The published history is empty unless a test says otherwise — most of
   /// these suites are about a single visit, not a career.
   @override
@@ -146,7 +157,8 @@ mixin RepRepoCatalogDefaults implements RepRepository {
     String catalogId,
     CatalogAnnouncement? announcement,
   ) =>
-      throw UnimplementedError('rep announcement write is not exercised by this test');
+      throw UnimplementedError(
+          'rep announcement write is not exercised by this test');
 
   @override
   Future<CatalogCategory> setCategorySchedule(
@@ -155,7 +167,8 @@ mixin RepRepoCatalogDefaults implements RepRepository {
     required CategorySchedule? schedule,
     required bool hideOutsideWindow,
   }) =>
-      throw UnimplementedError('rep category schedule is not exercised by this test');
+      throw UnimplementedError(
+          'rep category schedule is not exercised by this test');
 
   @override
   Future<String> uploadBrandingBytes(

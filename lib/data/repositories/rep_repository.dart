@@ -93,6 +93,19 @@ abstract interface class RepRepository {
   /// Re-runs only the FAILED rows — the owner's "Retry failed", delegated.
   Future<PublishRequestResult> retryFailedPublish(String catalogId);
 
+  /// "Publish by admin" — ADMIN only. The rep publish with the subscription
+  /// gate lifted; the content gates still answer 422. Same results as
+  /// [publish].
+  Future<PublishRequestResult> adminPublish(
+    String catalogId, {
+    String? idempotencyKey,
+  });
+
+  /// "Unpublish by admin" — ADMIN only. Takes the menu offline with a reason
+  /// the owner is shown. A menu that is not live answers `CATALOG_NOT_LIVE`
+  /// as a [CatalogFailure].
+  Future<UnpublishResult> adminUnpublish(String catalogId, String reason);
+
   /// How the last publish went — the owner's `GET /catalog/publish/status`,
   /// answered for a catalog the rep holds.
   ///
@@ -866,7 +879,11 @@ class RemoteRepRepository implements RepRepository {
       mapCatalogErrors(() async {
         final res = await _dio.patch<Map<String, dynamic>>(
           '/rep/catalogs/$catalogId/profile',
-          data: {'appearance': appearance == null || appearance.isEmpty ? null : appearance.toMap()},
+          data: {
+            'appearance': appearance == null || appearance.isEmpty
+                ? null
+                : appearance.toMap()
+          },
         );
         return _profileFrom(res.data);
       });
@@ -1183,6 +1200,25 @@ class RemoteRepRepository implements RepRepository {
   @override
   Future<PublishRequestResult> retryFailedPublish(String catalogId) =>
       postPublishRequest(_dio, '/rep/catalogs/$catalogId/publish/retry');
+
+  @override
+  Future<PublishRequestResult> adminPublish(
+    String catalogId, {
+    String? idempotencyKey,
+  }) =>
+      postPublishRequest(
+        _dio,
+        '/rep/catalogs/$catalogId/publish/admin',
+        idempotencyKey: idempotencyKey,
+      );
+
+  @override
+  Future<UnpublishResult> adminUnpublish(String catalogId, String reason) =>
+      postUnpublishRequest(
+        _dio,
+        '/rep/catalogs/$catalogId/unpublish/admin',
+        data: {'reason': reason.trim()},
+      );
 
   @override
   Future<PublishStatus> publishStatus(String catalogId) =>
