@@ -84,7 +84,7 @@ export async function addBranch(ownerUserId: string, input: AddBranchInput): Pro
   const count = await Catalog.countDocuments({ masterCatalogId: mainId, brandRole: 'BRANCH', deletedAt: null });
   if (count >= MAX_BRANCHES) return { outcome: 'LIMIT', max: MAX_BRANCHES };
 
-  const outletName = input.outletName.trim();
+  const outletName = input.outletName.trim().replace(/ /g, "_").slice(0, 40);
   const contact = {
     ...((main.contact ? JSON.parse(JSON.stringify(main.contact)) : {}) as Record<string, unknown>),
     ...(input.phone ? { phone: input.phone } : {}),
@@ -96,7 +96,7 @@ export async function addBranch(ownerUserId: string, input: AddBranchInput): Pro
     branch = await Catalog.create({
       userId: main.userId,
       // Mirage adopts a restaurant by NAME, so each outlet needs its own.
-      name: `${main.name} · ${outletName}`.slice(0, 120),
+      name: `${main.name}_${outletName}`.slice(0, 120),
       ...(main.businessName ? { businessName: main.businessName } : {}),
       ...(Object.keys(contact).length > 0 ? { contact } : {}),
       ...(main.hours ? { hours: JSON.parse(JSON.stringify(main.hours)) } : {}),

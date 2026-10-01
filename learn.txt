@@ -173,3 +173,15 @@ before connected :
 
 next : 15 3D spin videos	⏸ not built	deferred by you
     for this tell me exactly what you going to do ?? and what resources will used, can this slow down my ruing backend. or tell me any free tool i can use so i don't need to run on my real backend.
+
+
+
+
+Updates and fixs ------------------>>>>
+
+    a) Remove the btn 'Publish All outlets' on the outlets page of every catalog. only add branch should be there. User only able to publish the outlet from catalog page and also subcribing the plan.
+    
+    b)
+
+
+    Don't burn token do only neccessory tests and do it carefully for web and apk both by handling all possiable edge cases related to this.
