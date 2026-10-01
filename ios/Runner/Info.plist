@@ -77,6 +77,34 @@
 	     DEEP LINK URL SCHEME (go_router)
 	─────────────────────────────────────────────── -->
 
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tez</string>
+		<string>phonepe</string>
+		<string>paytmmp</string>
+		<string>paytm</string>
+		<string>gpay</string>
+		<string>credpay</string>
+		<string>mobikwik</string>
+		<string>in.fampay.app</string>
+		<string>bhim</string>
+		<string>amazonpay</string>
+		<string>upi</string>
+		<string>freecharge</string>
+		<string>myjio</string>
+		<string>kiwi</string>
+		<string>popclubapp</string>
+		<string>slice-upi</string>
+		<string>jupiter</string>
+		<string>navi</string>
+		<string>super</string>
+		<string>omnicard</string>
+		<string>kotakpay</string>
+		<string>ibl</string>
+		<string>axis</string>
+		<string>sbiyono</string>
+		<string>hdfcbank</string>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
