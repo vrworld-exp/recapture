@@ -44,6 +44,7 @@ import '../../../domain/catalog/subscription_publish_gate.dart';
 import '../../../domain/entities/catalog_status.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../app_button.dart';
+import 'publish_steps.dart';
 import '../app_status_pill.dart';
 import 'publish_link_actions.dart';
 
@@ -590,6 +591,9 @@ class _RunProgress extends StatelessWidget {
               color: AppColors.mirageRed,
             ),
           ),
+          const SizedBox(height: AppSpacing.lg),
+          // Step by step: what the run is doing now and what is left.
+          PublishStepTimeline(run: run),
           if (counts.failed > 0) ...[
             const SizedBox(height: AppSpacing.sm),
             Text(
