@@ -18,7 +18,9 @@ android {
     // 37, not 36: flutter_secure_storage compiles against Android SDK 37 and
     // compileSdk must be >= the highest of any dependency (backward compatible).
     // targetSdk stays at 36 — that's the runtime-behavior contract, unaffected.
-    compileSdk = 37
+    // Google now ships API 37 as the minor-versioned "android-37.0" platform;
+    // AGP 8.11 only resolves `compileSdk = 37` as hash "android-37", so name it exactly.
+    compileSdkVersion("android-37.0")
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
