@@ -198,6 +198,6 @@ Updates and fixs ------------------>>>>
 
 
 
-*z) I wand you to create a full sheet in readme or suitable for this. there each and every features of recapture should be mention and as the dev of app we can provide that sheet to anyone and for testing purpose. what content i the sheat sr., appropiate name of feature, detailes about feature how to use and what is, where this feature exist, who able to use this feature like (user[logged in], user[logged in][taste], user[logged in][2nd pro] , user[logged in][3rd pro] , user[admin], user[Artist], user[sale rep]) , also if you can the group all features page wise, home page , catalog page, user profile, inside something,
+✅z) I wand you to create a full sheet in readme or suitable for this. there each and every features of recapture should be mention and as the dev of app we can provide that sheet to anyone and for testing purpose. what content i the sheat sr., appropiate name of feature, detailes about feature how to use and what is, where this feature exist, who able to use this feature like (user[logged in], user[logged in][taste], user[logged in][2nd pro] , user[logged in][3rd pro] , user[admin], user[Artist], user[sale rep]) , also if you can the group all features page wise, home page , catalog page, user profile, inside something,
 also if you wnat they add some other details as well and another column if needed 
 plz write in detailed way so our internal team able to use it and give their feedback.

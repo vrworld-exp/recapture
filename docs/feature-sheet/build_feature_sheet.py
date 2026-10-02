@@ -232,10 +232,10 @@ f("Main buttons: Publish, Preview, Analytics, QR code, Download QR/standee", "Ca
   "Buttons appear/disappear by state exactly as described.")
 f("Edit menu (⋮ More)", "Catalog → ⋮", OWNER,
   "Menu with: Languages & translations, Spotlight & customer buttons, Offers & happy hour, My plate, Today: stock & prices, Staff, "
-  "Outlets & branches, Themes & Colours, Import menu from photos, AI descriptions, Customers, Order & booking links, Menu web address, Delete catalog.",
+  "Outlets & branches, Appearance & Theme, Import menu from photos, AI descriptions, Customers, Order & booking links, Menu web address, Delete catalog.",
   "Open ⋮ and tap each item.",
   "Each opens its screen. Items behind a switch are hidden when the switch is off (see Notes).",
-  notes="Hidden until 'appearanceEnabled' is on: Languages, Spotlight, Themes & Colours, Menu web address, palette & badge icons. "
+  notes="Hidden until 'appearanceEnabled' is on: Languages, Spotlight, Menu web address, palette & badge icons. "
         "Hidden until the AI key is set: Import menu, AI descriptions. The old 'Printable menu' option has been removed - report it if you still see it.")
 f("Payment banners on the catalog", "Catalog → banner under header", OWNER,
   "Shows plan problems with a button: 'Pay now' (payment due / grace), 'Pay to switch it back on' (page switched off), 'Restore 3D' (3D paused).",
@@ -354,7 +354,7 @@ f("Business profile", "Catalog → badge icon (Business profile)", OWNER,
   "Fill every field, upload logo and cover (16:9), Save profile, publish.",
   "Public page shows logo, cover banner and the fields marked 'Shown on your public page'.",
   notes="Rep: also for restaurants they activated (Restaurant details).")
-f("Themes & Colours (Appearance)", "Catalog → palette icon, or ⋮ → Themes & Colours", OWNER,
+f("Appearance & Theme", "Catalog → palette icon, or ⋮ → Appearance & Theme (always shown)", OWNER,
   "Pick a theme preset; see a live phone preview; Save look; publish.",
   "Choose a different preset → Save look → Publish → open the public menu.",
   "Public menu uses the new theme after publish.",
@@ -958,7 +958,7 @@ def write_md():
         "**3D spin videos** (customization stage 15) are deferred and not built.",
         "**Not built yet:** WhatsApp delivery of the weekly report, bulk WhatsApp sends, Hindi PDF menus, rep-side badge/diet editor, "
         "Mirage 'Our other branches' list, remembering the selected outlet after an app restart.",
-        "**Printable PDF menu** was removed on purpose (replaced by Themes & Colours in the menu).",
+        "**Printable PDF menu** was removed on purpose (replaced by Appearance & Theme in the menu).",
     ]:
         w(f"- {item}")
     w("")

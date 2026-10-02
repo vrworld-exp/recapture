@@ -462,11 +462,11 @@ The catalog is the restaurant's storefront - the menu customers open when they s
 
 #### 34. `CAT-04` Edit menu (⋮ More)
 
-- **What it is:** Menu with: Languages & translations, Spotlight & customer buttons, Offers & happy hour, My plate, Today: stock & prices, Staff, Outlets & branches, Themes & Colours, Import menu from photos, AI descriptions, Customers, Order & booking links, Menu web address, Delete catalog.
+- **What it is:** Menu with: Languages & translations, Spotlight & customer buttons, Offers & happy hour, My plate, Today: stock & prices, Staff, Outlets & branches, Appearance & Theme, Import menu from photos, AI descriptions, Customers, Order & booking links, Menu web address, Delete catalog.
 - **How to use / test:**
   - Open ⋮ and tap each item.
 - **Expected result:** Each opens its screen. Items behind a switch are hidden when the switch is off (see Notes).
-- **Notes:** Hidden until 'appearanceEnabled' is on: Languages, Spotlight, Themes & Colours, Menu web address, palette & badge icons. Hidden until the AI key is set: Import menu, AI descriptions. The old 'Printable menu' option has been removed - report it if you still see it.
+- **Notes:** Hidden until 'appearanceEnabled' is on: Languages, Spotlight, Menu web address, palette & badge icons. Hidden until the AI key is set: Import menu, AI descriptions. The old 'Printable menu' option has been removed - report it if you still see it.
 - **Platform:** APK · Web
 
 #### 35. `CAT-05` Payment banners on the catalog
@@ -734,7 +734,7 @@ Make the menu look like the restaurant's own. Rule for all of these: you can alw
 | Sr. | ID | Feature | Where in the app | U | T | S | M | Ad | Ar | R | H | C |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 60 | `LOOK-01` | **Business profile** | Catalog → badge icon (Business profile) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| 61 | `LOOK-02` | **Themes & Colours (Appearance)** | Catalog → palette icon, or ⋮ → Themes & Colours | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| 61 | `LOOK-02` | **Appearance & Theme** | Catalog → palette icon, or ⋮ → Appearance & Theme (always shown) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | 62 | `LOOK-03` | **Custom primary & accent colours** | Appearance → Customize colours | 🔒 | 🔒 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | 63 | `LOOK-04` | **Layout & fonts** | Appearance → Layout / Fonts | 🔒 | 🔒 | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | 64 | `LOOK-05` | **Diet filters on the menu** | Appearance → Diet filters | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -758,7 +758,7 @@ Make the menu look like the restaurant's own. Rule for all of these: you can alw
 - **Notes:** Rep: also for restaurants they activated (Restaurant details).
 - **Platform:** APK · Web
 
-#### 61. `LOOK-02` Themes & Colours (Appearance)
+#### 61. `LOOK-02` Appearance & Theme
 
 - **What it is:** Pick a theme preset; see a live phone preview; Save look; publish.
 - **How to use / test:**
@@ -1903,7 +1903,7 @@ Other numbers: trial 30 days · grace after a plan ends 7 days · rep-published 
 - **Rep-published unpaid page goes fully dark** after 7 days, and its banner is visible to diners. Both were chosen on purpose.
 - **3D spin videos** (customization stage 15) are deferred and not built.
 - **Not built yet:** WhatsApp delivery of the weekly report, bulk WhatsApp sends, Hindi PDF menus, rep-side badge/diet editor, Mirage 'Our other branches' list, remembering the selected outlet after an app restart.
-- **Printable PDF menu** was removed on purpose (replaced by Themes & Colours in the menu).
+- **Printable PDF menu** was removed on purpose (replaced by Appearance & Theme in the menu).
 
 ## How to give feedback
 

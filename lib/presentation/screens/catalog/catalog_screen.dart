@@ -1087,9 +1087,10 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  // The Appearance screen from the menu — same gate as the
-                  // header palette icon, so it never opens a switched-off page.
-                  if (customizing)
+                  // The Appearance screen from the menu. Ungated, unlike the
+                  // header palette icon: the rollout flag only hides entry
+                  // points (the server never refuses an appearance save on it),
+                  // and the screen itself shows plan locks.
                   PopupMenuItem(
                     key: const Key('catalog-open-themes'),
                     value: _CatalogMenuAction.themes,
@@ -1099,7 +1100,7 @@ class _CatalogHeaderCard extends ConsumerWidget {
                         const SizedBox(width: AppSpacing.sm),
                         Flexible(
                           child: Text(
-                            'Themes & Colours',
+                            'Appearance & Theme',
                             style: Theme.of(context).textTheme.bodyMedium,
                             overflow: TextOverflow.ellipsis,
                           ),

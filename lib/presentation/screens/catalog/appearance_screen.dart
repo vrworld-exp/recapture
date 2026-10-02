@@ -105,6 +105,11 @@ class AppearanceScreen extends ConsumerWidget {
           onPressed: () => navigateBack(context),
         ),
         title: Text('Appearance', style: Theme.of(context).textTheme.titleLarge),
+        // A second "Save look" within reach without scrolling to the bottom.
+        // Only once there is a catalog to save into.
+        actions: [
+          if (profileAsync.valueOrNull != null) _TopSaveButton(scope: scope),
+        ],
       ),
       body: profileAsync.when(
         loading: () => const Center(child: AppLoadingIndicator()),
@@ -204,6 +209,89 @@ class _AppearanceBody extends ConsumerWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Both Save buttons. [failureAfter] for the top one: the inline error sits
+/// at the bottom of the page, likely off-screen when the top button is used,
+/// so its failure is also toasted.
+Future<void> _saveLook(
+  BuildContext context,
+  AppearanceNotifier notifier, {
+  CatalogFailure? Function()? failureAfter,
+}) async {
+  final messenger = CatalogFeedback.of(context);
+  if (await notifier.save()) {
+    CatalogFeedback.confirm(
+      messenger,
+      'Look saved. It goes live the next time you publish.',
+    );
+  } else if (context.mounted) {
+    final error = failureAfter?.call();
+    if (error != null) {
+      CatalogFeedback.failure(messenger, error, subject: 'the look');
+    }
+  }
+}
+
+/// The app-bar twin of the bottom "Save look" — same enablement rules.
+class _TopSaveButton extends ConsumerWidget {
+  const _TopSaveButton({required this.scope});
+
+  final CatalogScope scope;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final presets =
+        ref.watch(captureConfigProvider.select((c) => c.themePresets));
+    final state = ref.watch(appearanceFor(scope));
+    final notifier = ref.read(appearanceFor(scope).notifier);
+    final problem = appearanceContrastProblem(state.draft, presets);
+    final canSave = state.isDirty && problem == null && !state.saving;
+
+    // Centred: app-bar actions are stretched to the bar's height otherwise.
+    return Padding(
+      padding: const EdgeInsets.only(right: AppSpacing.sm),
+      child: Center(
+        child: Tooltip(
+          message: state.saving
+              ? 'Saving…'
+              : problem != null
+                  ? 'Fix the colour warning to save'
+                  : state.isDirty
+                      ? 'Save look'
+                      : 'No changes to save',
+          // The theme's filled CTA, like the bottom Save look, but white text
+          // and compact: the theme's full-width minimum would break the app bar.
+          child: ElevatedButton.icon(
+            key: const Key('appearance-save-top'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.mirageRed,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 36),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            icon: state.saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.check, size: 18),
+            label: const Text('Save'),
+            onPressed: canSave
+                ? () => _saveLook(
+                      context,
+                      notifier,
+                      failureAfter: () => ref.read(appearanceFor(scope)).error,
+                    )
+                : null,
+          ),
+        ),
       ),
     );
   }
@@ -447,17 +535,7 @@ class _Controls extends ConsumerWidget {
           key: const Key('appearance-save'),
           label: 'Save look',
           isLoading: state.saving,
-          onPressed: canSave
-              ? () async {
-                  final messenger = CatalogFeedback.of(context);
-                  if (await notifier.save()) {
-                    CatalogFeedback.confirm(
-                      messenger,
-                      'Look saved. It goes live the next time you publish.',
-                    );
-                  }
-                }
-              : null,
+          onPressed: canSave ? () => _saveLook(context, notifier) : null,
         ),
         const SizedBox(height: AppSpacing.md),
         AppButton.secondary(
