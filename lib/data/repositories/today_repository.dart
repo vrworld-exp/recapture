@@ -1,10 +1,9 @@
 // lib/data/repositories/today_repository.dart
 //
-// Today screen, bulk prices, staff access and the printable menu
+// Today screen, bulk prices and staff access
 // (more-customization Stage 14). The Today API is the same for the owner
 // (`/catalog/…`) and a helper (`/staff/catalogs/:id/…`); [staffCatalogId]
 // picks which.
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -101,7 +100,7 @@ class TodayRepository {
       });
 }
 
-/// Owner-only: staff management and the printable menu.
+/// Owner-only: staff management.
 class StaffRepository {
   const StaffRepository(this._dio);
 
@@ -134,26 +133,6 @@ class StaffRepository {
           for (final c in (res.data?['catalogs'] is List ? res.data!['catalogs'] as List : const []))
             if (c is Map<String, dynamic>) StaffCatalog.fromMap(c),
         ];
-      });
-
-  Future<Uint8List> menuPdf({
-    required String template,
-    required String size,
-    required bool includeQr,
-    required bool published,
-  }) =>
-      mapCatalogErrors(() async {
-        final res = await _dio.get<List<int>>(
-          '/catalog/menu.pdf',
-          queryParameters: {
-            'template': template,
-            'size': size,
-            'includeQr': includeQr.toString(),
-            'source': published ? 'published' : 'draft',
-          },
-          options: Options(responseType: ResponseType.bytes),
-        );
-        return Uint8List.fromList(res.data ?? const []);
       });
 }
 
