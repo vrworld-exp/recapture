@@ -14,7 +14,6 @@ import 'package:go_router/go_router.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../app/theme/app_spacing.dart';
-import '../../../application/catalog/catalog_qr_service.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/today_repository.dart';
 import '../../../domain/catalog/today.dart';
@@ -215,72 +214,6 @@ class MyStaffCatalogsScreen extends ConsumerWidget {
               ),
       ),
     );
-  }
-}
-
-/// "Printable menu" — template, size, QR, published vs draft → a PDF to share / print.
-Future<void> showPrintableMenuDialog(BuildContext context, WidgetRef ref) async {
-  var template = 'classic';
-  var size = 'A4';
-  var qr = true;
-  var published = true;
-  final go = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, set) => AlertDialog(
-        title: const Text('Printable menu'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Wrap(
-              spacing: 6,
-              children: [
-                for (final (v, l) in const [('classic', 'Classic'), ('compact', 'Compact'), ('twoColumn', 'Two columns')])
-                  ChoiceChip(label: Text(l), selected: template == v, onSelected: (_) => set(() => template = v)),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              children: [
-                for (final v in const ['A4', 'A5'])
-                  ChoiceChip(label: Text(v), selected: size == v, onSelected: (_) => set(() => size = v)),
-              ],
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('QR to the live menu'),
-              value: qr,
-              onChanged: (v) => set(() => qr = v),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Only what is live'),
-              subtitle: const Text('Off = include changes not yet published'),
-              value: published,
-              onChanged: (v) => set(() => published = v),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Download')),
-        ],
-      ),
-    ),
-  );
-  if (go != true || !context.mounted) return;
-  final messenger = CatalogFeedback.of(context);
-  try {
-    final bytes = await ref
-        .read(staffRepositoryProvider)
-        .menuPdf(template: template, size: size, includeQr: qr, published: published);
-    await ref
-        .read(qrDelivererProvider)
-        .deliver(QrDownloadFile(bytes: bytes, fileName: 'menu-$size.pdf', mimeType: 'application/pdf'));
-  } on CatalogFailure catch (f) {
-    CatalogFeedback.failure(messenger, f, subject: 'menu PDF');
   }
 }
 

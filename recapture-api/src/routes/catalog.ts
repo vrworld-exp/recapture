@@ -49,7 +49,6 @@ import { listCatalogActivity } from '@/services/catalogActivityService';
 import { aiCatalogRouter } from '@/routes/aiCatalogRoutes';
 import { todayRouter } from '@/routes/todayRoutes';
 import { inviteStaff, listStaff, revokeStaff } from '@/services/staff/staffService';
-import { buildMenuPdf, MENU_PDF_SIZES, MENU_PDF_TEMPLATES } from '@/services/menuPdfService';
 import {
   deleteCustomer,
   exportCustomersCsv,
@@ -2538,35 +2537,6 @@ router.delete(
       return fail(res, 404, 'STAFF_NOT_FOUND', 'That person was not found.');
     }
     res.status(200).json({ status: 'success' });
-  })
-);
-
-// ── Printable menu (Stage 14.4) ─────────────────────────────────────────────
-
-const menuPdfQuerySchema = z.object({
-  template: z.enum(MENU_PDF_TEMPLATES).default('classic'),
-  size: z.enum(MENU_PDF_SIZES).default('A4'),
-  includeQr: z
-    .enum(['true', 'false'])
-    .default('true')
-    .transform((v) => v === 'true'),
-  source: z.enum(['published', 'draft']).default('published'),
-});
-
-/** GET /catalog/menu.pdf?template=&size=&includeQr=&source= */
-router.get(
-  '/menu.pdf',
-  asyncHandler(async (req, res) => {
-    const catalog = await findOwnedCatalog(req.user!.userId);
-    if (!catalog) return noCatalog(res);
-    const parsed = menuPdfQuerySchema.safeParse(req.query);
-    if (!parsed.success) return badRequest(res, parsed.error);
-    const pdf = await buildMenuPdf(catalog._id as MongooseTypes.ObjectId, parsed.data);
-    if (!pdf) return noCatalog(res);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="menu.pdf"');
-    res.setHeader('Cache-Control', 'no-store');
-    res.status(200).send(pdf);
   })
 );
 

@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../../data/repositories/ai_repository.dart';
 import '../../../data/repositories/today_repository.dart';
-import 'staff_screen.dart';
 import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../app/routes/app_router.dart';
 import '../../../app/routes/flow_back.dart';
@@ -950,7 +949,8 @@ class _CatalogHeaderCard extends ConsumerWidget {
                   _CatalogMenuAction.today => context.pushNamed(AppRouteNames.catalogToday),
                   _CatalogMenuAction.staff => context.pushNamed(AppRouteNames.catalogStaff),
                   _CatalogMenuAction.outlets => context.pushNamed(AppRouteNames.catalogOutlets),
-                  _CatalogMenuAction.printMenu => showPrintableMenuDialog(context, ref),
+                  _CatalogMenuAction.themes =>
+                    context.pushNamed(AppRouteNames.catalogAppearance),
                   _CatalogMenuAction.aiDescriptions =>
                     context.pushNamed(AppRouteNames.catalogAiDescriptions),
                   _CatalogMenuAction.address => context.pushNamed(AppRouteNames.catalogAddress),
@@ -1087,16 +1087,19 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       ],
                     ),
                   ),
+                  // The Appearance screen from the menu — same gate as the
+                  // header palette icon, so it never opens a switched-off page.
+                  if (customizing)
                   PopupMenuItem(
-                    key: const Key('catalog-open-print'),
-                    value: _CatalogMenuAction.printMenu,
+                    key: const Key('catalog-open-themes'),
+                    value: _CatalogMenuAction.themes,
                     child: Row(
                       children: [
-                        const Icon(Icons.print_outlined, size: 18, color: AppColors.textSecondary),
+                        const Icon(Icons.palette_outlined, size: 18, color: AppColors.textSecondary),
                         const SizedBox(width: AppSpacing.sm),
                         Flexible(
                           child: Text(
-                            'Printable menu',
+                            'Themes & Colours',
                             style: Theme.of(context).textTheme.bodyMedium,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -1449,7 +1452,7 @@ enum _CatalogMenuAction {
   today,
   staff,
   outlets,
-  printMenu,
+  themes,
   address,
   delete,
 }

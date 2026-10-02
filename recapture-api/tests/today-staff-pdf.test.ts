@@ -25,7 +25,6 @@ import { CatalogProduct } from '@/models/CatalogProduct';
 import { StaffInvite } from '@/models/StaffInvite';
 import { User } from '@/models/User';
 import { resolveDelegatedCatalog } from '@/services/catalogDelegationService';
-import { renderMenuPdf, wrap, type PrintMenu } from '@/services/menuPdfService';
 import {
   applyBulkPrices,
   bulkPrice,
@@ -293,54 +292,5 @@ describe('sold out until tomorrow', () => {
     expect(after.availability).toBe('IN_STOCK');
     expect(after.availabilityResetAt).toBeUndefined();
     expect(await CatalogChangeLog.countDocuments({ kind: 'AUTO_BACK_IN_STOCK' })).toBe(1);
-  });
-});
-
-// ── PDF ─────────────────────────────────────────────────────────────────────
-
-const menu = (dishes: number): PrintMenu => ({
-  title: 'Cafe Mocha',
-  subtitle: 'MG Road, Pune | 98765 43210',
-  primary: '#E10600',
-  qrUrl: 'https://menu.test/abc',
-  sections: dishes
-    ? [
-        {
-          name: 'Starters',
-          dishes: Array.from({ length: dishes }, (_, i) => ({
-            name:
-              i === 0
-                ? 'A very long dish name that certainly will not fit on one single line of the menu'
-                : `Dish ${i}`,
-            description: 'Crisp, golden and served with mint chutney.',
-            price: 100 + i,
-            foodType: i % 2 ? 'NON_VEG' : 'VEG',
-            badges: i === 1 ? ['Bestseller'] : [],
-          })),
-        },
-      ]
-    : [],
-});
-
-describe('menu PDF', () => {
-  it.each([0, 1, 200])('renders %d dishes as a valid PDF', (n) => {
-    for (const template of ['classic', 'compact', 'twoColumn'] as const) {
-      const pdf = renderMenuPdf(menu(n), {
-        template,
-        size: 'A4',
-        includeQr: true,
-        source: 'published',
-      });
-      const text = pdf.toString('latin1');
-      expect(text.startsWith('%PDF-1.4')).toBe(true);
-      expect(text).toContain('%%EOF');
-      if (n === 200) expect((text.match(/\/Type \/Page /g) ?? []).length).toBeGreaterThan(1);
-      if (n > 0) expect(text).toContain('Rs 100');
-    }
-  });
-
-  it('wraps long names inside the column', () => {
-    const lines = wrap('A very long dish name that certainly will not fit on one line', 11, 150);
-    expect(lines.length).toBeGreaterThan(1);
   });
 });

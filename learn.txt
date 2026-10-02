@@ -130,6 +130,10 @@ thisnking to fix it --------------------->>>
 
 
 
+    11. User role with admin (this time only admin) able to see all published catalogs, so inside profile page create one more section called all catalogs. when admin click on this the open catalogs page there all catalog preseent in a grid layout (two catalogs in one row) with name and icons of that catalog. if admin click on any catalog then open like a normal catalog page like we have now for every users, and also admin able to edit any catalog by clicking one the banner and open it and able to edit and publish changes directly (admin feature).
+
+
+
 
     Once app is ready for production ------------------>>>>>>>>
 
@@ -137,20 +141,6 @@ thisnking to fix it --------------------->>>
         a) From all subcription page, remove the complementry option ( complementry until btn is there  ) we don't need this option. 
 
         b) When all subcriptions page get open then all option should be defaul and first as position, currently need attention is as first and default option.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -187,3 +177,27 @@ before connected :
 
 next : 15 3D spin videos	⏸ not built	deferred by you
     for this tell me exactly what you going to do ?? and what resources will used, can this slow down my ruing backend. or tell me any free tool i can use so i don't need to run on my real backend.
+
+
+
+
+Updates and fixs ------------------>>>>
+
+    a) Remove the btn 'Publish All outlets' on the outlets page of every catalog. only add branch should be there. User only able to publish the outlet from catalog page and also subcribing the plan.
+
+    ✅b) After updating themes and color of catalog it not get reflected on main mirage page, so analysis the mirage fe code and fix it so what ever user changes in colors and themes page that change should get reflected on the mirage menu page, after saving and publishing that cahnge.
+
+
+    ✅c) Hey i want to remove a option from edit btn of catalog that are  printable menu options. And add a new option that is Themes & Colours when user click on this option plz redirect to user on Appearance page.
+
+    ✅d) also remove every code part to related this printable menu, i don't want any thing makes confusing for this.
+
+
+    Don't burn token do only neccessory tests and do it carefully for web and apk both by handling all possiable edge cases related to this.
+
+
+
+
+*z) I wand you to create a full sheet in readme or suitable for this. there each and every features of recapture should be mention and as the dev of app we can provide that sheet to anyone and for testing purpose. what content i the sheat sr., appropiate name of feature, detailes about feature how to use and what is, where this feature exist, who able to use this feature like (user[logged in], user[logged in][taste], user[logged in][2nd pro] , user[logged in][3rd pro] , user[admin], user[Artist], user[sale rep]) , also if you can the group all features page wise, home page , catalog page, user profile, inside something,
+also if you wnat they add some other details as well and another column if needed 
+plz write in detailed way so our internal team able to use it and give their feedback.

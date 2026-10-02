@@ -1,6 +1,6 @@
 // lib/domain/catalog/today.dart
 //
-// The Today screen, staff access and the printable menu (more-customization
+// The Today screen and staff access (more-customization
 // Stage 14), as the API returns them.
 
 String _s(Object? v) => v is String ? v : '';
