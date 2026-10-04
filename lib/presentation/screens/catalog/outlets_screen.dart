@@ -2,7 +2,8 @@
 //
 // Stage 16 — multi-branch restaurants:
 //   • [OutletsScreen] — `/catalog/outlets`: every outlet (main first), tap to
-//     switch; "Add branch"; "Publish all outlets".
+//     switch; "Add branch". No "Publish all" (removed 2026-10-04): each outlet
+//     is published from the catalog screen, through its own plan check.
 //   • [BrandWideGate] — wraps the brand-wide screens (look, badges, languages,
 //     AR style, QR style, My plate). On a branch they are set on the main
 //     outlet, so the gate shows that instead of an editor.
@@ -31,8 +32,6 @@ class OutletsScreen extends ConsumerStatefulWidget {
 }
 
 class _OutletsScreenState extends ConsumerState<OutletsScreen> {
-  bool _publishing = false;
-
   Future<void> _addBranch() async {
     final added = await showDialog<Outlet>(
       context: context,
@@ -44,30 +43,6 @@ class _OutletsScreenState extends ConsumerState<OutletsScreen> {
       CatalogFeedback.of(context),
       '${added.label} added with your full menu. You are now editing it.',
     );
-  }
-
-  Future<void> _publishAll() async {
-    final messenger = CatalogFeedback.of(context);
-    setState(() => _publishing = true);
-    try {
-      final results = await ref.read(outletsRepositoryProvider).publishAll();
-      ref.invalidate(outletsProvider);
-      ref.invalidate(catalogProvider);
-      final failed = results.where((r) => !r.ok).length;
-      if (mounted) {
-        CatalogFeedback.confirm(
-          messenger,
-          failed == 0
-              ? 'Publishing ${results.length} outlets.'
-              : 'Publishing ${results.length - failed} of ${results.length} outlets. '
-                  'Open the others to see what they need.',
-        );
-      }
-    } on CatalogFailure catch (f) {
-      if (mounted) CatalogFeedback.failure(messenger, f, subject: 'publish');
-    } finally {
-      if (mounted) setState(() => _publishing = false);
-    }
   }
 
   @override
@@ -157,16 +132,6 @@ class _OutletsScreenState extends ConsumerState<OutletsScreen> {
                     variant: AppButtonVariant.secondary,
                     onPressed: outlets.length >= 11 ? null : _addBranch,
                   ),
-                  if (outlets.length > 1) ...[
-                    const SizedBox(height: AppSpacing.md),
-                    AppButton(
-                      key: const Key('outlets-publish-all'),
-                      label: 'Publish all outlets',
-                      icon: Icons.cloud_upload_outlined,
-                      isLoading: _publishing,
-                      onPressed: _publishing ? null : _publishAll,
-                    ),
-                  ],
                 ],
               );
             },

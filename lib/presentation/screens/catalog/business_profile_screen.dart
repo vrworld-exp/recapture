@@ -40,6 +40,7 @@ import '../../../application/rep/rep_restaurant_notifier.dart';
 import '../../../data/datasources/product_image_picker.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/catalog_repository.dart';
+import '../../../data/repositories/menu_extras_repository.dart';
 import '../../../domain/catalog/business_profile_validators.dart';
 import '../../../domain/catalog/catalog_scope.dart';
 import '../../../domain/entities/business_profile.dart';
@@ -899,7 +900,6 @@ class _BrandingPanel extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.xxl),
           _AppearanceEntry(scope: scope),
-          const SizedBox(height: AppSpacing.md),
           _HoursEntry(scope: scope),
           const SizedBox(height: AppSpacing.md),
           // Stage 4: also on the owner's catalog screen; here it serves reps too.
@@ -938,13 +938,26 @@ class _HoursEntry extends StatelessWidget {
 
 /// The way to the Appearance screen (more-customization Stage 2) — the menu's
 /// colours and style, which are edited there rather than on this form.
-class _AppearanceEntry extends StatelessWidget {
+///
+/// The owner's own catalog shows it on Signature and up only; a rep's delegated
+/// view keeps it (the rep sets a restaurant up before its plan is chosen).
+class _AppearanceEntry extends ConsumerWidget {
   const _AppearanceEntry({required this.scope});
 
   final CatalogScope scope;
 
   @override
-  Widget build(BuildContext context) => OutlinedButton.icon(
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (scope.delegatedCatalogId == null && !ref.watch(customizationPlanAllowedProvider)) {
+      return const SizedBox.shrink();
+    }
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.md),
+      child: _button(context),
+    );
+  }
+
+  Widget _button(BuildContext context) => OutlinedButton.icon(
         key: const Key('profile-open-appearance'),
         style: OutlinedButton.styleFrom(
           alignment: Alignment.centerLeft,

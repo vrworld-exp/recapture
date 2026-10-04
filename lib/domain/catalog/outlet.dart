@@ -91,24 +91,3 @@ class BranchLink {
   Map<String, dynamic> toMap() =>
       {'followsMain': true, 'overriddenFields': overriddenFields};
 }
-
-/// One outlet's result of "Publish all outlets".
-class PublishAllResult {
-  const PublishAllResult({
-    required this.outletId,
-    required this.outcome,
-    this.outletName,
-  });
-
-  final String outletId;
-  final String? outletName;
-  final String outcome;
-
-  bool get ok => outcome == 'QUEUED' || outcome == 'NOTHING_TO_PUBLISH';
-
-  factory PublishAllResult.fromMap(Map<String, dynamic> map) => PublishAllResult(
-        outletId: (map['outletId'] ?? '').toString(),
-        outletName: map['outletName']?.toString(),
-        outcome: (map['outcome'] ?? '').toString(),
-      );
-}

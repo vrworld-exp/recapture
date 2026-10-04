@@ -855,6 +855,9 @@ class _CatalogHeaderCard extends ConsumerWidget {
     // Stage 8.3 rollout: the customization entry points appear once ops set
     // `appearanceEnabled` (see customizationVisibleProvider).
     final customizing = ref.watch(customizationVisibleProvider);
+    // Signature and up only (2026-10-04): a Taste catalog gets none of the
+    // customization items, flag or not — not even the ones the flag skips.
+    final planCustomizes = ref.watch(customizationPlanAllowedProvider);
     // Stage 13: AI items only when the server has an AI key (absent = off).
     final aiOn = ref.watch(aiStatusProvider(null)).valueOrNull?.enabled ?? false;
 
@@ -998,7 +1001,8 @@ class _CatalogHeaderCard extends ConsumerWidget {
                   ),
                   // Stage 10: offers, combos, happy hour. Not behind the
                   // customization flag: nothing reaches the menu until the owner
-                  // creates an offer and publishes.
+                  // creates an offer and publishes. Still a Signature feature.
+                  if (planCustomizes)
                   PopupMenuItem(
                     key: const Key('catalog-open-offers'),
                     value: _CatalogMenuAction.offers,
@@ -1016,7 +1020,9 @@ class _CatalogHeaderCard extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  // Stage 11: My plate — ungated, because it is on by default.
+                  // Stage 11: My plate — not behind the flag, because it is on by
+                  // default; behind the plan like the rest.
+                  if (planCustomizes)
                   PopupMenuItem(
                     key: const Key('catalog-open-plate'),
                     value: _CatalogMenuAction.plate,
@@ -1090,7 +1096,8 @@ class _CatalogHeaderCard extends ConsumerWidget {
                   // The Appearance screen from the menu. Ungated, unlike the
                   // header palette icon: the rollout flag only hides entry
                   // points (the server never refuses an appearance save on it),
-                  // and the screen itself shows plan locks.
+                  // and the screen itself shows plan locks. Hidden on Taste.
+                  if (planCustomizes)
                   PopupMenuItem(
                     key: const Key('catalog-open-themes'),
                     value: _CatalogMenuAction.themes,

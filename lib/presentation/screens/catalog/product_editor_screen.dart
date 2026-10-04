@@ -735,7 +735,10 @@ class _ProductEditorFormState extends ConsumerState<_ProductEditorForm> {
             ),
             enabled: !busy,
             problem: _details.validate(_foodType),
-            onManageBadges: () => context.pushNamed(AppRouteNames.catalogBadges),
+            // The badge library is a Signature screen; Taste just picks.
+            onManageBadges: ref.watch(customizationPlanAllowedProvider)
+                ? () => context.pushNamed(AppRouteNames.catalogBadges)
+                : null,
             onChanged: (value) {
               setState(() => _details = value);
               _recomputeDirty();

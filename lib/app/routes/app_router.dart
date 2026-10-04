@@ -98,6 +98,7 @@ import 'auth_router_notifier.dart';
 import 'flow_back.dart';
 import 'route_error_screen.dart';
 import '../../presentation/screens/catalog/outlets_screen.dart';
+import '../../presentation/widgets/catalog/customization_plan_gate.dart';
 
 /// Observes route pushes/pops on the app's root navigator so screens can react
 /// to becoming visible again after a pushed screen pops.
@@ -661,7 +662,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogAppearance,
         // Stage 16: brand-wide — on a branch it is set on the main outlet.
         builder: (_, __) => const FlowBackScope(
-          child: BrandWideGate(title: 'Appearance', child: AppearanceScreen()),
+          child: CustomizationPlanGate(
+            title: 'Appearance',
+            child: BrandWideGate(title: 'Appearance', child: AppearanceScreen()),
+          ),
         ),
       ),
       GoRoute(
@@ -674,7 +678,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogBadges,
         // Stage 16: brand-wide — on a branch it is set on the main outlet.
         builder: (_, __) => const FlowBackScope(
-          child: BrandWideGate(title: 'Badges', child: BadgeManagerScreen()),
+          child: CustomizationPlanGate(
+            title: 'Badges',
+            child: BrandWideGate(title: 'Badges', child: BadgeManagerScreen()),
+          ),
         ),
       ),
       // Stage 6: languages + translations. STATIC, before the product routes.
@@ -683,14 +690,18 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogLanguages,
         // Stage 16: brand-wide — on a branch it is set on the main outlet.
         builder: (_, __) => const FlowBackScope(
-          child:
-              BrandWideGate(title: 'Languages', child: MenuLanguagesScreen()),
+          child: CustomizationPlanGate(
+            title: 'Languages',
+            child: BrandWideGate(title: 'Languages', child: MenuLanguagesScreen()),
+          ),
         ),
       ),
       GoRoute(
         path: AppRoutes.catalogTranslations,
         name: AppRouteNames.catalogTranslations,
-        builder: (_, __) => const FlowBackScope(child: TranslationsScreen()),
+        builder: (_, __) => const FlowBackScope(
+          child: CustomizationPlanGate(title: 'Translations', child: TranslationsScreen()),
+        ),
       ),
       // Stage 7. STATIC, before the product routes.
       GoRoute(
@@ -698,26 +709,36 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogArStyle,
         // Stage 16: brand-wide — on a branch it is set on the main outlet.
         builder: (_, __) => const FlowBackScope(
-          child: BrandWideGate(title: 'AR style', child: ArStyleScreen()),
+          child: CustomizationPlanGate(
+            title: 'AR style',
+            child: BrandWideGate(title: 'AR style', child: ArStyleScreen()),
+          ),
         ),
       ),
       GoRoute(
         path: AppRoutes.catalogExtras,
         name: AppRouteNames.catalogExtras,
-        builder: (_, __) => const FlowBackScope(child: MenuExtrasScreen()),
+        builder: (_, __) => const FlowBackScope(
+          child: CustomizationPlanGate(title: 'Spotlight & buttons', child: MenuExtrasScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogQrStyle,
         name: AppRouteNames.catalogQrStyle,
         // Stage 16: brand-wide — on a branch it is set on the main outlet.
         builder: (_, __) => const FlowBackScope(
-          child: BrandWideGate(title: 'QR style', child: QrStyleScreen()),
+          child: CustomizationPlanGate(
+            title: 'QR style',
+            child: BrandWideGate(title: 'QR style', child: QrStyleScreen()),
+          ),
         ),
       ),
       GoRoute(
         path: AppRoutes.catalogAddress,
         name: AppRouteNames.catalogAddress,
-        builder: (_, __) => const FlowBackScope(child: MenuAddressScreen()),
+        builder: (_, __) => const FlowBackScope(
+          child: CustomizationPlanGate(title: 'Web address', child: MenuAddressScreen()),
+        ),
       ),
       // The catalog preview — the draft in the public page's shape (feature 5).
       // STATIC, declared before the product routes for the same reason the
@@ -790,18 +811,25 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
       GoRoute(
         path: AppRoutes.catalogOffers,
         name: AppRouteNames.catalogOffers,
-        builder: (_, __) => const FlowBackScope(child: OffersScreen()),
+        builder: (_, __) => const FlowBackScope(
+          child: CustomizationPlanGate(title: 'Offers', child: OffersScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogOfferNew,
         name: AppRouteNames.catalogOfferNew,
-        builder: (_, __) => const FlowBackScope(child: OfferEditorScreen()),
+        builder: (_, __) => const FlowBackScope(
+          child: CustomizationPlanGate(title: 'Offers', child: OfferEditorScreen()),
+        ),
       ),
       GoRoute(
         path: AppRoutes.catalogOfferDetail,
         name: AppRouteNames.catalogOfferDetail,
         builder: (_, state) => FlowBackScope(
-          child: OfferEditorScreen(offerId: state.pathParameters['offerId']),
+          child: CustomizationPlanGate(
+            title: 'Offers',
+            child: OfferEditorScreen(offerId: state.pathParameters['offerId']),
+          ),
         ),
       ),
       GoRoute(
@@ -850,7 +878,10 @@ GoRouter createAppRouter(AuthRouterNotifier authNotifier, [Ref? ref]) {
         name: AppRouteNames.catalogPlate,
         // Stage 16: brand-wide — on a branch it is set on the main outlet.
         builder: (_, __) => const FlowBackScope(
-          child: BrandWideGate(title: 'My plate', child: PlateSettingsScreen()),
+          child: CustomizationPlanGate(
+            title: 'My plate',
+            child: BrandWideGate(title: 'My plate', child: PlateSettingsScreen()),
+          ),
         ),
       ),
       GoRoute(

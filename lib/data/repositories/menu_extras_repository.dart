@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../application/catalog/catalog_notifier.dart';
+import '../../domain/catalog/customization_access.dart';
 import '../../domain/catalog/menu_entitlements.dart';
 import '../../domain/catalog/menu_extras.dart';
 import '../../domain/entities/business_profile.dart';
@@ -183,10 +185,22 @@ final catalogEntitlementsProvider = FutureProvider.autoDispose<MenuEntitlements>
   }
 });
 
+/// Whether this catalog's PLAN includes customization (Signature and up — see
+/// [planAllowsCustomization]). Follows the outlet being edited, since each
+/// outlet is billed on its own. No catalog loaded yet (or a failed read) reads
+/// as true: a gap must never hide a paying owner's screens.
+final customizationPlanAllowedProvider = Provider.autoDispose<bool>((ref) {
+  final catalog = ref.watch(catalogProvider).valueOrNull;
+  if (catalog == null) return true;
+  return planAllowsCustomization(catalog.subscription);
+});
+
 /// Stage 8.3: whether to show the customization entry points. True until the
-/// server has said otherwise (see above).
+/// server has said otherwise (see above) — and only on a plan that includes it.
 final customizationVisibleProvider = Provider.autoDispose<bool>(
-  (ref) => ref.watch(catalogEntitlementsProvider).valueOrNull?.appearanceEnabled ?? true,
+  (ref) =>
+      ref.watch(customizationPlanAllowedProvider) &&
+      (ref.watch(catalogEntitlementsProvider).valueOrNull?.appearanceEnabled ?? true),
 );
 
 /// The feedback report for one analytics range (`(from, to)`).

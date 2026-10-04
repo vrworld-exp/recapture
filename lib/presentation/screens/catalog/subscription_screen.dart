@@ -30,6 +30,7 @@ import '../../../application/catalog/payment_history_notifier.dart';
 import '../../../application/catalog/subscription_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/payments_repository.dart';
+import '../../../domain/catalog/customization_access.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/subscription_payment.dart';
@@ -740,6 +741,8 @@ class _PlanOverview extends StatelessWidget {
             _Feature('Up to ${plan.threeDDishCap} 3D/AR dishes'),
             const _Feature('Unlimited image dishes'),
             _Feature('${plan.includedStandeeCount} QR-code standees included'),
+            if (planIncludesCustomization(plan.planId))
+              const _Feature('Menu customization: themes, colours, badges, languages, offers'),
             for (final feature in plan.features)
               _Feature(_featureLabel(feature)),
           ],
@@ -1409,6 +1412,10 @@ class _PlanCard extends StatelessWidget {
           _Feature('Up to ${plan.threeDDishCap} 3D/AR dishes'),
           const _Feature('Unlimited image dishes'),
           _Feature('${plan.includedStandeeCount} QR-code standees included'),
+          // Client-side, not a server feature key: whether a plan customizes is
+          // the app's rule (planIncludesCustomization), so the card cannot drift.
+          if (planIncludesCustomization(plan.planId))
+            const _Feature('Menu customization: themes, colours, badges, languages, offers'),
           for (final feature in plan.features) _Feature(_featureLabel(feature)),
         ],
       ),

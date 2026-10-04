@@ -8,9 +8,7 @@ import { Types } from 'mongoose';
 import { Catalog, type ICatalog } from '@/models/Catalog';
 import { CatalogProduct } from '@/models/CatalogProduct';
 import { isDuplicateKeyError } from '@/services/catalogService';
-import { requestPublish, type RequestPublishResult } from '@/services/catalogPublishService';
-import { mainCatalogFilter, withOutlet } from '@/services/catalog/outletScope';
-import type { Actor } from '@/models/types/subscription.types';
+import { mainCatalogFilter } from '@/services/catalog/outletScope';
 import { overriddenFields, reconcileBranches, resetBranchProduct } from './copyDown';
 
 export const MAX_BRANCHES = 10;
@@ -152,35 +150,4 @@ export async function productOverrides(
     linked: !!row.masterProductId,
     overridden: overriddenFields(row as unknown as Parameters<typeof overriddenFields>[0]),
   };
-}
-
-export interface PublishAllOutcome {
-  outletId: string;
-  outletName: string | null;
-  outcome: RequestPublishResult['outcome'];
-}
-
-/**
- * "Publish all outlets": one ordinary publish per outlet (each keeps its own
- * single-flight guard and plan gates). Copy-down runs first so every branch
- * publishes the main outlet's latest menu.
- */
-export async function publishAllOutlets(
-  ownerUserId: string,
-  publishedBy?: Actor
-): Promise<PublishAllOutcome[] | null> {
-  const main = await mainOf(ownerUserId);
-  if (!main) return null;
-  const mainId = main._id as Types.ObjectId;
-  if (main.brandRole === 'MASTER') await reconcileBranches(mainId);
-
-  const outlets = [main, ...(await branchesOf(mainId))];
-  const results: PublishAllOutcome[] = [];
-  for (const outlet of outlets) {
-    const result = await withOutlet(outlet._id as Types.ObjectId, () =>
-      requestPublish(ownerUserId, publishedBy ? { publishedBy } : {})
-    );
-    results.push({ outletId: String(outlet._id), outletName: outlet.outletName ?? null, outcome: result.outcome });
-  }
-  return results;
 }

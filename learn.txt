@@ -183,7 +183,7 @@ next : 15 3D spin videos	⏸ not built	deferred by you
 
 Updates and fixs ------------------>>>>
 
-    a) Remove the btn 'Publish All outlets' on the outlets page of every catalog. only add branch should be there. User only able to publish the outlet from catalog page and also subcribing the plan.
+    ✅a) Remove the btn 'Publish All outlets' on the outlets page of every catalog. only add branch should be there. User only able to publish the outlet from catalog page and also subcribing the plan.
 
     ✅b) After updating themes and color of catalog it not get reflected on main mirage page, so analysis the mirage fe code and fix it so what ever user changes in colors and themes page that change should get reflected on the mirage menu page, after saving and publishing that cahnge.
 

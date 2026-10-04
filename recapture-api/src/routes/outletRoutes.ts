@@ -10,7 +10,6 @@ import { asyncHandler } from '@/utils/asyncHandler';
 import {
   addBranch,
   listOutlets,
-  publishAllOutlets,
   resetProductToMain,
 } from '@/services/brand/branchService';
 
@@ -59,16 +58,6 @@ export function outletRoutes(): Router {
         return fail(res, 409, 'DUPLICATE_OUTLET', 'You already have an outlet with that name.');
       }
       res.status(201).json({ status: 'success', outlet: result.outlet });
-    })
-  );
-
-  /** POST /catalog/outlets/publish-all — one publish per outlet. */
-  router.post(
-    '/publish-all',
-    asyncHandler(async (req, res) => {
-      const results = await publishAllOutlets(req.user!.userId);
-      if (!results) return noCatalog(res);
-      res.status(200).json({ status: 'success', results });
     })
   );
 

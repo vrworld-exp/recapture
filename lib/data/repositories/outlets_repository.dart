@@ -40,15 +40,6 @@ class OutletsRepository {
         return Outlet.fromMap(res.data?['outlet'] as Map<String, dynamic>? ?? const {});
       });
 
-  Future<List<PublishAllResult>> publishAll() => mapCatalogErrors(() async {
-        final res = await _dio.post<Map<String, dynamic>>('/catalog/outlets/publish-all');
-        final rows = res.data?['results'];
-        return [
-          for (final r in (rows is List ? rows : const []))
-            if (r is Map<String, dynamic>) PublishAllResult.fromMap(r),
-        ];
-      });
-
   /// "Reset to main outlet" for one dish on a branch.
   Future<void> resetProduct({required String outletId, required String productId}) =>
       mapCatalogErrors(() async {

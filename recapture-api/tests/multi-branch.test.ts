@@ -8,7 +8,7 @@
 //        outlet edits copy down except a branch override; archive copies down as
 //        archive; brand-wide look copied, per-outlet hours kept; reset-to-main.
 //   16c  X-Outlet-Id scopes every owner route; a foreign outlet is a 404; brand-
-//        wide fields refused on a branch; publish-all; rep activates a branch
+//        wide fields refused on a branch; rep activates a branch
 //        standee with its own delegation; the weekly report's brand line.
 import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import request from 'supertest';
@@ -397,16 +397,6 @@ describe('16c — outlet scope', () => {
       .send({ contact: { phone: '+919000000009' } });
     expect(phone.status).toBe(200);
     expect((await Catalog.findById(id))!.contact?.phone).toBe('+919000000009');
-  });
-
-  it('publish-all runs one publish per outlet', async () => {
-    const owner = await makeUser();
-    await seedMain(owner.id);
-    await addBranch(owner.id, { outletName: 'Baner' });
-    const res = await request(app).post('/catalog/outlets/publish-all').set(owner.auth);
-    expect(res.status).toBe(200);
-    expect(res.body.results).toHaveLength(2);
-    expect(res.body.results[1].outletName).toBe('Baner');
   });
 
   it('a rep activates a standee as a new branch with its own delegation', async () => {

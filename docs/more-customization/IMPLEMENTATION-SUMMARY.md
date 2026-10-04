@@ -277,7 +277,8 @@ Not built, by product decision (2026-09-30). The design doc is kept for later.
     outlet's photos.
   - Brand-wide fields are refused on a branch (`BRAND_WIDE_FIELD`).
   - A main outlet with branches cannot be deleted (`HAS_BRANCHES`).
-  - "Publish all outlets".
+  - ~~"Publish all outlets"~~ — removed 2026-10-04 (button and `POST /catalog/outlets/publish-all`):
+    each outlet is published from its own catalog screen, through its own plan check.
   - Reps can activate a standee as a new branch (`branchName`).
   - The main outlet's weekly report shows an "All outlets" line.
   - App: an outlet switcher, an Outlets screen, locked brand screens on a branch, and a "From
