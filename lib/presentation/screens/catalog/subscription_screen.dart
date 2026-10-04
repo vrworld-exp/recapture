@@ -30,7 +30,8 @@ import '../../../application/catalog/payment_history_notifier.dart';
 import '../../../application/catalog/subscription_notifier.dart';
 import '../../../data/repositories/catalog_failure.dart';
 import '../../../data/repositories/payments_repository.dart';
-import '../../../domain/catalog/customization_access.dart';
+import '../../../domain/catalog/plan_benefits.dart';
+import '../../widgets/catalog/plan_comparison_sheet.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/catalog_subscription.dart';
 import '../../../domain/entities/subscription_payment.dart';
@@ -307,7 +308,23 @@ class _SubscriptionBodyState extends ConsumerState<SubscriptionBody> {
             ),
           const SizedBox(height: AppSpacing.sm),
         ],
-        const SizedBox(height: AppSpacing.md),
+        // Every benefit of every plan, ✓ / ✗ side by side — a sheet, so the
+        // Pay button stays where the cards end.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            key: const ValueKey('subscription_compare_plans'),
+            icon: const Icon(Icons.table_chart_outlined, size: 18),
+            label: const Text('Compare all benefits'),
+            style: TextButton.styleFrom(foregroundColor: AppColors.royalGold),
+            onPressed: () => showPlanComparison(
+              context,
+              plans: subscription.plans.plans,
+              currentPlanId: subscription.status.isEntitled ? subscription.planId : null,
+            ),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.sm),
         CheckoutSection(
           subscription: subscription,
           planId: selected,
@@ -738,13 +755,8 @@ class _PlanOverview extends StatelessWidget {
               subscription.status != SubscriptionStatus.comped) ...[
             const SizedBox(height: AppSpacing.lg),
             Text("What's included", style: textTheme.titleSmall),
-            _Feature('Up to ${plan.threeDDishCap} 3D/AR dishes'),
-            const _Feature('Unlimited image dishes'),
-            _Feature('${plan.includedStandeeCount} QR-code standees included'),
-            if (planIncludesCustomization(plan.planId))
-              const _Feature('Menu customization: themes, colours, badges, languages, offers'),
-            for (final feature in plan.features)
-              _Feature(_featureLabel(feature)),
+            const SizedBox(height: AppSpacing.xs),
+            _BenefitList(plan: plan),
           ],
 
           // ── Offers ──────────────────────────────────────────────────────
@@ -1408,53 +1420,93 @@ class _PlanCard extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: AppSpacing.sm),
-          _Feature('Up to ${plan.threeDDishCap} 3D/AR dishes'),
-          const _Feature('Unlimited image dishes'),
-          _Feature('${plan.includedStandeeCount} QR-code standees included'),
-          // Client-side, not a server feature key: whether a plan customizes is
-          // the app's rule (planIncludesCustomization), so the card cannot drift.
-          if (planIncludesCustomization(plan.planId))
-            const _Feature('Menu customization: themes, colours, badges, languages, offers'),
-          for (final feature in plan.features) _Feature(_featureLabel(feature)),
+          const SizedBox(height: AppSpacing.md),
+          // The highlights, ✓ or ✗; every benefit is in "Compare all benefits".
+          _BenefitList(plan: plan),
         ],
       ),
     );
   }
 
-  static String _featureLabel(String feature) => switch (feature) {
-        'whatsapp_instagram_buttons' => 'WhatsApp & Instagram buttons',
-        'website_embed' => 'AR menu on your own website',
-        'per_dish_analytics' => 'Per-dish view analytics',
-        'priority_support' => 'Priority call support',
-        _ => feature.replaceAll('_', ' '),
-      };
+  static String _featureLabel(String feature) => planFeatureLabel(feature);
 }
 
-class _Feature extends StatelessWidget {
-  const _Feature(this.text);
+/// A plan's headline benefits as ✓ / ✗ rows, under "N of M benefits". Included
+/// rows lead with the feature's icon in gold and a green tick; missing ones are
+/// muted with a red cross. Every row is in [showPlanComparison].
+class _BenefitList extends StatelessWidget {
+  const _BenefitList({required this.plan});
 
-  final String text;
+  final PlanDefinition plan;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(top: AppSpacing.xs),
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final benefits = planBenefits(plan);
+    final included = benefits.where((b) => b.included).length;
+    final highlights = [
+      for (final id in planCardHighlights) ...benefits.where((b) => b.id == id),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$included of ${benefits.length} benefits',
+          key: ValueKey('plan_benefit_count_${plan.planId.apiValue}'),
+          style: text.labelSmall?.copyWith(color: AppColors.textMuted),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        for (final b in highlights) _BenefitRow(benefit: b, icon: benefitIcon(b.id)),
+      ],
+    );
+  }
+}
+
+class _BenefitRow extends StatelessWidget {
+  const _BenefitRow({required this.benefit, required this.icon});
+
+  final PlanBenefit benefit;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = benefit.included;
+    return Semantics(
+      label: '${benefit.label}: ${on ? 'included' : 'not included'}',
+      excludeSemantics: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
         child: Row(
           children: [
-            const Icon(Icons.check, size: 16, color: AppColors.success),
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: on ? AppColors.royalGold.withValues(alpha: 0.12) : AppColors.surface2,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                icon,
+                size: 16,
+                color: on ? AppColors.royalGold : AppColors.disabled,
+              ),
+            ),
             const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
-                text,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: AppColors.textSecondary),
+                benefit.label,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: on ? AppColors.textPrimary : AppColors.textMuted,
+                    ),
               ),
             ),
+            const SizedBox(width: AppSpacing.sm),
+            BenefitMark(key: ValueKey('benefit_${benefit.id}_${on ? 'yes' : 'no'}'), included: on),
           ],
         ),
-      );
+      ),
+    );
+  }
 }
 
 /// Pay / Renew / Upgrade — ONE button (§9) over the selected plan and
