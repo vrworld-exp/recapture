@@ -21,6 +21,7 @@ import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/platform/connectivity_watcher.dart';
 import 'package:recapture/presentation/screens/capture/capture_summary_screen.dart';
 import 'package:recapture/utils/analytics.dart';
+import 'package:recapture/application/upload/offline_capture_capability.dart';
 
 class _StubConfigNotifier extends ConfigNotifier {
   @override
@@ -69,7 +70,7 @@ void main() {
   List<({String name, Map<String, Object?> props})> named(String name) =>
       events.where((e) => e.name == name).toList();
 
-  Future<void> pump(WidgetTester tester) async {
+  Future<void> pump(WidgetTester tester, {bool native = false}) async {
     Widget stub(String l) => Scaffold(body: Text(l));
     final router = GoRouter(
       initialLocation: AppRoutes.captureSummary,
@@ -84,6 +85,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          // The pre-existing (web / online-only) Summary path: on the test VM
+          // the offline-capture capability would otherwise read native.
+          offlineCaptureCapabilityProvider.overrideWithValue(native),
           levelCaptureLedgerRegistryProvider
               .overrideWithValue(_completeRegistry()),
           captureConfigProvider.overrideWith(_StubConfigNotifier.new),
@@ -163,6 +167,22 @@ void main() {
     await tester.pump();
     expect(banner(), findsOneWidget);
     expect(named(AnalyticsEvents.captureSummaryOfflineBannerShown), hasLength(1));
+  });
+
+  testWidgets('NATIVE offline: Save replaces Upload; the banner says saving is '
+      'allowed', (tester) async {
+    await pump(tester, native: true);
+    await settle(tester, AppConnectivityStatus.offline);
+
+    expect(find.byKey(const Key('summary_save_offline')), findsOneWidget);
+    expect(find.byKey(const Key('summary_upload')), findsNothing);
+    expect(find.text('Save — upload when online'), findsOneWidget);
+    expect(find.textContaining('will upload when you'), findsOneWidget);
+
+    // Back online → the ordinary Upload returns.
+    await settle(tester, AppConnectivityStatus.online);
+    expect(find.byKey(const Key('summary_upload')), findsOneWidget);
+    expect(find.byKey(const Key('summary_save_offline')), findsNothing);
   });
 
   testWidgets('Upload while offline → blocked (snack + event, no nav)',

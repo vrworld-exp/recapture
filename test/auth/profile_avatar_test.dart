@@ -43,6 +43,10 @@ import 'package:recapture/domain/entities/user_profile.dart';
 import 'package:recapture/domain/entities/user_role.dart';
 import 'package:recapture/presentation/screens/profile/profile_screen.dart';
 import 'package:recapture/utils/analytics.dart';
+import 'package:recapture/application/upload/upload_prefs_provider.dart';
+import 'package:recapture/data/local/pending_capture_box.dart';
+import 'package:recapture/data/local/storage_providers.dart';
+import 'package:recapture/data/local/upload_prefs_box.dart';
 
 /// A presigned-looking URL. Nothing ever fetches it for real — [_FakeHttpClient]
 /// answers every request — but it is shaped like the thing the server mints so a
@@ -254,6 +258,12 @@ void main() {
       avatarImagePickerProvider.overrideWithValue(picker),
       userRoleStoreProvider.overrideWithValue(roleStore),
       authProvider.overrideWith(_CountingAuthNotifier.new),
+      // Offline capture: the Profile screen shows the "Upload on mobile data"
+      // toggle and asks about waiting captures on sign-out — both read Hive,
+      // which this harness does not initialise.
+      uploadPrefsStoreProvider.overrideWithValue(_MemUploadPrefs()),
+      pendingCaptureStoreProvider
+          .overrideWithValue(InMemoryPendingCaptureStore()),
     ]);
     addTearDown(container.dispose);
 
@@ -745,3 +755,14 @@ final List<int> _kTransparentPng = <int>[
   0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
   0x42, 0x60, 0x82,
 ];
+
+/// In-memory "Upload on mobile data" store — this harness has no Hive.
+class _MemUploadPrefs implements UploadPrefsStore {
+  bool? value;
+
+  @override
+  Future<bool?> getUploadOnMobileData() async => value;
+
+  @override
+  Future<void> setUploadOnMobileData(bool enabled) async => value = enabled;
+}

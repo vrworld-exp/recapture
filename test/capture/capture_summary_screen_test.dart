@@ -22,6 +22,7 @@ import 'package:recapture/domain/capture/capture_mode.dart';
 import 'package:recapture/domain/entities/capture_config.dart';
 import 'package:recapture/presentation/screens/capture/capture_summary_screen.dart';
 import 'package:recapture/utils/analytics.dart';
+import 'package:recapture/application/upload/offline_capture_capability.dart';
 
 /// The historical per-level counts (A=10, B=8, C=12) pinned explicitly via a
 /// variant-segments override, so the per-level scenarios below keep their
@@ -192,6 +193,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          // The pre-existing (web / online-only) Summary path: on the test VM
+          // the offline-capture capability would otherwise read native.
+          offlineCaptureCapabilityProvider.overrideWithValue(false),
           levelCaptureLedgerRegistryProvider.overrideWithValue(reg),
           captureConfigProvider.overrideWith(config),
           // Meshy routes the whole screen through CaptureConfig.meshy (single

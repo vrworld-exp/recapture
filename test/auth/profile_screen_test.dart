@@ -28,6 +28,10 @@ import 'package:recapture/domain/entities/auth_state.dart';
 import 'package:recapture/domain/entities/user_profile.dart';
 import 'package:recapture/domain/entities/user_role.dart';
 import 'package:recapture/presentation/screens/profile/profile_screen.dart';
+import 'package:recapture/application/upload/upload_prefs_provider.dart';
+import 'package:recapture/data/local/pending_capture_box.dart';
+import 'package:recapture/data/local/storage_providers.dart';
+import 'package:recapture/data/local/upload_prefs_box.dart';
 
 /// Fake repository. `profile` is served by fetchProfile unless [failProfile];
 /// updateDisplayName echoes the new name back (or throws when [failUpdate]).
@@ -148,6 +152,12 @@ void main() {
       accountRepositoryProvider.overrideWithValue(account),
       userRoleStoreProvider.overrideWithValue(roleStore),
       authProvider.overrideWith(_CountingAuthNotifier.new),
+      // Offline capture: the Profile screen shows the "Upload on mobile data"
+      // toggle and asks about waiting captures on sign-out — both read Hive,
+      // which this harness does not initialise.
+      uploadPrefsStoreProvider.overrideWithValue(_MemUploadPrefs()),
+      pendingCaptureStoreProvider
+          .overrideWithValue(InMemoryPendingCaptureStore()),
     ]);
     addTearDown(container.dispose);
 
@@ -442,4 +452,15 @@ void main() {
     expect(find.text('Ashish Kuldeep'), findsOneWidget);
     expect(find.text('New Name'), findsNothing);
   });
+}
+
+/// In-memory "Upload on mobile data" store — this harness has no Hive.
+class _MemUploadPrefs implements UploadPrefsStore {
+  bool? value;
+
+  @override
+  Future<bool?> getUploadOnMobileData() async => value;
+
+  @override
+  Future<void> setUploadOnMobileData(bool enabled) async => value = enabled;
 }

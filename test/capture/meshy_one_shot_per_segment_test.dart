@@ -66,6 +66,7 @@ import 'package:recapture/presentation/screens/capture/capture_screen.dart';
 import 'package:recapture/presentation/screens/capture/capture_summary_screen.dart';
 import 'package:recapture/utils/analytics.dart';
 import 'package:recapture/utils/constants.dart';
+import 'package:recapture/application/upload/offline_capture_capability.dart';
 
 // ── stand-ins for the Hive-backed stores (no Hive host in this test) ──────────
 
@@ -478,6 +479,9 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            // The pre-existing (web / online-only) Summary path: on the test VM
+            // the offline-capture capability would otherwise read native.
+            offlineCaptureCapabilityProvider.overrideWithValue(false),
             levelCaptureLedgerRegistryProvider.overrideWithValue(registry),
             captureConfigProvider.overrideWith(highCountFloor),
             captureModeProvider.overrideWith(() => _ModeController(mode)),
@@ -571,6 +575,10 @@ void main() {
         registry.ledgerFor('mid').recordAccepted(_accepted(i, '/mid/$i.jpg'));
       }
       final container = ProviderContainer(overrides: [
+        offlineCaptureCapabilityProvider.overrideWithValue(false),
+  // The pre-existing (web / online-only) Summary path: on the test VM
+  // the offline-capture capability would otherwise read native.
+  offlineCaptureCapabilityProvider.overrideWithValue(false),
         levelCaptureLedgerRegistryProvider.overrideWithValue(registry),
         // A remote retune of the global floor to 100% — full mode's knob.
         captureConfigProvider.overrideWith(_GlobalFloor100Config.new),
@@ -598,6 +606,10 @@ void main() {
         registry.ledgerFor('mid').recordAccepted(_accepted(i, '/mid/$i.jpg'));
       }
       final container = ProviderContainer(overrides: [
+        offlineCaptureCapabilityProvider.overrideWithValue(false),
+  // The pre-existing (web / online-only) Summary path: on the test VM
+  // the offline-capture capability would otherwise read native.
+  offlineCaptureCapabilityProvider.overrideWithValue(false),
         levelCaptureLedgerRegistryProvider.overrideWithValue(registry),
         captureConfigProvider.overrideWith(_GlobalFloor100Config.new),
         captureModeProvider
