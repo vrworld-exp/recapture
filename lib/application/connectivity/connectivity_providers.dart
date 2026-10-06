@@ -30,3 +30,21 @@ final isOnlineProvider = Provider<bool>((ref) {
     orElse: () => true,
   );
 });
+
+/// Live network TYPE (unmetered / metered / none) — drives the auto-upload
+/// policy for captures waiting on the phone. Same single watcher, seeded the
+/// same way. Before it resolves it reads as [AppNetworkType.metered]: the
+/// conservative guess, so a big capture never starts on mobile data by accident.
+final networkTypeProvider = StreamProvider<AppNetworkType>((ref) async* {
+  final watcher = ref.watch(connectivityWatcherProvider);
+  yield await watcher.currentNetworkType();
+  yield* watcher.networkTypeStream;
+});
+
+/// [networkTypeProvider] resolved to a value (metered until known).
+final currentNetworkTypeProvider = Provider<AppNetworkType>((ref) {
+  return ref.watch(networkTypeProvider).maybeWhen(
+        data: (t) => t,
+        orElse: () => AppNetworkType.metered,
+      );
+});

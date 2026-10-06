@@ -106,6 +106,37 @@ extension ProductSyncStatusColor on ProductSyncStatus {
       };
 }
 
+/// Status badge for a capture saved on the phone and not uploaded yet
+/// (offline capture). Shown on a project card INSTEAD of [AppStatusPill] until
+/// the upload is confirmed. Same pill by construction ([_Pill]); the label,
+/// colour and icon come from the caller (pending_capture_card_parts.dart), which
+/// maps them from theme tokens.
+class PendingCapturePill extends StatelessWidget {
+  const PendingCapturePill({
+    super.key,
+    required this.label,
+    required this.color,
+    required this.icon,
+    this.pulsing = false,
+  });
+
+  final String label;
+  final Color color;
+  final IconData icon;
+
+  /// A live upload: pulsing dot instead of the icon, like an in-progress status.
+  final bool pulsing;
+
+  @override
+  Widget build(BuildContext context) => _Pill(
+        label: label,
+        color: color,
+        affordance: pulsing
+            ? _PulsingDot(color: color)
+            : Icon(icon, size: 11, color: color),
+      );
+}
+
 /// The pill itself: a tinted capsule, an optional leading affordance, a label.
 class _Pill extends StatelessWidget {
   const _Pill({required this.label, required this.color, this.affordance});

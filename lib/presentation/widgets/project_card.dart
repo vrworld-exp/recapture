@@ -23,6 +23,8 @@ class ProjectCard extends StatelessWidget {
     this.onModels,
     this.onGenerate,
     this.isActionInFlight = false,
+    this.pendingPill,
+    this.pendingActions,
   });
 
   final Project project;
@@ -66,6 +68,14 @@ class ProjectCard extends StatelessWidget {
   /// When true the action button shows a loading state and is disabled
   /// (per-project in-flight guard owned by the screen).
   final bool isActionInFlight;
+
+  /// OFFLINE CAPTURE: a capture of this project is saved on the phone and not
+  /// uploaded yet. When set, [pendingPill] replaces the server status pill and
+  /// [pendingActions] replaces the whole action area until the upload is
+  /// confirmed (the screen builds both from pendingCapturesProvider). Null for
+  /// every ordinary card — unchanged.
+  final Widget? pendingPill;
+  final Widget? pendingActions;
 
   /// Whether to render the top-right status pill.
   ///
@@ -114,7 +124,12 @@ class ProjectCard extends StatelessWidget {
                   ],
                 ),
               ),
-              if (_showStatusPill) ...[
+              if (pendingPill != null) ...[
+                const SizedBox(width: AppSpacing.sm),
+                // Flexible: a long pending label ellipsizes at 360 dp rather
+                // than pushing the ⋮ button off the card.
+                Flexible(child: pendingPill!),
+              ] else if (_showStatusPill) ...[
                 const SizedBox(width: AppSpacing.sm),
                 AppStatusPill(status: project.status),
               ],
@@ -127,7 +142,13 @@ class ProjectCard extends StatelessWidget {
               ),
             ],
           ),
-          ..._buildActionArea(context),
+          if (pendingActions != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            const Divider(color: AppColors.disabled, thickness: 0.5, height: 1),
+            const SizedBox(height: AppSpacing.md),
+            pendingActions!,
+          ] else
+            ..._buildActionArea(context),
         ],
       ),
     );

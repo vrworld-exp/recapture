@@ -5,6 +5,7 @@ import 'active_session_box.dart';
 import 'config_cache_box.dart';
 import 'level_intro_box.dart';
 import 'offline_queue_box.dart';
+import 'pending_capture_box.dart';
 import 'projects_cache_box.dart';
 
 /// Gateway to the resumable capture/project session box.
@@ -26,3 +27,9 @@ final offlineQueueBoxProvider =
 /// Gateway to the per-intro "seen" / "don't show again" flags store.
 final levelIntroStoreProvider =
     Provider<LevelIntroStore>((ref) => LevelIntroBox());
+
+/// Gateway to the finished-captures-waiting-for-upload store. Read it only
+/// through `pendingCapturesProvider` — that is the owner-filtered source of
+/// truth the UI and the upload coordinator share.
+final pendingCaptureStoreProvider =
+    Provider<PendingCaptureStore>((ref) => HivePendingCaptureStore());

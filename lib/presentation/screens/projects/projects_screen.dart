@@ -33,6 +33,7 @@ import 'capture_mode_sheet.dart';
 import 'model_building_screen.dart';
 import 'model_viewer_screen.dart';
 import 'owner_model_history_screen.dart';
+import 'pending_captures_ui.dart';
 
 /// Which list the (staff-only) segmented control shows. Non-staff users never
 /// see the control and always get [mine].
@@ -416,6 +417,17 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     // never the default choice.
     final choice = await showCaptureModeSheet(context);
     if (choice == null || !mounted) return;
+    // Offline capture limits (C2): offline, at most N captures may wait, and
+    // the phone needs room for this one BEFORE the camera ever opens. Online
+    // (or on web) this never blocks.
+    if (choice is CaptureChoice) {
+      final ok = await guardOfflineCaptureStart(
+        context,
+        ref,
+        modeId: choice.mode.id,
+      );
+      if (!ok || !mounted) return;
+    }
     // The choice rides through as `extra`; the create screen branches on it and
     // renders either the capture form or the upload form.
     context.pushNamed(AppRouteNames.createProject, extra: choice);
@@ -505,17 +517,35 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
   Future<void> _onMore(Project p) async {
     if (_sheetOpen) return;
     _sheetOpen = true;
+    // A capture of this project saved on the phone and never uploaded: the
+    // delete confirmation says so, and the delete removes those photos too.
+    final waiting = [
+      for (final c in readPendingCaptures(ref))
+        if (c.projectId == p.id) c,
+    ];
     try {
       await showProjectOptionsSheet(
         context,
         project: p,
+        deleteWarning: waiting.isEmpty ? null : kPendingDeleteWarning,
         onRename: (id, newName) async {
           await _notifier.rename(id, newName);
           // The sheet wants the updated entity for its result; the notifier has
           // already committed this optimistic value to shared state.
           return p.copyWith(name: newName, updatedAt: DateTime.now());
         },
-        onDelete: (id) => _notifier.delete(id),
+        onDelete: (id) async {
+          for (final c in waiting) {
+            await deletePendingCapture(ref, c);
+          }
+          // An offline-only project has nothing on the server to delete —
+          // deletePendingCapture already dropped its row and queued create.
+          if (id.startsWith(kPendingProjectIdPrefix)) {
+            await _notifier.discardPendingProject(id);
+            return;
+          }
+          await _notifier.delete(id);
+        },
       );
     } finally {
       _sheetOpen = false;
@@ -553,6 +583,9 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
               // every state — in flight, loaded, or failed — without moving the
               // list itself.
               _GetProjectsStatusStrip(state: projectsAsync),
+              // Offline capture: "{n} captures waiting to upload" + Upload
+              // all. Renders nothing when none wait (and always on web).
+              const PendingCapturesStrip(),
               Expanded(child: _buildBody(projectsAsync)),
             ],
           );
@@ -620,7 +653,11 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       error: (_, __) => _ErrorView(
         onRetry: () => ref.invalidate(projectsProvider),
       ),
-      data: (projects) {
+      data: (serverProjects) {
+        // Offline capture: a waiting capture whose project the list does not
+        // carry still gets a card (it must never be invisible).
+        final pending = watchPendingCaptures(ref);
+        final projects = mergeProjectsWithPending(serverProjects, pending);
         // Staff get a Preview action on their OWN exportable projects too; the
         // callback is null for everyone else, so the shared card is unchanged.
         final isStaff = ref.watch(isStaffProvider);
@@ -655,8 +692,17 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
             separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
             itemBuilder: (context, index) {
               final project = projects[index];
+              final waiting = pendingFor(pending, project.id);
+              final parts = waiting == null
+                  ? null
+                  : pendingCardPartsFor(context, ref, waiting);
               return ProjectCard(
+                // Keyed by project id so the temp → server id swap after an
+                // offline create re-uses the slot instead of flickering.
+                key: ValueKey('project_${waiting?.localId ?? project.id}'),
                 project: project,
+                pendingPill: parts?.pill,
+                pendingActions: parts?.actions,
                 isActionInFlight: _actionInFlight.contains(project.id),
                 onResume: _onResume,
                 onView: _onView,

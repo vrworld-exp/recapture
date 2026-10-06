@@ -1,4 +1,6 @@
 // lib/application/offline/offline_queue_notifier.dart
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -47,9 +49,11 @@ class OfflineQueueState {
 class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
   OfflineQueueBox get _box => ref.read(offlineQueueBoxProvider);
 
+  Future<void> _restored = Future<void>.value();
+
   @override
   OfflineQueueState build() {
-    _restore(); // async, non-blocking
+    _restored = _restore(); // async, non-blocking
 
     // Auto-drain when connectivity flips to online. The processing guard makes
     // flapping connectivity safe (overlapping drains are no-ops).
@@ -69,6 +73,45 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
+  /// Completes once the persisted queue has been loaded. Callers that ask
+  /// "is there already a create for this project?" await it first, so a cold
+  /// start never answers "no" before the disk did.
+  Future<void> whenRestored() => _restored;
+
+  /// Whether a `createProject` action for offline project [tempId] is waiting.
+  bool hasCreateProjectFor(String tempId) => state.pending.any((a) =>
+      a.type == OfflineActionType.createProject &&
+      a.payload['tempId'] == tempId);
+
+  /// Makes sure offline project [tempId] has a `createProject` action queued,
+  /// re-creating it from a capture that is waiting for upload when it is gone.
+  ///
+  /// WHY IT CAN BE GONE: the queue is cleared on logout (no cross-user replay —
+  /// unchanged), and an action is dropped after [kMaxOfflineAttempts] failed
+  /// drains. A capture waiting on the phone for that project must still get
+  /// its project, so the upload coordinator re-creates the action from the
+  /// capture record when its OWNER is signed in again. The cross-user
+  /// guarantee holds: only the signed-in owner's captures ever reach here.
+  ///
+  /// Duplicate-safe: the action id — and so the POST /projects Idempotency-Key —
+  /// is derived from [tempId], so a re-created action replays the original
+  /// project on the server instead of creating a second one.
+  Future<void> ensureCreateProject({
+    required String tempId,
+    required String name,
+    required String size,
+    String mode = 'guided',
+  }) async {
+    await whenRestored();
+    if (hasCreateProjectFor(tempId)) return;
+    await enqueue(OfflineAction(
+      id: createProjectActionIdFor(tempId),
+      type: OfflineActionType.createProject,
+      payload: {'tempId': tempId, 'name': name, 'size': size, 'mode': mode},
+      createdAt: DateTime.now().toUtc(),
+    ));
+  }
+
   /// Appends [action] to the queue and persists. Does not drain — the drain is
   /// driven by connectivity returning (or a manual [processQueue]).
   Future<void> enqueue(OfflineAction action) async {
@@ -84,7 +127,30 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
   /// while a drain is in flight are preserved and picked up by the next drain.
   Future<void> processQueue() async {
     if (state.processing || state.pending.isEmpty) return;
+    final done = Completer<void>();
+    _drainDone = done;
+    try {
+      await _processQueue();
+    } finally {
+      _drainDone = null;
+      done.complete();
+    }
+  }
 
+  Completer<void>? _drainDone;
+
+  /// Runs a drain and returns once the queue is idle again — unlike
+  /// [processQueue], it WAITS for a drain already in flight (and then drains
+  /// once more, picking up anything enqueued meanwhile). Used by the upload
+  /// coordinator, which must know an offline project's create has been
+  /// attempted before it uploads into that project.
+  Future<void> flush() async {
+    final inFlight = _drainDone;
+    if (inFlight != null) await inFlight.future;
+    await processQueue();
+  }
+
+  Future<void> _processQueue() async {
     final batch = state.pending;
     state = OfflineQueueState(pending: batch, processing: true);
     _log(event: 'drain_started', pendingCount: batch.length);
@@ -114,6 +180,21 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
     await _persist(remaining);
     state = OfflineQueueState(pending: remaining, processing: false);
     _log(event: 'drain_finished', pendingCount: remaining.length);
+  }
+
+  /// Drops the queued `createProject` for offline project [tempId] (the user
+  /// deleted it before it ever reached the server). No-op when absent.
+  Future<void> removeCreateProjectFor(String tempId) async {
+    await whenRestored();
+    final next = [
+      for (final a in state.pending)
+        if (!(a.type == OfflineActionType.createProject &&
+            a.payload['tempId'] == tempId))
+          a,
+    ];
+    if (next.length == state.pending.length) return;
+    state = OfflineQueueState(pending: next, processing: state.processing);
+    await _persist(next);
   }
 
   /// Empties the queue (in memory and on disk). Used on logout.
@@ -163,6 +244,10 @@ class OfflineQueueNotifier extends Notifier<OfflineQueueState> {
             name: name,
             size: objectSizeFromApi(action.payload['size'] as String? ?? ''),
             mode: captureModeFromApi(action.payload['mode'] as String? ?? ''),
+            // The action id is derived from the temp id
+            // ([createProjectActionIdFor]) — a retry after a lost response, or
+            // a create re-made after a logout, replays the same project.
+            idempotencyKey: action.id,
           );
       ref.read(projectsProvider.notifier).reconcilePendingCreate(tempId, created);
       return true;
@@ -212,3 +297,8 @@ final offlineQueueProvider =
     NotifierProvider<OfflineQueueNotifier, OfflineQueueState>(
   OfflineQueueNotifier.new,
 );
+
+/// The deterministic action id (and POST /projects Idempotency-Key) for the
+/// offline create of [tempId]. Stable across logout/re-creation, so a retried or
+/// re-created create can only ever replay the one server project.
+String createProjectActionIdFor(String tempId) => 'project-$tempId';

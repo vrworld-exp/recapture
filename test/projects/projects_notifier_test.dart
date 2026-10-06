@@ -60,6 +60,7 @@ class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRe
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async {
     createCalls++;
     if (failCreate) throw Exception('create failed');

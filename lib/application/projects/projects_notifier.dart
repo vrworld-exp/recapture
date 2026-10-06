@@ -7,6 +7,7 @@ import '../../data/local/projects_cache_box.dart';
 import '../../data/local/storage_providers.dart';
 import '../../data/repositories/projects_repository.dart';
 import '../../domain/entities/create_project_options.dart';
+import '../../domain/entities/active_session.dart';
 import '../../domain/entities/offline_action.dart';
 import '../../domain/entities/project.dart';
 import '../../domain/entities/project_status.dart';
@@ -14,7 +15,9 @@ import '../auth/auth_notifier.dart';
 import '../../domain/entities/auth_state.dart';
 import '../capture/progression/level_progression_provider.dart';
 import '../connectivity/connectivity_providers.dart';
+import '../capture/session/capture_session_store.dart';
 import '../offline/offline_queue_notifier.dart';
+import '../upload/pending_captures_notifier.dart';
 import 'project_capture_cleanup.dart';
 
 /// Owns the user's project collection and is the single source of truth the
@@ -116,7 +119,10 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
 
     await ref.read(offlineQueueProvider.notifier).enqueue(
           OfflineAction(
-            id: OfflineAction.newId(),
+            // Derived from the temp id, not random: it doubles as the POST
+            // /projects Idempotency-Key, and a create re-made after a logout
+            // (offline capture) must replay the same server project.
+            id: createProjectActionIdFor(pending.id),
             type: OfflineActionType.createProject,
             payload: {
               'tempId': pending.id,
@@ -143,16 +149,46 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     } else if (!current.any((p) => p.id == serverProject.id)) {
       state = AsyncData<List<Project>>([serverProject, ...current]);
     }
+    // Captures waiting for upload adopt the server id NOW (in memory first),
+    // so the upload coordinator — which may be awaiting this very flush — never
+    // sees the temp id again and never creates a second project.
+    unawaited(ref
+        .read(pendingCapturesProvider.notifier)
+        .reKeyProject(tempId, serverProject.id)
+        .catchError((_) {}));
     // Carry the project-scoped capture state (capture mode, flow variant,
-    // progression) from the temp id onto the real one. Without this an
-    // offline-created Meshy project resumes as a FULL capture — the mode was
-    // stored under an id that no longer names anything.
-    unawaited(
-      ref
+    // progression, and the durable temp → server mapping) from the temp id
+    // onto the real one. Without this an offline-created Meshy project resumes
+    // as a FULL capture — the mode was stored under an id that no longer names
+    // anything.
+    unawaited(_migrateProjectState(tempId, serverProject.id));
+  }
+
+  /// Everything stored under an offline project's temp id moves to its server
+  /// id: progression/mode/variant/size (+ the temp → server mapping), the
+  /// per-level capture snapshots (`'$projectId::$levelId'`), and the resumable
+  /// draft slot when it points at the temp id. Each step is best-effort — a
+  /// failed step loses a resume point, never a capture.
+  Future<void> _migrateProjectState(String tempId, String serverId) async {
+    try {
+      await ref
           .read(levelProgressionStoreProvider)
-          .migrateProject(tempId, serverProject.id)
-          .catchError((_) {}),
-    );
+          .migrateProject(tempId, serverId);
+    } catch (_) {}
+    try {
+      await ref.read(captureSessionStoreProvider).migrateProject(tempId, serverId);
+    } catch (_) {}
+    try {
+      final box = ref.read(activeSessionBoxProvider);
+      final slot = await box.read();
+      if (slot != null && slot.projectId == tempId) {
+        await box.save(ActiveSession(
+          projectId: serverId,
+          step: slot.step,
+          updatedAt: DateTime.now(),
+        ));
+      }
+    } catch (_) {}
   }
 
   /// Optimistically renames the project, then confirms with the repo. Rolls back
@@ -213,6 +249,17 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     // Server delete confirmed → reclaim the project's local capture data
     // (purge-on-delete, Option A). Best-effort; never rolls back the delete.
     await _captureCleanup.purgeProjectCaptureData(id);
+  }
+
+  /// Removes an offline-created project that never reached the server: its
+  /// optimistic row and its queued create. No network call — there is nothing
+  /// on the server to delete. Only `pending_…` ids qualify.
+  Future<void> discardPendingProject(String tempId) async {
+    if (!tempId.startsWith(kPendingProjectIdPrefix)) return;
+    state = AsyncData<List<Project>>(
+      [for (final p in _current) if (p.id != tempId) p],
+    );
+    await ref.read(offlineQueueProvider.notifier).removeCreateProjectFor(tempId);
   }
 
   /// Re-queues a failed project. Optimistically flips its status to `processing`

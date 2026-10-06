@@ -620,6 +620,42 @@ abstract final class AnalyticsEvents {
   ///   attempt (queue-level run count, 1-based), pending_count, device_type }.
   static const String uploadOfflineAutoResumed = 'upload_offline_auto_resumed';
 
+  // ── Offline capture (captures saved on the phone, uploaded later) ──────────
+  // Emitted by the pending-upload coordinator and the screens around it
+  // (lib/application/upload/pending_upload_coordinator.dart). NO PII: no project
+  // name, user id or file path — enums, counts, rounded sizes/ages only. A
+  // failure reason travels as `failure_reason`, never `error_code`: the emit
+  // layer strips any prop whose name contains "code" (AGENTS.md §Analytics).
+
+  /// "Save — upload when online" on an offline Summary. Props: { capture_mode,
+  ///   frame_count, size_mb, pending_count }.
+  static const String offlineCaptureSaved = 'offline_capture_saved';
+
+  /// The coordinator started uploading a pending capture. Props: {
+  ///   capture_mode, trigger (auto|manual|upload_all), network (wifi|cellular),
+  ///   age_hours }.
+  static const String pendingUploadStarted = 'pending_upload_started';
+
+  /// Finalize returned QUEUED for a pending capture. Props: { capture_mode,
+  ///   attempts, age_hours, duration_s }.
+  static const String pendingUploadCompleted = 'pending_upload_completed';
+
+  /// A pending capture hit a NON-network terminal failure. Props: {
+  ///   capture_mode, failure_reason, attempts }.
+  static const String pendingUploadFailed = 'pending_upload_failed';
+
+  /// The user deleted a never-uploaded capture. Props: { capture_mode,
+  ///   age_hours }.
+  static const String pendingCaptureDeleted = 'pending_capture_deleted';
+
+  /// The logout dialog for pending captures was shown. Props: { pending_count,
+  ///   choice (upload_first|logout_anyway|dismiss) }.
+  static const String pendingLogoutPrompt = 'pending_logout_prompt';
+
+  /// The user accepted the "Use mobile data?" dialog. Props: { size_mb }.
+  static const String mobileDataUploadConfirmed =
+      'mobile_data_upload_confirmed';
+
   // ── Uploading screen (Screen 9) — view-level upload progress ────────────────
   // VIEW-level events from the Uploading screen observing the upload pipeline's
   // progress stream — distinct from any future service-layer transfer events.

@@ -42,6 +42,7 @@ class _FakeRepo with FakeProjectModelDefaults implements ProjectsRepository {
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async =>
       throw UnimplementedError('not used here');
 

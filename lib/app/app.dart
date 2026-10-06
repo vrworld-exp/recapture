@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../application/catalog/subscription_sync.dart';
 import '../application/config/config_notifier.dart';
 import '../application/offline/offline_queue_notifier.dart';
+import '../application/upload/pending_upload_coordinator.dart';
 import '../application/warmup/backend_warmup.dart';
 import 'routes/app_router.dart';
 import 'theme/app_colors.dart';
@@ -32,6 +33,11 @@ class ReCapture extends ConsumerWidget {
     // logout (to clear). Read, not watch — the shell must not rebuild on queue
     // changes; consumers watch offlineQueueProvider directly.
     ref.read(offlineQueueProvider);
+
+    // Eager-init the pending-upload coordinator (offline capture): on launch it
+    // restores captures saved on the phone — including one killed mid-upload —
+    // and uploads them when the network allows. A no-op on web.
+    ref.read(pendingUploadCoordinatorProvider);
 
     // Eager-init the backend warm-up: fire-and-forget GET /health now and on
     // every foreground resume, so the Render instance is awake before the

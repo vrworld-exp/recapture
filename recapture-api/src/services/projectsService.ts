@@ -127,9 +127,77 @@ const MODE_TO_MODEL: Record<NonNullable<CreateProjectInput['mode']>, CaptureMode
  * insert, so the new project sorts to the top of {@link listProjects}. Returns
  * the SAME DTO shape as the list endpoint.
  */
+/** Outcome of an idempotent create — see {@link createProjectIdempotent}. */
+export type CreateProjectResult =
+  | { outcome: 'CREATED'; project: ProjectListItem }
+  | { outcome: 'REPLAYED'; project: ProjectListItem }
+  | { outcome: 'IDEMPOTENCY_CONFLICT' };
+
+/**
+ * POST /projects with an optional `Idempotency-Key` — the POST /jobs mechanism
+ * applied to projects (offline capture: the client's outbox flushes an
+ * offline-created project, and a retry after a lost response must replay the
+ * first project instead of creating a second).
+ *
+ *   • no key            → a plain create (unchanged behaviour);
+ *   • same key + same body (same user) → REPLAYED: the ORIGINAL project, 200;
+ *   • same key + different body        → IDEMPOTENCY_CONFLICT, 409;
+ *   • same key from a DIFFERENT user   → a new project (keys are per user).
+ *
+ * A replay returns the original even if it has since been soft-deleted: the
+ * request is the same, so the answer is the same. (The client then finds the
+ * project gone at upload time and offers "Upload as new project", which uses
+ * a fresh key.)
+ */
+export async function createProjectIdempotent(
+  userId: string,
+  input: CreateProjectInput,
+  idempotencyKey?: string
+): Promise<CreateProjectResult> {
+  if (!idempotencyKey) {
+    return { outcome: 'CREATED', project: await createProject(userId, input) };
+  }
+  const ownerId = new Types.ObjectId(userId);
+  const existing = await Project.findOne({ userId: ownerId, idempotencyKey }).exec();
+  if (existing) return replayOrConflict(existing, input);
+  try {
+    return {
+      outcome: 'CREATED',
+      project: await createProject(userId, input, idempotencyKey),
+    };
+  } catch (err) {
+    if (isDuplicateKey(err)) {
+      const winner = await Project.findOne({ userId: ownerId, idempotencyKey }).exec();
+      if (winner) return replayOrConflict(winner, input);
+    }
+    throw err;
+  }
+}
+
+function replayOrConflict(existing: IProject, input: CreateProjectInput): CreateProjectResult {
+  const samePayload =
+    existing.name === input.name.trim() &&
+    existing.source === (input.source ?? 'capture') &&
+    existing.objectSize === (input.size ? SIZE_TO_MODEL[input.size] : undefined) &&
+    existing.mode === (input.mode ? MODE_TO_MODEL[input.mode] : undefined) &&
+    (existing.category ?? undefined) === (input.category ?? undefined);
+  if (!samePayload) return { outcome: 'IDEMPOTENCY_CONFLICT' };
+  return { outcome: 'REPLAYED', project: toListItem(existing) };
+}
+
+function isDuplicateKey(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === 11000
+  );
+}
+
 export async function createProject(
   userId: string,
-  input: CreateProjectInput
+  input: CreateProjectInput,
+  idempotencyKey?: string
 ): Promise<ProjectListItem> {
   // `size`/`mode` are conditionally required by createProjectSchema: present on
   // a capture project, ABSENT on an upload one. They are spread in only when
@@ -142,6 +210,7 @@ export async function createProject(
     ...(input.size ? { objectSize: SIZE_TO_MODEL[input.size] } : {}),
     ...(input.mode ? { mode: MODE_TO_MODEL[input.mode] } : {}),
     ...(input.category ? { category: input.category } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     // status defaults to 'DRAFT'; stats defaults via the schema.
   });
 

@@ -205,6 +205,14 @@ class AuthNotifier extends Notifier<AuthState> {
   /// previous user's deferred actions are never replayed, even if the queue
   /// notifier was never instantiated this session. Best-effort — a failure to
   /// clear one store never blocks the others or the logout itself.
+  ///
+  /// DELIBERATELY NOT CLEARED: `pending_captures` (offline capture). Captures
+  /// waiting for upload stay on the phone for their owner — every read filters
+  /// by the signed-in user, so another account never sees them — and upload
+  /// after the owner signs in again. Their offline-project creates, wiped here
+  /// with the outbox, are re-created from those records on the owner's next
+  /// login (OfflineQueueNotifier.ensureCreateProject), so the cross-user
+  /// guarantee above is untouched.
   Future<void> _safeClear() async {
     try {
       await ref.read(authStorageProvider).clear();

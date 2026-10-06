@@ -39,6 +39,9 @@ import '../../../application/catalog/catalog_notifier.dart';
 import '../../../data/datasources/avatar_image_picker.dart';
 import '../../../dev/dev_log/dev_upload_log.dart';
 import '../../../application/notifications/notifications_notifier.dart';
+import '../../../application/upload/offline_capture_capability.dart';
+import '../../../application/upload/pending_captures_notifier.dart';
+import '../../../application/upload/upload_prefs_provider.dart';
 import '../../../domain/catalog/subscription_copy.dart';
 import '../../../domain/entities/avatar_upload_failure.dart';
 import '../../../domain/entities/catalog_subscription.dart';
@@ -48,6 +51,7 @@ import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
 import '../../widgets/delete_confirmation_modal.dart';
+import '../projects/pending_captures_ui.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -141,6 +145,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   },
                 ),
               ),
+              // ── Upload on mobile data (offline capture) ────────────────────
+              // Device-local, so it lives outside the profile fetch above.
+              // Native only — web has no captures waiting on the device.
+              if (ref.watch(offlineCaptureCapabilityProvider))
+                const _UploadOnMobileDataTile(),
               // ── Sign out ────────────────────────────────────────────────────
               // ALWAYS enabled, in every state. A user whose profile will not
               // load is exactly the user who most needs to sign out; gating this
@@ -183,15 +192,23 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   Future<void> _confirmSignOut() async {
     if (_signingOut) return;
 
-    // Platform-adaptive destructive confirm (Material dialog / Cupertino sheet),
-    // branching on Theme.of(context).platform so tests can force either side.
-    // ANY dismissal resolves false.
-    final confirmed = await showDeleteConfirmation(
-      context,
-      count: 1, // not photo-driven; the signOut copy ignores it
-      kind: ConfirmKind.signOut,
-    );
-    if (!confirmed || !mounted) return;
+    // Offline capture (C3): captures still waiting on this phone get their own
+    // question first. "Log out anyway" IS the confirmation; "Upload first" and
+    // a dismiss cancel the sign-out.
+    final pending = await _askAboutPendingCaptures();
+    if (pending == _PendingSignOut.cancel || !mounted) return;
+
+    if (pending == _PendingSignOut.noneWaiting) {
+      // Platform-adaptive destructive confirm (Material dialog / Cupertino
+      // sheet), branching on Theme.of(context).platform so tests can force
+      // either side. ANY dismissal resolves false.
+      final confirmed = await showDeleteConfirmation(
+        context,
+        count: 1, // not photo-driven; the signOut copy ignores it
+        kind: ConfirmKind.signOut,
+      );
+      if (!confirmed || !mounted) return;
+    }
 
     setState(() => _signingOut = true);
     Analytics.logEvent(AnalyticsEvents.profileSignOut, {
@@ -206,6 +223,71 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       // route to /auth on its own. NO manual navigation here — it would race
       // that redirect and could strand the user on a half-torn-down screen.
       if (mounted) setState(() => _signingOut = false);
+    }
+  }
+
+  /// "{n} captures haven't been uploaded yet." — Upload first / Log out
+  /// anyway. The captures are NOT deleted by logging out: they stay on this
+  /// phone for this account (hidden from any other account) and upload after
+  /// this account signs in again.
+  Future<_PendingSignOut> _askAboutPendingCaptures() async {
+    if (!ref.read(offlineCaptureCapabilityProvider)) {
+      return _PendingSignOut.noneWaiting;
+    }
+    await ref.read(pendingCapturesProvider.notifier).whenLoaded();
+    final n = ref.read(pendingCapturesProvider).length;
+    if (n == 0 || !mounted) return _PendingSignOut.noneWaiting;
+
+    final choice = await showDialog<String>(
+      context: context,
+      barrierColor: AppColors.scrim,
+      builder: (ctx) => AlertDialog(
+        key: const Key('pending_logout_dialog'),
+        backgroundColor: AppColors.surface1,
+        title: Text(
+          n == 1
+              ? "1 capture hasn't been uploaded yet."
+              : "$n captures haven't been uploaded yet.",
+        ),
+        content: const Text(
+          'If you log out, they stay on this phone and upload after you log '
+          'in again with this account.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('pending_logout_anyway'),
+            onPressed: () => Navigator.of(ctx).pop('logout_anyway'),
+            child: const Text('Log out anyway',
+                style: TextStyle(color: AppColors.error)),
+          ),
+          TextButton(
+            key: const Key('pending_logout_upload_first'),
+            onPressed: () => Navigator.of(ctx).pop('upload_first'),
+            child: const Text('Upload first'),
+          ),
+        ],
+      ),
+    );
+    Analytics.logEvent(AnalyticsEvents.pendingLogoutPrompt, {
+      'pending_count': n,
+      'choice': choice ?? 'dismiss',
+    });
+    switch (choice) {
+      case 'logout_anyway':
+        return _PendingSignOut.logoutAnyway;
+      case 'upload_first':
+        if (mounted) {
+          await uploadAllWithConfirm(context, ref);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Uploading your captures. You can log out once '
+                  'they are done.'),
+            ));
+          }
+        }
+        return _PendingSignOut.cancel;
+      default:
+        return _PendingSignOut.cancel;
     }
   }
 
@@ -489,6 +571,45 @@ Future<AvatarAction?> showAvatarActionSheet(
 /// itself, which wins. So the override has to happen in the button theme, and
 /// only there — border, radius, sizing and typography still resolve from the
 /// ambient theme, so this can never drift off-theme.
+/// The answer to the pending-captures question before signing out.
+enum _PendingSignOut { noneWaiting, logoutAnyway, cancel }
+
+/// "Upload on mobile data" — whether Full captures saved on the phone may
+/// upload over mobile data on their own (Meshy captures always may). OFF by
+/// default; a Full capture can still be sent over mobile data from its card
+/// after a size confirm.
+class _UploadOnMobileDataTile extends ConsumerWidget {
+  const _UploadOnMobileDataTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = ref.watch(uploadOnMobileDataProvider);
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.md),
+      child: SwitchListTile(
+        key: const Key('profile_upload_mobile_data'),
+        contentPadding: EdgeInsets.zero,
+        value: enabled,
+        activeThumbColor: AppColors.mirageRed,
+        onChanged: (v) =>
+            ref.read(uploadOnMobileDataProvider.notifier).set(v),
+        title: Text(
+          'Upload on mobile data',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        subtitle: Text(
+          'Let full captures saved on this phone upload without Wi-Fi. '
+          'Short (Meshy) captures always upload on any network.',
+          style: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: AppColors.textMuted),
+        ),
+      ),
+    );
+  }
+}
+
 class _DangerButtonTheme extends StatelessWidget {
   const _DangerButtonTheme({required this.child});
 

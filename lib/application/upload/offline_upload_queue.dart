@@ -30,8 +30,15 @@
 // pause/cancel mechanics via [UploadController]). NON-network failures keep
 // their existing behaviour: the runner's backoff first, then a terminal
 // [UploadJobState.failed] for Screen 9F — only NETWORK failures divert into the
-// queue. NOT WIRED into the live capture→upload flow yet; the pipeline task
-// composes runner + engine + this queue and overrides the providers.
+// queue.
+//
+// WIRED (offline capture): the pending-upload coordinator
+// (pending_upload_coordinator.dart) owns one instance per signed-in user and is
+// its [UploadJobRunner] — one drained job = one capture saved on the phone,
+// run through the SAME UploadFlowOrchestrator the Summary's Upload uses (pack →
+// project → job → chunked upload → finalize). Job ids are the captures'
+// localIds; the byte-level resume point stays keyed by the SERVER job id inside
+// the engine, which a stable POST /jobs Idempotency-Key replays.
 //
 // BACKGROUND (OS) DIMENSION: this in-app monitor covers the FOREGROUND.
 // Background auto-resume rides the OS connectivity-constrained mechanisms —
@@ -180,6 +187,23 @@ class OfflineUploadQueue {
     } else {
       _emitQueued(entry, reason: 'offline_at_start');
     }
+  }
+
+  /// Tracks [spec] as a durable job that starts USER-PAUSED: it waits for
+  /// [resumeUserPaused] and is never auto-resumed. Used when the user paused a
+  /// capture whose job had to be rebuilt (e.g. after an account switch).
+  /// Idempotent per sessionId.
+  Future<void> enqueuePaused(UploadSessionSpec spec) async {
+    if (_disposed || _byId.containsKey(spec.sessionId)) return;
+    final entry = UploadQueueEntry(
+      jobId: spec.sessionId,
+      spec: spec,
+      state: UploadJobState.userPaused,
+      seq: _nextSeq++,
+    );
+    _byId[entry.jobId] = entry;
+    await _persist(entry);
+    _emitSnapshot();
   }
 
   /// The connectivity HINT (wire to the app's connectivity stream). Debounced:

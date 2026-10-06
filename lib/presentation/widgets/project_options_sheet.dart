@@ -24,6 +24,9 @@ Future<ProjectOptionsResult> showProjectOptionsSheet(
   required Project project,
   required Future<Project> Function(String id, String newName) onRename,
   required Future<void> Function(String id) onDelete,
+  // Extra sentence for the delete confirmation — set when a capture of this
+  // project is saved on the phone and was never uploaded (offline capture).
+  String? deleteWarning,
 }) async {
   final result = await showModalBottomSheet<ProjectOptionsResult>(
     context: context,
@@ -38,6 +41,7 @@ Future<ProjectOptionsResult> showProjectOptionsSheet(
       project: project,
       onRename: onRename,
       onDelete: onDelete,
+      deleteWarning: deleteWarning,
     ),
   );
   return result ?? const ProjectOptionsResult.none();
@@ -50,11 +54,13 @@ class _ProjectOptionsSheet extends StatefulWidget {
     required this.project,
     required this.onRename,
     required this.onDelete,
+    this.deleteWarning,
   });
 
   final Project project;
   final Future<Project> Function(String id, String newName) onRename;
   final Future<void> Function(String id) onDelete;
+  final String? deleteWarning;
 
   @override
   State<_ProjectOptionsSheet> createState() => _ProjectOptionsSheetState();
@@ -143,6 +149,7 @@ class _ProjectOptionsSheetState extends State<_ProjectOptionsSheet> {
       barrierColor: AppColors.scrim,
       builder: (_) => _DeleteConfirmDialog(
         projectName: widget.project.name,
+        warning: widget.deleteWarning,
         onDelete: () => widget.onDelete(widget.project.id),
       ),
     );
@@ -305,9 +312,14 @@ class _DeleteConfirmDialog extends StatefulWidget {
   const _DeleteConfirmDialog({
     required this.projectName,
     required this.onDelete,
+    this.warning,
   });
 
   final String projectName;
+
+  /// An extra sentence shown under the standard copy (offline capture: "This
+  /// capture was never uploaded…").
+  final String? warning;
   final Future<void> Function() onDelete;
 
   @override
@@ -358,7 +370,9 @@ class _DeleteConfirmDialogState extends State<_DeleteConfirmDialog> {
       ),
       content: Text(
         '"${widget.projectName}" will be permanently deleted. '
-        "This can't be undone.",
+        "This can't be undone."
+        '${widget.warning == null ? '' : '\n\n${widget.warning}'}',
+        key: const Key('delete_project_dialog_body'),
         style: Theme.of(context)
             .textTheme
             .bodyMedium

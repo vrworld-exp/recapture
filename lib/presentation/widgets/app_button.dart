@@ -75,7 +75,16 @@ class AppButton extends StatelessWidget {
                 children: [
                   Icon(icon, size: 18),
                   const SizedBox(width: AppSpacing.sm),
-                  Text(label),
+                  // Flexible: in a narrow slot (a 360 dp card) a long label
+                  // ellipsizes instead of overflowing; with room to spare
+                  // nothing changes.
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
                 ],
               )
             : Text(label);

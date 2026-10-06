@@ -91,6 +91,14 @@ export interface IProject extends Document {
   latestCompletedJobId?: Types.ObjectId;
   stats?: ProjectStats;
   deletedAt?: Date;
+  /**
+   * Optional client `Idempotency-Key` of the POST /projects that created this
+   * project (offline capture: an offline-created project is flushed by the
+   * client's outbox, and a retry after a lost response must not create a
+   * second one). Scoped per user by the unique partial index below; never
+   * returned in a DTO.
+   */
+  idempotencyKey?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -161,6 +169,10 @@ const ProjectSchema = new Schema<IProject>(
     deletedAt: {
       type: Date,
     },
+    idempotencyKey: {
+      type: String,
+      maxlength: 128,
+    },
   },
   {
     timestamps: true, // adds createdAt, updatedAt automatically
@@ -177,6 +189,15 @@ ProjectSchema.index({ userId: 1, updatedAt: -1, _id: -1 });
 // Secondary query pattern: "filter a user's projects by status"
 // (e.g. show only DRAFT/CAPTURING projects on Projects screen "in progress" section)
 ProjectSchema.index({ userId: 1, status: 1 });
+
+// POST /projects idempotency — the same pattern as Job's: unique per
+// (userId, idempotencyKey), partial so the many keyless projects never
+// collide. A concurrent duplicate create loses with E11000 and is resolved to
+// a replay of the winner.
+ProjectSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true } } }
+);
 
 // Admin/staff query pattern (GET /admin/projects): cross-USER list filtered by
 // status, same deterministic (updatedAt DESC, _id DESC) cursor ordering as the

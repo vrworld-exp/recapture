@@ -75,6 +75,7 @@ class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRe
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async {
     createCalls++;
     createPayloads.add({'name': name, 'size': (size ?? ObjectSize.medium).apiValue, 'mode': (mode ?? CaptureMode.guided).apiValue});

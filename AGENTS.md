@@ -1658,6 +1658,51 @@ the owner's `modelCount`, their models list and the project detail's viewer with
   `presentation/screens/capture`, `domain/upload`) — that flow is native by
   nature. It is a bug anywhere the catalog, rep or admin surfaces reach.
 
+### Offline capture (captures saved on the phone, uploaded later) — native only
+Design + stage reports: `docs/offline-capture/README.md`.
+- **A finished capture is PACKED AT SAVE TIME** into
+  `<app documents>/upload_workspace/bundles/<localId>/` and recorded as a
+  `PendingCapture` (`domain/upload/pending_capture.dart`, Hive box
+  `pending_captures`). The per-level photo ledger is in memory only, so a capture
+  that waits across a kill/reboot cannot be re-packed later. The bundle path is
+  stored RELATIVE to documents (the iOS container moves on update).
+  `ActiveSession` stays the single slot for a capture still being SHOT.
+- **`pendingCapturesProvider` is the single source of truth** and is
+  OWNER-SCOPED: it holds only the signed-in user's records. The box is
+  deliberately NOT cleared on logout; another account never sees, counts or
+  uploads them.
+- **`pending_upload_coordinator.dart` is the one owner of pending → uploaded.**
+  It is the `OfflineUploadQueue`'s runner (one queue per signed-in user) and runs
+  each capture through the SAME `UploadFlowOrchestrator` the Summary uses. No
+  second engine or retry layer. One upload at a time, shared with the Summary's
+  Upload through `UploadFlowNotifier.whenIdle/installPending`.
+- **Resume = replay.** Each capture sends a STABLE POST /jobs Idempotency-Key
+  (`PendingCapture.jobIdempotencyKey`), so a re-run replays the same job and the
+  engine resumes from its saved part ETags. `PLAN_EXPIRED` (the plan is valid 24 h
+  from JOB creation) bumps `jobKeyGeneration` for a fresh job.
+- **Offline projects are created ONLY by the outbox.** Action id (= POST
+  /projects Idempotency-Key) is `project-<tempId>` (`createProjectActionIdFor`);
+  POST /projects now honours the key (same mechanism as /jobs, per user, unique
+  partial index). The coordinator re-creates a missing create from the capture
+  after a logout cleared the outbox, flushes, and uploads only into the
+  reconciled server id (`LevelProgressionStore.reconciledIdFor`). The upload
+  flow's `pending_` fallback is a logged safety net.
+- **Policy** (`domain/upload/auto_upload_policy.dart`): Meshy any network; Full on
+  Wi-Fi, or mobile data only with the "Upload on mobile data" setting (Profile,
+  default OFF) or a per-capture confirm. Limits (`offline_capture_limits.dart`):
+  5 waiting per user and 1.5 × the per-mode size free, both OFFLINE only.
+- **Web:** `offlineCaptureCapabilityProvider` (conditional-import seam) is false →
+  no store, no coordinator, no offline UI; web capture is online-only as before.
+- ⚠ **Android background after a process kill is NOT done:** the WorkManager
+  request is scheduled (UNMETERED when only Wi-Fi-bound Full captures wait) but
+  `UploadResumeWorker.runResumeStub` still does nothing — it needs a headless
+  Flutter engine, and Hive is not safe across two isolates. While the process
+  lives, the Dart queue keeps uploading in the background.
+- ⚠ **The capture-storage purge (`purgeProjectCaptureData`) never deletes capture
+  frames:** it targets `/recapture/<projectId>`, while the camera writes
+  `captures/<sessionId>`. Pending captures delete their own bundle; raw frames
+  are left exactly as they are after an online upload today.
+
 ### Web upload of artist photo sets (LIVE on web and native)
 - The presigned part PUTs go **direct to S3**, and the avatar bytes-proxy
   precedent explicitly **does not extend here** — a 48-photo set is

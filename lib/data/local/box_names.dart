@@ -56,6 +56,13 @@ abstract final class BoxNames {
   /// (offline-queued, auto-resumed on restore) vs user-paused (never
   /// auto-resumed) so a relaunch while offline stays queued instead of failing.
   static const String uploadQueue = 'upload_queue';
+
+  /// Finished captures waiting for upload (one JSON record per capture, keyed by
+  /// its stable `localId`). Survives logout ON PURPOSE — every read filters by
+  /// the owning user, so another account on the phone never sees them, and the
+  /// owner's captures reappear when they log back in. Holds the bundle location
+  /// and upload bookkeeping only; the photos themselves live on disk.
+  static const String pendingCaptures = 'pending_captures';
 }
 
 /// Per-box schema marker. Current migration policy is clear-on-mismatch — when

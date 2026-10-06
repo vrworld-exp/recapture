@@ -38,6 +38,7 @@ class _CountingProjectsRepository with FakeProjectModelDefaults implements Proje
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async =>
       Project(
         id: 'p1',

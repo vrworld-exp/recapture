@@ -124,6 +124,7 @@ class _StubProjectsRepo with FakeProjectModelDefaults implements ProjectsReposit
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async =>
       throw UnimplementedError();
   @override

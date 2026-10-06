@@ -138,6 +138,21 @@ class UploadFlowContext {
   /// local Project entity carries no size yet — 'medium' until the create-
   /// project size selection is threaded through.
   final String objectSize;
+
+  /// The same context pointed at project [id] — used once an offline-created
+  /// project has been reconciled to its server id.
+  UploadFlowContext withProjectId(String id) => UploadFlowContext(
+        localProjectId: id,
+        projectName: projectName,
+        captureSessionId: captureSessionId,
+        config: config,
+        progression: progression,
+        registry: registry,
+        variant: variant,
+        mode: mode,
+        workspaceRoot: workspaceRoot,
+        objectSize: objectSize,
+      );
 }
 
 /// The transport engine the orchestrator runs: the manager (progress feed +
@@ -236,6 +251,17 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   /// that failed before it: the screen degrades to no button rather than to a
   /// broken one.
   String? remoteProjectId;
+
+  /// The [PendingCapture.localId] this flow uploads, when it runs for a capture
+  /// saved on the phone (offline capture). Null for a flow started the
+  /// pre-existing way. Lets the 9F Retry hand the capture back to the
+  /// pending-upload coordinator instead of re-packing from (possibly gone)
+  /// in-memory capture state with a fresh job key.
+  String? pendingLocalId;
+
+  /// The terminal failure, once [fail] ran — the same object Screen 9F
+  /// classifies. Read by the pending-upload coordinator to route the outcome.
+  Object? terminalError;
 
   /// False once the flow reached completed/failed/cancelled — a terminal flow
   /// is replaced (not reused) by the next start.
@@ -368,6 +394,7 @@ class UploadFlowProgress implements UploadProgressSource, UploadController {
   void fail(Object error) {
     if (_terminal) return;
     _terminal = true;
+    terminalError = error;
     // Dev diagnostics: EVERY terminal failure passes through here — this line
     // is what turns a bare 9F code into an actionable raw error in the panel.
     DevUploadLog.instance.add('flow FAILED', error: error);
@@ -601,6 +628,18 @@ class UploadFlowOrchestrator {
         // /jobs `captureMode`, which is sent below). The create form's
         // guided/manual choice is not carried into the upload context, so this
         // fallback sends the valid default 'guided'.
+        //
+        // SAFETY NET ONLY since offline capture: a capture saved on the phone
+        // reaches this flow through the pending-upload coordinator, which waits
+        // for the offline outbox to create the project (the ONE creator of
+        // offline projects) and hands over the server id. Reaching here with a
+        // `pending_` id therefore means that guarantee slipped — logged loudly.
+        if (ctx.localProjectId.startsWith(kPendingProjectIdPrefix)) {
+          DevUploadLog.instance.add(
+              'WARNING: pending_ project reached the upload flow — creating it '
+              'here (the outbox should have). Check the pending-upload '
+              'coordinator.');
+        }
         DevUploadLog.instance.add('POST /projects …');
         remoteProjectId = await backend.createProject(
           name: ctx.projectName,
@@ -757,6 +796,34 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
   @override
   UploadFlowProgress? build() => null;
 
+  Completer<void>? _idle;
+
+  /// Set by the pending-upload coordinator: a 9F Retry of a flow that uploaded
+  /// a capture saved on the phone goes back to it (same bundle, same stable job
+  /// key) rather than through [start].
+  void Function(String localId)? pendingRetryHandler;
+
+  /// True while a flow is running. One upload at a time, globally — the
+  /// Summary's Upload and the pending-capture drain share this guard.
+  bool get isBusy => state?.isActive ?? false;
+
+  /// Completes when no flow is running.
+  Future<void> whenIdle() {
+    if (!isBusy) return Future<void>.value();
+    return (_idle ??= Completer<void>()).future;
+  }
+
+  /// Installs a coordinator-built [orchestrator] as THE active flow, exactly as
+  /// [start] would (so Screen 9/9F and the progress seams bind to it). Returns
+  /// false — installing nothing — while another flow is active. The caller runs
+  /// it.
+  bool installPending(UploadFlowOrchestrator orchestrator, String localId) {
+    if (isBusy) return false;
+    orchestrator.progress.pendingLocalId = localId;
+    _install(orchestrator.progress);
+    return true;
+  }
+
   /// Starts the upload flow (the Summary Upload CTA / 9F Retry entry point).
   /// Fire-and-forget: the flow surface is installed SYNCHRONOUSLY (so the
   /// Uploading screen binds to it on arrival) and every error flows through
@@ -765,6 +832,13 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
   void start() {
     final current = state;
     if (current != null && current.isActive) return;
+    // A retry of a capture saved on the phone belongs to the coordinator.
+    final localId = current?.pendingLocalId;
+    final retry = pendingRetryHandler;
+    if (localId != null && retry != null) {
+      retry(localId);
+      return;
+    }
 
     final orchestrator = UploadFlowOrchestrator(
       resolveContext: _resolveContext,
@@ -794,9 +868,11 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
           case UploadStatus.completed:
             unawaited(_refreshProjectsAfterUpload());
             unawaited(sub?.cancel());
+            _releaseIdle();
           case UploadStatus.failed:
           case UploadStatus.cancelled:
             unawaited(sub?.cancel()); // terminal without a new remote project
+            _releaseIdle();
           default:
             break;
         }
@@ -805,6 +881,12 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
       // classification) — irrelevant here, but they must not go unhandled.
       onError: (_, __) {},
     );
+  }
+
+  void _releaseIdle() {
+    final idle = _idle;
+    _idle = null;
+    if (idle != null && !idle.isCompleted) idle.complete();
   }
 
   /// Test seam: installs [progress] exactly like [start] does, without
@@ -822,94 +904,7 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
 
   /// Reads the session context from the live providers/stores. Throws (into
   /// the orchestrator's catch → 9F) when no capture session is resolvable.
-  Future<UploadFlowContext> _resolveContext() async {
-    // The progression controller is NOT wired into the live capture flow (its
-    // provider stays null on-device — the flow sequences A→B→C via GoRouter;
-    // see level_progression_provider.dart's SCOPE note), so the snapshot is
-    // derived from the SAME live sources the Summary gate reads: config +
-    // flow variant + the per-level ledgers.
-    var progression = ref.read(levelProgressionControllerProvider);
-    if (progression == null) {
-      progression = progressionFromLedger(
-        ref.read(captureConfigProvider),
-        variant: ref.read(captureFlowVariantProvider),
-        registry: ref.read(levelCaptureLedgerRegistryProvider),
-        mode: ref.read(captureModeProvider),
-      );
-      DevUploadLog.instance.add(
-          'progression derived from ledger (${progression.levels.map((l) => '${l.levelCode}=${l.acceptedCount}').join(', ')})');
-    }
-    if (progression.levels.every((l) => l.acceptedCount == 0)) {
-      throw StateError('no captured photos to upload');
-    }
-
-    final session = ref.read(captureLevelSessionProvider);
-    var projectId = session?.projectId ?? '';
-    if (projectId.isEmpty) {
-      try {
-        projectId = (await ActiveSessionBox().read())?.projectId ?? '';
-      } catch (_) {
-        // No resumable-session marker → fall through to the empty id.
-      }
-    }
-
-    // Object SIZE is a property of the project (chosen at create, persisted
-    // per project — the server Project DTO does not carry it back). Source it
-    // so POST /jobs declares the SAME size the project was created with; the
-    // server rejects a mismatch with SIZE_MISMATCH. Falls back to 'medium'
-    // only for a legacy/never-persisted project (matching the prior hardcoded
-    // default). Reads by whatever id resolved above (a real or a pending id —
-    // create_project_screen persists it under either).
-    var objectSize = 'medium';
-    if (projectId.isNotEmpty) {
-      try {
-        final size = await ref
-            .read(levelProgressionStoreProvider)
-            .loadObjectSizeOrNull(projectId);
-        if (size != null) objectSize = size.apiValue;
-      } catch (_) {
-        // Unreadable store → keep the 'medium' default.
-      }
-    }
-
-    // Name the remote project from the local one when it is in the loaded
-    // list; otherwise a dated fallback (the upload must not block on the list).
-    // Only the FALLBACK create path (no real project) ever sends this name —
-    // when an existing project is reused, POST /projects is skipped entirely
-    // and the name is correct by construction.
-    String projectName = '';
-    final projects = ref.read(projectsProvider).valueOrNull;
-    if (projects != null) {
-      for (final p in projects) {
-        if (p.id == projectId) {
-          projectName = p.name;
-          break;
-        }
-      }
-    }
-    if (projectName.isEmpty) {
-      final now = DateTime.now();
-      projectName =
-          'ReCapture ${now.year}-${now.month.toString().padLeft(2, '0')}-'
-          '${now.day.toString().padLeft(2, '0')} '
-          '${now.hour.toString().padLeft(2, '0')}:'
-          '${now.minute.toString().padLeft(2, '0')}';
-    }
-
-    final docs = await getApplicationDocumentsDirectory();
-    return UploadFlowContext(
-      localProjectId: projectId,
-      projectName: projectName,
-      captureSessionId: session?.sessionId ?? '',
-      config: ref.read(captureConfigProvider),
-      progression: progression,
-      registry: ref.read(levelCaptureLedgerRegistryProvider),
-      variant: ref.read(captureFlowVariantProvider),
-      mode: ref.read(captureModeProvider),
-      workspaceRoot: '${docs.path}/upload_workspace',
-      objectSize: objectSize,
-    );
-  }
+  Future<UploadFlowContext> _resolveContext() => resolveLiveUploadContext(ref);
 
   Future<CaptureBundle> _packWithPacker({
     required UploadFlowContext context,
@@ -928,29 +923,131 @@ class UploadFlowNotifier extends Notifier<UploadFlowProgress?> {
         cancelToken: cancelToken,
       );
 
-  UploadEngine _buildEngine(String jobId) {
-    final deviceType =
-        defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
-    final manager = ChunkedUploadManager(
-      api: JobsMultipartUploadApi(
-        dio: ref.read(uploadApiDioProvider),
-        jobId: jobId,
-      ),
-      s3: DioS3PartClient(),
-      store: HiveUploadProgressStore(),
-      // Connectivity gate: parts park (auto-pause) instead of burning retries
-      // into a dead network; the user resumes from the upload controls.
-      isOnline: () => ref.read(isOnlineProvider),
+  UploadEngine _buildEngine(String jobId) =>
+      buildProductionUploadEngine(ref, jobId);
+}
+
+/// The production [UploadEngine] for [jobId] — shared by the Summary's flow and
+/// the pending-upload coordinator so both transfer identically (same resumable
+/// [HiveUploadProgressStore], same connectivity gate, same retry runner).
+UploadEngine buildProductionUploadEngine(Ref ref, String jobId) {
+  final deviceType =
+      defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+  final manager = ChunkedUploadManager(
+    api: JobsMultipartUploadApi(
+      dio: ref.read(uploadApiDioProvider),
+      jobId: jobId,
+    ),
+    s3: DioS3PartClient(),
+    store: HiveUploadProgressStore(),
+    // Connectivity gate: parts park (auto-pause) instead of burning retries
+    // into a dead network; the user resumes from the upload controls.
+    isOnline: () => ref.read(isOnlineProvider),
+    deviceType: deviceType,
+  );
+  return RunnerUploadEngine(
+    manager: manager,
+    runner: ResilientUploadRunner(
+      attempt: ManagerUploadAttempt(manager),
       deviceType: deviceType,
+    ),
+  );
+}
+
+/// Resolves the [UploadFlowContext] for the capture that just finished, from
+/// the LIVE capture providers/stores (ledger registry, progression, flow
+/// variant, mode, level session). Shared by the Summary's Upload flow and by
+/// "Save — upload when online" (pending_capture_saver.dart), which packs the
+/// same capture into a durable bundle. Only valid while that capture's state is
+/// still in memory — i.e. from the Summary screen. Throws when no captured
+/// photos are resolvable.
+Future<UploadFlowContext> resolveLiveUploadContext(Ref ref) async {
+  // The progression controller is NOT wired into the live capture flow (its
+  // provider stays null on-device — the flow sequences A→B→C via GoRouter;
+  // see level_progression_provider.dart's SCOPE note), so the snapshot is
+  // derived from the SAME live sources the Summary gate reads: config +
+  // flow variant + the per-level ledgers.
+  var progression = ref.read(levelProgressionControllerProvider);
+  if (progression == null) {
+    progression = progressionFromLedger(
+      ref.read(captureConfigProvider),
+      variant: ref.read(captureFlowVariantProvider),
+      registry: ref.read(levelCaptureLedgerRegistryProvider),
+      mode: ref.read(captureModeProvider),
     );
-    return RunnerUploadEngine(
-      manager: manager,
-      runner: ResilientUploadRunner(
-        attempt: ManagerUploadAttempt(manager),
-        deviceType: deviceType,
-      ),
-    );
+    DevUploadLog.instance.add(
+        'progression derived from ledger (${progression.levels.map((l) => '${l.levelCode}=${l.acceptedCount}').join(', ')})');
   }
+  if (progression.levels.every((l) => l.acceptedCount == 0)) {
+    throw StateError('no captured photos to upload');
+  }
+
+  final session = ref.read(captureLevelSessionProvider);
+  var projectId = session?.projectId ?? '';
+  if (projectId.isEmpty) {
+    try {
+      projectId = (await ActiveSessionBox().read())?.projectId ?? '';
+    } catch (_) {
+      // No resumable-session marker → fall through to the empty id.
+    }
+  }
+
+  // Object SIZE is a property of the project (chosen at create, persisted
+  // per project — the server Project DTO does not carry it back). Source it
+  // so POST /jobs declares the SAME size the project was created with; the
+  // server rejects a mismatch with SIZE_MISMATCH. Falls back to 'medium'
+  // only for a legacy/never-persisted project (matching the prior hardcoded
+  // default). Reads by whatever id resolved above (a real or a pending id —
+  // create_project_screen persists it under either).
+  var objectSize = 'medium';
+  if (projectId.isNotEmpty) {
+    try {
+      final size = await ref
+          .read(levelProgressionStoreProvider)
+          .loadObjectSizeOrNull(projectId);
+      if (size != null) objectSize = size.apiValue;
+    } catch (_) {
+      // Unreadable store → keep the 'medium' default.
+    }
+  }
+
+  // Name the remote project from the local one when it is in the loaded
+  // list; otherwise a dated fallback (the upload must not block on the list).
+  // Only the FALLBACK create path (no real project) ever sends this name —
+  // when an existing project is reused, POST /projects is skipped entirely
+  // and the name is correct by construction.
+  String projectName = '';
+  final projects = ref.read(projectsProvider).valueOrNull;
+  if (projects != null) {
+    for (final p in projects) {
+      if (p.id == projectId) {
+        projectName = p.name;
+        break;
+      }
+    }
+  }
+  if (projectName.isEmpty) {
+    final now = DateTime.now();
+    projectName =
+        'ReCapture ${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+  }
+
+  final docs = await getApplicationDocumentsDirectory();
+  return UploadFlowContext(
+    localProjectId: projectId,
+    projectName: projectName,
+    captureSessionId: session?.sessionId ?? '',
+    config: ref.read(captureConfigProvider),
+    progression: progression,
+    registry: ref.read(levelCaptureLedgerRegistryProvider),
+    variant: ref.read(captureFlowVariantProvider),
+    mode: ref.read(captureModeProvider),
+    workspaceRoot: '${docs.path}/upload_workspace',
+    objectSize: objectSize,
+  );
 }
 
 /// RFC-4122 v4 UUID from a CSPRNG — the /jobs Idempotency-Key.

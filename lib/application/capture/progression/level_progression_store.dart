@@ -304,5 +304,31 @@ class LevelProgressionStore {
       if (box.get(to) == null) await box.put(to, value);
       await box.delete(from);
     }
+    // Remember the mapping itself. A capture saved for later under the temp id
+    // can be uploaded long after the outbox flushed (or, after a logout, from a
+    // re-created create action) — the upload needs to find the server id from
+    // the temp id alone, so it never creates a second project.
+    if (fromId.startsWith(kReconcilableIdPrefix)) {
+      await box.put(_reconciledKey(fromId), toId);
+    }
+  }
+
+  static String _reconciledKey(String tempId) => '$tempId::reconciled_to';
+
+  /// The server id an offline-created project [tempId] was reconciled to by
+  /// [migrateProject], or null when it has not been (yet). Never throws.
+  Future<String?> reconciledIdFor(String tempId) async {
+    try {
+      final box = await _open();
+      final id = box.get(_reconciledKey(tempId));
+      return (id == null || id.isEmpty) ? null : id;
+    } catch (_) {
+      return null;
+    }
   }
 }
+
+/// Only offline placeholders get a durable temp → server mapping. Mirrors
+/// `kPendingProjectIdPrefix` (projects_notifier.dart imports this store, so the
+/// constant cannot be imported back without a cycle).
+const String kReconcilableIdPrefix = 'pending_';

@@ -34,6 +34,10 @@ abstract interface class ProjectsRepository {
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    // Optional POST /projects `Idempotency-Key`. The offline outbox sends one
+    // (derived from the offline project's temp id) so a retried flush replays
+    // the first project instead of creating a second.
+    String? idempotencyKey,
   });
 
   /// Renames a project. Backend returns success only. Throws on network failure.
@@ -194,6 +198,7 @@ class RemoteProjectsRepository implements ProjectsRepository {
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async {
     final res = await _dio.post<Map<String, dynamic>>(
       '/projects',
@@ -208,6 +213,9 @@ class RemoteProjectsRepository implements ProjectsRepository {
         // request body is byte-for-byte what it was before this field existed.
         if (source != ProjectSource.capture) 'source': source.apiValue,
       },
+      options: idempotencyKey == null
+          ? null
+          : Options(headers: {'Idempotency-Key': idempotencyKey}),
     );
     final project = res.data?['project'];
     if (project is! Map<String, dynamic>) {

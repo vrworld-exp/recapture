@@ -347,6 +347,7 @@ class _StubProjectsRepo implements ProjectsRepository {
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async {
     final project = Project(
       id: 'p1',

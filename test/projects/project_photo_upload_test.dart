@@ -800,6 +800,7 @@ class _StubProjectsRepo implements ProjectsRepository {
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async {
     creates++;
     return Project(

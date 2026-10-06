@@ -70,15 +70,21 @@ class UploadResumeWorker(
         const val WORK_NAME = "upload_network_resume"
 
         /**
-         * Schedules (or refreshes) the network-constrained resume request.
+         * Schedules (or refreshes) the network-constrained resume request
+         * (CONNECTED, or UNMETERED when [unmeteredOnly]).
          * Runs when the OS reports connectivity; retries with exponential
          * backoff if the worker asks for it.
          */
-        fun schedule(context: Context) {
+        fun schedule(context: Context, unmeteredOnly: Boolean = false) {
             val request = OneTimeWorkRequestBuilder<UploadResumeWorker>()
                 .setConstraints(
                     Constraints.Builder()
-                        .setRequiredNetworkType(NetworkType.CONNECTED)
+                        .setRequiredNetworkType(
+                            // UNMETERED when every waiting capture is a Full
+                            // capture held to Wi-Fi by the "Upload on mobile
+                            // data" setting (offline capture, Step B5).
+                            if (unmeteredOnly) NetworkType.UNMETERED else NetworkType.CONNECTED,
+                        )
                         .build(),
                 )
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)

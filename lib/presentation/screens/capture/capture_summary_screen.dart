@@ -19,10 +19,20 @@
 // MESHY MODE drops the two incomplete-capture surfaces — Fix Issues and the
 // below-minimum notice/confirm — so Upload starts the pipeline on the first tap
 // (see `CaptureMode.offersIncompleteRemedies`). Everything that protects a real
-// failure stays in BOTH modes: the offline block, the hard `uploadGateProvider`
+// failure stays in BOTH modes: the offline handling, the hard `uploadGateProvider`
 // re-checks around every await, the `_navigating` latch, Save for later, and
 // Cancel. A Meshy user who deletes photos in Review still lands on the hard
 // gate, with `_UploadGateNotice` naming the short level and offering the remedy.
+//
+// OFFLINE (native builds — `offlineCaptureCapabilityProvider`): instead of
+// blocking, the primary CTA becomes "Save — upload when online". It packs the
+// capture into a bundle on the phone, records it as a pending capture, and
+// returns to Projects; the pending-upload coordinator uploads it when the
+// network allows. ONLINE on native, Upload goes through the same coordinator so
+// the capture is recorded before the transfer (an app kill mid-upload resumes)
+// — same screens, same taps. WEB keeps today's behaviour exactly: the offline
+// banner plus "You're offline — reconnect to upload." The hard upload gate
+// applies to Save exactly as it does to Upload.
 //
 // Completeness + shortfall are read from the per-level summary (which composes the
 // shared `evaluateLevelA` validator over the live ledger) — this screen recomputes
@@ -47,10 +57,15 @@ import '../../../application/capture/completion_gate_provider.dart';
 import '../../../application/capture/review_grid_items_provider.dart';
 import '../../../application/capture/upload_gate_provider.dart';
 import '../../../application/connectivity/connectivity_providers.dart';
+import '../../../application/upload/offline_capture_capability.dart';
+import '../../../application/upload/pending_capture_saver.dart';
+import '../../../application/upload/pending_captures_notifier.dart';
+import '../../../application/upload/pending_upload_coordinator.dart';
 import '../../../application/upload/upload_flow.dart';
 import '../../../domain/capture/capture_cancel.dart';
 import '../../../domain/capture/level_completion.dart';
 import '../../../domain/capture/upload_gate.dart';
+import '../../../domain/upload/capture_bundle.dart';
 import '../../../utils/analytics.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
@@ -101,6 +116,9 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
   /// so no false "offline" flashes on entry.
   bool _offline = false;
   Timer? _connectivityDebounce;
+
+  /// True while "Save — upload when online" is packing the capture.
+  bool _savingOffline = false;
 
   static String get _deviceType =>
       defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
@@ -262,12 +280,102 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
       'phase': 'upload',
       'device_type': _deviceType,
     });
+    if (ref.read(offlineCaptureCapabilityProvider)) {
+      // Native: the same flow, through the pending-upload coordinator, which
+      // records the capture before the transfer so a kill mid-upload resumes.
+      final SummaryUploadResult result;
+      try {
+        result = await ref
+            .read(pendingUploadCoordinatorProvider.notifier)
+            .uploadFromSummary();
+      } catch (e) {
+        if (mounted) {
+          setState(() => _navigating = false);
+          _showSaveFailed(e);
+        }
+        return;
+      }
+      if (!mounted) return;
+      if (result == SummaryUploadResult.savedForLater) {
+        _showSnack(
+          const Key('summary_saved_queued_snack'),
+          'Saved on this phone. It will upload after the current upload.',
+        );
+        context.go(AppRoutes.projects);
+        return;
+      }
+      context.go(AppRoutes.uploading);
+      return;
+    }
     // Start the REAL upload flow (pack → project/job → transfer → finalize).
     // Fire-and-forget: start() installs the progress surface synchronously and
     // never throws — errors flow through the progress stream to Screen 9/9F.
     ref.read(uploadFlowProvider.notifier).start();
     if (!mounted) return;
     context.go(AppRoutes.uploading);
+  }
+
+  /// "Save — upload when online" (offline, native). Packs the capture into a
+  /// bundle on the phone, records it as a pending capture, and returns to
+  /// Projects. The hard gate applies exactly as it does to Upload.
+  Future<void> _onSaveOffline() async {
+    if (_navigating) return;
+    final gate = ref.read(uploadGateProvider);
+    if (!gate.eligible) {
+      ref
+          .read(uploadGateAnalyticsProvider.notifier)
+          .logBlocked(gate, sessionId: _sessionId);
+      return;
+    }
+    _navigating = true;
+    setState(() => _savingOffline = true);
+    try {
+      final saved =
+          await ref.read(pendingCaptureSaverProvider).saveFinishedCapture();
+      Analytics.logEvent(AnalyticsEvents.offlineCaptureSaved, {
+        'capture_mode': saved.captureMode,
+        'frame_count': saved.frameCount,
+        'size_mb': (saved.byteCount / (1024 * 1024)).round(),
+        'pending_count': ref.read(pendingCapturesProvider).length,
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _savingOffline = false;
+          _navigating = false;
+        });
+        _showSaveFailed(e);
+      }
+      return;
+    }
+    if (!mounted) return;
+    _showSnack(
+      const Key('summary_saved_offline_snack'),
+      "Saved on this phone. It will upload when you're online.",
+    );
+    context.go(AppRoutes.projects);
+  }
+
+  void _showSaveFailed(Object error) {
+    final noSpace = error is BundlePackException &&
+        error.reason == BundlePackFailureReason.insufficientStorage;
+    _showSnack(
+      const Key('summary_save_failed_snack'),
+      noSpace
+          ? 'Not enough space on this phone to save this capture.'
+          : "Couldn't save this capture. Please try again.",
+      color: AppColors.error,
+    );
+  }
+
+  void _showSnack(Key key, String message, {Color? color}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: key,
+        backgroundColor: color ?? AppColors.surface1,
+        content: Text(message),
+      ),
+    );
   }
 
   /// Routes to [target]'s capture to add shots — the Fix Issues CTA (most-work
@@ -388,6 +496,8 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
         .syncPassedMilestone(uploadGate, sessionId: _sessionId);
 
     final overallComplete = allLevelsComplete(summaries);
+    // Native builds can keep the capture on the phone when offline; web cannot.
+    final canSaveOffline = ref.watch(offlineCaptureCapabilityProvider);
     // Whether this mode offers the incomplete-capture remedies at all (Fix
     // Issues + the below-min notice/confirm) — false in Meshy, see CaptureMode.
     final offersRemedies =
@@ -468,9 +578,12 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
           // Offline banner — pinned just above the Upload CTA (the action it
           // gates), so it's always visible without obscuring the scrolling cards
           // or warnings list. Renders nothing when online (no reserved space).
-          if (_offline) const _OfflineBanner(),
+          if (_offline) _OfflineBanner(canSave: canSaveOffline),
           _BottomBar(
             uploadEligible: uploadGate.eligible,
+            saveOfflineInstead: _offline && canSaveOffline,
+            savingOffline: _savingOffline,
+            onSaveOffline: _onSaveOffline,
             shortLevels: uploadGate.shortLevels,
             showBelowMinNotice: !overallComplete && offersRemedies,
             showFixIssues: mostWork != null && offersRemedies,
@@ -494,6 +607,9 @@ class _CaptureSummaryScreenState extends ConsumerState<CaptureSummaryScreen>
 class _BottomBar extends StatelessWidget {
   const _BottomBar({
     required this.uploadEligible,
+    required this.saveOfflineInstead,
+    required this.savingOffline,
+    required this.onSaveOffline,
     required this.shortLevels,
     required this.showBelowMinNotice,
     required this.showFixIssues,
@@ -507,6 +623,14 @@ class _BottomBar extends StatelessWidget {
   /// Hard upload gate: false → Upload is disabled (any level below its absolute
   /// minimum accepted shots).
   final bool uploadEligible;
+
+  /// Offline on a native build: the primary CTA is "Save — upload when online"
+  /// instead of Upload.
+  final bool saveOfflineInstead;
+
+  /// The save is packing the capture (spinner on the CTA).
+  final bool savingOffline;
+  final VoidCallback onSaveOffline;
 
   /// The levels below their absolute minimum (the disabled-state messaging).
   final List<UploadLevelStatus> shortLevels;
@@ -569,12 +693,20 @@ class _BottomBar extends StatelessWidget {
                 button: true,
                 enabled: uploadEligible,
                 label: disabledReason,
-                child: AppButton(
-                  key: const Key('summary_upload'),
-                  label: 'Upload',
-                  icon: Icons.cloud_upload_outlined,
-                  onPressed: uploadEligible ? onUpload : null,
-                ),
+                child: saveOfflineInstead
+                    ? AppButton(
+                        key: const Key('summary_save_offline'),
+                        label: 'Save — upload when online',
+                        icon: Icons.save_alt_outlined,
+                        isLoading: savingOffline,
+                        onPressed: uploadEligible ? onSaveOffline : null,
+                      )
+                    : AppButton(
+                        key: const Key('summary_upload'),
+                        label: 'Upload',
+                        icon: Icons.cloud_upload_outlined,
+                        onPressed: uploadEligible ? onUpload : null,
+                      ),
               ),
               if (showFixIssues) ...[
                 const SizedBox(height: AppSpacing.sm),
@@ -691,7 +823,10 @@ class _UploadGateNotice extends StatelessWidget {
 /// like [_UploadGateNotice]). Amber (a recoverable warning), distinct from the red
 /// hard-gate. Shown only while offline; the parent renders nothing when online.
 class _OfflineBanner extends StatelessWidget {
-  const _OfflineBanner();
+  const _OfflineBanner({required this.canSave});
+
+  /// Native: saving for later is allowed, so the banner says so.
+  final bool canSave;
 
   @override
   Widget build(BuildContext context) {
@@ -716,7 +851,10 @@ class _OfflineBanner extends StatelessWidget {
             const SizedBox(width: AppSpacing.sm),
             Expanded(
               child: Text(
-                "You're offline. Reconnect to upload your capture.",
+                canSave
+                    ? "You're offline. Save this capture on your phone — it "
+                        "will upload when you're back online."
+                    : "You're offline. Reconnect to upload your capture.",
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: AppColors.warning,
                       fontWeight: FontWeight.w600,

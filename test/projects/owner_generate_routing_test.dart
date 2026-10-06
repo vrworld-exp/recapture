@@ -69,6 +69,7 @@ class _RecordingProjectsRepo
     CaptureMode? mode,
     String? category,
     ProjectSource source = ProjectSource.capture,
+    String? idempotencyKey,
   }) async =>
       throw UnimplementedError();
   @override

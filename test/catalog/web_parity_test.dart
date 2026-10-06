@@ -85,6 +85,7 @@ const List<String> _allSeams = [
   'lib/application/rep/web_dish_camera',
   'lib/application/projects/model_export_delivery',
   'lib/application/projects/preview_download_delivery',
+  'lib/application/upload/offline_capture_capability',
   'lib/platform/unsaved_changes',
   'lib/presentation/screens/projects/model_viewer_load_probe',
 ];
@@ -348,6 +349,9 @@ void main() {
           'kCanCaptureDish',
         ],
         'lib/application/catalog/checkout_adapter': ['kCanCheckoutInApp'],
+        'lib/application/upload/offline_capture_capability': [
+          'kCanCaptureOffline',
+        ],
       };
 
       for (final entry in seamFlags.entries) {

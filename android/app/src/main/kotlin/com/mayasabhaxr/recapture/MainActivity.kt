@@ -270,7 +270,12 @@ class MainActivity : FlutterActivity() {
                 // counterpart for when the app is backgrounded/killed with jobs
                 // waiting for connection. See UploadResumeWorker.
                 "scheduleNetworkResume" -> {
-                    UploadResumeWorker.schedule(applicationContext)
+                    // `unmetered`: only Full captures that may not use mobile
+                    // data are waiting → require Wi-Fi (NetworkType.UNMETERED).
+                    UploadResumeWorker.schedule(
+                        applicationContext,
+                        unmeteredOnly = call.argument<Boolean>("unmetered") ?: false,
+                    )
                     result.success(null)
                 }
                 "cancelNetworkResume" -> {

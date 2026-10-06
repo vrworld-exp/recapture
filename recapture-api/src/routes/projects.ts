@@ -14,7 +14,7 @@ import {
 import { decodeCursor, type ProjectCursor } from '@/utils/cursor';
 import {
   listProjects,
-  createProject,
+  createProjectIdempotent,
   softDeleteProject,
   renameProject,
   getProject,
@@ -52,6 +52,7 @@ import {
   type OnDemandBlockReason,
 } from '@/services/onDemandModelGenerationService';
 import { consumeRateWindow } from '@/utils/rateLimit';
+import { idempotencyKeySchema } from '@/validation/jobSchemas';
 import { env } from '@/config/env';
 import { hashIdentifier } from '@/utils/otp';
 import { track, AnalyticsEvent } from '@/utils/analytics';
@@ -196,6 +197,13 @@ router.get(
  * Ownership comes ONLY from the token; an `ownerId`/`userId` in the body is
  * rejected by the schema's `.strict()`. Returns the same project DTO as the
  * list endpoint with a 201. Create-only — no update/delete here.
+ *
+ * IDEMPOTENCY (optional `Idempotency-Key` header, same mechanism as POST
+ * /jobs): a repeat with the same key + same body from the same user replays the
+ * ORIGINAL project with a 200 (`idempotentReplay: true`); the same key with a
+ * different body is a 409 IDEMPOTENCY_CONFLICT. The client's offline outbox
+ * sends one when it flushes an offline-created project, so a retry after a lost
+ * response can never create a second project.
  */
 router.post(
   '/',
@@ -220,8 +228,40 @@ router.post(
       return;
     }
 
+    // Optional Idempotency-Key — when present it must be well-formed; a
+    // malformed key is a 400, never a silently ignored retry guard.
+    let idempotencyKey: string | undefined;
+    const rawKey = req.headers['idempotency-key'];
+    if (rawKey !== undefined) {
+      const key = idempotencyKeySchema.safeParse(Array.isArray(rawKey) ? rawKey[0] : rawKey);
+      if (!key.success) {
+        res.status(400).json({
+          status: 'error',
+          code: 'INVALID_REQUEST',
+          message: 'Idempotency-Key must be 1-128 characters.',
+        });
+        return;
+      }
+      idempotencyKey = key.data;
+    }
+
     const userId = req.user!.userId;
-    const project = await createProject(userId, parsed.data);
+    const result = await createProjectIdempotent(userId, parsed.data, idempotencyKey);
+    if (result.outcome === 'IDEMPOTENCY_CONFLICT') {
+      res.status(409).json({
+        status: 'error',
+        code: 'IDEMPOTENCY_CONFLICT',
+        message: 'Idempotency-Key was already used with a different request.',
+      });
+      return;
+    }
+    if (result.outcome === 'REPLAYED') {
+      // Same key + same body → the original project; nothing new was created
+      // (and no second PROJECT_CREATED event).
+      res.status(200).json({ status: 'success', idempotentReplay: true, project: result.project });
+      return;
+    }
+    const project = result.project;
 
     track(AnalyticsEvent.PROJECT_CREATED, {
       user_id_hash: hashIdentifier(userId),

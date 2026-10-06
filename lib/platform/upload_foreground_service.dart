@@ -56,7 +56,12 @@ class UploadForegroundServiceClient {
   /// this when the app leaves the foreground with queued jobs, and
   /// [cancelNetworkResume] when the queue drains/cancels, so the two never
   /// double-run.
-  Future<void> scheduleNetworkResume() => _invoke('scheduleNetworkResume');
+  ///
+  /// [unmeteredOnly] constrains the request to an UNMETERED network (Wi-Fi):
+  /// set when the only captures waiting are Full captures that may not use
+  /// mobile data (offline capture, Step B5).
+  Future<void> scheduleNetworkResume({bool unmeteredOnly = false}) =>
+      _invoke('scheduleNetworkResume', {'unmetered': unmeteredOnly});
 
   /// Cancels the pending background auto-resume request (queue drained, or the
   /// user cancelled the upload). Idempotent — a no-op when nothing is scheduled.

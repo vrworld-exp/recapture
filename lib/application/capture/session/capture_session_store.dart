@@ -14,6 +14,7 @@
 // extra locking here.
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive/hive.dart';
 
 import '../../../data/local/box_names.dart';
@@ -90,4 +91,29 @@ class CaptureSessionStore {
         box.keys.where((k) => k.toString().startsWith(prefix)).toList();
     await box.deleteAll(keys);
   }
+
+  /// Re-keys every snapshot of [fromId] to [toId] (an offline-created project
+  /// adopting its server id). Keeps the `'$projectId::$levelId'` format; an
+  /// existing snapshot under [toId] is not overwritten.
+  Future<void> migrateProject(String fromId, String toId) async {
+    if (fromId == toId) return;
+    final box = await _open();
+    final prefix = '$fromId::';
+    final keys =
+        box.keys.where((k) => k.toString().startsWith(prefix)).toList();
+    for (final k in keys) {
+      final levelId = k.toString().substring(prefix.length);
+      final value = box.get(k);
+      final target = _keyFor(toId, levelId);
+      if (value != null && box.get(target) == null) {
+        await box.put(target, value);
+      }
+      await box.delete(k);
+    }
+  }
 }
+
+/// Shared gateway (the capture screens still construct their own instances;
+/// both open the same box). Overridden in tests.
+final captureSessionStoreProvider =
+    Provider<CaptureSessionStore>((ref) => CaptureSessionStore());
