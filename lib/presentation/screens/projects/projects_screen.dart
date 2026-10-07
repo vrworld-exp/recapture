@@ -14,6 +14,8 @@ import '../../../application/auth/user_role_notifier.dart';
 import '../../../application/projects/model_generation_request_notifier.dart';
 import '../../../application/projects/owner_generation_request_notifier.dart';
 import '../../../application/projects/projects_notifier.dart';
+import '../../../application/connectivity/connectivity_providers.dart';
+import '../../../application/upload/offline_capture_capability.dart';
 import '../../../data/repositories/live_projects_repository.dart';
 import '../../../data/repositories/projects_repository.dart';
 import '../../../domain/entities/project.dart';
@@ -144,6 +146,19 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
     } catch (_) {
       _logRefresh('network_error');
       if (!mounted) return;
+      // Offline capture builds: a blocking modal here would wall off the `+`
+      // (the offline capture entry point). Say it in a snackbar and keep the
+      // list (cached / pending) usable.
+      if (ref.read(offlineCaptureCapabilityProvider)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              "You're offline — your list will update when you reconnect.",
+            ),
+          ),
+        );
+        return;
+      }
       await showOfflineRetryModal(
         context,
         source: OfflineSource.projectsHub,
@@ -563,8 +578,17 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       if (prev is AsyncLoading && next is AsyncData<List<Project>>) {
         _logViewed(next.value);
       }
-      if (next is AsyncError) {
+      // Offline capture builds never block the hub: the error body below is
+      // inline and the `+` stays reachable, so a capture can start offline.
+      if (next is AsyncError && !ref.read(offlineCaptureCapabilityProvider)) {
         _showLoadErrorModal();
+      }
+    });
+    // Back online after a failed load → reload on our own, so the user isn't
+    // left on the offline view until they think to press Retry.
+    ref.listen<bool>(isOnlineProvider, (prev, next) {
+      if (prev == false && next && ref.read(projectsProvider).hasError) {
+        ref.invalidate(projectsProvider);
       }
     });
 
@@ -650,98 +674,109 @@ class _ProjectsScreenState extends ConsumerState<ProjectsScreen> with RouteAware
       // under the strip's "API calling…" line, so the page has the shape of the
       // list it is about to become.
       loading: () => const _SkeletonList(),
-      error: (_, __) => _ErrorView(
-        onRetry: () => ref.invalidate(projectsProvider),
-      ),
-      data: (serverProjects) {
-        // Offline capture: a waiting capture whose project the list does not
-        // carry still gets a card (it must never be invisible).
-        final pending = watchPendingCaptures(ref);
-        final projects = mergeProjectsWithPending(serverProjects, pending);
-        // Staff get a Preview action on their OWN exportable projects too; the
-        // callback is null for everyone else, so the shared card is unchanged.
-        final isStaff = ref.watch(isStaffProvider);
-        if (projects.isEmpty) {
-          // Empty state is pull-to-refreshable too — a user with no projects can
-          // swipe to re-check. The scroll view fills the viewport so the gesture
-          // is available even though the content is short.
-          return _refreshable(
-            LayoutBuilder(
-              builder: (context, constraints) => SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: ProjectsEmptyState(
-                    // Go through the same capture-mode sheet the FAB uses — a
-                    // direct push here would skip the Full/Meshy chooser, so a
-                    // first-time user (whose list is empty) could never start a
-                    // Meshy capture and would silently get a Full one.
-                    onStartCapture: _onCreateProject,
-                  ),
-                ),
-              ),
-            ),
-          );
+      error: (_, __) {
+        final canCaptureOffline = ref.watch(offlineCaptureCapabilityProvider);
+        // Captures saved on the phone stay visible (and uploadable) even when
+        // the server list can't load — they must never be invisible.
+        if (canCaptureOffline && watchPendingCaptures(ref).isNotEmpty) {
+          return _buildList(const <Project>[]);
         }
-        return _refreshable(
-          ListView.separated(
-            // Always scrollable so even a 1–2 item list can be pulled down.
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            itemCount: projects.length,
-            separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
-            itemBuilder: (context, index) {
-              final project = projects[index];
-              final waiting = pendingFor(pending, project.id);
-              final parts = waiting == null
-                  ? null
-                  : pendingCardPartsFor(context, ref, waiting);
-              return ProjectCard(
-                // Keyed by project id so the temp → server id swap after an
-                // offline create re-uses the slot instead of flickering.
-                key: ValueKey('project_${waiting?.localId ?? project.id}'),
-                project: project,
-                pendingPill: parts?.pill,
-                pendingActions: parts?.actions,
-                isActionInFlight: _actionInFlight.contains(project.id),
-                onResume: _onResume,
-                onView: _onView,
-                onRetry: _onRetry,
-                onMore: _onMore,
-                onPreview:
-                    isStaff && _isExportable(project) ? _onPreview : null,
-                // Any owner can open their own generated models — _onModels
-                // routes to a history screen for every user.
-                //
-                // A CAPTURE project needs a VIEWABLE model first: its history
-                // has nothing to show otherwise, and a button opening an empty
-                // screen is worse than no button (a failed-only project shows
-                // none — see ProjectListItem.modelCount).
-                //
-                // An UPLOAD project shows it ALWAYS, because it is that card's
-                // standing entry point rather than a bonus: the card has no
-                // primary action of its own, and the empty history is not a
-                // dead end — it names the next step ("open Preview, pick 3–4
-                // photos, tap Create Model"), which is exactly where an
-                // uploaded set is turned into a model.
-                onModels: project.hasViewableModels || project.isUploadProject
-                    ? _onModels
-                    : null,
-                // Any owner can generate a model for their own capturable
-                // project. Requires a FINALIZED capture (without one the server
-                // always answers NOT_EXPORTABLE) AND no model yet: once this
-                // capture already has one, Generate gives way to the Models
-                // button — a viewable model is the successful end state, so
-                // re-offering Generate there is redundant noise. Regenerating
-                // stays reachable from inside the viewer.
-                onGenerate: _isExportable(project) && !project.hasViewableModels
-                    ? _onGenerate
-                    : null,
-              );
-            },
-          ),
+        return _ErrorView(
+          offlineHint: canCaptureOffline,
+          onRetry: () => ref.invalidate(projectsProvider),
         );
       },
+      data: _buildList,
+    );
+  }
+
+  Widget _buildList(List<Project> serverProjects) {
+    // Offline capture: a waiting capture whose project the list does not
+    // carry still gets a card (it must never be invisible).
+    final pending = watchPendingCaptures(ref);
+    final projects = mergeProjectsWithPending(serverProjects, pending);
+    // Staff get a Preview action on their OWN exportable projects too; the
+    // callback is null for everyone else, so the shared card is unchanged.
+    final isStaff = ref.watch(isStaffProvider);
+    if (projects.isEmpty) {
+      // Empty state is pull-to-refreshable too — a user with no projects can
+      // swipe to re-check. The scroll view fills the viewport so the gesture
+      // is available even though the content is short.
+      return _refreshable(
+        LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: ProjectsEmptyState(
+                // Go through the same capture-mode sheet the FAB uses — a
+                // direct push here would skip the Full/Meshy chooser, so a
+                // first-time user (whose list is empty) could never start a
+                // Meshy capture and would silently get a Full one.
+                onStartCapture: _onCreateProject,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return _refreshable(
+      ListView.separated(
+        // Always scrollable so even a 1–2 item list can be pulled down.
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(AppSpacing.lg),
+        itemCount: projects.length,
+        separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm),
+        itemBuilder: (context, index) {
+          final project = projects[index];
+          final waiting = pendingFor(pending, project.id);
+          final parts = waiting == null
+              ? null
+              : pendingCardPartsFor(context, ref, waiting);
+          return ProjectCard(
+            // Keyed by project id so the temp → server id swap after an
+            // offline create re-uses the slot instead of flickering.
+            key: ValueKey('project_${waiting?.localId ?? project.id}'),
+            project: project,
+            pendingPill: parts?.pill,
+            pendingActions: parts?.actions,
+            isActionInFlight: _actionInFlight.contains(project.id),
+            onResume: _onResume,
+            onView: _onView,
+            onRetry: _onRetry,
+            onMore: _onMore,
+            onPreview:
+                isStaff && _isExportable(project) ? _onPreview : null,
+            // Any owner can open their own generated models — _onModels
+            // routes to a history screen for every user.
+            //
+            // A CAPTURE project needs a VIEWABLE model first: its history
+            // has nothing to show otherwise, and a button opening an empty
+            // screen is worse than no button (a failed-only project shows
+            // none — see ProjectListItem.modelCount).
+            //
+            // An UPLOAD project shows it ALWAYS, because it is that card's
+            // standing entry point rather than a bonus: the card has no
+            // primary action of its own, and the empty history is not a
+            // dead end — it names the next step ("open Preview, pick 3–4
+            // photos, tap Create Model"), which is exactly where an
+            // uploaded set is turned into a model.
+            onModels: project.hasViewableModels || project.isUploadProject
+                ? _onModels
+                : null,
+            // Any owner can generate a model for their own capturable
+            // project. Requires a FINALIZED capture (without one the server
+            // always answers NOT_EXPORTABLE) AND no model yet: once this
+            // capture already has one, Generate gives way to the Models
+            // button — a viewable model is the successful end state, so
+            // re-offering Generate there is redundant noise. Regenerating
+            // stays reachable from inside the viewer.
+            onGenerate: _isExportable(project) && !project.hasViewableModels
+                ? _onGenerate
+                : null,
+          );
+        },
+      ),
     );
   }
 
@@ -884,9 +919,13 @@ class _SkeletonBox extends StatelessWidget {
 /// Minimal retry surface rendered behind the offline modal so the screen is
 /// never blank if the modal is dismissed.
 class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.onRetry});
+  const _ErrorView({required this.onRetry, this.offlineHint = false});
 
   final VoidCallback onRetry;
+
+  /// Offline capture builds: this view IS the offline surface (no modal), so it
+  /// says the list will come back and that capturing still works.
+  final bool offlineHint;
 
   @override
   Widget build(BuildContext context) {
@@ -903,6 +942,18 @@ class _ErrorView extends StatelessWidget {
               style: Theme.of(context).textTheme.bodyMedium,
               textAlign: TextAlign.center,
             ),
+            if (offlineHint) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'They will show again when you reconnect. You can still start '
+                'a new capture with +.',
+                style: Theme.of(context)
+                    .textTheme
+                    .bodySmall
+                    ?.copyWith(color: AppColors.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+            ],
             const SizedBox(height: AppSpacing.lg),
             AppButton(
               label: 'Retry',

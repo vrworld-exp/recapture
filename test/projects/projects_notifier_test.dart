@@ -1,9 +1,15 @@
 // test/projects/projects_notifier_test.dart
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recapture/application/auth/auth_notifier.dart';
+import 'package:recapture/application/connectivity/connectivity_providers.dart';
+import 'package:recapture/application/offline/offline_queue_notifier.dart';
+import 'package:recapture/application/upload/offline_capture_capability.dart';
+import 'package:recapture/data/local/offline_queue_box.dart';
+import 'package:recapture/domain/entities/offline_action.dart';
 import 'package:recapture/application/projects/project_capture_cleanup.dart';
 import 'package:recapture/application/projects/projects_notifier.dart';
 import 'package:recapture/data/local/projects_cache_box.dart';
@@ -46,6 +52,10 @@ class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRe
   int deleteCalls = 0;
   int retryCalls = 0;
 
+  /// Thrown by [create] when set (e.g. a no-response DioException).
+  Object? createError;
+  final List<String?> createKeys = [];
+
   @override
   Future<List<Project>> list() async {
     listCalls++;
@@ -63,6 +73,8 @@ class FakeProjectsRepository with FakeProjectModelDefaults implements ProjectsRe
     String? idempotencyKey,
   }) async {
     createCalls++;
+    createKeys.add(idempotencyKey);
+    if (createError != null) throw createError!;
     if (failCreate) throw Exception('create failed');
     return _p('new', name: name, status: ProjectStatus.draft);
   }
@@ -134,10 +146,23 @@ class SpyCaptureCleanup implements ProjectCaptureCleanup {
   }
 }
 
+/// In-memory outbox box (no Hive).
+class _MemOfflineQueueBox implements OfflineQueueBox {
+  List<OfflineAction> _stored = const [];
+  @override
+  Future<void> clear() async => _stored = const [];
+  @override
+  Future<void> save(List<OfflineAction> actions) async =>
+      _stored = List.of(actions);
+  @override
+  Future<List<OfflineAction>> read() async => _stored;
+}
+
 ProviderContainer _container(
   FakeProjectsRepository repo, {
   FakeProjectsCacheBox? cache,
   ProjectCaptureCleanup? cleanup,
+  bool? offlineCapable,
 }) {
   final c = ProviderContainer(overrides: [
     projectsRepositoryProvider.overrideWithValue(repo),
@@ -145,6 +170,12 @@ ProviderContainer _container(
     projectCaptureCleanupProvider
         .overrideWithValue(cleanup ?? SpyCaptureCleanup()),
     authProvider.overrideWith(FakeAuthNotifier.new),
+    if (offlineCapable != null) ...[
+      offlineCaptureCapabilityProvider.overrideWithValue(offlineCapable),
+      // The phone reports ONLINE (an interface is up) — the request still fails.
+      isOnlineProvider.overrideWithValue(true),
+      offlineQueueBoxProvider.overrideWithValue(_MemOfflineQueueBox()),
+    ],
   ]);
   addTearDown(c.dispose);
   return c;
@@ -155,8 +186,10 @@ Future<ProviderContainer> _booted(
   FakeProjectsRepository repo, {
   FakeProjectsCacheBox? cache,
   ProjectCaptureCleanup? cleanup,
+  bool? offlineCapable,
 }) async {
-  final c = _container(repo, cache: cache, cleanup: cleanup);
+  final c = _container(repo,
+      cache: cache, cleanup: cleanup, offlineCapable: offlineCapable);
   await c.read(projectsProvider.future);
   return c;
 }
@@ -197,6 +230,67 @@ void main() {
       expect(created.name, 'Fresh');
       expect(_list(c).map((p) => p.id), ['new', 'a']);
       expect(repo.listCalls, 1); // no refetch
+    });
+
+    // "Online" = an interface is up; mobile data with no internet still counts.
+    // A create that gets NO response must fall back to the offline path.
+    DioException noResponse() => DioException(
+          requestOptions: RequestOptions(path: '/projects'),
+          type: DioExceptionType.connectionError,
+        );
+
+    test('online but unreachable → queued offline under the same key',
+        () async {
+      final repo = FakeProjectsRepository([_p('a')])..createError = noResponse();
+      final c = await _booted(repo, offlineCapable: true);
+      final created = await c.read(projectsProvider.notifier).create(
+            name: 'Fresh',
+            size: ObjectSize.small,
+            mode: CaptureMode.guided,
+          );
+      expect(created.isPending, isTrue);
+      expect(created.id, startsWith(kPendingProjectIdPrefix));
+      expect(_list(c).first.id, created.id);
+      final queued = c.read(offlineQueueProvider).pending.single;
+      expect(queued.type, OfflineActionType.createProject);
+      // The online attempt and the queued create share one Idempotency-Key, so
+      // a request that did land is replayed, never duplicated.
+      expect(repo.createKeys.first, createProjectActionIdFor(created.id));
+      expect(queued.id, createProjectActionIdFor(created.id));
+    });
+
+    test('a real server error (has a response) still throws', () async {
+      final req = RequestOptions(path: '/projects');
+      final repo = FakeProjectsRepository([_p('a')])
+        ..createError = DioException(
+          requestOptions: req,
+          response: Response(requestOptions: req, statusCode: 422),
+          type: DioExceptionType.badResponse,
+        );
+      final c = await _booted(repo, offlineCapable: true);
+      await expectLater(
+        c.read(projectsProvider.notifier).create(
+              name: 'Fresh',
+              size: ObjectSize.small,
+              mode: CaptureMode.guided,
+            ),
+        throwsA(isA<DioException>()),
+      );
+      expect(c.read(offlineQueueProvider).pending, isEmpty);
+    });
+
+    test('web (no offline capture) → unreachable still throws', () async {
+      final repo = FakeProjectsRepository([_p('a')])..createError = noResponse();
+      final c = await _booted(repo, offlineCapable: false);
+      await expectLater(
+        c.read(projectsProvider.notifier).create(
+              name: 'Fresh',
+              size: ObjectSize.small,
+              mode: CaptureMode.guided,
+            ),
+        throwsA(isA<DioException>()),
+      );
+      expect(c.read(offlineQueueProvider).pending, isEmpty);
     });
   });
 

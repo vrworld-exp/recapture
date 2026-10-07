@@ -1,6 +1,7 @@
 // lib/application/projects/projects_notifier.dart
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/local/projects_cache_box.dart';
@@ -17,6 +18,7 @@ import '../capture/progression/level_progression_provider.dart';
 import '../connectivity/connectivity_providers.dart';
 import '../capture/session/capture_session_store.dart';
 import '../offline/offline_queue_notifier.dart';
+import '../upload/offline_capture_capability.dart';
 import '../upload/pending_captures_notifier.dart';
 import 'project_capture_cleanup.dart';
 
@@ -56,8 +58,10 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
 
     // Stale-while-revalidate: paint cached projects immediately (no skeleton),
     // then refresh in the background and update both state and cache.
+    // An EMPTY cached list counts too: it is a real answer ("no projects"), and
+    // treating it as a cold start made the hub fail offline for a new account.
     final cached = await _readCache();
-    if (cached != null && cached.isNotEmpty) {
+    if (cached != null) {
       _revalidate();
       return cached;
     }
@@ -99,17 +103,39 @@ class ProjectsNotifier extends AsyncNotifier<List<Project>> {
     required ObjectSize size,
     required CaptureMode mode,
   }) async {
+    // Minted up front: the online attempt sends the SAME Idempotency-Key the
+    // offline outbox would, so falling back after a lost response replays the
+    // project the server may already have made instead of creating a second.
+    final tempId = '$kPendingProjectIdPrefix'
+        '${DateTime.now().toUtc().microsecondsSinceEpoch}';
+
     if (ref.read(isOnlineProvider)) {
-      final created = await _repo.create(name: name, size: size, mode: mode);
-      state = AsyncData<List<Project>>([created, ..._current]);
-      return created;
+      try {
+        final created = await _repo.create(
+          name: name,
+          size: size,
+          mode: mode,
+          idempotencyKey: createProjectActionIdFor(tempId),
+        );
+        state = AsyncData<List<Project>>([created, ..._current]);
+        return created;
+      } on DioException catch (e) {
+        // "Online" only means a network interface is up (mobile data with no
+        // internet still counts). A request that got NO response is the same as
+        // offline here — on builds that capture offline, queue it instead of
+        // failing. A real server answer (4xx/5xx) still surfaces as an error.
+        final unreachable =
+            e.response == null && e.type != DioExceptionType.cancel;
+        if (!unreachable || !ref.read(offlineCaptureCapabilityProvider)) {
+          rethrow;
+        }
+      }
     }
 
     // Offline: show it immediately with a temp id + pending flag, and queue the
     // create so it survives a restart and flushes on reconnect. No network call.
     final pending = Project(
-      id: '$kPendingProjectIdPrefix'
-          '${DateTime.now().toUtc().microsecondsSinceEpoch}',
+      id: tempId,
       name: name,
       status: ProjectStatus.draft,
       updatedAt: DateTime.now(),
